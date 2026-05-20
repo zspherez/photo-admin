@@ -16,7 +16,8 @@ function getSheetsClient(): sheets_v4.Sheets {
   const auth = new google.auth.JWT({
     email: creds.client_email,
     key: creds.private_key,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    // Read+write — needed so manually-added contacts get appended back to the Sheet.
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
   return google.sheets({ version: "v4", auth });
 }
@@ -117,3 +118,60 @@ export async function syncContactsFromSheet(tabName = "Artists"): Promise<{
 
   return result;
 }
+
+export interface AppendContactInput {
+  artistName: string;
+  email: string;
+  managerName?: string | null;
+  role?: string | null;
+  customPrice?: string | null;
+  notes?: string | null;
+}
+
+// Appends a new contact row to the Artists tab so the Sheet stays in sync
+// with manual additions. Best-effort: caller should catch + log on failure.
+export async function appendContactToSheet(
+  data: AppendContactInput,
+  tabName = "Artists"
+): Promise<void> {
+  const sheets = getSheetsClient();
+  const spreadsheetId = process.env.SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error("Missing SPREADSHEET_ID");
+
+  // Read header row to map our keys onto whatever columns the sheet has.
+  const headerRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${tabName}!A1:ZZ1`,
+  });
+  const headerRaw = (headerRes.data.values?.[0] ?? []) as string[];
+  if (headerRaw.length === 0) {
+    throw new Error(`Sheet tab "${tabName}" has no header row`);
+  }
+  const header = headerRaw.map((h) => (h ?? "").trim().toLowerCase());
+
+  const row: string[] = new Array(header.length).fill("");
+  const setCol = (key: string, value: string | null | undefined) => {
+    if (!value) return;
+    const idx = header.indexOf(key);
+    if (idx >= 0) row[idx] = value;
+  };
+
+  setCol("artist", data.artistName);
+  setCol("artist name", data.artistName);
+  setCol("manager_name", data.managerName ?? null);
+  setCol("manager name", data.managerName ?? null);
+  setCol("email", data.email);
+  setCol("price", data.customPrice ?? null);
+  setCol("rate", data.customPrice ?? null);
+  setCol("role", data.role ?? null);
+  setCol("notes", data.notes ?? null);
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${tabName}!A:ZZ`,
+    valueInputOption: "RAW",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: { values: [row] },
+  });
+}
+

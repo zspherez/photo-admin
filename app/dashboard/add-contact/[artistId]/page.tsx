@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
+import { appendContactToSheet } from "@/lib/sheets";
 import { Card, CardBody } from "@/components/ui/card";
 import { Button, LinkButton } from "@/components/ui/button";
 import { Field, TextArea } from "@/components/ui/field";
@@ -21,11 +22,34 @@ async function createContact(formData: FormData) {
     redirect(`/dashboard/add-contact/${artistId}?error=missing_fields`);
   }
 
-  await db.contact.upsert({
+  const existing = await db.contact.findUnique({
+    where: { artistId_email: { artistId, email } },
+  });
+
+  const contact = await db.contact.upsert({
     where: { artistId_email: { artistId, email } },
     create: { artistId, email, name, role, customPrice, notes, source: "manual" },
     update: { name, role, customPrice, notes },
+    include: { artist: true },
   });
+
+  // Append to the Sheet only on NEW create (not on updates). Best-effort —
+  // a sheet failure shouldn't block the DB write.
+  if (!existing) {
+    try {
+      await appendContactToSheet({
+        artistName: contact.artist.name,
+        email,
+        managerName: name,
+        role,
+        customPrice,
+        notes,
+      });
+    } catch (e) {
+      console.error("[sheet append] failed", e);
+    }
+  }
+
   revalidatePath("/dashboard");
   revalidatePath("/settings/contacts");
   revalidatePath("/");
