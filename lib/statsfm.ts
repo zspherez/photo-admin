@@ -27,9 +27,30 @@ export interface StatsfmTopArtistItem {
   };
 }
 
+export async function getStatsfmToken(): Promise<string> {
+  const cred = await db.integrationCredential.findUnique({ where: { provider: "statsfm" } });
+  if (cred?.accessToken) return cred.accessToken;
+  const env = process.env.STATSFM_TOKEN;
+  if (env) return env;
+  throw new Error("No Stats.fm token configured");
+}
+
+export function decodeStatsfmTokenExpiry(token: string): Date | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8")) as {
+      exp?: number;
+    };
+    if (typeof payload.exp !== "number") return null;
+    return new Date(payload.exp * 1000);
+  } catch {
+    return null;
+  }
+}
+
 async function statsfmFetch<T>(path: string): Promise<T> {
-  const token = process.env.STATSFM_TOKEN;
-  if (!token) throw new Error("Missing STATSFM_TOKEN");
+  const token = await getStatsfmToken();
   const res = await fetch(`${STATSFM_BASE}${path}`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
@@ -61,20 +82,39 @@ export async function getTopArtists(
   return collected;
 }
 
-export async function saveStatsfmCredential(user: StatsfmUser): Promise<void> {
-  const token = process.env.STATSFM_TOKEN!;
+export async function saveStatsfmCredential(user: StatsfmUser, tokenOverride?: string): Promise<void> {
+  const token = tokenOverride ?? (await getStatsfmToken());
+  const expiresAt = decodeStatsfmTokenExpiry(token);
   await db.integrationCredential.upsert({
     where: { provider: "statsfm" },
     create: {
       provider: "statsfm",
       accessToken: token,
+      expiresAt,
       meta: JSON.stringify({ userId: user.id, displayName: user.displayName, isPlus: user.isPlus }),
     },
     update: {
       accessToken: token,
+      expiresAt,
       meta: JSON.stringify({ userId: user.id, displayName: user.displayName, isPlus: user.isPlus }),
     },
   });
+}
+
+export async function rotateStatsfmToken(newToken: string): Promise<{ userId: string; displayName: string; expiresAt: Date | null }> {
+  // Validate the token by calling /me with it directly (don't write yet).
+  const res = await fetch(`${STATSFM_BASE}/me`, {
+    headers: { Authorization: `Bearer ${newToken}` },
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Stats.fm token invalid: ${res.status} ${await res.text()}`);
+  const data = (await res.json()) as { item: StatsfmUser };
+  await saveStatsfmCredential(data.item, newToken);
+  return {
+    userId: data.item.id,
+    displayName: data.item.displayName,
+    expiresAt: decodeStatsfmTokenExpiry(newToken),
+  };
 }
 
 export async function syncStatsfmTopArtists(
