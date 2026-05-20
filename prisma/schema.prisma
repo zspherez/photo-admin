@@ -91,6 +91,7 @@ model Show {
   isFestival      Boolean      @default(false)
   eventName       String?
   source          String?
+  dismissedAt     DateTime?
   raw             String?
   artists         ShowArtist[]
   outreaches      Outreach[]
@@ -99,6 +100,7 @@ model Show {
 
   @@index([date])
   @@index([isFestival, date])
+  @@index([dismissedAt])
 }
 
 model ShowArtist {

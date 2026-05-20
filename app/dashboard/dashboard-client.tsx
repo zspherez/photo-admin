@@ -16,7 +16,7 @@ import { Card } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button, LinkButton } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
-import { sendNowAction } from "./actions";
+import { sendNowAction, dismissShowAction, restoreShowAction } from "./actions";
 
 interface Props {
   shows: MatchedShow[];
@@ -122,6 +122,8 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
     });
   };
 
+  const [showDismissed, setShowDismissed] = useState(false);
+
   const filtered = useMemo(() => {
     const f = deferredFilters;
     const sourcePrefix =
@@ -129,6 +131,7 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
     const search = f.search.toLowerCase();
 
     return shows.filter((show) => {
+      if (showDismissed ? !show.dismissedAt : !!show.dismissedAt) return false;
       if (!dateInRange(show.date, f.range)) return false;
 
       const matchedArtists = sourcePrefix
@@ -157,7 +160,9 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
       }
       return true;
     });
-  }, [shows, deferredFilters]);
+  }, [shows, deferredFilters, showDismissed]);
+
+  const dismissedCount = shows.filter((s) => !!s.dismissedAt).length;
 
   const filtersDirty =
     filters.search ||
@@ -205,8 +210,19 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
 
   return (
     <>
-      <div className="mt-1 text-sm text-zinc-500">
-        {filtered.length} matched · {totalUpcoming} total upcoming · {totalSignals.toLocaleString()} listen signals
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm text-zinc-500">
+          {filtered.length} {showDismissed ? "dismissed" : "matched"} · {totalUpcoming} total upcoming · {totalSignals.toLocaleString()} listen signals
+        </span>
+        {dismissedCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowDismissed((v) => !v)}
+            className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+          >
+            {showDismissed ? "← Back to matched" : `View dismissed (${dismissedCount})`}
+          </button>
+        )}
       </div>
 
       <Card className="mt-6 p-4">
@@ -268,15 +284,27 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
             const date = typeof show.date === "string" ? new Date(show.date) : show.date;
             return (
               <Card key={show.id} className="p-5">
-                <p className="text-sm text-zinc-500">
-                  <span className="font-medium text-zinc-900 dark:text-zinc-100">
-                    {date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
-                  </span>
-                  {" · "}{show.venueName}{show.state ? `, ${show.state}` : ""}
-                  {show.ticketUrl && (
-                    <> · <a href={show.ticketUrl} target="_blank" rel="noopener noreferrer" className="text-zinc-700 hover:underline dark:text-zinc-300">EDMTrain ↗</a></>
-                  )}
-                </p>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm text-zinc-500">
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+                    </span>
+                    {" · "}{show.venueName}{show.state ? `, ${show.state}` : ""}
+                    {show.ticketUrl && (
+                      <> · <a href={show.ticketUrl} target="_blank" rel="noopener noreferrer" className="text-zinc-700 hover:underline dark:text-zinc-300">EDMTrain ↗</a></>
+                    )}
+                  </p>
+                  <form action={show.dismissedAt ? restoreShowAction : dismissShowAction}>
+                    <input type="hidden" name="showId" value={show.id} />
+                    <button
+                      type="submit"
+                      title={show.dismissedAt ? "Restore" : "Dismiss"}
+                      className="shrink-0 rounded p-1 text-xs text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-300"
+                    >
+                      {show.dismissedAt ? "↺" : "×"}
+                    </button>
+                  </form>
+                </div>
                 <div className="mt-3 space-y-2">
                   {show.matchedArtists.map((a) => {
                     const contact = a.contacts[0] ?? null;

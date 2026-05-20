@@ -7,6 +7,7 @@ export interface MatchedShow {
   city: string;
   state: string | null;
   ticketUrl: string | null;
+  dismissedAt: Date | null;
   matchedArtists: {
     id: string;
     name: string;
@@ -46,6 +47,7 @@ export interface MatchFilters {
   contact: ContactFilter;
   status: StatusFilter;
   search: string;
+  includeDismissed?: boolean;
 }
 
 export const DEFAULT_FILTERS: MatchFilters = {
@@ -54,6 +56,7 @@ export const DEFAULT_FILTERS: MatchFilters = {
   contact: "any",
   status: "any",
   search: "",
+  includeDismissed: false,
 };
 
 function rangeEndDate(range: RangeFilter): Date {
@@ -64,9 +67,10 @@ function rangeEndDate(range: RangeFilter): Date {
 
 // Loads the maximum useful window once; client-side filtering handles
 // range/source/contact/status/search. The widest range we offer is 90d, so
-// load 90d and let the client narrow.
-export async function getMatchedShowsForClient(): Promise<MatchedShow[]> {
-  return getMatchedUpcomingShows({ ...DEFAULT_FILTERS, range: "90d" });
+// load 90d and let the client narrow. Pass includeDismissed to surface
+// dismissed shows in the same payload (client toggles visibility).
+export async function getMatchedShowsForClient(includeDismissed = true): Promise<MatchedShow[]> {
+  return getMatchedUpcomingShows({ ...DEFAULT_FILTERS, range: "90d", includeDismissed });
 }
 
 export async function getMatchedUpcomingShows(
@@ -79,6 +83,7 @@ export async function getMatchedUpcomingShows(
     where: {
       date: { gte: new Date(), lte: rangeEndDate(filters.range) },
       isFestival: false,
+      dismissedAt: filters.includeDismissed ? undefined : null,
       artists: {
         some: {
           artist: {
@@ -162,6 +167,7 @@ export async function getMatchedUpcomingShows(
       city: show.city,
       state: show.state,
       ticketUrl: show.ticketUrl,
+      dismissedAt: show.dismissedAt,
       matchedArtists: matched,
       otherArtists: others,
       outreach: show.outreaches.map((o) => ({
