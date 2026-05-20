@@ -46,13 +46,33 @@ function formatRankLabel(source: string, rank: number | null): string {
   return rank ? `${niceSource} #${rank}` : niceSource;
 }
 
-function statusBadge(status: string, opened: boolean, clicked: boolean): string {
-  if (clicked) return "Clicked";
-  if (opened) return "Opened";
-  if (status === "sent") return "Sent";
-  if (status === "test") return "Test sent";
-  if (status === "failed") return "Failed";
-  return status;
+interface OutreachState {
+  status: string;
+  sentAt: Date | null;
+  deliveredAt: Date | null;
+  openCount: number;
+  clickCount: number;
+}
+
+function statusLabels(o: OutreachState): string[] {
+  if (o.status === "failed") return ["Failed"];
+  if (o.status === "queued") return ["Queued"];
+  const labels: string[] = [];
+  if (o.status === "test") labels.push("Test sent");
+  else if (o.sentAt) labels.push("Sent");
+  if (o.deliveredAt) labels.push("Delivered");
+  if (o.openCount > 0) labels.push(o.openCount > 1 ? `Opened (${o.openCount})` : "Opened");
+  if (o.clickCount > 0) labels.push(o.clickCount > 1 ? `Clicked (${o.clickCount})` : "Clicked");
+  return labels.length > 0 ? labels : [o.status];
+}
+
+function statusColorClass(o: OutreachState): string {
+  if (o.status === "failed") return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+  if (o.clickCount > 0) return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
+  if (o.openCount > 0) return "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200";
+  if (o.deliveredAt) return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200";
+  if (o.status === "test") return "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200";
+  return "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300";
 }
 
 function parseFilters(sp: Record<string, string | undefined>): MatchFilters {
@@ -330,14 +350,8 @@ export default async function DashboardPage({
                           </Link>
                         )}
                         {outreach && (
-                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                            outreach.clickCount > 0 ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                            : outreach.openCount > 0 ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
-                            : outreach.status === "failed" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
-                            : outreach.status === "test" ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200"
-                            : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-                          }`}>
-                            {statusBadge(outreach.status, outreach.openCount > 0, outreach.clickCount > 0)}
+                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColorClass(outreach)}`}>
+                            {statusLabels(outreach).join(" · ")}
                           </span>
                         )}
                       </div>

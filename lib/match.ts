@@ -25,6 +25,7 @@ export interface MatchedShow {
   outreach: {
     contactId: string;
     sentAt: Date | null;
+    deliveredAt: Date | null;
     status: string;
     firstClickedAt: Date | null;
     clickCount: number;
@@ -156,6 +157,7 @@ export async function getMatchedUpcomingShows(
       outreach: show.outreaches.map((o) => ({
         contactId: o.contactId,
         sentAt: o.sentAt,
+        deliveredAt: o.deliveredAt,
         status: o.status,
         firstClickedAt: o.firstClickedAt,
         clickCount: o.clickCount,
