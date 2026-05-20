@@ -16,7 +16,12 @@ import { Card } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button, LinkButton } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
-import { sendNowAction, dismissShowAction, restoreShowAction } from "./actions";
+import {
+  sendNowAction,
+  dismissShowAction,
+  restoreShowAction,
+  toggleInterestedAction,
+} from "./actions";
 
 interface Props {
   shows: MatchedShow[];
@@ -123,6 +128,7 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
   };
 
   const [showDismissed, setShowDismissed] = useState(false);
+  const [interestedOnly, setInterestedOnly] = useState(false);
 
   const filtered = useMemo(() => {
     const f = deferredFilters;
@@ -132,6 +138,7 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
 
     return shows.filter((show) => {
       if (showDismissed ? !show.dismissedAt : !!show.dismissedAt) return false;
+      if (interestedOnly && !show.interestedAt) return false;
       if (!dateInRange(show.date, f.range)) return false;
 
       const matchedArtists = sourcePrefix
@@ -160,9 +167,10 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
       }
       return true;
     });
-  }, [shows, deferredFilters, showDismissed]);
+  }, [shows, deferredFilters, showDismissed, interestedOnly]);
 
   const dismissedCount = shows.filter((s) => !!s.dismissedAt).length;
+  const interestedCount = shows.filter((s) => !!s.interestedAt && !s.dismissedAt).length;
 
   const filtersDirty =
     filters.search ||
@@ -212,17 +220,37 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
     <>
       <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
         <span className="text-sm text-zinc-500">
-          {filtered.length} {showDismissed ? "dismissed" : "matched"} · {totalUpcoming} total upcoming · {totalSignals.toLocaleString()} listen signals
+          {filtered.length}{" "}
+          {showDismissed ? "dismissed" : interestedOnly ? "interested" : "matched"} · {totalUpcoming} total upcoming · {totalSignals.toLocaleString()} listen signals
         </span>
-        {dismissedCount > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowDismissed((v) => !v)}
-            className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-          >
-            {showDismissed ? "← Back to matched" : `View dismissed (${dismissedCount})`}
-          </button>
-        )}
+        <div className="flex items-center gap-3 text-xs">
+          {interestedCount > 0 && !showDismissed && (
+            <button
+              type="button"
+              onClick={() => setInterestedOnly((v) => !v)}
+              className={cn(
+                "transition",
+                interestedOnly
+                  ? "font-medium text-amber-600 dark:text-amber-400"
+                  : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+              )}
+            >
+              {interestedOnly ? "← Show all matched" : `★ Interested only (${interestedCount})`}
+            </button>
+          )}
+          {dismissedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowDismissed((v) => !v);
+                setInterestedOnly(false);
+              }}
+              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+            >
+              {showDismissed ? "← Back to matched" : `View dismissed (${dismissedCount})`}
+            </button>
+          )}
+        </div>
       </div>
 
       <Card className="mt-6 p-4">
@@ -293,17 +321,37 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
                     {show.ticketUrl && (
                       <> · <a href={show.ticketUrl} target="_blank" rel="noopener noreferrer" className="text-zinc-700 hover:underline dark:text-zinc-300">EDMTrain ↗</a></>
                     )}
+                    {show.interestedAt && (
+                      <> · <span className="text-amber-600 dark:text-amber-400">★ Interested</span></>
+                    )}
                   </p>
-                  <form action={show.dismissedAt ? restoreShowAction : dismissShowAction}>
-                    <input type="hidden" name="showId" value={show.id} />
-                    <button
-                      type="submit"
-                      title={show.dismissedAt ? "Restore" : "Dismiss"}
-                      className="shrink-0 rounded p-1 text-xs text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-300"
-                    >
-                      {show.dismissedAt ? "↺" : "×"}
-                    </button>
-                  </form>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <form action={toggleInterestedAction}>
+                      <input type="hidden" name="showId" value={show.id} />
+                      <button
+                        type="submit"
+                        title={show.interestedAt ? "Unmark interested" : "Mark interested"}
+                        className={cn(
+                          "rounded p-1 text-sm transition",
+                          show.interestedAt
+                            ? "text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/40"
+                            : "text-zinc-300 hover:bg-zinc-100 hover:text-amber-500 dark:text-zinc-700 dark:hover:bg-zinc-900"
+                        )}
+                      >
+                        {show.interestedAt ? "★" : "☆"}
+                      </button>
+                    </form>
+                    <form action={show.dismissedAt ? restoreShowAction : dismissShowAction}>
+                      <input type="hidden" name="showId" value={show.id} />
+                      <button
+                        type="submit"
+                        title={show.dismissedAt ? "Restore" : "Dismiss"}
+                        className="rounded p-1 text-xs text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-300"
+                      >
+                        {show.dismissedAt ? "↺" : "×"}
+                      </button>
+                    </form>
+                  </div>
                 </div>
                 <div className="mt-3 space-y-2">
                   {show.matchedArtists.map((a) => {

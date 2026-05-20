@@ -8,6 +8,7 @@ export interface MatchedShow {
   state: string | null;
   ticketUrl: string | null;
   dismissedAt: Date | null;
+  interestedAt: Date | null;
   matchedArtists: {
     id: string;
     name: string;
@@ -168,6 +169,7 @@ export async function getMatchedUpcomingShows(
       state: show.state,
       ticketUrl: show.ticketUrl,
       dismissedAt: show.dismissedAt,
+      interestedAt: show.interestedAt,
       matchedArtists: matched,
       otherArtists: others,
       outreach: show.outreaches.map((o) => ({

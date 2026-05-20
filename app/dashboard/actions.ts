@@ -28,3 +28,14 @@ export async function restoreShowAction(formData: FormData) {
   await db.show.update({ where: { id: showId }, data: { dismissedAt: null } });
   revalidatePath("/dashboard");
 }
+
+export async function toggleInterestedAction(formData: FormData) {
+  const showId = formData.get("showId") as string;
+  const show = await db.show.findUnique({ where: { id: showId }, select: { interestedAt: true } });
+  if (!show) return;
+  await db.show.update({
+    where: { id: showId },
+    data: { interestedAt: show.interestedAt ? null : new Date() },
+  });
+  revalidatePath("/dashboard");
+}

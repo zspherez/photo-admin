@@ -92,6 +92,7 @@ model Show {
   eventName       String?
   source          String?
   dismissedAt     DateTime?
+  interestedAt    DateTime?
   raw             String?
   artists         ShowArtist[]
   outreaches      Outreach[]
@@ -101,6 +102,7 @@ model Show {
   @@index([date])
   @@index([isFestival, date])
   @@index([dismissedAt])
+  @@index([interestedAt])
 }
 
 model ShowArtist {
