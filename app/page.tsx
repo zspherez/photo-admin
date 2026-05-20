@@ -57,12 +57,18 @@ export default async function Home() {
         <Stat label="Contacts" value={contactCount} />
       </section>
 
-      <section className="mt-8 flex gap-2">
+      <section className="mt-8 flex flex-wrap gap-2">
         <Link
           href="/dashboard"
           className="inline-block rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
         >
-          Open matched-shows dashboard →
+          Matched shows →
+        </Link>
+        <Link
+          href="/festivals"
+          className="inline-block rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+        >
+          Festivals →
         </Link>
         <Link
           href="/settings"

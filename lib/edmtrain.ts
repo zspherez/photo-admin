@@ -118,6 +118,9 @@ export async function syncEdmtrainShows(daysAhead = 90): Promise<SyncResult> {
       ticketUrl: evt.link,
       ages: evt.ages,
       electronicGenre: evt.electronicGenreInd ? "electronic" : "other",
+      isFestival: evt.festivalInd ?? false,
+      eventName: evt.name ?? null,
+      source: "edmtrain",
       raw: JSON.stringify(evt),
     };
     const show = await db.show.upsert({

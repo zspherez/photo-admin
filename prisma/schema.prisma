@@ -79,7 +79,7 @@ model Contact {
 
 model Show {
   id              String       @id @default(cuid())
-  edmtrainId      Int          @unique
+  edmtrainId      Int?         @unique
   date            DateTime
   venueName       String
   city            String
@@ -87,6 +87,9 @@ model Show {
   ticketUrl       String?
   ages            String?
   electronicGenre String?
+  isFestival      Boolean      @default(false)
+  eventName       String?
+  source          String?
   raw             String?
   artists         ShowArtist[]
   outreaches      Outreach[]
@@ -94,6 +97,7 @@ model Show {
   updatedAt       DateTime     @updatedAt
 
   @@index([date])
+  @@index([isFestival, date])
 }
 
 model ShowArtist {
