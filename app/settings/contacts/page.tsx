@@ -2,6 +2,9 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { listTabs, syncContactsFromSheet } from "@/lib/sheets";
+import { Card, CardBody } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 export const dynamic = "force-dynamic";
 
@@ -46,93 +49,82 @@ export default async function ContactsSettingsPage() {
   const result = lastResult ? JSON.parse(lastResult.value) : null;
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-12">
-      <Link href="/" className="text-sm text-blue-600 hover:underline">← Home</Link>
-      <h1 className="mt-4 text-2xl font-semibold tracking-tight">Contacts</h1>
-      <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-        Sync from your Google Sheet (read-only). Edit per-artist overrides here.
-      </p>
+    <main className="mx-auto max-w-3xl px-6 py-10">
+      <Link href="/settings" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Settings</Link>
+      <h1 className="mt-2 text-2xl font-semibold tracking-tight">Contacts</h1>
+      <p className="mt-1 text-sm text-zinc-500">Sync from your Google Sheet (read-only).</p>
 
       {!hasConfig && (
-        <div className="mt-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-          Missing env: need <code>SPREADSHEET_ID</code> plus one of{" "}
-          <code>GOOGLE_CREDENTIALS_JSON</code> (Vercel) or <code>GOOGLE_CREDENTIALS_PATH</code> (local).
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          Missing env: need <code>SPREADSHEET_ID</code> plus one of <code>GOOGLE_CREDENTIALS_JSON</code> (Vercel) or <code>GOOGLE_CREDENTIALS_PATH</code> (local).
         </div>
       )}
       {tabError && (
-        <div className="mt-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-700 dark:bg-red-950 dark:text-red-200">
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
           Sheets API error: {tabError}
         </div>
       )}
 
-      <section className="mt-8 rounded-lg border border-zinc-200 p-5 dark:border-zinc-800">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">Sync</h2>
-        <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
-          {contactCount} contacts stored
-          {lastSync && (
-            <> · last sync {new Date(lastSync.value).toLocaleString()}</>
+      <Card className="mt-6">
+        <CardBody>
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Sync</h2>
+            <span className="text-xs text-zinc-500">
+              {contactCount.toLocaleString()} contacts
+              {lastSync && <> · {new Date(lastSync.value).toLocaleString()}</>}
+            </span>
+          </div>
+          {tabs.length > 0 && (
+            <p className="mt-2 text-xs text-zinc-500">Tabs: {tabs.join(", ")}</p>
           )}
-        </p>
-        {tabs.length > 0 && (
-          <p className="mt-1 text-xs text-zinc-500">
-            Tabs found: {tabs.join(", ")}
-          </p>
-        )}
-        <form action={syncContacts} className="mt-4 flex items-center gap-2">
-          <input
-            name="tab"
-            defaultValue="Artists"
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-            placeholder="Tab name"
-          />
-          <button
-            type="submit"
-            disabled={!hasConfig}
-            className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
-          >
-            Sync from Sheet
-          </button>
-        </form>
-        {result && (
-          <pre className="mt-4 overflow-auto rounded bg-zinc-100 p-3 text-xs dark:bg-zinc-900">
-            {JSON.stringify(result, null, 2)}
-          </pre>
-        )}
-      </section>
+          <form action={syncContacts} className="mt-3 flex items-center gap-2">
+            <input
+              name="tab"
+              defaultValue="Artists"
+              placeholder="Tab name"
+              className="h-9 flex-1 rounded-md border border-zinc-200 bg-white px-3 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950"
+            />
+            <Button type="submit" variant="primary" disabled={!hasConfig}>
+              Sync from Sheet
+            </Button>
+          </form>
+          {result && (
+            <pre className="mt-4 overflow-auto rounded-md bg-zinc-50 p-3 text-xs dark:bg-zinc-900">
+              {JSON.stringify(result, null, 2)}
+            </pre>
+          )}
+        </CardBody>
+      </Card>
 
       {recentContacts.length > 0 && (
         <section className="mt-8">
-          <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
-            Recent contacts
-          </h2>
-          <ul className="mt-3 divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
-            {recentContacts.map((c: {
-              id: string;
-              email: string;
-              name: string | null;
-              role: string | null;
-              customPrice: string | null;
-              artist: { name: string };
-            }) => (
-              <li key={c.id} className="px-4 py-3 text-sm">
-                <div className="flex items-center justify-between">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{c.artist.name}</p>
-                    <p className="truncate text-xs text-zinc-500">
-                      {c.name ? `${c.name} · ` : ""}
-                      {c.email}
-                      {c.role ? ` · ${c.role}` : ""}
-                    </p>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Recent contacts</h2>
+          <Card className="mt-3">
+            <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
+              {recentContacts.map((c: {
+                id: string;
+                email: string;
+                name: string | null;
+                role: string | null;
+                customPrice: string | null;
+                artist: { name: string };
+              }) => (
+                <li key={c.id} className="px-4 py-3 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{c.artist.name}</p>
+                      <p className="truncate text-xs text-zinc-500">
+                        {c.name ? `${c.name} · ` : ""}{c.email}{c.role ? ` · ${c.role}` : ""}
+                      </p>
+                    </div>
+                    {c.customPrice && (
+                      <Badge tone="default">{c.customPrice}</Badge>
+                    )}
                   </div>
-                  {c.customPrice && (
-                    <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
-                      {c.customPrice}
-                    </span>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+                </li>
+              ))}
+            </ul>
+          </Card>
         </section>
       )}
     </main>

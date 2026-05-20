@@ -2,6 +2,9 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { SPOTIFY_SCOPES, getValidAccessToken, syncSpotifyListens } from "@/lib/spotify";
+import { Card, CardBody } from "@/components/ui/card";
+import { Button, LinkButton } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 export const dynamic = "force-dynamic";
 
@@ -67,106 +70,86 @@ export default async function SpotifySettingsPage({
       _count: { _all: true },
     }),
   ]);
-  const signalSummary = signalCounts
-    .map((c) => `${c.source}: ${c._count._all}`)
-    .join(" · ");
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-12">
-      <Link href="/" className="text-sm text-blue-600 hover:underline">
-        ← Home
-      </Link>
-      <h1 className="mt-4 text-2xl font-semibold tracking-tight">Spotify</h1>
-      <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-        Connect your Spotify account to pull top artists, recent plays, follows, and playlists.
-      </p>
+    <main className="mx-auto max-w-2xl px-6 py-10">
+      <Link href="/settings" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Settings</Link>
+      <h1 className="mt-2 text-2xl font-semibold tracking-tight">Spotify</h1>
+      <p className="mt-1 text-sm text-zinc-500">Top artists, recent plays, follows, playlists.</p>
 
       {status === "connected" && (
-        <div className="mt-6 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
           Spotify connected.
         </div>
       )}
       {status === "error" && (
-        <div className="mt-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-700 dark:bg-red-950 dark:text-red-200">
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
           Auth failed: {detail ?? "unknown"}
         </div>
       )}
 
-      <section className="mt-8 rounded-lg border border-zinc-200 p-5 dark:border-zinc-800">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">Status</h2>
-        {cred ? (
-          <>
-            <p className="mt-3">
-              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" /> Connected
-              <span className="ml-2 text-sm text-zinc-500">
-                (token refresh{" "}
-                {cred.expiresAt
-                  ? `expires ${cred.expiresAt.toLocaleString()}`
-                  : "no expiry"}
-                )
-              </span>
-            </p>
-            <p className="mt-2 text-xs text-zinc-500">Scopes: {cred.scope ?? "—"}</p>
-            <div className="mt-4 flex flex-wrap gap-3">
-              <form action={syncListens}>
-                <button
-                  type="submit"
-                  className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
-                >
-                  Sync listens
-                </button>
-              </form>
-              <form action={testCall}>
-                <button
-                  type="submit"
-                  className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900"
-                >
-                  Test API call
-                </button>
-              </form>
-              <form action={disconnect}>
-                <button
-                  type="submit"
-                  className="rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950"
-                >
-                  Disconnect
-                </button>
-              </form>
-            </div>
-            <p className="mt-4 text-xs text-zinc-500">
-              {signalSummary || "No Spotify signals yet — click Sync listens."}
-              {lastSync && (
-                <> · last sync {new Date(lastSync.value).toLocaleString()}</>
+      <Card className="mt-6">
+        <CardBody>
+          {cred ? (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="text-sm font-medium">Connected</span>
+                </div>
+                <Badge tone="success" size="xs">Active</Badge>
+              </div>
+              <p className="mt-2 text-xs text-zinc-500">
+                Token {cred.expiresAt ? `refreshes ${cred.expiresAt.toLocaleString()}` : "(no expiry)"}
+              </p>
+              <p className="mt-1 text-xs text-zinc-500">Scopes: {cred.scope ?? "—"}</p>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <form action={syncListens}>
+                  <Button type="submit" variant="primary" size="sm">Sync listens</Button>
+                </form>
+                <form action={testCall}>
+                  <Button type="submit" variant="secondary" size="sm">Test API call</Button>
+                </form>
+                <form action={disconnect}>
+                  <Button type="submit" variant="danger" size="sm">Disconnect</Button>
+                </form>
+              </div>
+
+              {signalCounts.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-1.5">
+                  {signalCounts.map((c) => (
+                    <Badge key={c.source} tone="muted" size="xs">
+                      {c.source.replace("spotify_", "")}: {c._count._all}
+                    </Badge>
+                  ))}
+                </div>
               )}
-            </p>
-            {lastResult && (
-              <pre className="mt-2 overflow-auto rounded bg-zinc-100 p-3 text-xs dark:bg-zinc-900">
-                {lastResult.value}
-              </pre>
-            )}
-            {lastTest && (
-              <pre className="mt-2 overflow-auto rounded bg-zinc-100 p-3 text-xs dark:bg-zinc-900">
-                {lastTest.value}
-              </pre>
-            )}
-          </>
-        ) : (
-          <>
-            <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
-              Not connected.
-            </p>
-            <a
-              href="/api/spotify/login"
-              className="mt-4 inline-block rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
-            >
-              Connect Spotify
-            </a>
-            <p className="mt-3 text-xs text-zinc-500">
-              Requested scopes: <code>{SPOTIFY_SCOPES}</code>
-            </p>
-          </>
-        )}
-      </section>
+              {lastSync && (
+                <p className="mt-2 text-xs text-zinc-500">Last sync {new Date(lastSync.value).toLocaleString()}</p>
+              )}
+              {lastResult && (
+                <pre className="mt-3 overflow-auto rounded-md bg-zinc-50 p-3 text-xs dark:bg-zinc-900">
+                  {lastResult.value}
+                </pre>
+              )}
+              {lastTest && (
+                <pre className="mt-2 overflow-auto rounded-md bg-zinc-50 p-3 text-xs dark:bg-zinc-900">
+                  {lastTest.value}
+                </pre>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">Not connected.</p>
+              <LinkButton href="/api/spotify/login" variant="primary" className="mt-4">
+                Connect Spotify
+              </LinkButton>
+              <p className="mt-3 text-xs text-zinc-500">Requested scopes: <code>{SPOTIFY_SCOPES}</code></p>
+            </>
+          )}
+        </CardBody>
+      </Card>
     </main>
   );
 }

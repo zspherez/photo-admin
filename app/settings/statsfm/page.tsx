@@ -9,6 +9,11 @@ import {
   saveStatsfmCredential,
   syncStatsfmTopArtists,
 } from "@/lib/statsfm";
+import { Card, CardBody } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { TextArea } from "@/components/ui/field";
+import { cn } from "@/lib/cn";
 
 export const dynamic = "force-dynamic";
 
@@ -69,7 +74,7 @@ export default async function StatsfmSettingsPage({
   const expiresAt = activeToken ? decodeStatsfmTokenExpiry(activeToken) : null;
   const now = Date.now();
   const hoursUntilExpiry = expiresAt ? (expiresAt.getTime() - now) / 3600_000 : null;
-  const expiryColor =
+  const expiryClass =
     hoursUntilExpiry === null
       ? "text-zinc-500"
       : hoursUntilExpiry < 0
@@ -77,107 +82,96 @@ export default async function StatsfmSettingsPage({
       : hoursUntilExpiry < 24
       ? "text-amber-700 dark:text-amber-400"
       : "text-emerald-700 dark:text-emerald-400";
+  const rotatedViaUI = !!(cred?.accessToken && cred.accessToken !== process.env.STATSFM_TOKEN);
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-12">
-      <Link href="/settings" className="text-sm text-blue-600 hover:underline">← Settings</Link>
-      <h1 className="mt-4 text-2xl font-semibold tracking-tight">Stats.fm</h1>
-      <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-        Pull your lifetime top artists. Tokens expire every ~7 days; rotate without redeploying via the form below.
-      </p>
+    <main className="mx-auto max-w-2xl px-6 py-10">
+      <Link href="/settings" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Settings</Link>
+      <h1 className="mt-2 text-2xl font-semibold tracking-tight">Stats.fm</h1>
+      <p className="mt-1 text-sm text-zinc-500">Lifetime listening history. Tokens expire every ~7 days — rotate below.</p>
 
       {sp.rotate === "ok" && (
-        <div className="mt-6 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
           New token saved.
         </div>
       )}
       {sp.rotate === "error" && (
-        <div className="mt-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-700 dark:bg-red-950 dark:text-red-200">
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
           Token rejected{sp.detail ? `: ${sp.detail}` : "."}
         </div>
       )}
       {sp.rotate === "missing" && (
-        <div className="mt-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-700 dark:bg-red-950 dark:text-red-200">
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
           Paste a token first.
         </div>
       )}
 
-      <section className="mt-8 rounded-lg border border-zinc-200 p-5 dark:border-zinc-800">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">Status</h2>
-        {meta ? (
-          <>
-            <p className="mt-3">
-              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" /> Connected as{" "}
-              <b>{meta.displayName}</b> ({meta.userId}) {meta.isPlus ? "· Plus" : ""}
-            </p>
-            <p className={`mt-2 text-sm ${expiryColor}`}>
-              Token{" "}
-              {hoursUntilExpiry === null
-                ? "expiry unknown"
-                : hoursUntilExpiry < 0
-                ? `expired ${Math.abs(Math.round(hoursUntilExpiry))}h ago`
-                : `expires in ${Math.round(hoursUntilExpiry)}h (${expiresAt!.toLocaleString()})`}
-              {cred?.accessToken && cred.accessToken !== process.env.STATSFM_TOKEN && (
-                <span className="ml-2 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                  rotated via UI
-                </span>
-              )}
-            </p>
-            <p className="mt-2 text-sm text-zinc-500">
-              Lifetime top artists stored: {lifetimeCount}
-              {lifetimeSync && <> · last sync {new Date(lifetimeSync.value).toLocaleString()}</>}
-            </p>
-            <div className="mt-4 flex flex-wrap gap-3">
-              <form action={syncLifetime}>
-                <button type="submit" className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700">
-                  Sync lifetime top 500
-                </button>
-              </form>
-              <form action={disconnect}>
-                <button type="submit" className="rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950">
-                  Disconnect
-                </button>
-              </form>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
-              Not connected.{" "}
-              {hasEnvToken
-                ? "Token is in .env — click Test & save to verify."
-                : "Paste a token below to connect (or add STATSFM_TOKEN to env)."}
-            </p>
-            {hasEnvToken && (
-              <form action={testAndSave} className="mt-4">
-                <button type="submit" className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
-                  Test &amp; save
-                </button>
-              </form>
-            )}
-          </>
-        )}
-      </section>
+      <Card className="mt-6">
+        <CardBody>
+          {meta ? (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="text-sm font-medium">{meta.displayName} ({meta.userId})</span>
+                </div>
+                <div className="flex gap-1.5">
+                  {meta.isPlus && <Badge tone="success" size="xs">Plus</Badge>}
+                  {rotatedViaUI && <Badge tone="muted" size="xs">UI</Badge>}
+                </div>
+              </div>
+              <p className={cn("mt-2 text-xs", expiryClass)}>
+                Token{" "}
+                {hoursUntilExpiry === null
+                  ? "expiry unknown"
+                  : hoursUntilExpiry < 0
+                  ? `expired ${Math.abs(Math.round(hoursUntilExpiry))}h ago`
+                  : `expires in ${Math.round(hoursUntilExpiry)}h · ${expiresAt!.toLocaleString()}`}
+              </p>
+              <p className="mt-1 text-xs text-zinc-500">
+                {lifetimeCount.toLocaleString()} lifetime top artists stored
+                {lifetimeSync && <> · last sync {new Date(lifetimeSync.value).toLocaleString()}</>}
+              </p>
 
-      <section className="mt-8 rounded-lg border border-zinc-200 p-5 dark:border-zinc-800">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">Rotate token</h2>
-        <p className="mt-2 text-xs text-zinc-500">
-          Paste a fresh Stats.fm JWT (from stats.fm browser DevTools → Application → Local Storage → <code>token</code>). It&apos;s validated against <code>/me</code> before saving.
-        </p>
-        <form action={rotateToken} className="mt-3 flex flex-col gap-2">
-          <textarea
-            name="token"
-            rows={3}
-            placeholder="eyJhbGciOiJIUzI1NiIs..."
-            className="block w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
-          />
-          <div>
-            <button type="submit" className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
-              Save new token
-            </button>
-          </div>
-        </form>
-      </section>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <form action={syncLifetime}>
+                  <Button type="submit" variant="primary" size="sm">Sync lifetime top 500</Button>
+                </form>
+                <form action={disconnect}>
+                  <Button type="submit" variant="danger" size="sm">Disconnect</Button>
+                </form>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">Not connected.</p>
+              <p className="mt-1 text-xs text-zinc-500">
+                {hasEnvToken
+                  ? "Token in .env — click Test & save."
+                  : "Paste a token below (or add STATSFM_TOKEN to env)."}
+              </p>
+              {hasEnvToken && (
+                <form action={testAndSave} className="mt-3">
+                  <Button type="submit" variant="primary">Test &amp; save</Button>
+                </form>
+              )}
+            </>
+          )}
+        </CardBody>
+      </Card>
+
+      <Card className="mt-6">
+        <CardBody>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Rotate token</h2>
+          <p className="mt-2 text-xs text-zinc-500">
+            Paste a fresh Stats.fm JWT (stats.fm DevTools → Application → Local Storage → <code>token</code>). Validated against <code>/me</code> before saving.
+          </p>
+          <form action={rotateToken} className="mt-3 space-y-2">
+            <TextArea name="token" label="" rows={3} placeholder="eyJhbGciOiJIUzI1NiIs..." mono />
+            <Button type="submit" variant="primary">Save new token</Button>
+          </form>
+        </CardBody>
+      </Card>
     </main>
   );
 }

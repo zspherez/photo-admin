@@ -11,6 +11,9 @@ import {
   extractVars,
 } from "@/lib/template";
 import { TemplateEditor } from "@/components/template-editor";
+import { Card, CardBody } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 export const dynamic = "force-dynamic";
 
@@ -68,7 +71,7 @@ export default async function TemplateSettingsPage() {
 
   let previewSubject = template.subject;
   let previewHtml = template.htmlBody;
-  let sampleLabel = "Preview: no sample available";
+  let sampleLabel = "No sample available";
   if (sample) {
     const matched = sample.artists.find((sa) => sa.artist.contacts.length > 0);
     if (matched) {
@@ -82,56 +85,57 @@ export default async function TemplateSettingsPage() {
       });
       previewSubject = applyTemplate(template.subject, sampleVars);
       previewHtml = applyTemplate(template.htmlBody, sampleVars);
-      sampleLabel = `Preview: ${matched.artist.name} @ ${sample.venueName}`;
+      sampleLabel = `Preview: ${matched.artist.name} at ${sample.venueName}`;
     }
   }
 
   return (
-    <main className="mx-auto max-w-4xl px-6 py-12">
-      <Link href="/settings" className="text-sm text-blue-600 hover:underline">← Settings</Link>
-      <h1 className="mt-4 text-2xl font-semibold tracking-tight">Email template</h1>
-      <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-        Used in: {usedVars.length === 0 ? "no variables" : usedVars.map((v) => (
-          <code key={v} className="mx-1 rounded bg-zinc-100 px-1 py-0.5 text-xs dark:bg-zinc-800">{`{{${v}}}`}</code>
-        ))}
-      </p>
+    <main className="mx-auto max-w-4xl px-6 py-10">
+      <Link href="/settings" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Settings</Link>
+      <h1 className="mt-2 text-2xl font-semibold tracking-tight">Email template</h1>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-zinc-500">Used variables:</span>
+        {usedVars.length === 0 ? (
+          <span className="text-xs text-zinc-400">none</span>
+        ) : (
+          usedVars.map((v) => <Badge key={v} tone="muted" size="xs">{`{{${v}}}`}</Badge>)
+        )}
+      </div>
 
-      <form action={saveTemplate} className="mt-6">
-        <TemplateEditor
-          initialSubject={template.subject}
-          initialHtml={template.htmlBody}
-          variables={allVars}
-        />
-        <div className="mt-4 flex gap-2">
-          <button
-            type="submit"
-            className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
-          >
-            Save template
-          </button>
-        </div>
-      </form>
+      <Card className="mt-6">
+        <CardBody>
+          <form action={saveTemplate}>
+            <TemplateEditor
+              initialSubject={template.subject}
+              initialHtml={template.htmlBody}
+              variables={allVars}
+            />
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <Button type="submit" variant="primary">Save template</Button>
+            </div>
+          </form>
+        </CardBody>
+      </Card>
 
-      <form action={resetToDefault} className="mt-2">
-        <button
-          type="submit"
-          className="text-xs text-zinc-500 hover:underline"
-        >
+      <form action={resetToDefault} className="mt-3">
+        <button type="submit" className="text-xs text-zinc-500 hover:underline">
           Reset to default
         </button>
       </form>
 
-      <section className="mt-10">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">{sampleLabel}</h2>
-        <div className="mt-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-          <p className="text-xs font-medium text-zinc-500">Subject</p>
-          <p className="mt-1 font-medium">{previewSubject}</p>
-          <p className="mt-4 text-xs font-medium text-zinc-500">Body</p>
-          <div
-            className="prose prose-sm mt-1 max-w-none rounded border border-zinc-200 p-3 dark:prose-invert dark:border-zinc-800"
-            dangerouslySetInnerHTML={{ __html: previewHtml }}
-          />
-        </div>
+      <section className="mt-8">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">{sampleLabel}</h2>
+        <Card className="mt-3">
+          <CardBody>
+            <p className="text-xs font-medium text-zinc-500">Subject</p>
+            <p className="mt-1 font-medium">{previewSubject}</p>
+            <p className="mt-4 text-xs font-medium text-zinc-500">Body</p>
+            <div
+              className="prose prose-sm mt-1 max-w-none rounded-md border border-zinc-100 bg-zinc-50/40 p-3 dark:prose-invert dark:border-zinc-900 dark:bg-zinc-900/40"
+              dangerouslySetInnerHTML={{ __html: previewHtml }}
+            />
+          </CardBody>
+        </Card>
       </section>
     </main>
   );
