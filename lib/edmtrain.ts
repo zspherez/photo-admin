@@ -37,17 +37,19 @@ export interface EdmtrainEvent {
   };
 }
 
-export async function fetchEdmtrainEvents(daysAhead = 90): Promise<EdmtrainEvent[]> {
+export async function fetchEdmtrainEvents(daysAhead = 90, locationIds: number[] | null = [NYC_LOCATION_ID]): Promise<EdmtrainEvent[]> {
   const apiKey = process.env.EDMTRAIN_API_KEY;
   if (!apiKey) throw new Error("Missing EDMTRAIN_API_KEY");
   const today = new Date();
   const end = new Date(today.getTime() + daysAhead * 86400_000);
   const params = new URLSearchParams({
-    locationIds: String(NYC_LOCATION_ID),
     client: apiKey,
     startDate: today.toISOString().slice(0, 10),
     endDate: end.toISOString().slice(0, 10),
   });
+  if (locationIds && locationIds.length > 0) {
+    params.set("locationIds", locationIds.join(","));
+  }
   const res = await fetch(`${EDMTRAIN_BASE}?${params.toString()}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`EDMTrain ${res.status}: ${await res.text()}`);
   const json = (await res.json()) as { success: boolean; data: EdmtrainEvent[] };
@@ -91,18 +93,14 @@ export interface SyncResult {
   artistsLinked: number;
 }
 
-export async function syncEdmtrainShows(daysAhead = 90): Promise<SyncResult> {
-  const [events, blocklist] = await Promise.all([
-    fetchEdmtrainEvents(daysAhead),
-    getVenueBlocklist(),
-  ]);
-
+async function upsertEvents(events: EdmtrainEvent[], applyBlocklist: boolean): Promise<SyncResult> {
+  const blocklist = applyBlocklist ? await getVenueBlocklist() : [];
   let upserted = 0;
   let skippedVenue = 0;
   let artistsLinked = 0;
 
   for (const evt of events) {
-    if (isBlocked(evt.venue.name, blocklist)) {
+    if (applyBlocklist && isBlocked(evt.venue.name, blocklist)) {
       skippedVenue++;
       continue;
     }
@@ -141,11 +139,31 @@ export async function syncEdmtrainShows(daysAhead = 90): Promise<SyncResult> {
     }
   }
 
+  return { fetched: events.length, upserted, skippedVenue, artistsLinked };
+}
+
+export async function syncEdmtrainShows(daysAhead = 90): Promise<SyncResult> {
+  const events = await fetchEdmtrainEvents(daysAhead, [NYC_LOCATION_ID]);
+  const result = await upsertEvents(events, true);
   await db.setting.upsert({
     where: { key: "edmtrain_last_sync" },
     create: { key: "edmtrain_last_sync", value: new Date().toISOString() },
     update: { value: new Date().toISOString() },
   });
+  return result;
+}
 
-  return { fetched: events.length, upserted, skippedVenue, artistsLinked };
+export async function syncEdmtrainFestivals(daysAhead = 365): Promise<SyncResult> {
+  // No location filter — global. Then keep only electronic festivals.
+  const allEvents = await fetchEdmtrainEvents(daysAhead, null);
+  const festivals = allEvents.filter((e) => e.festivalInd && e.electronicGenreInd);
+  // Venue blocklist mainly excludes summer NYC venues that don't matter outside NYC,
+  // but keep it on for consistency — won't drop anything outside the city anyway.
+  const result = await upsertEvents(festivals, true);
+  await db.setting.upsert({
+    where: { key: "edmtrain_festivals_last_sync" },
+    create: { key: "edmtrain_festivals_last_sync", value: new Date().toISOString() },
+    update: { value: new Date().toISOString() },
+  });
+  return result;
 }

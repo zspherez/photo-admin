@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { syncEdmtrainShows } from "@/lib/edmtrain";
+import { syncEdmtrainFestivals, syncEdmtrainShows } from "@/lib/edmtrain";
 
-// Daily: refresh EDMTrain NYC shows for the next 90 days.
+// Daily: refresh EDMTrain NYC shows (90 days) + all US festivals (365 days).
 // Triggered by Vercel cron (see vercel.json) — also callable manually with the right auth header.
 export async function GET(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -12,14 +12,16 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  const results: Record<string, unknown> = {};
   try {
-    const result = await syncEdmtrainShows(90);
-    return NextResponse.json({ ok: true, ...result });
+    results.nyc = await syncEdmtrainShows(90);
   } catch (e) {
-    console.error("[cron sync-shows] failed", e);
-    return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : String(e) },
-      { status: 500 }
-    );
+    results.nyc = { error: e instanceof Error ? e.message : String(e) };
   }
+  try {
+    results.festivals = await syncEdmtrainFestivals(365);
+  } catch (e) {
+    results.festivals = { error: e instanceof Error ? e.message : String(e) };
+  }
+  return NextResponse.json({ ok: true, results });
 }
