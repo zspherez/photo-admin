@@ -255,15 +255,26 @@ export async function pullFollowedArtists(maxArtists = 500): Promise<number> {
   return n;
 }
 
-export async function pullPlaylistArtists(maxPlaylists = 30, maxTracksPerPlaylist = 100): Promise<{
+export async function pullPlaylistArtists(maxPlaylists = 100, maxTracksPerPlaylist = 100): Promise<{
   playlists: number;
   artists: number;
+  removed: number;
 }> {
-  const playlistsRes = await spotifyFetch<{
-    items: { id: string; name: string; external_urls?: { spotify?: string } }[];
-    next: string | null;
-  }>(`/me/playlists?limit=${Math.min(50, maxPlaylists)}`);
-  const playlists = (playlistsRes.items ?? []).slice(0, maxPlaylists);
+  // Paginate the full playlist list so deletions are reflected accurately.
+  const playlists: { id: string; name: string; external_urls?: { spotify?: string } }[] = [];
+  let offset = 0;
+  while (playlists.length < maxPlaylists) {
+    const pageSize = Math.min(50, maxPlaylists - playlists.length);
+    const res = await spotifyFetch<{
+      items: { id: string; name: string; external_urls?: { spotify?: string } }[];
+      next: string | null;
+    }>(`/me/playlists?limit=${pageSize}&offset=${offset}`);
+    const items = res.items ?? [];
+    if (items.length === 0) break;
+    playlists.push(...items);
+    if (!res.next) break;
+    offset += items.length;
+  }
 
   const playlistDbIds = new Map<string, string>();
   for (const pl of playlists) {
@@ -320,7 +331,34 @@ export async function pullPlaylistArtists(maxPlaylists = 30, maxTracksPerPlaylis
     }
   }
 
-  return { playlists: playlists.length, artists: allSpotifyIds.size };
+  // Reconcile: delete any SpotifyPlaylist (and via cascade, ArtistPlaylist) that
+  // is no longer in your account. Also drop ArtistPlaylist links for playlists
+  // that survived but no longer contain the artist (e.g. you removed the track).
+  const seenSpotifyIds = playlists.map((p) => p.id);
+  const removedPlaylists = await db.spotifyPlaylist.deleteMany({
+    where: { spotifyId: { notIn: seenSpotifyIds } },
+  });
+  for (const [playlistDbId, currentArtistDbIds] of (() => {
+    const m = new Map<string, string[]>();
+    for (const [pid, sids] of artistsByPlaylistDbId) {
+      m.set(pid, Array.from(sids).map((s) => dbIdBySpotify.get(s)).filter((x): x is string => !!x));
+    }
+    return m;
+  })()) {
+    await db.artistPlaylist.deleteMany({
+      where: { playlistId: playlistDbId, artistId: { notIn: currentArtistDbIds } },
+    });
+  }
+  // Clean up spotify_playlist signals for artists with zero remaining playlist links.
+  await db.listenSignal.deleteMany({
+    where: { source: "spotify_playlist", artist: { playlists: { none: {} } } },
+  });
+
+  return {
+    playlists: playlists.length,
+    artists: allSpotifyIds.size,
+    removed: removedPlaylists.count,
+  };
 }
 
 export async function syncSpotifyListens(): Promise<{
