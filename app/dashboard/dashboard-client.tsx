@@ -330,13 +330,11 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
                           {a.playlists.slice(0, 3).map((pl) => (
                             <a
                               key={pl.spotifyId}
-                              href={pl.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title={`In your Spotify playlist "${pl.name}"`}
+                              href={`spotify:playlist:${pl.spotifyId}`}
+                              title={`Open "${pl.name}" in Spotify`}
                               className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-emerald-200 transition hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900 dark:hover:bg-emerald-950"
                             >
-                              ♪ {pl.name} ↗
+                              ♪ {pl.name}
                             </a>
                           ))}
                           {a.playlists.length > 3 && (

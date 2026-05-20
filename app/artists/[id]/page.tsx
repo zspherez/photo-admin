@@ -36,9 +36,11 @@ function getExternalLinks(artist: {
 }): ExternalLink[] {
   const links: ExternalLink[] = [];
   if (artist.spotifyId) {
+    // spotify: URI opens directly in the desktop app on macOS/Windows;
+    // browser falls back to open.spotify.com if app not installed.
     links.push({
       label: "Spotify",
-      href: `https://open.spotify.com/artist/${artist.spotifyId}`,
+      href: `spotify:artist:${artist.spotifyId}`,
       type: "spotify",
     });
   }
@@ -166,12 +168,10 @@ export default async function ArtistPage({ params }: { params: Promise<{ id: str
             {artist.playlists.map((ap) => (
               <a
                 key={ap.playlist.spotifyId}
-                href={ap.playlist.url}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={`spotify:playlist:${ap.playlist.spotifyId}`}
                 className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-emerald-200 transition hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900 dark:hover:bg-emerald-950"
               >
-                ♪ {ap.playlist.name} ↗
+                ♪ {ap.playlist.name}
               </a>
             ))}
           </div>
