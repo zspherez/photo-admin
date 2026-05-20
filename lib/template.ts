@@ -22,7 +22,7 @@ export const DEFAULT_TEMPLATE_SUBJECT = "Photography for upcoming NYC {{artist}}
 
 export const DEFAULT_TEMPLATE_HTML = `<html>
   <body>
-    <p>Hi {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in NYC in a few weeks. I am a multimedia creative specialist local to NYC and would love to work together to capture this show!</p>
+    <p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in NYC in a few weeks. I am a multimedia creative specialist local to NYC and would love to work together to capture this show!</p>
     <p>Gave a brief summary of my rates/deliverables below, and attached my full rate card to this email but I'm happy to work with you to meet your needs!</p>
     <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
     <p>My standard NYC show rate is $400 for photo/video, or $200 for just photo, more details in my rate card.</p>
