@@ -192,7 +192,12 @@ export default async function FestivalDetailPage({
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-sm font-medium">{r.artist.name}</span>
+                      <Link
+                        href={`/artists/${r.artist.id}`}
+                        className="text-sm font-medium hover:underline"
+                      >
+                        {r.artist.name}
+                      </Link>
                       {r.topSignal && (
                         <Badge tone="success">{rankLabel(r.topSignal.source, r.topSignal.rank)}</Badge>
                       )}

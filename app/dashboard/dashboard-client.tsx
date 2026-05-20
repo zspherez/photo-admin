@@ -316,7 +316,12 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
                         className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50/50 px-3 py-2 dark:border-zinc-900 dark:bg-zinc-900/40"
                       >
                         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                          <span className="text-sm font-medium">{a.name}</span>
+                          <Link
+                            href={`/artists/${a.id}`}
+                            className="text-sm font-medium hover:underline"
+                          >
+                            {a.name}
+                          </Link>
                           {a.topSignal && (
                             <Badge tone="success">
                               {formatRankLabel(a.topSignal.source, a.topSignal.rank)}
