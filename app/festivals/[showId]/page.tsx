@@ -7,6 +7,7 @@ import { getTestOverride } from "@/lib/resend";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button, LinkButton } from "@/components/ui/button";
+import { ArtistLink } from "@/components/artist-modal";
 import { cn } from "@/lib/cn";
 
 export const dynamic = "force-dynamic";
@@ -192,12 +193,9 @@ export default async function FestivalDetailPage({
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <Link
-                        href={`/artists/${r.artist.id}`}
-                        className="text-sm font-medium hover:underline"
-                      >
+                      <ArtistLink artistId={r.artist.id} className="text-sm font-medium">
                         {r.artist.name}
-                      </Link>
+                      </ArtistLink>
                       {r.topSignal && (
                         <Badge tone="success">{rankLabel(r.topSignal.source, r.topSignal.rank)}</Badge>
                       )}

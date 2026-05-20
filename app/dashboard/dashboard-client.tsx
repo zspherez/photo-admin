@@ -15,6 +15,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button, LinkButton } from "@/components/ui/button";
+import { ArtistLink } from "@/components/artist-modal";
 import { cn } from "@/lib/cn";
 import {
   sendNowAction,
@@ -325,17 +326,17 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
                       <> · <span className="text-amber-600 dark:text-amber-400">★ Interested</span></>
                     )}
                   </p>
-                  <div className="flex shrink-0 items-center gap-0.5">
+                  <div className="flex shrink-0 items-center gap-1">
                     <form action={toggleInterestedAction}>
                       <input type="hidden" name="showId" value={show.id} />
                       <button
                         type="submit"
                         title={show.interestedAt ? "Unmark interested" : "Mark interested"}
                         className={cn(
-                          "rounded p-1 text-sm transition",
+                          "inline-flex h-8 w-8 items-center justify-center rounded-md border text-base transition",
                           show.interestedAt
-                            ? "text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/40"
-                            : "text-zinc-300 hover:bg-zinc-100 hover:text-amber-500 dark:text-zinc-700 dark:hover:bg-zinc-900"
+                            ? "border-amber-300 bg-amber-50 text-amber-600 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400 dark:hover:bg-amber-950"
+                            : "border-zinc-200 text-zinc-500 hover:border-amber-300 hover:text-amber-500 dark:border-zinc-800 dark:text-zinc-500 dark:hover:border-amber-800 dark:hover:text-amber-400"
                         )}
                       >
                         {show.interestedAt ? "★" : "☆"}
@@ -346,7 +347,7 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
                       <button
                         type="submit"
                         title={show.dismissedAt ? "Restore" : "Dismiss"}
-                        className="rounded p-1 text-xs text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-300"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-zinc-200 text-base text-zinc-500 transition hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
                       >
                         {show.dismissedAt ? "↺" : "×"}
                       </button>
@@ -364,12 +365,9 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
                         className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-100 bg-zinc-50/50 px-3 py-2 dark:border-zinc-900 dark:bg-zinc-900/40"
                       >
                         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                          <Link
-                            href={`/artists/${a.id}`}
-                            className="text-sm font-medium hover:underline"
-                          >
+                          <ArtistLink artistId={a.id} className="text-sm font-medium">
                             {a.name}
-                          </Link>
+                          </ArtistLink>
                           {a.topSignal && (
                             <Badge tone="success">
                               {formatRankLabel(a.topSignal.source, a.topSignal.rank)}
