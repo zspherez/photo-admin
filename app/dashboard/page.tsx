@@ -39,7 +39,7 @@ export default async function DashboardPage({
 
   const [matched, totalUpcoming, totalSignals] = await Promise.all([
     getMatchedShowsForClient(),
-    db.show.count({ where: { date: { gte: new Date() } } }),
+    db.show.count({ where: { date: { gte: new Date() }, isFestival: false } }),
     db.listenSignal.count(),
   ]);
 

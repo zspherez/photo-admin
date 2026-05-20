@@ -78,6 +78,7 @@ export async function getMatchedUpcomingShows(
   const shows = await db.show.findMany({
     where: {
       date: { gte: new Date(), lte: rangeEndDate(filters.range) },
+      isFestival: false,
       artists: {
         some: {
           artist: {
