@@ -62,6 +62,13 @@ function rangeEndDate(range: RangeFilter): Date {
   return new Date(now.getTime() + days * 86400_000);
 }
 
+// Loads the maximum useful window once; client-side filtering handles
+// range/source/contact/status/search. The widest range we offer is 90d, so
+// load 90d and let the client narrow.
+export async function getMatchedShowsForClient(): Promise<MatchedShow[]> {
+  return getMatchedUpcomingShows({ ...DEFAULT_FILTERS, range: "90d" });
+}
+
 export async function getMatchedUpcomingShows(
   filters: MatchFilters = DEFAULT_FILTERS
 ): Promise<MatchedShow[]> {
