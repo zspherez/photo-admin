@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { applyTemplate, buildVarsForShow, ensureDefaultTemplate } from "@/lib/template";
-import { sendEmailViaResend } from "@/lib/resend";
+import { getTestOverride, sendEmailViaResend } from "@/lib/resend";
 
 export interface SendOutreachInput {
   showId: string;
@@ -73,12 +73,13 @@ export async function sendOutreach({
     outreachId: outreach.id,
   });
 
+  const isTestSend = !!getTestOverride();
   await db.outreach.update({
     where: { id: outreach.id },
     data: {
       finalSubject: subject,
       finalHtml: html,
-      status: result.error ? "failed" : "sent",
+      status: result.error ? "failed" : isTestSend ? "test" : "sent",
       error: result.error,
       providerMessageId: result.providerMessageId,
       sentAt: result.error ? null : new Date(),
