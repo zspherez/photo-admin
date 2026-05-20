@@ -1,5 +1,7 @@
-import Link from "next/link";
 import { db } from "@/lib/db";
+import { CardLink } from "@/components/ui/card";
+import { LinkButton } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +47,9 @@ function groupFestivals(rows: FestivalRow[]): FestivalGroup[] {
     }
   }
   return Array.from(groups.values()).sort(
-    (a, b) => Math.min(...a.dates.map((d) => d.getTime())) - Math.min(...b.dates.map((d) => d.getTime()))
+    (a, b) =>
+      Math.min(...a.dates.map((d) => d.getTime())) -
+      Math.min(...b.dates.map((d) => d.getTime()))
   );
 }
 
@@ -74,60 +78,56 @@ export default async function FestivalsPage() {
   const hiddenEmpty = allGroups.length - groups.length;
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-12">
-      <div className="flex items-center justify-between">
+    <main className="mx-auto max-w-6xl px-6 py-10">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <Link href="/" className="text-sm text-blue-600 hover:underline">← Home</Link>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">Festivals</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Festivals</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            {groups.length} upcoming · {festivals.length} EDMTrain event-days
-            {hiddenEmpty > 0 && ` · ${hiddenEmpty} empty-lineup ${hiddenEmpty === 1 ? "festival" : "festivals"} hidden`}
+            {groups.length} upcoming
+            {hiddenEmpty > 0 && ` · ${hiddenEmpty} empty-lineup hidden`}
           </p>
         </div>
-        <div className="flex gap-2 text-sm">
-          <Link href="/festivals/new" className="rounded-md bg-emerald-600 px-3 py-1.5 font-medium text-white hover:bg-emerald-700">
-            + Add festival
-          </Link>
-          <Link href="/dashboard" className="rounded-md border border-zinc-300 px-3 py-1.5 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900">
-            Dashboard
-          </Link>
-        </div>
+        <LinkButton href="/festivals/new" variant="primary" size="sm">+ Add festival</LinkButton>
       </div>
 
       {groups.length === 0 ? (
-        <div className="mt-10 rounded-lg border border-dashed border-zinc-300 p-10 text-center text-sm text-zinc-500 dark:border-zinc-700">
-          No festivals yet. The next EDMTrain sync will populate this, or click <b>+ Add festival</b> to add one manually.
+        <div className="mt-10 rounded-xl border border-dashed border-zinc-300 p-12 text-center text-sm text-zinc-500 dark:border-zinc-700">
+          No festivals yet. The next sync will populate this, or add one manually.
         </div>
       ) : (
-        <ul className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <ul className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {groups.map(({ primary: f, dates }) => {
             const matched = f.artists.filter((sa) => sa.artist.listenSignals.length > 0).length;
             const withContact = f.artists.filter((sa) => sa.artist.contacts.length > 0).length;
-            const headliners = f.artists.slice(0, 4).map((sa) => sa.artist.name);
+            const headliners = f.artists.slice(0, 3).map((sa) => sa.artist.name);
             return (
-              <Link
-                key={f.id}
-                href={`/festivals/${f.id}`}
-                className="rounded-lg border border-zinc-200 p-4 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
-              >
-                <p className="font-medium">{f.eventName || f.venueName}</p>
-                <p className="mt-1 text-xs text-zinc-500">
+              <CardLink key={f.id} href={`/festivals/${f.id}`} className="p-5">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="font-medium leading-tight">{f.eventName || f.venueName}</p>
+                  {f.source === "manual" && <Badge tone="muted" size="xs">manual</Badge>}
+                </div>
+                <p className="mt-1.5 text-xs text-zinc-500">
                   {dateRangeLabel(dates)}
                   {dates.length > 1 && (
-                    <span className="ml-1 text-zinc-400">({dates.length} days)</span>
+                    <span className="ml-1 text-zinc-400">({dates.length}d)</span>
                   )}
-                  {" · "}{f.venueName}{f.state ? `, ${f.state}` : ""}
-                  {f.source === "manual" && <span className="ml-2 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">manual</span>}
                 </p>
-                <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
-                  {f.artists.length} artists · <span className="text-emerald-700 dark:text-emerald-400">{matched} matched</span> · <span className="text-blue-700 dark:text-blue-400">{withContact} with contact</span>
+                <p className="mt-0.5 text-xs text-zinc-500">
+                  {f.venueName}
+                  {f.state ? `, ${f.state}` : f.city ? `, ${f.city}` : ""}
                 </p>
+                <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                  <Badge tone="default" size="xs">{f.artists.length} artists</Badge>
+                  {matched > 0 && <Badge tone="success" size="xs">{matched} matched</Badge>}
+                  {withContact > 0 && <Badge tone="info" size="xs">{withContact} contact</Badge>}
+                </div>
                 {headliners.length > 0 && (
-                  <p className="mt-2 truncate text-xs text-zinc-500">
-                    {headliners.join(", ")}{f.artists.length > 4 ? ` +${f.artists.length - 4}` : ""}
+                  <p className="mt-3 truncate text-xs text-zinc-500">
+                    {headliners.join(", ")}
+                    {f.artists.length > 3 ? ` +${f.artists.length - 3}` : ""}
                   </p>
                 )}
-              </Link>
+              </CardLink>
             );
           })}
         </ul>
