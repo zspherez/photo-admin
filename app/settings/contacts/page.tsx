@@ -19,7 +19,8 @@ async function syncContacts(formData: FormData) {
 }
 
 export default async function ContactsSettingsPage() {
-  const hasConfig = !!process.env.GOOGLE_CREDENTIALS_PATH && !!process.env.SPREADSHEET_ID;
+  const hasCreds = !!process.env.GOOGLE_CREDENTIALS_JSON || !!process.env.GOOGLE_CREDENTIALS_PATH;
+  const hasConfig = hasCreds && !!process.env.SPREADSHEET_ID;
 
   let tabs: string[] = [];
   let tabError: string | null = null;
@@ -54,7 +55,8 @@ export default async function ContactsSettingsPage() {
 
       {!hasConfig && (
         <div className="mt-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-          Missing <code>GOOGLE_CREDENTIALS_PATH</code> or <code>SPREADSHEET_ID</code> in .env.
+          Missing env: need <code>SPREADSHEET_ID</code> plus one of{" "}
+          <code>GOOGLE_CREDENTIALS_JSON</code> (Vercel) or <code>GOOGLE_CREDENTIALS_PATH</code> (local).
         </div>
       )}
       {tabError && (
