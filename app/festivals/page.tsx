@@ -69,7 +69,9 @@ function dateRangeLabel(dates: Date[]): string {
 
 export default async function FestivalsPage() {
   const festivals = await loadFestivals();
-  const groups = groupFestivals(festivals);
+  const allGroups = groupFestivals(festivals);
+  const groups = allGroups.filter((g) => g.primary.artists.length > 0);
+  const hiddenEmpty = allGroups.length - groups.length;
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-12">
@@ -78,7 +80,8 @@ export default async function FestivalsPage() {
           <Link href="/" className="text-sm text-blue-600 hover:underline">← Home</Link>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">Festivals</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            {groups.length} upcoming · {festivals.length} EDMTrain event-days · multi-day festivals collapsed
+            {groups.length} upcoming · {festivals.length} EDMTrain event-days
+            {hiddenEmpty > 0 && ` · ${hiddenEmpty} empty-lineup ${hiddenEmpty === 1 ? "festival" : "festivals"} hidden`}
           </p>
         </div>
         <div className="flex gap-2 text-sm">
