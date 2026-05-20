@@ -5,7 +5,7 @@ import { sendOutreach } from "@/lib/sendOutreach";
 import { applyTemplate, buildVarsForShow, ensureDefaultTemplate } from "@/lib/template";
 import { Card, CardBody } from "@/components/ui/card";
 import { Button, LinkButton } from "@/components/ui/button";
-import { Field, TextArea } from "@/components/ui/field";
+import { TemplateEditor } from "@/components/template-editor";
 
 export const dynamic = "force-dynamic";
 
@@ -59,8 +59,7 @@ export default async function CustomizePage({
           <form action={sendCustom} className="space-y-4">
             <input type="hidden" name="showId" value={showId} />
             <input type="hidden" name="contactId" value={contactId} />
-            <Field name="subject" label="Subject" defaultValue={subject} />
-            <TextArea name="html" label="HTML body" rows={20} defaultValue={html} mono />
+            <TemplateEditor initialSubject={subject} initialHtml={html} variables={[]} />
             <div className="flex gap-2">
               <Button type="submit" variant="primary">Send now</Button>
               <LinkButton href="/dashboard" variant="secondary">Cancel</LinkButton>

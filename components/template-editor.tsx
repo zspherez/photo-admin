@@ -120,23 +120,25 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
             </ToolbarBtn>
           </>
         )}
-        <div className="ml-auto">
-          <select
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) return;
-              insertVar(v);
-              e.target.value = "";
-            }}
-            className="rounded border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
-            defaultValue=""
-          >
-            <option value="" disabled>Insert variable…</option>
-            {variables.map((v) => (
-              <option key={v} value={v}>{`{{${v}}}`}</option>
-            ))}
-          </select>
-        </div>
+        {variables.length > 0 && (
+          <div className="ml-auto">
+            <select
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) return;
+                insertVar(v);
+                e.target.value = "";
+              }}
+              className="rounded border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+              defaultValue=""
+            >
+              <option value="" disabled>Insert variable…</option>
+              {variables.map((v) => (
+                <option key={v} value={v}>{`{{${v}}}`}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {view === "visual" && <EditorContent editor={editor} />}
