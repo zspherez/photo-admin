@@ -1,0 +1,169 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model IntegrationCredential {
+  id           String    @id @default(cuid())
+  provider     String    @unique
+  accessToken  String
+  refreshToken String?
+  expiresAt    DateTime?
+  scope        String?
+  meta         String?
+  updatedAt    DateTime  @updatedAt
+  createdAt    DateTime  @default(now())
+}
+
+model Artist {
+  id             String           @id @default(cuid())
+  name           String
+  normalizedName String           @unique
+  spotifyId      String?          @unique
+  statsfmId      String?          @unique
+  edmtrainId     Int?             @unique
+  genres         String?
+  popularity     Int?
+  imageUrl       String?
+  contacts       Contact[]
+  shows          ShowArtist[]
+  listenSignals  ListenSignal[]
+  playlists      ArtistPlaylist[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+}
+
+model SpotifyPlaylist {
+  id        String           @id @default(cuid())
+  spotifyId String           @unique
+  name      String
+  url       String
+  artists   ArtistPlaylist[]
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+}
+
+model ArtistPlaylist {
+  artistId   String
+  playlistId String
+  artist     Artist          @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  playlist   SpotifyPlaylist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+
+  @@id([artistId, playlistId])
+  @@index([playlistId])
+}
+
+model Contact {
+  id          String     @id @default(cuid())
+  artistId    String
+  artist      Artist     @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  email       String
+  name        String?
+  role        String?
+  customPrice String?
+  notes       String?
+  source      String?
+  outreaches  Outreach[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@unique([artistId, email])
+  @@index([artistId])
+}
+
+model Show {
+  id              String       @id @default(cuid())
+  edmtrainId      Int          @unique
+  date            DateTime
+  venueName       String
+  city            String
+  state           String?
+  ticketUrl       String?
+  ages            String?
+  electronicGenre String?
+  raw             String?
+  artists         ShowArtist[]
+  outreaches      Outreach[]
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([date])
+}
+
+model ShowArtist {
+  showId    String
+  artistId  String
+  show      Show    @relation(fields: [showId], references: [id], onDelete: Cascade)
+  artist    Artist  @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  headliner Boolean @default(false)
+
+  @@id([showId, artistId])
+  @@index([artistId])
+}
+
+model ListenSignal {
+  id         String    @id @default(cuid())
+  artistId   String
+  artist     Artist    @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  source     String
+  rank       Int?
+  playCount  Int?
+  score      Float?
+  lastSeenAt DateTime?
+  fetchedAt  DateTime  @default(now())
+
+  @@unique([artistId, source])
+  @@index([artistId])
+}
+
+model EmailTemplate {
+  id         String     @id @default(cuid())
+  name       String     @unique
+  subject    String
+  htmlBody   String
+  isDefault  Boolean    @default(false)
+  outreaches Outreach[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
+
+model Outreach {
+  id                String         @id @default(cuid())
+  showId            String
+  show              Show           @relation(fields: [showId], references: [id], onDelete: Cascade)
+  contactId         String
+  contact           Contact        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  templateId        String?
+  template          EmailTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  finalSubject      String
+  finalHtml         String
+  status            String
+  error             String?
+  providerMessageId String?
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  firstOpenedAt    DateTime?
+  lastOpenedAt     DateTime?
+  openCount        Int            @default(0)
+  firstClickedAt   DateTime?
+  lastClickedAt    DateTime?
+  clickCount       Int            @default(0)
+  bouncedAt        DateTime?
+  complainedAt     DateTime?
+  createdAt         DateTime       @default(now())
+
+  @@unique([showId, contactId])
+  @@index([showId])
+  @@index([contactId])
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
