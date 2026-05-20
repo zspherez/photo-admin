@@ -69,6 +69,7 @@ model Contact {
   customPrice String?
   notes       String?
   source      String?
+  isFullTeam  Boolean    @default(false)
   outreaches  Outreach[]
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt

@@ -65,9 +65,20 @@ export async function syncContactsFromSheet(tabName = "Artists"): Promise<{
 
   const result = { read: rows.length, contactsUpserted: 0, artistsCreated: 0, skipped: 0 };
 
+  const fullTeamPattern = /full\s*teams?/i;
+
   for (const row of rows) {
     const artistName = (row.artist ?? row["artist name"] ?? "").trim();
-    const email = (row.email ?? "").trim().toLowerCase();
+    const emailRaw = (row.email ?? "").trim();
+    const isFullTeam = fullTeamPattern.test(emailRaw);
+    const cleanedEmail = emailRaw
+      .replace(/full\s*teams?/gi, "")
+      .replace(/[,;]\s*$/, "")
+      .replace(/^\s*[,;]\s*/, "")
+      .trim()
+      .toLowerCase();
+    const email = cleanedEmail;
+
     if (!artistName || !email) {
       result.skipped++;
       continue;
@@ -88,6 +99,7 @@ export async function syncContactsFromSheet(tabName = "Artists"): Promise<{
       customPrice: row.price || row.rate || null,
       notes: row.notes || null,
       source: "sheet",
+      isFullTeam,
     };
     await db.contact.upsert({
       where: { artistId_email: { artistId: artist.id, email } },

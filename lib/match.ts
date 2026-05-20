@@ -19,6 +19,7 @@ export interface MatchedShow {
       name: string | null;
       role: string | null;
       customPrice: string | null;
+      isFullTeam: boolean;
     }[];
   }[];
   otherArtists: { id: string; name: string }[];
@@ -139,6 +140,7 @@ export async function getMatchedUpcomingShows(
             name: c.name,
             role: c.role,
             customPrice: c.customPrice,
+            isFullTeam: c.isFullTeam,
           })),
         });
       } else {

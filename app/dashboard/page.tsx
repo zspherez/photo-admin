@@ -333,13 +333,20 @@ export default async function DashboardPage({
                           </span>
                         ))}
                         {contact && (
-                          <Link
-                            href={`/dashboard/contact/${contact.id}`}
-                            className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                            title={`${contact.name ?? ""} <${contact.email}>${contact.role ? ` · ${contact.role}` : ""}`}
-                          >
-                            {contact.customPrice ?? "edit contact"}
-                          </Link>
+                          <>
+                            <Link
+                              href={`/dashboard/contact/${contact.id}`}
+                              className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                              title={`${contact.name ?? ""} <${contact.email}>${contact.role ? ` · ${contact.role}` : ""}`}
+                            >
+                              {contact.customPrice ?? "edit contact"}
+                            </Link>
+                            {contact.isFullTeam && (
+                              <span className="rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800 dark:bg-purple-900 dark:text-purple-200" title="Email goes to the artist's full management team">
+                                Full team
+                              </span>
+                            )}
+                          </>
                         )}
                         {!contact && (
                           <Link
