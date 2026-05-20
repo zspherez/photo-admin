@@ -18,7 +18,7 @@ export function extractVars(template: string): string[] {
 
 export const DEFAULT_TEMPLATE_NAME = "default";
 
-export const DEFAULT_TEMPLATE_SUBJECT = "Photography for upcoming NYC {{artist}} show";
+export const DEFAULT_TEMPLATE_SUBJECT = "{{artist}} NYC Photo/Video";
 
 export const DEFAULT_TEMPLATE_HTML = `<html>
   <body>
