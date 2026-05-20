@@ -45,6 +45,5 @@ prisma/migrations.sqlite-backup/
 *.tsbuildinfo
 next-env.d.ts
 
-/app/generated/prisma
 
 certificates
