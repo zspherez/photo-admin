@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { SESSION_COOKIE, expectedSessionHash, constantTimeEqual } from "@/lib/auth";
+import { Card, CardBody } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
 
@@ -39,42 +41,45 @@ export default async function LoginPage({
   const { next, error } = await searchParams;
   const pwSet = !!process.env.ADMIN_PASSWORD;
   return (
-    <main className="mx-auto max-w-md px-6 py-24">
-      <h1 className="text-2xl font-semibold tracking-tight">photo-admin</h1>
-      <p className="mt-2 text-sm text-zinc-500">Sign in to continue.</p>
+    <main className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col items-center justify-center px-6">
+      <div className="mb-8 flex items-center gap-2">
+        <span className="inline-block h-3 w-3 rounded-sm bg-zinc-900 dark:bg-zinc-100" />
+        <h1 className="text-2xl font-semibold tracking-tight">photo-admin</h1>
+      </div>
+      <Card className="w-full">
+        <CardBody>
+          <h2 className="text-sm font-medium">Sign in</h2>
+          <p className="mt-1 text-xs text-zinc-500">Enter the admin password to continue.</p>
 
-      {!pwSet && (
-        <div className="mt-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-          <code>ADMIN_PASSWORD</code> is not set. Auth is currently disabled; anyone hitting this URL gets in.
-        </div>
-      )}
-      {error && (
-        <div className="mt-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-700 dark:bg-red-950 dark:text-red-200">
-          Incorrect password.
-        </div>
-      )}
+          {!pwSet && (
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              <code>ADMIN_PASSWORD</code> not set — auth is disabled.
+            </div>
+          )}
+          {error && (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+              Incorrect password.
+            </div>
+          )}
 
-      <form action={login} className="mt-6 space-y-4">
-        <input type="hidden" name="next" value={next ?? "/"} />
-        <div>
-          <label htmlFor="password" className="text-sm font-medium">Password</label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            autoFocus
-            required
-            className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-          />
-        </div>
-        <button
-          type="submit"
-          className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
-        >
-          Sign in
-        </button>
-      </form>
+          <form action={login} className="mt-4 space-y-3">
+            <input type="hidden" name="next" value={next ?? "/"} />
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              autoFocus
+              required
+              placeholder="Password"
+              className="block h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950"
+            />
+            <Button type="submit" variant="primary" size="md" className="w-full">
+              Sign in
+            </Button>
+          </form>
+        </CardBody>
+      </Card>
     </main>
   );
 }

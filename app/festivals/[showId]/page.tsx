@@ -4,6 +4,10 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { sendOutreach } from "@/lib/sendOutreach";
 import { getTestOverride } from "@/lib/resend";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button, LinkButton } from "@/components/ui/button";
+import { cn } from "@/lib/cn";
 
 export const dynamic = "force-dynamic";
 
@@ -102,9 +106,17 @@ export default async function FestivalDetailPage({
 
   const eligibleSendCount = filtered.filter((r) => r.contact && r.outreach?.status !== "sent").length;
 
+  const filterOptions: { key: string; label: string }[] = [
+    { key: "all", label: "All" },
+    { key: "matched", label: "Matched" },
+    { key: "matched_with_contact", label: "Matched + contact" },
+    { key: "needs_contact", label: "Needs contact" },
+    { key: "unsent", label: "Unsent" },
+  ];
+
   return (
-    <main className="mx-auto max-w-5xl px-6 py-12">
-      <Link href="/festivals" className="text-sm text-blue-600 hover:underline">← Festivals</Link>
+    <main className="mx-auto max-w-5xl px-6 py-10">
+      <Link href="/festivals" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← All festivals</Link>
       <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{festival.eventName || festival.venueName}</h1>
@@ -112,112 +124,107 @@ export default async function FestivalDetailPage({
             {festival.date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
             {" · "}{festival.venueName}{festival.state ? `, ${festival.state}` : ""}
             {festival.ticketUrl && (
-              <> · <a href={festival.ticketUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">EDMTrain ↗</a></>
+              <> · <a href={festival.ticketUrl} target="_blank" rel="noopener noreferrer" className="text-zinc-700 hover:underline dark:text-zinc-300">EDMTrain ↗</a></>
             )}
           </p>
         </div>
       </div>
 
-      {testOverride && (
-        <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-          Test override active — sends route to <b>{testOverride}</b>. Outreach rows stored as <code>status=test</code>.
-        </div>
-      )}
-      {(sp.sent || sp.failed || sp.skipped) && (
-        <div className="mt-4 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">
-          Bulk send: {sp.sent || 0} sent, {sp.failed || 0} failed, {sp.skipped || 0} skipped.
-          {sp.errors && <span className="ml-2 text-red-700 dark:text-red-300">{sp.errors}</span>}
-        </div>
-      )}
+      <div className="mt-4 space-y-2">
+        {testOverride && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+            Test override active — sends route to <b>{testOverride}</b>. Outreach rows stored as <code>status=test</code>.
+          </div>
+        )}
+        {(sp.sent || sp.failed || sp.skipped) && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Bulk send: {sp.sent || 0} sent, {sp.failed || 0} failed, {sp.skipped || 0} skipped.
+            {sp.errors && <span className="ml-2 text-red-700 dark:text-red-300">{sp.errors}</span>}
+          </div>
+        )}
+      </div>
 
-      <section className="mt-6 flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-zinc-500">Filter:</span>
-        {([
-          ["all", "All"],
-          ["matched", "Matched"],
-          ["matched_with_contact", "Matched + contact"],
-          ["needs_contact", "Needs contact"],
-          ["unsent", "Unsent (sendable)"],
-        ] as const).map(([key, label]) => (
-          <Link
-            key={key}
-            href={`/festivals/${showId}${key === "all" ? "" : `?filter=${key}`}`}
-            className={`rounded-full px-2.5 py-0.5 font-medium ${
-              filter === key
-                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                : "border border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            }`}
-          >
-            {label}
-          </Link>
-        ))}
-      </section>
+      <Card className="mt-6 p-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Filter</span>
+          {filterOptions.map((opt) => (
+            <Link
+              key={opt.key}
+              href={`/festivals/${showId}${opt.key === "all" ? "" : `?filter=${opt.key}`}`}
+              className={cn(
+                "rounded-full px-2.5 py-0.5 text-xs font-medium transition",
+                filter === opt.key
+                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                  : "border border-zinc-200 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100"
+              )}
+            >
+              {opt.label}
+            </Link>
+          ))}
+        </div>
+      </Card>
 
       <form action={bulkSend} className="mt-6">
         <input type="hidden" name="showId" value={showId} />
 
-        <div className="sticky top-0 z-10 -mx-4 mb-3 flex items-center justify-between gap-2 rounded-md border border-zinc-200 bg-white px-4 py-2 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="sticky top-12 z-20 -mx-1 mb-3 flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white/95 px-4 py-2 shadow-sm backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
           <span className="text-sm text-zinc-600 dark:text-zinc-400">
-            {filtered.length} shown · {eligibleSendCount} sendable
+            {filtered.length} shown · <b>{eligibleSendCount}</b> sendable
           </span>
-          <button
-            type="submit"
-            className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={eligibleSendCount === 0}
-          >
+          <Button type="submit" variant="primary" size="md" disabled={eligibleSendCount === 0}>
             Send to selected
-          </button>
+          </Button>
         </div>
 
-        <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
-          {filtered.map((r) => {
-            const canSend = !!r.contact && r.outreach?.status !== "sent";
-            return (
-              <li key={r.artist.id} className="flex items-center gap-3 px-4 py-3">
-                <input
-                  type="checkbox"
-                  name="contactIds"
-                  value={r.contact?.id ?? ""}
-                  disabled={!canSend}
-                  defaultChecked={canSend && filter === "unsent"}
-                  className="h-4 w-4 accent-emerald-600 disabled:cursor-not-allowed disabled:opacity-30"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">{r.artist.name}</span>
-                    {r.topSignal && (
-                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
-                        {rankLabel(r.topSignal.source, r.topSignal.rank)}
-                      </span>
+        <Card>
+          <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
+            {filtered.map((r) => {
+              const canSend = !!r.contact && r.outreach?.status !== "sent";
+              return (
+                <li key={r.artist.id} className="flex items-center gap-3 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    name="contactIds"
+                    value={r.contact?.id ?? ""}
+                    disabled={!canSend}
+                    defaultChecked={canSend && filter === "unsent"}
+                    className="h-4 w-4 accent-zinc-900 disabled:cursor-not-allowed disabled:opacity-30 dark:accent-zinc-100"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-sm font-medium">{r.artist.name}</span>
+                      {r.topSignal && (
+                        <Badge tone="success">{rankLabel(r.topSignal.source, r.topSignal.rank)}</Badge>
+                      )}
+                      {r.genres.slice(0, 2).map((g) => (
+                        <Badge key={g} tone="muted" size="xs">{g}</Badge>
+                      ))}
+                      {r.contact?.isFullTeam && <Badge tone="accent">Full team</Badge>}
+                    </div>
+                    {r.contact ? (
+                      <p className="mt-0.5 truncate text-xs text-zinc-500">
+                        {r.contact.name ? `${r.contact.name} · ` : ""}{r.contact.email}
+                        {r.contact.customPrice ? ` · ${r.contact.customPrice}` : ""}
+                        {r.outreach?.status === "sent" && " · already sent"}
+                        {r.outreach?.status === "test" && " · test sent (sendable)"}
+                      </p>
+                    ) : (
+                      <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
+                        No contact ·{" "}
+                        <Link href={`/dashboard/add-contact/${r.artist.id}`} className="underline">add one</Link>
+                      </p>
                     )}
-                    {r.genres.slice(0, 2).map((g) => (
-                      <span key={g} className="rounded-full border border-zinc-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
-                        {g}
-                      </span>
-                    ))}
                   </div>
-                  {r.contact ? (
-                    <p className="mt-0.5 truncate text-xs text-zinc-500">
-                      {r.contact.name ? `${r.contact.name} · ` : ""}{r.contact.email}
-                      {r.contact.customPrice ? ` · ${r.contact.customPrice}` : ""}
-                      {r.outreach?.status === "sent" && " · already sent"}
-                      {r.outreach?.status === "test" && " · test sent (sendable)"}
-                    </p>
-                  ) : (
-                    <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
-                      No contact · <Link href={`/dashboard/add-contact/${r.artist.id}`} className="underline">add one</Link>
-                    </p>
+                  {r.contact && (
+                    <LinkButton href={`/dashboard/customize/${showId}/${r.contact.id}`} variant="secondary" size="sm">
+                      Customize
+                    </LinkButton>
                   )}
-                </div>
-                {r.contact && (
-                  <Link href={`/dashboard/customize/${showId}/${r.contact.id}`} className="rounded-md border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900">
-                    Customize
-                  </Link>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
       </form>
     </main>
   );

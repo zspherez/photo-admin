@@ -1,5 +1,6 @@
-import Link from "next/link";
 import { db } from "@/lib/db";
+import { CardLink } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 
 export const dynamic = "force-dynamic";
 
@@ -14,43 +15,80 @@ export default async function SettingsIndex() {
   ]);
   const settingMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
 
-  const cards: { title: string; href: string; status: string; ok: boolean }[] = [
-    { title: "General", href: "/settings/general", status: `${Object.keys(settingMap).length}/3 set`, ok: Object.keys(settingMap).length === 3 },
-    { title: "Spotify", href: "/settings/spotify", status: spotify ? "Connected" : "Not connected", ok: !!spotify },
-    { title: "Stats.fm", href: "/settings/statsfm", status: statsfm ? "Connected" : "Not connected", ok: !!statsfm },
-    { title: "Contacts (Sheets)", href: "/settings/contacts", status: `${contactCount} contacts`, ok: contactCount > 0 },
-    { title: "Email template", href: "/settings/template", status: template ? "Saved" : "Not saved", ok: !!template },
-    { title: "Shows (EDMTrain)", href: "/shows", status: `${showCount} upcoming`, ok: showCount > 0 },
+  const cards: { title: string; href: string; status: string; ok: boolean; description: string }[] = [
+    {
+      title: "General",
+      href: "/settings/general",
+      status: `${Object.keys(settingMap).length}/3 set`,
+      ok: Object.keys(settingMap).length === 3,
+      description: "Portfolio URL, default rate, venue blocklist.",
+    },
+    {
+      title: "Spotify",
+      href: "/settings/spotify",
+      status: spotify ? "Connected" : "Not connected",
+      ok: !!spotify,
+      description: "Top artists, recent plays, follows, playlists.",
+    },
+    {
+      title: "Stats.fm",
+      href: "/settings/statsfm",
+      status: statsfm ? "Connected" : "Not connected",
+      ok: !!statsfm,
+      description: "Lifetime listening history. Rotate token here.",
+    },
+    {
+      title: "Contacts",
+      href: "/settings/contacts",
+      status: `${contactCount.toLocaleString()} contacts`,
+      ok: contactCount > 0,
+      description: "Sync from Google Sheet.",
+    },
+    {
+      title: "Email template",
+      href: "/settings/template",
+      status: template ? "Saved" : "Not saved",
+      ok: !!template,
+      description: "Subject + HTML body with variables.",
+    },
+    {
+      title: "EDMTrain shows",
+      href: "/shows",
+      status: `${showCount.toLocaleString()} upcoming`,
+      ok: showCount > 0,
+      description: "All NYC shows including non-matched.",
+    },
   ];
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-12">
-      <Link href="/" className="text-sm text-blue-600 hover:underline">← Home</Link>
-      <h1 className="mt-4 text-2xl font-semibold tracking-tight">Settings</h1>
-      <div className="mt-6 flex justify-end">
+    <main className="mx-auto max-w-4xl px-6 py-10">
+      <div className="flex items-end justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+          <p className="mt-1 text-sm text-zinc-500">Integrations + runtime config.</p>
+        </div>
         <form action="/api/auth/logout" method="post">
           <button
             type="submit"
-            className="text-xs text-zinc-500 hover:underline"
+            className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200"
           >
             Log out
           </button>
         </form>
       </div>
 
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {cards.map((c) => (
-          <Link
-            key={c.href}
-            href={c.href}
-            className="rounded-lg border border-zinc-200 p-4 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
-          >
-            <div className="flex items-center justify-between">
+          <CardLink key={c.href} href={c.href} className="p-5">
+            <div className="flex items-start justify-between gap-2">
               <span className="font-medium">{c.title}</span>
-              <span className={`inline-block h-2 w-2 rounded-full ${c.ok ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-700"}`} />
+              <Badge tone={c.ok ? "success" : "default"} size="xs">
+                {c.ok ? "Ready" : "Setup"}
+              </Badge>
             </div>
             <p className="mt-1 text-xs text-zinc-500">{c.status}</p>
-          </Link>
+            <p className="mt-2 text-xs text-zinc-500">{c.description}</p>
+          </CardLink>
         ))}
       </div>
     </main>
