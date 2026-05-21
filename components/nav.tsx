@@ -8,6 +8,7 @@ const ITEMS: { href: string; label: string; match: (p: string) => boolean }[] = 
   { href: "/dashboard", label: "Shows", match: (p) => p === "/dashboard" || p.startsWith("/dashboard/") },
   { href: "/festivals", label: "Festivals", match: (p) => p === "/festivals" || p.startsWith("/festivals/") },
   { href: "/new", label: "New", match: (p) => p === "/new" },
+  { href: "/outreach", label: "Sent", match: (p) => p === "/outreach" || p.startsWith("/outreach/") },
   { href: "/shows", label: "All shows", match: (p) => p === "/shows" },
   { href: "/settings", label: "Settings", match: (p) => p === "/settings" || p.startsWith("/settings/") },
 ];
