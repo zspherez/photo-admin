@@ -13,6 +13,7 @@ export interface MatchedShow {
     id: string;
     name: string;
     genres: string[];
+    popularity: number | null;
     topSignal: { source: string; rank: number | null } | null;
     playlists: { spotifyId: string; name: string; url: string }[];
     contacts: {
@@ -142,7 +143,8 @@ export async function getMatchedUpcomingShows(
           id: sa.artist.id,
           name: sa.artist.name,
           genres,
-          topSignal: { source: top.source, rank: top.rank },
+          popularity: sa.artist.popularity,
+          topSignal: top ? { source: top.source, rank: top.rank } : null,
           playlists: sa.artist.playlists.map((ap) => ({
             spotifyId: ap.playlist.spotifyId,
             name: ap.playlist.name,
@@ -206,4 +208,111 @@ export async function getMatchedUpcomingShows(
   });
 
   return filtered.slice(0, 200);
+}
+
+// Shows where I have NO listen signal but the artist is otherwise notable —
+// high Spotify popularity. Helps surface gigs I'd want despite the artist
+// not being in my listening graph. Loads 90d, client narrows further.
+export async function getUnknownBigShowsForClient(
+  minPopularity = 60
+): Promise<MatchedShow[]> {
+  const shows = await db.show.findMany({
+    where: {
+      date: { gte: new Date(), lte: rangeEndDate("90d") },
+      isFestival: false,
+      dismissedAt: null,
+      artists: {
+        some: {
+          artist: {
+            popularity: { gte: minPopularity },
+            listenSignals: { none: {} },
+          },
+        },
+      },
+    },
+    orderBy: { date: "asc" },
+    include: {
+      artists: {
+        include: {
+          artist: {
+            include: {
+              listenSignals: { orderBy: { rank: "asc" } },
+              contacts: true,
+              playlists: { include: { playlist: true } },
+            },
+          },
+        },
+      },
+      outreaches: true,
+    },
+    take: 200,
+  });
+
+  type ShowArtist = (typeof shows)[number]["artists"][number];
+
+  return shows.map((show) => {
+    const featured: MatchedShow["matchedArtists"] = [];
+    const others: MatchedShow["otherArtists"] = [];
+    for (const sa of show.artists as ShowArtist[]) {
+      const isFeatured =
+        sa.artist.popularity != null &&
+        sa.artist.popularity >= minPopularity &&
+        sa.artist.listenSignals.length === 0;
+      if (isFeatured) {
+        let genres: string[] = [];
+        if (sa.artist.genres) {
+          try {
+            const parsed = JSON.parse(sa.artist.genres) as unknown;
+            if (Array.isArray(parsed)) genres = parsed.filter((g): g is string => typeof g === "string");
+          } catch {
+            // ignore
+          }
+        }
+        featured.push({
+          id: sa.artist.id,
+          name: sa.artist.name,
+          genres,
+          popularity: sa.artist.popularity,
+          topSignal: null,
+          playlists: sa.artist.playlists.map((ap) => ({
+            spotifyId: ap.playlist.spotifyId,
+            name: ap.playlist.name,
+            url: ap.playlist.url,
+          })),
+          contacts: sa.artist.contacts.map((c) => ({
+            id: c.id,
+            email: c.email,
+            name: c.name,
+            role: c.role,
+            customPrice: c.customPrice,
+            isFullTeam: c.isFullTeam,
+          })),
+        });
+      } else {
+        others.push({ id: sa.artist.id, name: sa.artist.name });
+      }
+    }
+    return {
+      id: show.id,
+      date: show.date,
+      venueName: show.venueName,
+      city: show.city,
+      state: show.state,
+      ticketUrl: show.ticketUrl,
+      dismissedAt: show.dismissedAt,
+      interestedAt: show.interestedAt,
+      matchedArtists: featured,
+      otherArtists: others,
+      outreach: show.outreaches.map((o) => ({
+        contactId: o.contactId,
+        sentAt: o.sentAt,
+        deliveredAt: o.deliveredAt,
+        status: o.status,
+        firstClickedAt: o.firstClickedAt,
+        clickCount: o.clickCount,
+        firstOpenedAt: o.firstOpenedAt,
+        openCount: o.openCount,
+      })),
+    };
+  }).filter((s) => s.matchedArtists.length > 0);
 }

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
+import { updateContactInSheet } from "@/lib/sheets";
 import { Card, CardBody } from "@/components/ui/card";
 import { Button, LinkButton } from "@/components/ui/button";
 import { Field, TextArea } from "@/components/ui/field";
@@ -21,10 +22,35 @@ async function saveContact(formData: FormData) {
     redirect(`/dashboard/contact/${contactId}?error=missing_fields`);
   }
 
+  const prior = await db.contact.findUnique({
+    where: { id: contactId },
+    include: { artist: true },
+  });
+  if (!prior) {
+    redirect(`/dashboard/contact/${contactId}?error=not_found`);
+  }
+
   await db.contact.update({
     where: { id: contactId },
     data: { email, name, role, customPrice, notes },
   });
+
+  // Push the edit to the Sheet (best-effort). Falls back to append if the
+  // row isn't there (e.g. contact was originally added manually).
+  try {
+    await updateContactInSheet({
+      artistName: prior.artist.name,
+      oldEmail: prior.email,
+      newEmail: email,
+      managerName: name,
+      role,
+      customPrice,
+      notes,
+    });
+  } catch (e) {
+    console.error("[sheet update] failed", e);
+  }
+
   revalidatePath("/dashboard");
   redirect("/dashboard?added=1");
 }

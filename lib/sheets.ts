@@ -128,6 +128,16 @@ export interface AppendContactInput {
   notes?: string | null;
 }
 
+function colNumToLetter(n: number): string {
+  let s = "";
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
 // Appends a new contact row to the Artists tab so the Sheet stays in sync
 // with manual additions. Best-effort: caller should catch + log on failure.
 export async function appendContactToSheet(
@@ -173,5 +183,121 @@ export async function appendContactToSheet(
     insertDataOption: "INSERT_ROWS",
     requestBody: { values: [row] },
   });
+}
+
+export interface UpdateContactInput {
+  artistName: string;
+  oldEmail: string;
+  newEmail: string;
+  managerName?: string | null;
+  role?: string | null;
+  customPrice?: string | null;
+  notes?: string | null;
+}
+
+// Updates an existing row in the Artists tab. Finds the row by matching
+// (artist name + old email) — old vs new because the user might be changing
+// the email itself. If the row isn't found (e.g. contact was originally
+// added manually and never appeared in the sheet), appends a fresh row.
+export async function updateContactInSheet(
+  data: UpdateContactInput,
+  tabName = "Artists"
+): Promise<{ updated: boolean; rowIndex: number | null }> {
+  const sheets = getSheetsClient();
+  const spreadsheetId = process.env.SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error("Missing SPREADSHEET_ID");
+
+  const allRes = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${tabName}!A:ZZ`,
+  });
+  const values = (allRes.data.values ?? []) as string[][];
+  if (values.length < 2) {
+    // Just a header (or empty) — append instead
+    await appendContactToSheet(
+      {
+        artistName: data.artistName,
+        email: data.newEmail,
+        managerName: data.managerName,
+        role: data.role,
+        customPrice: data.customPrice,
+        notes: data.notes,
+      },
+      tabName
+    );
+    return { updated: false, rowIndex: null };
+  }
+
+  const [headerRaw, ...rows] = values;
+  const header = headerRaw.map((h) => (h ?? "").trim().toLowerCase());
+  const artistCol = header.findIndex((h) => h === "artist" || h === "artist name");
+  const emailCol = header.indexOf("email");
+  if (artistCol < 0 || emailCol < 0) {
+    // Can't reliably locate — fall back to append
+    await appendContactToSheet(
+      {
+        artistName: data.artistName,
+        email: data.newEmail,
+        managerName: data.managerName,
+        role: data.role,
+        customPrice: data.customPrice,
+        notes: data.notes,
+      },
+      tabName
+    );
+    return { updated: false, rowIndex: null };
+  }
+
+  const targetArtist = data.artistName.trim().toLowerCase();
+  const targetEmail = data.oldEmail.trim().toLowerCase();
+  const matchIndex = rows.findIndex((r) => {
+    const a = (r[artistCol] ?? "").trim().toLowerCase();
+    const e = (r[emailCol] ?? "").trim().toLowerCase();
+    return a === targetArtist && e === targetEmail;
+  });
+
+  if (matchIndex < 0) {
+    // Not in sheet yet — append
+    await appendContactToSheet(
+      {
+        artistName: data.artistName,
+        email: data.newEmail,
+        managerName: data.managerName,
+        role: data.role,
+        customPrice: data.customPrice,
+        notes: data.notes,
+      },
+      tabName
+    );
+    return { updated: false, rowIndex: null };
+  }
+
+  const sheetRow = matchIndex + 2; // +1 for header, +1 for 1-indexed
+  const existing = rows[matchIndex];
+  // Pad to header length
+  const updated = Array.from({ length: header.length }, (_, i) => existing[i] ?? "");
+
+  const setCol = (key: string, value: string | null | undefined) => {
+    if (value == null) return;
+    const idx = header.indexOf(key);
+    if (idx >= 0) updated[idx] = value;
+  };
+
+  setCol("email", data.newEmail);
+  setCol("manager_name", data.managerName ?? "");
+  setCol("manager name", data.managerName ?? "");
+  setCol("price", data.customPrice ?? "");
+  setCol("rate", data.customPrice ?? "");
+  setCol("role", data.role ?? "");
+  setCol("notes", data.notes ?? "");
+
+  const endCol = colNumToLetter(header.length);
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${tabName}!A${sheetRow}:${endCol}${sheetRow}`,
+    valueInputOption: "RAW",
+    requestBody: { values: [updated] },
+  });
+  return { updated: true, rowIndex: sheetRow };
 }
 

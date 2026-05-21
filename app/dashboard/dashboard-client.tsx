@@ -26,9 +26,12 @@ import {
 
 interface Props {
   shows: MatchedShow[];
+  unknownBig: MatchedShow[];
   totalUpcoming: number;
   totalSignals: number;
 }
+
+type Mode = "matched" | "unknown" | "interested" | "dismissed";
 
 function formatRankLabel(source: string, rank: number | null): string {
   const map: Record<string, string> = {
@@ -110,7 +113,7 @@ function dateInRange(date: Date | string, range: RangeFilter): boolean {
   return d.getTime() <= now + days * 86400_000;
 }
 
-export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
+export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [, startTransition] = useTransition();
@@ -128,8 +131,9 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
     });
   };
 
-  const [showDismissed, setShowDismissed] = useState(false);
-  const [interestedOnly, setInterestedOnly] = useState(false);
+  const [mode, setMode] = useState<Mode>("matched");
+
+  const sourceList: MatchedShow[] = mode === "unknown" ? unknownBig : shows;
 
   const filtered = useMemo(() => {
     const f = deferredFilters;
@@ -137,9 +141,13 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
       f.source === "statsfm" ? "statsfm_" : f.source === "spotify" ? "spotify_" : null;
     const search = f.search.toLowerCase();
 
-    return shows.filter((show) => {
-      if (showDismissed ? !show.dismissedAt : !!show.dismissedAt) return false;
-      if (interestedOnly && !show.interestedAt) return false;
+    return sourceList.filter((show) => {
+      if (mode === "dismissed") {
+        if (!show.dismissedAt) return false;
+      } else {
+        if (show.dismissedAt) return false;
+      }
+      if (mode === "interested" && !show.interestedAt) return false;
       if (!dateInRange(show.date, f.range)) return false;
 
       const matchedArtists = sourcePrefix
@@ -168,10 +176,12 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
       }
       return true;
     });
-  }, [shows, deferredFilters, showDismissed, interestedOnly]);
+  }, [sourceList, deferredFilters, mode]);
 
   const dismissedCount = shows.filter((s) => !!s.dismissedAt).length;
   const interestedCount = shows.filter((s) => !!s.interestedAt && !s.dismissedAt).length;
+  const matchedCount = shows.filter((s) => !s.dismissedAt).length;
+  const unknownCount = unknownBig.length;
 
   const filtersDirty =
     filters.search ||
@@ -217,41 +227,43 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
     },
   ];
 
+  const tabs: { key: Mode; label: string; count: number; tone?: string }[] = [
+    { key: "matched", label: "Matched", count: matchedCount },
+    { key: "unknown", label: "Unknown but big", count: unknownCount },
+    { key: "interested", label: "★ Interested", count: interestedCount, tone: "amber" },
+    { key: "dismissed", label: "Dismissed", count: dismissedCount },
+  ];
+
   return (
     <>
-      <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm text-zinc-500">
-          {filtered.length}{" "}
-          {showDismissed ? "dismissed" : interestedOnly ? "interested" : "matched"} · {totalUpcoming} total upcoming · {totalSignals.toLocaleString()} listen signals
-        </span>
-        <div className="flex items-center gap-3 text-xs">
-          {interestedCount > 0 && !showDismissed && (
+      <div className="mt-1 text-sm text-zinc-500">
+        {totalUpcoming} total upcoming · {totalSignals.toLocaleString()} listen signals
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-1 border-b border-zinc-200 dark:border-zinc-800">
+        {tabs.map((t) => {
+          const active = mode === t.key;
+          return (
             <button
+              key={t.key}
               type="button"
-              onClick={() => setInterestedOnly((v) => !v)}
+              onClick={() => setMode(t.key)}
               className={cn(
-                "transition",
-                interestedOnly
-                  ? "font-medium text-amber-600 dark:text-amber-400"
-                  : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition",
+                active
+                  ? t.tone === "amber"
+                    ? "border-amber-500 text-amber-700 dark:text-amber-400"
+                    : "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100"
+                  : "border-transparent text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
               )}
             >
-              {interestedOnly ? "← Show all matched" : `★ Interested only (${interestedCount})`}
+              {t.label}
+              {t.count > 0 && (
+                <span className="ml-1.5 text-xs text-zinc-400">{t.count}</span>
+              )}
             </button>
-          )}
-          {dismissedCount > 0 && (
-            <button
-              type="button"
-              onClick={() => {
-                setShowDismissed((v) => !v);
-                setInterestedOnly(false);
-              }}
-              className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-            >
-              {showDismissed ? "← Back to matched" : `View dismissed (${dismissedCount})`}
-            </button>
-          )}
-        </div>
+          );
+        })}
       </div>
 
       <Card className="mt-6 p-4">
@@ -371,6 +383,11 @@ export function DashboardClient({ shows, totalUpcoming, totalSignals }: Props) {
                           {a.topSignal && (
                             <Badge tone="success">
                               {formatRankLabel(a.topSignal.source, a.topSignal.rank)}
+                            </Badge>
+                          )}
+                          {!a.topSignal && a.popularity != null && (
+                            <Badge tone="info" title="Spotify popularity (0-100)">
+                              Popularity {a.popularity}
                             </Badge>
                           )}
                           {a.playlists.slice(0, 3).map((pl) => (

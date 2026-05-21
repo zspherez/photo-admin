@@ -56,11 +56,12 @@ export default async function FestivalDetailPage({
   searchParams,
 }: {
   params: Promise<{ showId: string }>;
-  searchParams: Promise<{ sent?: string; failed?: string; skipped?: string; errors?: string; filter?: string }>;
+  searchParams: Promise<{ sent?: string; failed?: string; skipped?: string; errors?: string; filter?: string; genre?: string }>;
 }) {
   const { showId } = await params;
   const sp = await searchParams;
   const filter = sp.filter ?? "all";
+  const genreFilter = sp.genre ?? "all";
   const testOverride = getTestOverride();
 
   const festival = await db.show.findUnique({
@@ -97,11 +98,16 @@ export default async function FestivalDetailPage({
     return { artist: a, topSignal, matched, contact, outreach, genres };
   });
 
+  const allGenres = Array.from(
+    new Set(rows.flatMap((r) => r.genres.map((g) => g.toLowerCase())))
+  ).sort();
+
   const filtered = rows.filter((r) => {
-    if (filter === "matched") return r.matched;
-    if (filter === "matched_with_contact") return r.matched && !!r.contact;
-    if (filter === "needs_contact") return r.matched && !r.contact;
-    if (filter === "unsent") return r.matched && !!r.contact && r.outreach?.status !== "sent";
+    if (filter === "matched" && !r.matched) return false;
+    if (filter === "matched_with_contact" && !(r.matched && !!r.contact)) return false;
+    if (filter === "needs_contact" && !(r.matched && !r.contact)) return false;
+    if (filter === "unsent" && !(r.matched && !!r.contact && r.outreach?.status !== "sent")) return false;
+    if (genreFilter !== "all" && !r.genres.some((g) => g.toLowerCase() === genreFilter)) return false;
     return true;
   });
 
@@ -145,24 +151,55 @@ export default async function FestivalDetailPage({
         )}
       </div>
 
-      <Card className="mt-6 p-3">
+      <Card className="mt-6 space-y-2 p-3">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Filter</span>
-          {filterOptions.map((opt) => (
-            <Link
-              key={opt.key}
-              href={`/festivals/${showId}${opt.key === "all" ? "" : `?filter=${opt.key}`}`}
-              className={cn(
-                "rounded-full px-2.5 py-0.5 text-xs font-medium transition",
-                filter === opt.key
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                  : "border border-zinc-200 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100"
-              )}
-            >
-              {opt.label}
-            </Link>
-          ))}
+          <span className="mr-1 w-12 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Filter</span>
+          {filterOptions.map((opt) => {
+            const params = new URLSearchParams();
+            if (opt.key !== "all") params.set("filter", opt.key);
+            if (genreFilter !== "all") params.set("genre", genreFilter);
+            const qs = params.toString();
+            return (
+              <Link
+                key={opt.key}
+                href={qs ? `/festivals/${showId}?${qs}` : `/festivals/${showId}`}
+                className={cn(
+                  "rounded-full px-2.5 py-0.5 text-xs font-medium transition",
+                  filter === opt.key
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "border border-zinc-200 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100"
+                )}
+              >
+                {opt.label}
+              </Link>
+            );
+          })}
         </div>
+        {allGenres.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 w-12 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Genre</span>
+            {(["all", ...allGenres] as const).map((g) => {
+              const params = new URLSearchParams();
+              if (filter !== "all") params.set("filter", filter);
+              if (g !== "all") params.set("genre", g);
+              const qs = params.toString();
+              return (
+                <Link
+                  key={g}
+                  href={qs ? `/festivals/${showId}?${qs}` : `/festivals/${showId}`}
+                  className={cn(
+                    "rounded-full px-2.5 py-0.5 text-xs font-medium transition",
+                    genreFilter === g
+                      ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      : "border border-zinc-200 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100"
+                  )}
+                >
+                  {g === "all" ? "Any" : g}
+                </Link>
+              );
+            })}
+          </div>
+        )}
       </Card>
 
       <form action={bulkSend} className="mt-6">

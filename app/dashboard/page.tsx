@@ -1,4 +1,4 @@
-import { getMatchedShowsForClient } from "@/lib/match";
+import { getMatchedShowsForClient, getUnknownBigShowsForClient } from "@/lib/match";
 import { db } from "@/lib/db";
 import { getTestOverride, getRateCardInfo } from "@/lib/resend";
 import { cn } from "@/lib/cn";
@@ -37,8 +37,9 @@ export default async function DashboardPage({
   const testOverride = getTestOverride();
   const rateCard = getRateCardInfo();
 
-  const [matched, totalUpcoming, totalSignals] = await Promise.all([
+  const [matched, unknownBig, totalUpcoming, totalSignals] = await Promise.all([
     getMatchedShowsForClient(),
+    getUnknownBigShowsForClient(60),
     db.show.count({ where: { date: { gte: new Date() }, isFestival: false } }),
     db.listenSignal.count(),
   ]);
@@ -68,7 +69,12 @@ export default async function DashboardPage({
         {sp.error && <Banner tone="danger">Send failed: {sp.error}</Banner>}
       </div>
 
-      <DashboardClient shows={matched} totalUpcoming={totalUpcoming} totalSignals={totalSignals} />
+      <DashboardClient
+        shows={matched}
+        unknownBig={unknownBig}
+        totalUpcoming={totalUpcoming}
+        totalSignals={totalSignals}
+      />
     </main>
   );
 }
