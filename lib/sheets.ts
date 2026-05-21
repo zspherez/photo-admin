@@ -66,21 +66,29 @@ export async function syncContactsFromSheet(tabName = "Artists"): Promise<{
 
   const result = { read: rows.length, contactsUpserted: 0, artistsCreated: 0, skipped: 0 };
 
+  // Clean up any previously-bad rows: contacts whose email contains a comma
+  // (left over from when the sync didn't split multi-email cells).
+  await db.contact.deleteMany({ where: { email: { contains: "," } } });
+
   const fullTeamPattern = /full\s*teams?/i;
 
   for (const row of rows) {
     const artistName = (row.artist ?? row["artist name"] ?? "").trim();
     const emailRaw = (row.email ?? "").trim();
     const isFullTeam = fullTeamPattern.test(emailRaw);
-    const cleanedEmail = emailRaw
-      .replace(/full\s*teams?/gi, "")
-      .replace(/[,;]\s*$/, "")
-      .replace(/^\s*[,;]\s*/, "")
-      .trim()
-      .toLowerCase();
-    const email = cleanedEmail;
+    // Strip the "full teams" marker, then split by any common separator
+    // (some cells are "manager@x.com, booking@x.com" or "a@x.com; b@x.com").
+    const stripped = emailRaw.replace(/full\s*teams?/gi, "");
+    const emails = Array.from(
+      new Set(
+        stripped
+          .split(/[\s,;]+/)
+          .map((e) => e.trim().toLowerCase())
+          .filter((e) => e.includes("@") && e.length >= 5)
+      )
+    );
 
-    if (!artistName || !email) {
+    if (!artistName || emails.length === 0) {
       result.skipped++;
       continue;
     }
@@ -102,12 +110,15 @@ export async function syncContactsFromSheet(tabName = "Artists"): Promise<{
       source: "sheet",
       isFullTeam,
     };
-    await db.contact.upsert({
-      where: { artistId_email: { artistId: artist.id, email } },
-      create: { artistId: artist.id, email, ...contactData },
-      update: contactData,
-    });
-    result.contactsUpserted++;
+
+    for (const email of emails) {
+      await db.contact.upsert({
+        where: { artistId_email: { artistId: artist.id, email } },
+        create: { artistId: artist.id, email, ...contactData },
+        update: contactData,
+      });
+      result.contactsUpserted++;
+    }
   }
 
   await db.setting.upsert({
