@@ -13,7 +13,7 @@ function client(): Resend {
 }
 
 export interface SendArgs {
-  to: string;
+  to: string | string[];
   subject: string;
   html: string;
   outreachId: string;
@@ -69,8 +69,9 @@ export async function sendEmailViaResend({ to, subject, html, outreachId }: Send
   if (!from) return { providerMessageId: null, error: "Missing RESEND_FROM_EMAIL" };
 
   const override = getTestOverride();
-  const finalTo = override ?? to;
-  const finalSubject = override ? `[TEST → ${to}] ${subject}` : subject;
+  const toList = Array.isArray(to) ? to : [to];
+  const finalTo: string | string[] = override ? override : toList.length === 1 ? toList[0] : toList;
+  const finalSubject = override ? `[TEST → ${toList.join(", ")}] ${subject}` : subject;
   const attachments = await loadAttachments();
 
   try {

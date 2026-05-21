@@ -32,13 +32,32 @@ export async function sendOutreach({
   if (!show) return { ok: false, error: "Show not found" };
   if (!contact) return { ok: false, error: "Contact not found" };
 
+  // Find every contact for the same artist — we send a single email to all of
+  // them so they're on the same thread. The clicked contact (contactId) is
+  // the "primary" used for the Outreach row + greeting.
+  const siblingContacts = await db.contact.findMany({
+    where: { artistId: contact.artistId },
+  });
+  const siblingIds = siblingContacts.map((c) => c.id);
+  const recipients = Array.from(
+    new Set(siblingContacts.map((c) => c.email).filter((e) => e && e.includes("@")))
+  );
+  if (recipients.length === 0) {
+    return { ok: false, error: "No valid emails for this artist" };
+  }
+
+  // Block re-send if ANY contact for this artist already has a sent outreach
+  // for this show.
+  const alreadySent = await db.outreach.findFirst({
+    where: { showId, contactId: { in: siblingIds }, status: "sent" },
+  });
+  if (alreadySent) {
+    return { ok: false, error: "Already sent for this artist on this show", outreachId: alreadySent.id };
+  }
+
   const existing = await db.outreach.findUnique({
     where: { showId_contactId: { showId, contactId } },
   });
-  if (existing && existing.status === "sent") {
-    return { ok: false, error: "Already sent for this show + contact", outreachId: existing.id };
-  }
-
   const outreach = existing
     ? await db.outreach.update({
         where: { id: existing.id },
@@ -67,7 +86,7 @@ export async function sendOutreach({
   const html = htmlOverride?.trim() || applyTemplate(template.htmlBody, vars);
 
   const result = await sendEmailViaResend({
-    to: contact.email,
+    to: recipients,
     subject,
     html,
     outreachId: outreach.id,

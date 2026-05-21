@@ -369,8 +369,12 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
                 <div className="mt-3 space-y-2">
                   {show.matchedArtists.map((a) => {
                     const contact = a.contacts[0] ?? null;
-                    const outreach = contact ? show.outreach.find((o) => o.contactId === contact.id) : undefined;
-                    const alreadySent = outreach?.status === "sent";
+                    const contactIds = new Set(a.contacts.map((c) => c.id));
+                    const artistOutreach = show.outreach.find(
+                      (o) => contactIds.has(o.contactId) && (o.status === "sent" || o.status === "test")
+                    );
+                    const outreach = artistOutreach ?? (contact ? show.outreach.find((o) => o.contactId === contact.id) : undefined);
+                    const alreadySent = artistOutreach?.status === "sent";
                     return (
                       <div
                         key={a.id}
@@ -411,9 +415,9 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
                               <Link
                                 href={`/dashboard/contact/${contact.id}`}
                                 className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                                title={`${contact.name ?? ""} <${contact.email}>${contact.role ? ` · ${contact.role}` : ""}`}
+                                title={a.contacts.map((c) => `${c.name ?? ""} <${c.email}>`.trim()).join("\n")}
                               >
-                                {contact.customPrice ?? "edit"}
+                                {contact.customPrice ?? (a.contacts.length > 1 ? `${a.contacts.length} contacts` : "edit")}
                               </Link>
                               {contact.isFullTeam && (
                                 <Badge tone="accent" title="Email goes to the artist's full management team">Full team</Badge>
