@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { Card, CardBody } from "@/components/ui/card";
@@ -64,9 +65,15 @@ async function saveSettings(formData: FormData) {
   revalidatePath("/settings");
   revalidatePath("/dashboard");
   revalidatePath("/festivals");
+  redirect("/settings/general?saved=1");
 }
 
-export default async function GeneralSettingsPage() {
+export default async function GeneralSettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ saved?: string }>;
+}) {
+  const sp = await searchParams;
   const rows = await db.setting.findMany({ where: { key: { in: KEYS.map((k) => k.key) } } });
   const valueByKey = Object.fromEntries(rows.map((r) => [r.key, r.value]));
 
@@ -75,6 +82,12 @@ export default async function GeneralSettingsPage() {
       <Link href="/settings" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Settings</Link>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">General</h1>
       <p className="mt-1 text-sm text-zinc-500">Runtime config. Blank fields fall back to placeholder defaults.</p>
+
+      {sp.saved && (
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+          Saved.
+        </div>
+      )}
 
       <Card className="mt-6">
         <CardBody>
