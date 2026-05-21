@@ -92,7 +92,7 @@ export async function sendOutreach({
     outreachId: outreach.id,
   });
 
-  const isTestSend = !!getTestOverride();
+  const isTestSend = !!(await getTestOverride());
   await db.outreach.update({
     where: { id: outreach.id },
     data: {

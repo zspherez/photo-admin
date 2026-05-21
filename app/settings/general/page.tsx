@@ -26,13 +26,31 @@ const KEYS = [
     placeholder: "montauk, surf lodge",
     description: "Comma-separated substrings (case-insensitive). EDMTrain shows whose venue matches are filtered out.",
   },
+  {
+    key: "test_override_email",
+    label: "Test mode — redirect all sends to",
+    placeholder: "jr8ers@gmail.com",
+    description:
+      "When set, every send goes here instead of the real contacts (subject prefixed with [TEST → original]). Leave blank to send to real contacts. Overrides SEND_TEST_OVERRIDE env.",
+  },
+  {
+    key: "bcc_emails",
+    label: "BCC me on every send",
+    placeholder: "josh@rehders.photos",
+    description:
+      "Comma-separated. Added as BCC on every real send (skipped when test mode is on, to avoid CC-ing yourself on tests).",
+  },
 ] as const;
 
 async function saveSettings(formData: FormData) {
   "use server";
   for (const k of KEYS) {
     const value = ((formData.get(k.key) as string) ?? "").trim();
-    if (value) {
+    // For test_override_email + bcc_emails, an explicit empty value still
+    // wins over env fallback (we upsert empty rather than delete). For other
+    // keys with placeholder fallbacks, deleting the row reverts to default.
+    const preserveEmptyRow = k.key === "test_override_email" || k.key === "bcc_emails";
+    if (value || preserveEmptyRow) {
       await db.setting.upsert({
         where: { key: k.key },
         create: { key: k.key, value },
@@ -44,6 +62,8 @@ async function saveSettings(formData: FormData) {
   }
   revalidatePath("/settings/general");
   revalidatePath("/settings");
+  revalidatePath("/dashboard");
+  revalidatePath("/festivals");
 }
 
 export default async function GeneralSettingsPage() {

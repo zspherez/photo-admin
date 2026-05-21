@@ -36,10 +36,10 @@ export default async function DashboardPage({
   }>;
 }) {
   const sp = await searchParams;
-  const testOverride = getTestOverride();
   const rateCard = getRateCardInfo();
 
-  const [matched, unknownBig, totalUpcoming, totalSignals] = await Promise.all([
+  const [testOverride, matched, unknownBig, totalUpcoming, totalSignals] = await Promise.all([
+    getTestOverride(),
     getMatchedShowsForClient(),
     getUnknownBigShowsForClient(60),
     db.show.count({ where: { date: { gte: new Date() }, isFestival: false } }),

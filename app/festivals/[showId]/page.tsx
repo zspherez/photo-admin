@@ -62,7 +62,7 @@ export default async function FestivalDetailPage({
   const sp = await searchParams;
   const filter = sp.filter ?? "all";
   const genreFilter = sp.genre ?? "all";
-  const testOverride = getTestOverride();
+  const testOverride = await getTestOverride();
 
   const festival = await db.show.findUnique({
     where: { id: showId },
