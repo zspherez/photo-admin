@@ -31,6 +31,8 @@ export default async function DashboardPage({
     sent?: string;
     error?: string;
     added?: string;
+    updated?: string;
+    sheet_errors?: string;
   }>;
 }) {
   const sp = await searchParams;
@@ -65,7 +67,20 @@ export default async function DashboardPage({
           </p>
         )}
         {sp.sent && <Banner tone="success">Email sent.</Banner>}
-        {sp.added && <Banner tone="success">Contact saved.</Banner>}
+        {sp.added && (
+          <Banner tone="success">
+            {sp.added === "0" && sp.updated
+              ? `${sp.updated} contact${Number(sp.updated) === 1 ? "" : "s"} updated.`
+              : sp.updated
+              ? `${sp.added} added, ${sp.updated} updated.`
+              : `${sp.added} contact${Number(sp.added) === 1 ? "" : "s"} added.`}
+          </Banner>
+        )}
+        {sp.sheet_errors && (
+          <Banner tone="warning">
+            DB updated; sheet sync had errors: {sp.sheet_errors}
+          </Banner>
+        )}
         {sp.error && <Banner tone="danger">Send failed: {sp.error}</Banner>}
       </div>
 
