@@ -33,6 +33,8 @@ export default async function DashboardPage({
     added?: string;
     updated?: string;
     sheet_errors?: string;
+    marked?: string;
+    unmarked?: string;
   }>;
 }) {
   const sp = await searchParams;
@@ -67,6 +69,8 @@ export default async function DashboardPage({
           </p>
         )}
         {sp.sent && <Banner tone="success">Email sent.</Banner>}
+        {sp.marked && <Banner tone="success">Marked as sent.</Banner>}
+        {sp.unmarked && <Banner tone="success">Manual mark removed.</Banner>}
         {sp.added && (
           <Banner tone="success">
             {sp.added === "0" && sp.updated

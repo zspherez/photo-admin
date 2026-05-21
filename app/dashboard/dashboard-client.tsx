@@ -22,6 +22,8 @@ import {
   dismissShowAction,
   restoreShowAction,
   toggleInterestedAction,
+  markSentAction,
+  unmarkSentAction,
 } from "./actions";
 
 interface Props {
@@ -371,9 +373,9 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
                 <div className="mt-3 space-y-2">
                   {show.matchedArtists.map((a) => {
                     const contact = a.contacts[0] ?? null;
-                    const contactIds = new Set(a.contacts.map((c) => c.id));
+                    const artistContactIds = new Set(a.contacts.map((c) => c.id));
                     const artistOutreach = show.outreach.find(
-                      (o) => contactIds.has(o.contactId) && (o.status === "sent" || o.status === "test")
+                      (o) => artistContactIds.has(o.contactId) && (o.status === "sent" || o.status === "test")
                     );
                     const outreach = artistOutreach ?? (contact ? show.outreach.find((o) => o.contactId === contact.id) : undefined);
                     const alreadySent = artistOutreach?.status === "sent";
@@ -441,17 +443,45 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
                           )}
                         </div>
                         {contact && (
-                          <div className="flex shrink-0 gap-1.5">
-                            <form action={sendNowAction}>
-                              <input type="hidden" name="showId" value={show.id} />
-                              <input type="hidden" name="contactId" value={contact.id} />
-                              <Button type="submit" variant="primary" size="sm" disabled={alreadySent}>
-                                {alreadySent ? "Sent" : "Send"}
-                              </Button>
-                            </form>
-                            <LinkButton href={`/dashboard/customize/${show.id}/${contact.id}`} variant="secondary" size="sm">
-                              Customize
-                            </LinkButton>
+                          <div className="flex shrink-0 flex-col items-end gap-1">
+                            <div className="flex gap-1.5">
+                              <form action={sendNowAction}>
+                                <input type="hidden" name="showId" value={show.id} />
+                                <input type="hidden" name="contactId" value={contact.id} />
+                                <Button type="submit" variant="primary" size="sm" disabled={alreadySent}>
+                                  {alreadySent ? "Sent" : "Send"}
+                                </Button>
+                              </form>
+                              <LinkButton href={`/dashboard/customize/${show.id}/${contact.id}`} variant="secondary" size="sm">
+                                Customize
+                              </LinkButton>
+                            </div>
+                            {!alreadySent && (
+                              <form action={markSentAction}>
+                                <input type="hidden" name="showId" value={show.id} />
+                                <input type="hidden" name="contactId" value={contact.id} />
+                                <button
+                                  type="submit"
+                                  title="Record as sent without actually emailing (use if you reached out via DM, personal email, etc.)"
+                                  className="text-[10px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                                >
+                                  Mark sent (manual)
+                                </button>
+                              </form>
+                            )}
+                            {alreadySent && artistOutreach && (
+                              <form action={unmarkSentAction}>
+                                <input type="hidden" name="showId" value={show.id} />
+                                <input type="hidden" name="contactId" value={artistOutreach.contactId} />
+                                <button
+                                  type="submit"
+                                  title="Only deletes manual marks (rows with no Resend message ID)"
+                                  className="text-[10px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                                >
+                                  Unmark
+                                </button>
+                              </form>
+                            )}
                           </div>
                         )}
                       </div>
