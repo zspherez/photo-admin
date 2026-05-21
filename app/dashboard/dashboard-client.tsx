@@ -84,7 +84,7 @@ function parseSearchParams(sp: URLSearchParams): MatchFilters {
   const c = sp.get("contact") as ContactFilter | null;
   const st = sp.get("status") as StatusFilter | null;
   return {
-    range: r === "7d" || r === "30d" || r === "90d" ? r : DEFAULT_FILTERS.range,
+    range: r === "7d" || r === "30d" || r === "30-60d" || r === "90d" ? r : DEFAULT_FILTERS.range,
     source: s === "statsfm" || s === "spotify" || s === "any" ? s : DEFAULT_FILTERS.source,
     contact: c === "has" || c === "needs" || c === "any" ? c : DEFAULT_FILTERS.contact,
     status:
@@ -108,9 +108,10 @@ function buildQueryString(filters: MatchFilters): string {
 function dateInRange(date: Date | string, range: RangeFilter): boolean {
   const d = typeof date === "string" ? new Date(date) : date;
   const now = Date.now();
-  if (d.getTime() < now) return false;
-  const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
-  return d.getTime() <= now + days * 86400_000;
+  const start = range === "30-60d" ? now + 30 * 86400_000 : now;
+  const days = range === "7d" ? 7 : range === "30d" ? 30 : range === "30-60d" ? 60 : 90;
+  const end = now + days * 86400_000;
+  return d.getTime() >= start && d.getTime() <= end;
 }
 
 export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals }: Props) {
@@ -196,6 +197,7 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
       options: [
         { key: "range", value: "7d", label: "7d" },
         { key: "range", value: "30d", label: "30d" },
+        { key: "range", value: "30-60d", label: "30–60d" },
         { key: "range", value: "90d", label: "90d" },
       ],
     },

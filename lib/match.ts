@@ -38,7 +38,7 @@ export interface MatchedShow {
   }[];
 }
 
-export type RangeFilter = "7d" | "30d" | "90d";
+export type RangeFilter = "7d" | "30d" | "30-60d" | "90d";
 export type SourceFilter = "any" | "statsfm" | "spotify";
 export type ContactFilter = "any" | "has" | "needs";
 export type StatusFilter = "any" | "unsent" | "sent" | "opened" | "clicked";
@@ -63,8 +63,16 @@ export const DEFAULT_FILTERS: MatchFilters = {
 
 function rangeEndDate(range: RangeFilter): Date {
   const now = new Date();
-  const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
+  const days = range === "7d" ? 7 : range === "30d" ? 30 : range === "30-60d" ? 60 : 90;
   return new Date(now.getTime() + days * 86400_000);
+}
+
+function rangeStartDate(range: RangeFilter): Date {
+  const now = new Date();
+  // The "30-60d" range starts 30 days out — useful for "what's coming up but
+  // I'm not in panic-send mode about it yet" planning.
+  if (range === "30-60d") return new Date(now.getTime() + 30 * 86400_000);
+  return now;
 }
 
 // Loads the maximum useful window once; client-side filtering handles
@@ -83,7 +91,7 @@ export async function getMatchedUpcomingShows(
 
   const shows = await db.show.findMany({
     where: {
-      date: { gte: new Date(), lte: rangeEndDate(filters.range) },
+      date: { gte: rangeStartDate(filters.range), lte: rangeEndDate(filters.range) },
       isFestival: false,
       dismissedAt: filters.includeDismissed ? undefined : null,
       artists: {
