@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <style>
+    .fg { fill: #18181b; }
+    @media (prefers-color-scheme: dark) { .fg { fill: #fafafa; } }
+  </style>
+  <path class="fg" fill-rule="evenodd" d="M11 5H21V8H26A3 3 0 0 1 29 11V24A3 3 0 0 1 26 27H6A3 3 0 0 1 3 24V11A3 3 0 0 1 6 8H11ZM16 13A5 5 0 1 0 16 23A5 5 0 1 0 16 13Z"/>
+  <circle class="fg" cx="24.5" cy="12" r="1"/>
+</svg>

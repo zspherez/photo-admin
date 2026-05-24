@@ -14,8 +14,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "photo-admin",
-  description: "Outreach automation for NYC EDM shows",
+  title: {
+    default: "Photo Admin",
+    template: "%s · Photo Admin",
+  },
+  description: "Match upcoming shows to your listening history and pitch the photo gig.",
   robots: { index: false, follow: false },
 };
 
