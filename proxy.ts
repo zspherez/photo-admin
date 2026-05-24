@@ -3,6 +3,7 @@ import { SESSION_COOKIE, isAuthenticated } from "@/lib/auth";
 
 const PUBLIC_PREFIXES = [
   "/login",
+  "/test",
   "/api/resend/webhook",
   "/api/cron/",
   "/api/spotify/callback",
