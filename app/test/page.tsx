@@ -123,8 +123,10 @@ export default async function TestPage() {
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
       <header className="border-b border-zinc-200 pb-5 dark:border-zinc-800">
-        <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-semibold tracking-tight">Photo Admin — demo</h1>
+        <div className="flex items-center gap-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.svg" alt="" className="h-8 w-auto dark:invert" />
+          <h1 className="text-2xl font-semibold tracking-tight">Rehders Photos Admin — demo</h1>
           <Badge tone="muted" size="xs">read-only</Badge>
         </div>
         <p className="mt-2 text-sm text-zinc-500">

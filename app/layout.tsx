@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "Photo Admin",
-    template: "%s · Photo Admin",
+    default: "Rehders Photos Admin",
+    template: "%s · Rehders Photos Admin",
   },
   description: "Match upcoming shows to your listening history and pitch the photo gig.",
   robots: { index: false, follow: false },

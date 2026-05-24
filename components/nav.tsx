@@ -24,8 +24,9 @@ export function Nav() {
           href="/"
           className="flex items-center gap-2 text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
         >
-          <span className="inline-block h-2 w-2 rounded-sm bg-zinc-900 dark:bg-zinc-100" />
-          photo-admin
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.svg" alt="" className="h-6 w-auto dark:invert" />
+          Rehders Photos Admin
         </Link>
         <nav className="flex items-center gap-1">
           {ITEMS.map((item) => {
