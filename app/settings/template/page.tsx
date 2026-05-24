@@ -17,7 +17,18 @@ import { Badge } from "@/components/ui/badge";
 
 export const dynamic = "force-dynamic";
 
-const KNOWN_VARS = ["artist", "venue", "date", "rate", "portfolio_url", "manager_name"];
+const KNOWN_VARS = [
+  "artist",
+  "venue",
+  "date",
+  "rate",
+  "portfolio_url",
+  "sender_name",
+  "sender_email",
+  "sender_phone",
+  "sender_city",
+  "manager_name",
+];
 
 async function saveTemplate(formData: FormData) {
   "use server";

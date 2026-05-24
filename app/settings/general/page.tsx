@@ -10,9 +10,33 @@ export const dynamic = "force-dynamic";
 
 const KEYS = [
   {
+    key: "sender_name",
+    label: "Your name",
+    placeholder: "Jane Doe",
+    description: "Substituted into {{sender_name}} in email templates (signature, etc.).",
+  },
+  {
+    key: "sender_email",
+    label: "Your email",
+    placeholder: "you@example.com",
+    description: "Substituted into {{sender_email}} in email templates.",
+  },
+  {
+    key: "sender_phone",
+    label: "Your phone",
+    placeholder: "+1.555.555.5555",
+    description: "Substituted into {{sender_phone}} in email templates.",
+  },
+  {
+    key: "sender_city",
+    label: "Your city",
+    placeholder: "NYC",
+    description: "Substituted into {{sender_city}} (used in the default template's pitch line).",
+  },
+  {
     key: "portfolio_url",
     label: "Portfolio URL",
-    placeholder: "https://rehders.photos",
+    placeholder: "https://example.com",
     description: "Substituted into {{portfolio_url}} in email templates.",
   },
   {
@@ -24,20 +48,20 @@ const KEYS = [
   {
     key: "venue_blocklist",
     label: "Venue blocklist",
-    placeholder: "montauk, surf lodge",
+    placeholder: "venue one, venue two",
     description: "Comma-separated substrings (case-insensitive). EDMTrain shows whose venue matches are filtered out.",
   },
   {
     key: "test_override_email",
     label: "Test mode — redirect all sends to",
-    placeholder: "jr8ers@gmail.com",
+    placeholder: "you+test@example.com",
     description:
       "When set, every send goes here instead of the real contacts (subject prefixed with [TEST → original]). Leave blank to send to real contacts. Overrides SEND_TEST_OVERRIDE env.",
   },
   {
     key: "bcc_emails",
     label: "BCC me on every send",
-    placeholder: "josh@rehders.photos",
+    placeholder: "you@example.com",
     description:
       "Comma-separated. Added as BCC on every real send (skipped when test mode is on, to avoid CC-ing yourself on tests).",
   },
