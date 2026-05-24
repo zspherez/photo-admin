@@ -188,12 +188,16 @@ export default async function TestPage() {
                         </Badge>
                       )}
                       {a.playlists.slice(0, 3).map((pl) => (
-                        <span
+                        <a
                           key={pl.spotifyId}
-                          className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900"
+                          href={`https://open.spotify.com/playlist/${pl.spotifyId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`Open "${pl.name}" on Spotify`}
+                          className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 ring-1 ring-emerald-200 transition hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900 dark:hover:bg-emerald-950"
                         >
                           ♪ {pl.name}
-                        </span>
+                        </a>
                       ))}
                       {a.playlists.length > 3 && (
                         <span className="text-[10px] text-zinc-500">
