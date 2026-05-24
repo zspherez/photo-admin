@@ -25,7 +25,7 @@ export function Nav() {
           className="flex items-center gap-2 text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.svg" alt="" className="h-6 w-auto dark:invert" />
+          <img src="/logo.svg" alt="" className="h-6 w-auto dark:brightness-200" />
           Rehders Photos Admin
         </Link>
         <nav className="flex items-center gap-1">

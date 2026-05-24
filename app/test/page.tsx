@@ -125,7 +125,7 @@ export default async function TestPage() {
       <header className="border-b border-zinc-200 pb-5 dark:border-zinc-800">
         <div className="flex items-center gap-3">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.svg" alt="" className="h-8 w-auto dark:invert" />
+          <img src="/logo.svg" alt="" className="h-8 w-auto dark:brightness-200" />
           <h1 className="text-2xl font-semibold tracking-tight">Rehders Photos Admin — demo</h1>
           <Badge tone="muted" size="xs">read-only</Badge>
         </div>
