@@ -88,7 +88,7 @@ export default async function FestivalDetailPage({
     const topSignal = a.listenSignals[0] ?? null;
     const matched = a.listenSignals.length > 0;
     const contact = a.contacts[0] ?? null;
-    const outreach = contact ? festival.outreaches.find((o) => o.contactId === contact.id) : undefined;
+    const outreach = festival.outreaches.find((o) => o.artistId === a.id);
     const genres: string[] = (() => {
       try {
         return a.genres ? (JSON.parse(a.genres) as string[]).filter((g) => typeof g === "string") : [];

@@ -14,6 +14,7 @@ async function saveContact(formData: FormData) {
   "use server";
   const contactId = formData.get("contactId") as string;
   const email = ((formData.get("email") as string) ?? "").trim().toLowerCase();
+  const phone = ((formData.get("phone") as string) ?? "").trim() || null;
   const name = ((formData.get("name") as string) ?? "").trim() || null;
   const role = ((formData.get("role") as string) ?? "").trim() || null;
   const customPrice = ((formData.get("customPrice") as string) ?? "").trim() || null;
@@ -33,7 +34,7 @@ async function saveContact(formData: FormData) {
 
   await db.contact.update({
     where: { id: contactId },
-    data: { email, name, role, customPrice, notes },
+    data: { email, phone, name, role, customPrice, notes },
   });
 
   // Push the edit to the Sheet (best-effort). Falls back to append if the
@@ -99,6 +100,7 @@ export default async function ContactEditPage({
           <form action={saveContact} className="space-y-4">
             <input type="hidden" name="contactId" value={contact.id} />
             <Field name="email" label="Email" type="email" defaultValue={contact.email} required />
+            <Field name="phone" label="Phone (for texting)" type="tel" defaultValue={contact.phone ?? ""} placeholder="+1 555 123 4567" />
             <Field name="name" label="Manager name" defaultValue={contact.name ?? ""} />
             <Field name="role" label="Role" defaultValue={contact.role ?? ""} placeholder="management / booking / artist" />
             <Field name="customPrice" label="Custom rate" defaultValue={contact.customPrice ?? ""} placeholder="$400" />

@@ -16,6 +16,7 @@ import { Card } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button, LinkButton } from "@/components/ui/button";
 import { ArtistLink } from "@/components/artist-modal";
+import { SendButton } from "@/components/send-button";
 import { cn } from "@/lib/cn";
 import { formatShowDate } from "@/lib/formatDate";
 import {
@@ -374,9 +375,8 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
                 <div className="mt-3 space-y-2">
                   {show.matchedArtists.map((a) => {
                     const contact = a.contacts[0] ?? null;
-                    const artistContactIds = new Set(a.contacts.map((c) => c.id));
                     const artistOutreach = show.outreach.find(
-                      (o) => artistContactIds.has(o.contactId) && (o.status === "sent" || o.status === "test")
+                      (o) => o.artistId === a.id && (o.status === "sent" || o.status === "test")
                     );
                     const outreach = artistOutreach ?? (contact ? show.outreach.find((o) => o.contactId === contact.id) : undefined);
                     const alreadySent = artistOutreach?.status === "sent";
@@ -443,55 +443,67 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
                             </Badge>
                           )}
                         </div>
-                        {contact && (
-                          <div className="flex shrink-0 flex-col items-end gap-1">
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          {contact && (
                             <div className="flex gap-1.5">
-                              <form action={sendNowAction}>
-                                <input type="hidden" name="showId" value={show.id} />
-                                <input type="hidden" name="contactId" value={contact.id} />
-                                <Button type="submit" variant="primary" size="sm" disabled={alreadySent}>
-                                  {alreadySent ? "Sent" : "Send"}
-                                </Button>
-                              </form>
+                              <SendButton
+                                showId={show.id}
+                                contactId={contact.id}
+                                contactName={contact.name}
+                                phone={contact.phone}
+                                alreadySent={alreadySent}
+                                action={sendNowAction}
+                              />
                               <LinkButton href={`/dashboard/customize/${show.id}/${contact.id}`} variant="secondary" size="sm">
                                 Customize
                               </LinkButton>
                             </div>
-                            {!alreadySent && (
-                              <form action={markSentAction}>
-                                <input type="hidden" name="showId" value={show.id} />
+                          )}
+                          {!alreadySent && (
+                            <form action={markSentAction}>
+                              <input type="hidden" name="showId" value={show.id} />
+                              {contact ? (
                                 <input type="hidden" name="contactId" value={contact.id} />
-                                <button
-                                  type="submit"
-                                  title="Record as sent without actually emailing (use if you reached out via DM, personal email, etc.)"
-                                  className="text-[10px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                                >
-                                  Mark sent (manual)
-                                </button>
-                              </form>
-                            )}
-                            {alreadySent && artistOutreach && (
-                              <form action={unmarkSentAction}>
-                                <input type="hidden" name="showId" value={show.id} />
-                                <input type="hidden" name="contactId" value={artistOutreach.contactId} />
-                                <button
-                                  type="submit"
-                                  title="Only deletes manual marks (rows with no Resend message ID)"
-                                  className="text-[10px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
-                                >
-                                  Unmark
-                                </button>
-                              </form>
-                            )}
-                          </div>
-                        )}
+                              ) : (
+                                <input type="hidden" name="artistId" value={a.id} />
+                              )}
+                              <button
+                                type="submit"
+                                title="Record as sent without actually emailing (use if you reached out via DM, personal email, etc.)"
+                                className="text-[10px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                              >
+                                Mark sent (manual)
+                              </button>
+                            </form>
+                          )}
+                          {alreadySent && artistOutreach && (
+                            <form action={unmarkSentAction}>
+                              <input type="hidden" name="outreachId" value={artistOutreach.id} />
+                              <button
+                                type="submit"
+                                title="Only deletes manual marks (rows with no Resend message ID)"
+                                className="text-[10px] text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                              >
+                                Unmark
+                              </button>
+                            </form>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
                 {show.otherArtists.length > 0 && (
                   <p className="mt-3 truncate text-xs text-zinc-400">
-                    + {show.otherArtists.map((a) => a.name).join(", ")}
+                    +{" "}
+                    {show.otherArtists.map((a, i) => (
+                      <span key={a.id}>
+                        {i > 0 && ", "}
+                        <ArtistLink artistId={a.id} className="hover:text-zinc-600 dark:hover:text-zinc-300">
+                          {a.name}
+                        </ArtistLink>
+                      </span>
+                    ))}
                   </p>
                 )}
               </Card>

@@ -66,6 +66,7 @@ export async function sendOutreach({
     : await db.outreach.create({
         data: {
           showId,
+          artistId: contact.artistId,
           contactId,
           templateId: template.id,
           finalSubject: "",

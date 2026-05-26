@@ -25,6 +25,7 @@ async function createContacts(formData: FormData) {
   "use server";
   const artistId = formData.get("artistId") as string;
   const emailsRaw = ((formData.get("emails") as string) ?? "").trim();
+  const phone = ((formData.get("phone") as string) ?? "").trim() || null;
   const name = ((formData.get("name") as string) ?? "").trim() || null;
   const role = ((formData.get("role") as string) ?? "").trim() || null;
   const customPrice = ((formData.get("customPrice") as string) ?? "").trim() || null;
@@ -50,8 +51,8 @@ async function createContacts(formData: FormData) {
 
     const contact = await db.contact.upsert({
       where: { artistId_email: { artistId, email } },
-      create: { artistId, email, name, role, customPrice, notes, source: "manual" },
-      update: { name, role, customPrice, notes },
+      create: { artistId, email, phone, name, role, customPrice, notes, source: "manual" },
+      update: { phone, name, role, customPrice, notes },
       include: { artist: true },
     });
 
@@ -159,6 +160,7 @@ export default async function AddContactPage({
               placeholder={"manager@example.com\nbooking@example.com\nlabel@example.com"}
               mono
             />
+            <Field name="phone" label="Phone (shared, for texting)" type="tel" placeholder="+1 555 123 4567" />
             <Field name="name" label="Manager name (shared)" placeholder="Thierry" />
             <Field name="role" label="Role (shared)" placeholder="management / booking / label" />
             <Field name="customPrice" label="Custom rate (shared)" placeholder="$400" />

@@ -4,6 +4,8 @@ import { db } from "@/lib/db";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatShowDate } from "@/lib/formatDate";
+import { sendNowAction } from "@/app/dashboard/actions";
+import { SendButton } from "@/components/send-button";
 
 export const dynamic = "force-dynamic";
 
@@ -97,6 +99,15 @@ export default async function ArtistPage({ params }: { params: Promise<{ id: str
     .map((sa) => sa.show)
     .filter((s) => s.date >= new Date())
     .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  const outreaches = await db.outreach.findMany({
+    where: { artistId: artist.id, showId: { in: upcomingShows.map((s) => s.id) } },
+    select: { id: true, showId: true, status: true },
+  });
+  const sentByShow = new Set(
+    outreaches.filter((o) => o.status === "sent" || o.status === "test").map((o) => o.showId),
+  );
+  const primaryContact = artist.contacts[0] ?? null;
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
@@ -214,13 +225,14 @@ export default async function ArtistPage({ params }: { params: Promise<{ id: str
           <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Upcoming shows</h2>
           <Card className="mt-2">
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
-              {upcomingShows.map((s) => (
-                <li key={s.id} className="px-4 py-3 text-sm">
-                  <Link
-                    href={s.isFestival ? `/festivals/${s.id}` : "/dashboard"}
-                    className="flex items-center justify-between gap-2 hover:opacity-80"
-                  >
-                    <div className="min-w-0">
+              {upcomingShows.map((s) => {
+                const alreadySent = sentByShow.has(s.id);
+                return (
+                  <li key={s.id} className="flex items-center justify-between gap-2 px-4 py-3 text-sm">
+                    <Link
+                      href={s.isFestival ? `/festivals/${s.id}` : "/dashboard"}
+                      className="min-w-0 flex-1 hover:opacity-80"
+                    >
                       <p className="truncate">
                         <span className="font-medium">{s.eventName || s.venueName}</span>
                         <span className="ml-2 text-xs text-zinc-500">
@@ -228,11 +240,23 @@ export default async function ArtistPage({ params }: { params: Promise<{ id: str
                           {" · "}{s.venueName}{s.state ? `, ${s.state}` : ""}
                         </span>
                       </p>
+                    </Link>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {s.isFestival && <Badge tone="accent" size="xs">Festival</Badge>}
+                      {primaryContact && (
+                        <SendButton
+                          showId={s.id}
+                          contactId={primaryContact.id}
+                          contactName={primaryContact.name}
+                          phone={primaryContact.phone}
+                          alreadySent={alreadySent}
+                          action={sendNowAction}
+                        />
+                      )}
                     </div>
-                    {s.isFestival && <Badge tone="accent" size="xs">Festival</Badge>}
-                  </Link>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           </Card>
         </section>

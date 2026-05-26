@@ -58,7 +58,7 @@ function buildWhere(status: StatusFilter, search: string) {
   else if (status === "opened") where.openCount = { gt: 0 };
   else if (status === "clicked") where.clickCount = { gt: 0 };
   if (search) {
-    where.contact = { artist: { name: { contains: search, mode: "insensitive" } } };
+    where.artist = { name: { contains: search, mode: "insensitive" } };
   }
   return where;
 }
@@ -81,7 +81,8 @@ export default async function OutreachLogPage({
       take: 300,
       include: {
         show: true,
-        contact: { include: { artist: true } },
+        artist: true,
+        contact: true,
       },
     }),
     db.outreach.count(),
@@ -174,8 +175,8 @@ export default async function OutreachLogPage({
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <ArtistLink artistId={o.contact.artistId} className="text-sm font-medium">
-                          {o.contact.artist.name}
+                        <ArtistLink artistId={o.artistId} className="text-sm font-medium">
+                          {o.artist.name}
                         </ArtistLink>
                         <Badge tone={statusTone(o)}>{statusLabels(o).join(" · ")}</Badge>
                         {o.show.isFestival && <Badge tone="accent" size="xs">Festival</Badge>}
@@ -187,9 +188,13 @@ export default async function OutreachLogPage({
                           {formatShowDate(o.show.date, { month: "short", day: "numeric", year: "numeric" })}
                         </Link>
                         {" · "}
-                        <Link href={`/dashboard/contact/${o.contactId}`} className="hover:underline">
-                          {o.contact.name ? `${o.contact.name} <${o.contact.email}>` : o.contact.email}
-                        </Link>
+                        {o.contact ? (
+                          <Link href={`/dashboard/contact/${o.contact.id}`} className="hover:underline">
+                            {o.contact.name ? `${o.contact.name} <${o.contact.email}>` : o.contact.email}
+                          </Link>
+                        ) : (
+                          <span className="italic text-zinc-400">no contact</span>
+                        )}
                       </p>
                       {o.error && (
                         <p className="mt-0.5 truncate text-xs text-red-700 dark:text-red-400">

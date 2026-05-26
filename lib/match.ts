@@ -19,6 +19,7 @@ export interface MatchedShow {
     contacts: {
       id: string;
       email: string;
+      phone: string | null;
       name: string | null;
       role: string | null;
       customPrice: string | null;
@@ -27,7 +28,9 @@ export interface MatchedShow {
   }[];
   otherArtists: { id: string; name: string }[];
   outreach: {
-    contactId: string;
+    id: string;
+    artistId: string;
+    contactId: string | null;
     sentAt: Date | null;
     deliveredAt: Date | null;
     status: string;
@@ -161,6 +164,7 @@ export async function getMatchedUpcomingShows(
           contacts: sa.artist.contacts.map((c) => ({
             id: c.id,
             email: c.email,
+            phone: c.phone,
             name: c.name,
             role: c.role,
             customPrice: c.customPrice,
@@ -183,6 +187,8 @@ export async function getMatchedUpcomingShows(
       matchedArtists: matched,
       otherArtists: others,
       outreach: show.outreaches.map((o) => ({
+        id: o.id,
+        artistId: o.artistId,
         contactId: o.contactId,
         sentAt: o.sentAt,
         deliveredAt: o.deliveredAt,
@@ -290,6 +296,7 @@ export async function getUnknownBigShowsForClient(
           contacts: sa.artist.contacts.map((c) => ({
             id: c.id,
             email: c.email,
+            phone: c.phone,
             name: c.name,
             role: c.role,
             customPrice: c.customPrice,
@@ -312,6 +319,8 @@ export async function getUnknownBigShowsForClient(
       matchedArtists: featured,
       otherArtists: others,
       outreach: show.outreaches.map((o) => ({
+        id: o.id,
+        artistId: o.artistId,
         contactId: o.contactId,
         sentAt: o.sentAt,
         deliveredAt: o.deliveredAt,

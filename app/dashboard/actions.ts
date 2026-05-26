@@ -43,33 +43,32 @@ export async function toggleInterestedAction(formData: FormData) {
 // Record a send that happened outside the app (personal email, DM, etc.) so
 // the dashboard reflects it as "Sent". providerMessageId stays null which is
 // our flag for "manually marked"; unmarkSent uses that to safely delete.
+// Accepts either contactId (when a contact is known) or artistId (for
+// artist-level "I reached out, no contact in the system" rows).
 export async function markSentAction(formData: FormData) {
   "use server";
   const showId = formData.get("showId") as string;
-  const contactId = formData.get("contactId") as string;
-  const contact = await db.contact.findUnique({ where: { id: contactId } });
-  if (!contact) {
-    redirect(`/dashboard?error=contact_not_found`);
+  const contactId = (formData.get("contactId") as string) || null;
+  let artistId = (formData.get("artistId") as string) || null;
+
+  if (contactId) {
+    const contact = await db.contact.findUnique({ where: { id: contactId } });
+    if (!contact) redirect(`/dashboard?error=contact_not_found`);
+    artistId = contact.artistId;
   }
-  const siblings = await db.contact.findMany({ where: { artistId: contact.artistId } });
+  if (!artistId) redirect(`/dashboard?error=missing_target`);
+
   const alreadySent = await db.outreach.findFirst({
-    where: {
-      showId,
-      contactId: { in: siblings.map((c) => c.id) },
-      status: "sent",
-    },
+    where: { showId, artistId, status: "sent" },
   });
   if (alreadySent) {
     redirect(`/dashboard?error=already_sent_for_artist`);
   }
 
-  const existing = await db.outreach.findUnique({
-    where: { showId_contactId: { showId, contactId } },
-  });
-  if (existing) {
-    await db.outreach.update({
-      where: { id: existing.id },
-      data: {
+  if (contactId) {
+    await db.outreach.upsert({
+      where: { showId_contactId: { showId, contactId } },
+      update: {
         status: "sent",
         sentAt: new Date(),
         finalSubject: "(manual outreach)",
@@ -77,12 +76,21 @@ export async function markSentAction(formData: FormData) {
         providerMessageId: null,
         error: null,
       },
+      create: {
+        showId,
+        artistId,
+        contactId,
+        finalSubject: "(manual outreach)",
+        finalHtml: "(manual outreach)",
+        status: "sent",
+        sentAt: new Date(),
+      },
     });
   } else {
     await db.outreach.create({
       data: {
         showId,
-        contactId,
+        artistId,
         finalSubject: "(manual outreach)",
         finalHtml: "(manual outreach)",
         status: "sent",
@@ -99,11 +107,9 @@ export async function markSentAction(formData: FormData) {
 // it wasn't a real Resend send). Won't touch genuine outreach.
 export async function unmarkSentAction(formData: FormData) {
   "use server";
-  const showId = formData.get("showId") as string;
-  const contactId = formData.get("contactId") as string;
-  const outreach = await db.outreach.findUnique({
-    where: { showId_contactId: { showId, contactId } },
-  });
+  const outreachId = (formData.get("outreachId") as string) || null;
+  if (!outreachId) redirect("/dashboard?error=missing_outreach");
+  const outreach = await db.outreach.findUnique({ where: { id: outreachId } });
   if (outreach && outreach.providerMessageId === null) {
     await db.outreach.delete({ where: { id: outreach.id } });
   }
