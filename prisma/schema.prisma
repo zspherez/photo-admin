@@ -64,7 +64,7 @@ model Contact {
   id          String     @id @default(cuid())
   artistId    String
   artist      Artist     @relation(fields: [artistId], references: [id], onDelete: Cascade)
-  email       String
+  email       String?
   phone       String?
   name        String?
   role        String?

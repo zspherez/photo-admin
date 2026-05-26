@@ -18,7 +18,7 @@ export interface MatchedShow {
     playlists: { spotifyId: string; name: string; url: string }[];
     contacts: {
       id: string;
-      email: string;
+      email: string | null;
       phone: string | null;
       name: string | null;
       role: string | null;

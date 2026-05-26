@@ -13,14 +13,14 @@ export const dynamic = "force-dynamic";
 async function saveContact(formData: FormData) {
   "use server";
   const contactId = formData.get("contactId") as string;
-  const email = ((formData.get("email") as string) ?? "").trim().toLowerCase();
+  const email = ((formData.get("email") as string) ?? "").trim().toLowerCase() || null;
   const phone = ((formData.get("phone") as string) ?? "").trim() || null;
   const name = ((formData.get("name") as string) ?? "").trim() || null;
   const role = ((formData.get("role") as string) ?? "").trim() || null;
   const customPrice = ((formData.get("customPrice") as string) ?? "").trim() || null;
   const notes = ((formData.get("notes") as string) ?? "").trim() || null;
 
-  if (!contactId || !email) {
+  if (!contactId || (!email && !phone)) {
     redirect(`/dashboard/contact/${contactId}?error=missing_fields`);
   }
 
@@ -37,20 +37,22 @@ async function saveContact(formData: FormData) {
     data: { email, phone, name, role, customPrice, notes },
   });
 
-  // Push the edit to the Sheet (best-effort). Falls back to append if the
-  // row isn't there (e.g. contact was originally added manually).
-  try {
-    await updateContactInSheet({
-      artistName: prior.artist.name,
-      oldEmail: prior.email,
-      newEmail: email,
-      managerName: name,
-      role,
-      customPrice,
-      notes,
-    });
-  } catch (e) {
-    console.error("[sheet update] failed", e);
+  // Push the edit to the Sheet (best-effort). Skip for phone-only contacts
+  // since the sheet is keyed by email.
+  if (email && prior.email) {
+    try {
+      await updateContactInSheet({
+        artistName: prior.artist.name,
+        oldEmail: prior.email,
+        newEmail: email,
+        managerName: name,
+        role,
+        customPrice,
+        notes,
+      });
+    } catch (e) {
+      console.error("[sheet update] failed", e);
+    }
   }
 
   revalidatePath("/dashboard");
@@ -91,7 +93,7 @@ export default async function ContactEditPage({
 
       {error && (
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          {error === "missing_fields" ? "Email is required." : error}
+          {error === "missing_fields" ? "Provide an email or a phone number." : error}
         </div>
       )}
 
@@ -99,8 +101,9 @@ export default async function ContactEditPage({
         <CardBody>
           <form action={saveContact} className="space-y-4">
             <input type="hidden" name="contactId" value={contact.id} />
-            <Field name="email" label="Email" type="email" defaultValue={contact.email} required />
+            <Field name="email" label="Email" type="email" defaultValue={contact.email ?? ""} />
             <Field name="phone" label="Phone (for texting)" type="tel" defaultValue={contact.phone ?? ""} placeholder="+1 555 123 4567" />
+            <p className="text-xs text-zinc-500">Provide at least one of email or phone.</p>
             <Field name="name" label="Manager name" defaultValue={contact.name ?? ""} />
             <Field name="role" label="Role" defaultValue={contact.role ?? ""} placeholder="management / booking / artist" />
             <Field name="customPrice" label="Custom rate" defaultValue={contact.customPrice ?? ""} placeholder="$400" />

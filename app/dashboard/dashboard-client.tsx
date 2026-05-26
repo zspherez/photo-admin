@@ -420,7 +420,7 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
                               <Link
                                 href={a.contacts.length > 1 ? `/artists/${a.id}` : `/dashboard/contact/${contact.id}`}
                                 className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                                title={a.contacts.map((c) => `${c.name ?? ""} <${c.email}>`.trim()).join("\n")}
+                                title={a.contacts.map((c) => `${c.name ?? ""} ${c.email ? `<${c.email}>` : c.phone ?? ""}`.trim()).join("\n")}
                               >
                                 {contact.customPrice ?? (a.contacts.length > 1 ? `${a.contacts.length} contacts` : "edit")}
                               </Link>
@@ -454,9 +454,11 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
                                 alreadySent={alreadySent}
                                 action={sendNowAction}
                               />
-                              <LinkButton href={`/dashboard/customize/${show.id}/${contact.id}`} variant="secondary" size="sm">
-                                Customize
-                              </LinkButton>
+                              {contact.email && (
+                                <LinkButton href={`/dashboard/customize/${show.id}/${contact.id}`} variant="secondary" size="sm">
+                                  Customize
+                                </LinkButton>
+                              )}
                             </div>
                           )}
                           {!alreadySent && (

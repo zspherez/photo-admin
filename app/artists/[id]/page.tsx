@@ -203,7 +203,7 @@ export default async function ArtistPage({ params }: { params: Promise<{ id: str
                         {c.name && <b>{c.name}</b>}
                         {c.name ? " · " : ""}
                         <Link href={`/dashboard/contact/${c.id}`} className="text-zinc-700 hover:underline dark:text-zinc-300">
-                          {c.email}
+                          {c.email ?? c.phone ?? "(no contact info)"}
                         </Link>
                         {c.role && <span className="text-zinc-500"> · {c.role}</span>}
                       </p>

@@ -1,20 +1,42 @@
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { syncEdmtrainShows } from "@/lib/edmtrain";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { formatShowDate } from "@/lib/formatDate";
+import { SyncForm } from "@/components/sync-form";
+import { SyncBanner } from "@/components/sync-banner";
 
 export const dynamic = "force-dynamic";
 
 async function refreshShows() {
   "use server";
-  await syncEdmtrainShows(90);
+  let redirectTo: string;
+  try {
+    const result = await syncEdmtrainShows(90);
+    const params = new URLSearchParams({
+      synced: "ok",
+      fetched: String(result.fetched),
+      upserted: String(result.upserted),
+      skipped: String(result.skippedVenue),
+      linked: String(result.artistsLinked),
+    });
+    redirectTo = `/shows?${params.toString()}`;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    redirectTo = `/shows?synced=error&detail=${encodeURIComponent(msg.slice(0, 200))}`;
+  }
   revalidatePath("/shows");
   revalidatePath("/");
+  redirect(redirectTo);
 }
 
-export default async function ShowsPage() {
+export default async function ShowsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ synced?: string; fetched?: string; upserted?: string; skipped?: string; linked?: string; detail?: string }>;
+}) {
+  const sp = await searchParams;
   const [shows, lastSync, totalArtists] = await Promise.all([
     db.show.findMany({
       where: { date: { gte: new Date() }, isFestival: false },
@@ -36,10 +58,19 @@ export default async function ShowsPage() {
             {lastSync && ` · last sync ${new Date(lastSync.value).toLocaleString()}`}
           </p>
         </div>
-        <form action={refreshShows}>
-          <Button type="submit" variant="primary" size="md">Refresh from EDMTrain</Button>
-        </form>
+        <SyncForm action={refreshShows} label="Refresh from EDMTrain" pendingLabel="Refreshing…" />
       </div>
+
+      {sp.synced === "ok" && (
+        <SyncBanner
+          tone="success"
+          title="Shows refreshed."
+          detail={`${sp.fetched ?? "?"} fetched · ${sp.upserted ?? "?"} upserted · ${sp.skipped ?? "?"} venue-skipped · ${sp.linked ?? "?"} artists linked`}
+        />
+      )}
+      {sp.synced === "error" && (
+        <SyncBanner tone="error" title="Sync failed." detail={sp.detail ?? "unknown error"} />
+      )}
 
       {shows.length === 0 ? (
         <div className="mt-8 rounded-xl border border-dashed border-zinc-300 p-12 text-center text-sm text-zinc-500 dark:border-zinc-700">

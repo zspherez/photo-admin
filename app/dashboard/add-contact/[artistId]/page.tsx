@@ -36,43 +36,51 @@ async function createContacts(formData: FormData) {
   }
 
   const emails = parseEmails(emailsRaw);
-  if (emails.length === 0) {
-    redirect(`/dashboard/add-contact/${artistId}?error=no_valid_emails`);
+  if (emails.length === 0 && !phone) {
+    redirect(`/dashboard/add-contact/${artistId}?error=missing_target`);
   }
 
   let createdCount = 0;
   let updatedCount = 0;
   const sheetErrors: string[] = [];
 
-  for (const email of emails) {
-    const existing = await db.contact.findUnique({
-      where: { artistId_email: { artistId, email } },
+  if (emails.length === 0) {
+    // Phone-only contact. No sheet sync since the sheet is keyed by email.
+    await db.contact.create({
+      data: { artistId, phone, name, role, customPrice, notes, source: "manual" },
     });
+    createdCount++;
+  } else {
+    for (const email of emails) {
+      const existing = await db.contact.findUnique({
+        where: { artistId_email: { artistId, email } },
+      });
 
-    const contact = await db.contact.upsert({
-      where: { artistId_email: { artistId, email } },
-      create: { artistId, email, phone, name, role, customPrice, notes, source: "manual" },
-      update: { phone, name, role, customPrice, notes },
-      include: { artist: true },
-    });
+      const contact = await db.contact.upsert({
+        where: { artistId_email: { artistId, email } },
+        create: { artistId, email, phone, name, role, customPrice, notes, source: "manual" },
+        update: { phone, name, role, customPrice, notes },
+        include: { artist: true },
+      });
 
-    if (existing) {
-      updatedCount++;
-    } else {
-      createdCount++;
-      try {
-        await appendContactToSheet({
-          artistName: contact.artist.name,
-          email,
-          managerName: name,
-          role,
-          customPrice,
-          notes,
-        });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.error("[sheet append] failed", e);
-        sheetErrors.push(`${email}: ${msg.slice(0, 80)}`);
+      if (existing) {
+        updatedCount++;
+      } else {
+        createdCount++;
+        try {
+          await appendContactToSheet({
+            artistName: contact.artist.name,
+            email,
+            managerName: name,
+            role,
+            customPrice,
+            notes,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error("[sheet append] failed", e);
+          sheetErrors.push(`${email}: ${msg.slice(0, 80)}`);
+        }
       }
     }
   }
@@ -142,8 +150,8 @@ export default async function AddContactPage({
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
           {error === "missing_fields"
             ? "Artist is required."
-            : error === "no_valid_emails"
-            ? "Add at least one valid email."
+            : error === "missing_target"
+            ? "Add at least one email or a phone number."
             : error}
         </div>
       )}
@@ -154,8 +162,8 @@ export default async function AddContactPage({
             <input type="hidden" name="artistId" value={artistId} />
             <TextArea
               name="emails"
-              label="Emails"
-              description="One per line. Commas, semicolons, and spaces also separate. Each becomes a contact with the shared metadata below. Duplicates are deduped."
+              label="Emails (optional if phone given)"
+              description="One per line. Commas, semicolons, and spaces also separate. Each becomes a contact with the shared metadata below. Duplicates are deduped. Leave empty to create a single phone-only contact."
               rows={4}
               placeholder={"manager@example.com\nbooking@example.com\nlabel@example.com"}
               mono

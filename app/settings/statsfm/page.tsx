@@ -14,6 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { TextArea } from "@/components/ui/field";
 import { cn } from "@/lib/cn";
+import { SyncForm } from "@/components/sync-form";
+import { SyncBanner } from "@/components/sync-banner";
 
 export const dynamic = "force-dynamic";
 
@@ -43,11 +45,24 @@ async function rotateToken(formData: FormData) {
 async function syncLifetime() {
   "use server";
   const cred = await db.integrationCredential.findUnique({ where: { provider: "statsfm" } });
-  if (!cred?.meta) return;
-  const { userId } = JSON.parse(cred.meta);
-  await syncStatsfmTopArtists(userId, "lifetime", 500);
+  if (!cred?.meta) redirect("/settings/statsfm?synced=error&detail=not_connected");
+  const { userId } = JSON.parse(cred!.meta!);
+  let redirectTo: string;
+  try {
+    const result = await syncStatsfmTopArtists(userId, "lifetime", 500);
+    const params = new URLSearchParams({
+      synced: "ok",
+      fetched: String(result.fetched),
+      written: String(result.written),
+    });
+    redirectTo = `/settings/statsfm?${params.toString()}`;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    redirectTo = `/settings/statsfm?synced=error&detail=${encodeURIComponent(msg.slice(0, 200))}`;
+  }
   revalidatePath("/settings/statsfm");
   revalidatePath("/");
+  redirect(redirectTo);
 }
 
 async function disconnect() {
@@ -60,7 +75,7 @@ async function disconnect() {
 export default async function StatsfmSettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ rotate?: string; detail?: string }>;
+  searchParams: Promise<{ rotate?: string; detail?: string; synced?: string; fetched?: string; written?: string }>;
 }) {
   const sp = await searchParams;
   const [cred, lifetimeSync, lifetimeCount] = await Promise.all([
@@ -90,20 +105,20 @@ export default async function StatsfmSettingsPage({
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">Stats.fm</h1>
       <p className="mt-1 text-sm text-zinc-500">Lifetime listening history. Tokens expire every ~7 days — rotate below.</p>
 
-      {sp.rotate === "ok" && (
-        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
-          New token saved.
-        </div>
-      )}
+      {sp.rotate === "ok" && <SyncBanner tone="success" title="New token saved." />}
       {sp.rotate === "error" && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          Token rejected{sp.detail ? `: ${sp.detail}` : "."}
-        </div>
+        <SyncBanner tone="error" title="Token rejected." detail={sp.detail ?? undefined} />
       )}
-      {sp.rotate === "missing" && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          Paste a token first.
-        </div>
+      {sp.rotate === "missing" && <SyncBanner tone="error" title="Paste a token first." />}
+      {sp.synced === "ok" && (
+        <SyncBanner
+          tone="success"
+          title="Lifetime top artists synced."
+          detail={`${sp.fetched ?? "?"} fetched · ${sp.written ?? "?"} written`}
+        />
+      )}
+      {sp.synced === "error" && (
+        <SyncBanner tone="error" title="Sync failed." detail={sp.detail ?? "unknown error"} />
       )}
 
       <Card className="mt-6">
@@ -134,9 +149,7 @@ export default async function StatsfmSettingsPage({
               </p>
 
               <div className="mt-4 flex flex-wrap gap-2">
-                <form action={syncLifetime}>
-                  <Button type="submit" variant="primary" size="sm">Sync lifetime top 500</Button>
-                </form>
+                <SyncForm action={syncLifetime} label="Sync lifetime top 500" pendingLabel="Syncing…" size="sm" />
                 <form action={disconnect}>
                   <Button type="submit" variant="danger" size="sm">Disconnect</Button>
                 </form>

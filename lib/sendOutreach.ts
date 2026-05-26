@@ -40,7 +40,11 @@ export async function sendOutreach({
   });
   const siblingIds = siblingContacts.map((c) => c.id);
   const recipients = Array.from(
-    new Set(siblingContacts.map((c) => c.email).filter((e) => e && e.includes("@")))
+    new Set(
+      siblingContacts
+        .map((c) => c.email)
+        .filter((e): e is string => !!e && e.includes("@"))
+    )
   );
   if (recipients.length === 0) {
     return { ok: false, error: "No valid emails for this artist" };
