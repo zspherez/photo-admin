@@ -6,6 +6,7 @@ import { updateContactInSheet } from "@/lib/sheets";
 import { Card, CardBody } from "@/components/ui/card";
 import { Button, LinkButton } from "@/components/ui/button";
 import { Field, TextArea } from "@/components/ui/field";
+import { formatShowDate } from "@/lib/formatDate";
 
 export const dynamic = "force-dynamic";
 
@@ -124,7 +125,7 @@ export default async function ContactEditPage({
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
               {contact.outreaches.map((o) => (
                 <li key={o.id} className="px-4 py-3 text-sm">
-                  <p className="font-medium">{o.show.venueName} · {o.show.date.toLocaleDateString()}</p>
+                  <p className="font-medium">{o.show.venueName} · {formatShowDate(o.show.date, {})}</p>
                   <p className="mt-0.5 text-xs text-zinc-500">
                     {o.status}{o.sentAt ? ` · sent ${o.sentAt.toLocaleString()}` : ""}
                     {o.openCount > 0 ? ` · opened ${o.openCount}x` : ""}

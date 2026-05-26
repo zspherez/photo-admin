@@ -6,6 +6,7 @@ import { appendContactToSheet } from "@/lib/sheets";
 import { Card, CardBody } from "@/components/ui/card";
 import { Button, LinkButton } from "@/components/ui/button";
 import { Field, TextArea } from "@/components/ui/field";
+import { formatShowDate } from "@/lib/formatDate";
 
 export const dynamic = "force-dynamic";
 
@@ -115,7 +116,7 @@ export default async function AddContactPage({
       </p>
       {upcomingShows.length > 0 && (
         <p className="mt-1 text-xs text-zinc-500">
-          Upcoming: {upcomingShows.slice(0, 3).map((s) => `${s.venueName} ${s.date.toLocaleDateString()}`).join(" · ")}
+          Upcoming: {upcomingShows.slice(0, 3).map((s) => `${s.venueName} ${formatShowDate(s.date, {})}`).join(" · ")}
         </p>
       )}
 

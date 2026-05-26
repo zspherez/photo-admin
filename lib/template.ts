@@ -76,6 +76,7 @@ export async function buildVarsForShow(ctx: ShowContext): Promise<TemplateVars> 
       weekday: "long",
       month: "long",
       day: "numeric",
+      timeZone: "UTC",
     }),
     rate: ctx.customPrice?.trim() ?? "",
     portfolio_url: portfolioUrl,

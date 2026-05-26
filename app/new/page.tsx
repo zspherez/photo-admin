@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { formatShowDate } from "@/lib/formatDate";
 
 export const dynamic = "force-dynamic";
 const LAST_SEEN_KEY = "last_seen_new_shows";
@@ -101,7 +102,7 @@ export default async function NewlyAnnouncedPage() {
                           {withContact > 0 && <Badge tone="info" size="xs">{withContact} contact</Badge>}
                         </div>
                         <p className="mt-0.5 truncate text-xs text-zinc-500">
-                          {show.date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+                          {formatShowDate(show.date)}
                           {" · "}{show.venueName}
                           {show.state ? `, ${show.state}` : show.city ? `, ${show.city}` : ""}
                           {show.eventName && headliners && ` · ${headliners}`}

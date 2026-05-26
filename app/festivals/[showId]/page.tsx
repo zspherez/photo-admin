@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, LinkButton } from "@/components/ui/button";
 import { ArtistLink } from "@/components/artist-modal";
 import { cn } from "@/lib/cn";
+import { formatShowDate } from "@/lib/formatDate";
 
 export const dynamic = "force-dynamic";
 
@@ -128,7 +129,7 @@ export default async function FestivalDetailPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{festival.eventName || festival.venueName}</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            {festival.date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
+            {formatShowDate(festival.date, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
             {" · "}{festival.venueName}{festival.state ? `, ${festival.state}` : ""}
             {festival.ticketUrl && (
               <> · <a href={festival.ticketUrl} target="_blank" rel="noopener noreferrer" className="text-zinc-700 hover:underline dark:text-zinc-300">EDMTrain ↗</a></>

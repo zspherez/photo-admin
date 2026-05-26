@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { ArtistLink } from "@/components/artist-modal";
 import { cn } from "@/lib/cn";
+import { formatShowDate } from "@/lib/formatDate";
 
 export const dynamic = "force-dynamic";
 
@@ -183,7 +184,7 @@ export default async function OutreachLogPage({
                         <Link href={showHref} className="hover:underline">
                           {o.show.eventName || o.show.venueName}
                           {" · "}
-                          {o.show.date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                          {formatShowDate(o.show.date, { month: "short", day: "numeric", year: "numeric" })}
                         </Link>
                         {" · "}
                         <Link href={`/dashboard/contact/${o.contactId}`} className="hover:underline">

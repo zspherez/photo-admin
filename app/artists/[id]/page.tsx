@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { formatShowDate } from "@/lib/formatDate";
 
 export const dynamic = "force-dynamic";
 
@@ -223,7 +224,7 @@ export default async function ArtistPage({ params }: { params: Promise<{ id: str
                       <p className="truncate">
                         <span className="font-medium">{s.eventName || s.venueName}</span>
                         <span className="ml-2 text-xs text-zinc-500">
-                          {s.date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+                          {formatShowDate(s.date, { weekday: "short", month: "short", day: "numeric" })}
                           {" · "}{s.venueName}{s.state ? `, ${s.state}` : ""}
                         </span>
                       </p>

@@ -62,6 +62,7 @@ function dateRangeLabel(dates: Date[]): string {
       weekday: "short",
       month: "short",
       day: "numeric",
+      timeZone: "UTC",
       ...(withYear ? { year: "numeric" } : {}),
     });
   if (sorted.length === 1) return fmt(first, true);

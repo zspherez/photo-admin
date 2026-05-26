@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { syncEdmtrainShows } from "@/lib/edmtrain";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { formatShowDate } from "@/lib/formatDate";
 
 export const dynamic = "force-dynamic";
 
@@ -56,7 +57,7 @@ export default async function ShowsPage() {
                   <p className="mt-0.5 truncate text-xs text-zinc-500">
                     {show.venueName} · {show.city}
                     {show.state ? `, ${show.state}` : ""} ·{" "}
-                    {show.date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+                    {formatShowDate(show.date, { weekday: "short", month: "short", day: "numeric" })}
                   </p>
                 </div>
                 {show.ticketUrl && (

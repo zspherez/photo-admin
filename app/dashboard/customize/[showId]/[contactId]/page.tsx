@@ -6,6 +6,7 @@ import { applyTemplate, buildVarsForShow, ensureDefaultTemplate } from "@/lib/te
 import { Card, CardBody } from "@/components/ui/card";
 import { Button, LinkButton } from "@/components/ui/button";
 import { TemplateEditor } from "@/components/template-editor";
+import { formatShowDate } from "@/lib/formatDate";
 
 export const dynamic = "force-dynamic";
 
@@ -51,7 +52,7 @@ export default async function CustomizePage({
       <Link href="/dashboard" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Dashboard</Link>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">Customize &amp; send</h1>
       <p className="mt-1 text-sm text-zinc-500">
-        To <b>{contact.name ? `${contact.name} <${contact.email}>` : contact.email}</b> · {contact.artist.name} at {show.venueName}, {show.date.toLocaleDateString()}
+        To <b>{contact.name ? `${contact.name} <${contact.email}>` : contact.email}</b> · {contact.artist.name} at {show.venueName}, {formatShowDate(show.date, {})}
       </p>
 
       <Card className="mt-6">
