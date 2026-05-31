@@ -1,6 +1,7 @@
 import { getMatchedShowsForClient, getUnknownBigShowsForClient } from "@/lib/match";
 import { db } from "@/lib/db";
 import { getTestOverride, getRateCardInfo } from "@/lib/resend";
+import { isWeekendET } from "@/lib/schedule";
 import { cn } from "@/lib/cn";
 import { DashboardClient } from "./dashboard-client";
 
@@ -35,6 +36,8 @@ export default async function DashboardPage({
     sheet_errors?: string;
     marked?: string;
     unmarked?: string;
+    scheduled?: string;
+    cancelled?: string;
   }>;
 }) {
   const sp = await searchParams;
@@ -69,6 +72,8 @@ export default async function DashboardPage({
           </p>
         )}
         {sp.sent && <Banner tone="success">Email sent.</Banner>}
+        {sp.scheduled && <Banner tone="success">Email scheduled for Monday morning (9–10 AM ET). You can cancel it from the listing.</Banner>}
+        {sp.cancelled && <Banner tone="success">Scheduled send cancelled.</Banner>}
         {sp.marked && <Banner tone="success">Marked as sent.</Banner>}
         {sp.unmarked && <Banner tone="success">Manual mark removed.</Banner>}
         {sp.added && (
@@ -93,6 +98,7 @@ export default async function DashboardPage({
         unknownBig={unknownBig}
         totalUpcoming={totalUpcoming}
         totalSignals={totalSignals}
+        isWeekend={isWeekendET()}
       />
     </main>
   );

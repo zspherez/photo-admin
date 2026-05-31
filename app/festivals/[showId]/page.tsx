@@ -2,8 +2,9 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { sendOutreach } from "@/lib/sendOutreach";
+import { sendOutreach, scheduleOutreach } from "@/lib/sendOutreach";
 import { getTestOverride } from "@/lib/resend";
+import { isWeekendET, getNextMondaySlot } from "@/lib/schedule";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button, LinkButton } from "@/components/ui/button";
@@ -17,21 +18,28 @@ async function bulkSend(formData: FormData) {
   "use server";
   const showId = formData.get("showId") as string;
   const contactIds = formData.getAll("contactIds").map((v) => String(v));
+  const weekend = isWeekendET();
   let sent = 0;
+  let scheduled = 0;
   let failed = 0;
   let skipped = 0;
   const errors: string[] = [];
   for (const contactId of contactIds) {
-    const result = await sendOutreach({ showId, contactId });
-    if (result.ok) sent++;
-    else if (result.error?.includes("Already sent")) skipped++;
-    else {
+    const result = weekend
+      ? await scheduleOutreach({ showId, contactId }, getNextMondaySlot())
+      : await sendOutreach({ showId, contactId });
+    if (result.ok) {
+      if (result.scheduled) scheduled++;
+      else sent++;
+    } else if (result.error?.includes("Already sent") || result.error?.includes("Already scheduled")) {
+      skipped++;
+    } else {
       failed++;
       if (result.error) errors.push(`${contactId.slice(-6)}: ${result.error}`);
     }
   }
   revalidatePath(`/festivals/${showId}`);
-  const params = new URLSearchParams({ sent: String(sent), failed: String(failed), skipped: String(skipped) });
+  const params = new URLSearchParams({ sent: String(sent), scheduled: String(scheduled), failed: String(failed), skipped: String(skipped) });
   if (errors.length) params.set("errors", errors.slice(0, 3).join(" | "));
   redirect(`/festivals/${showId}?${params.toString()}`);
 }

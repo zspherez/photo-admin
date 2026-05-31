@@ -8,10 +8,11 @@ import { formatShowDate } from "@/lib/formatDate";
 
 export const dynamic = "force-dynamic";
 
-type StatusFilter = "all" | "sent" | "delivered" | "opened" | "clicked" | "test" | "failed";
+type StatusFilter = "all" | "sent" | "delivered" | "opened" | "clicked" | "test" | "failed" | "scheduled";
 
 const STATUS_OPTIONS: { key: StatusFilter; label: string }[] = [
   { key: "all", label: "All" },
+  { key: "scheduled", label: "Scheduled" },
   { key: "sent", label: "Sent" },
   { key: "delivered", label: "Delivered" },
   { key: "opened", label: "Opened" },
@@ -31,6 +32,8 @@ interface OutreachLike {
 function statusLabels(o: OutreachLike): string[] {
   if (o.status === "failed") return ["Failed"];
   if (o.status === "queued") return ["Queued"];
+  if (o.status === "scheduled") return ["Scheduled"];
+  if (o.status === "cancelled") return ["Cancelled"];
   const labels: string[] = [];
   if (o.status === "test") labels.push("Test sent");
   else if (o.sentAt) labels.push("Sent");
@@ -42,6 +45,8 @@ function statusLabels(o: OutreachLike): string[] {
 
 function statusTone(o: OutreachLike): BadgeTone {
   if (o.status === "failed") return "danger";
+  if (o.status === "cancelled") return "default";
+  if (o.status === "scheduled") return "warning";
   if (o.clickCount > 0) return "info";
   if (o.openCount > 0) return "info";
   if (o.deliveredAt) return "success";
@@ -52,6 +57,7 @@ function statusTone(o: OutreachLike): BadgeTone {
 function buildWhere(status: StatusFilter, search: string) {
   const where: Record<string, unknown> = {};
   if (status === "sent") where.status = "sent";
+  else if (status === "scheduled") where.status = "scheduled";
   else if (status === "test") where.status = "test";
   else if (status === "failed") where.status = "failed";
   else if (status === "delivered") where.deliveredAt = { not: null };

@@ -34,6 +34,7 @@ export interface MatchedShow {
     sentAt: Date | null;
     deliveredAt: Date | null;
     status: string;
+    scheduledFor: Date | null;
     firstClickedAt: Date | null;
     clickCount: number;
     firstOpenedAt: Date | null;
@@ -193,6 +194,7 @@ export async function getMatchedUpcomingShows(
         sentAt: o.sentAt,
         deliveredAt: o.deliveredAt,
         status: o.status,
+        scheduledFor: o.scheduledFor,
         firstClickedAt: o.firstClickedAt,
         clickCount: o.clickCount,
         firstOpenedAt: o.firstOpenedAt,
@@ -325,6 +327,7 @@ export async function getUnknownBigShowsForClient(
         sentAt: o.sentAt,
         deliveredAt: o.deliveredAt,
         status: o.status,
+        scheduledFor: o.scheduledFor,
         firstClickedAt: o.firstClickedAt,
         clickCount: o.clickCount,
         firstOpenedAt: o.firstOpenedAt,

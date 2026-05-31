@@ -26,6 +26,7 @@ import {
   toggleInterestedAction,
   markSentAction,
   unmarkSentAction,
+  cancelScheduledAction,
 } from "./actions";
 
 interface Props {
@@ -33,6 +34,7 @@ interface Props {
   unknownBig: MatchedShow[];
   totalUpcoming: number;
   totalSignals: number;
+  isWeekend: boolean;
 }
 
 type Mode = "matched" | "unknown" | "interested" | "dismissed";
@@ -64,6 +66,8 @@ interface OutreachState {
 function statusLabels(o: OutreachState): string[] {
   if (o.status === "failed") return ["Failed"];
   if (o.status === "queued") return ["Queued"];
+  if (o.status === "scheduled") return ["Scheduled"];
+  if (o.status === "cancelled") return ["Cancelled"];
   const labels: string[] = [];
   if (o.status === "test") labels.push("Test sent");
   else if (o.sentAt) labels.push("Sent");
@@ -75,6 +79,8 @@ function statusLabels(o: OutreachState): string[] {
 
 function statusTone(o: OutreachState): BadgeTone {
   if (o.status === "failed") return "danger";
+  if (o.status === "cancelled") return "default";
+  if (o.status === "scheduled") return "warning";
   if (o.clickCount > 0) return "info";
   if (o.openCount > 0) return "info";
   if (o.deliveredAt) return "success";
@@ -118,7 +124,7 @@ function dateInRange(date: Date | string, range: RangeFilter): boolean {
   return d.getTime() >= start && d.getTime() <= end;
 }
 
-export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals }: Props) {
+export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals, isWeekend }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [, startTransition] = useTransition();
@@ -171,7 +177,7 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
       if (f.contact === "needs" && !matchedArtists.some((a) => a.contacts.length === 0)) return false;
 
       if (f.status !== "any") {
-        const anySent = show.outreach.some((o) => o.status === "sent");
+        const anySent = show.outreach.some((o) => o.status === "sent" || o.status === "scheduled");
         const anyOpened = show.outreach.some((o) => o.openCount > 0);
         const anyClicked = show.outreach.some((o) => o.clickCount > 0);
         if (f.status === "sent" && !anySent) return false;
@@ -376,10 +382,17 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
                   {show.matchedArtists.map((a) => {
                     const contact = a.contacts[0] ?? null;
                     const artistOutreach = show.outreach.find(
-                      (o) => o.artistId === a.id && (o.status === "sent" || o.status === "test")
+                      (o) => o.artistId === a.id && (o.status === "sent" || o.status === "test" || o.status === "scheduled")
                     );
                     const outreach = artistOutreach ?? (contact ? show.outreach.find((o) => o.contactId === contact.id) : undefined);
                     const alreadySent = artistOutreach?.status === "sent";
+                    const isScheduled = artistOutreach?.status === "scheduled";
+                    const scheduledInfo = isScheduled && artistOutreach ? {
+                      outreachId: artistOutreach.id,
+                      scheduledLabel: artistOutreach.scheduledFor
+                        ? `Scheduled · ${new Date(artistOutreach.scheduledFor).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}`
+                        : "Scheduled",
+                    } : null;
                     return (
                       <div
                         key={a.id}
@@ -452,7 +465,10 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
                                 contactName={contact.name}
                                 phone={contact.phone}
                                 alreadySent={alreadySent}
+                                isWeekend={isWeekend}
+                                scheduledInfo={scheduledInfo}
                                 action={sendNowAction}
+                                cancelAction={cancelScheduledAction}
                               />
                               {contact.email && (
                                 <LinkButton href={`/dashboard/customize/${show.id}/${contact.id}`} variant="secondary" size="sm">
@@ -461,7 +477,7 @@ export function DashboardClient({ shows, unknownBig, totalUpcoming, totalSignals
                               )}
                             </div>
                           )}
-                          {!alreadySent && (
+                          {!alreadySent && !isScheduled && (
                             <form action={markSentAction}>
                               <input type="hidden" name="showId" value={show.id} />
                               {contact ? (

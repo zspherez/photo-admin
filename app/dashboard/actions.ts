@@ -3,11 +3,24 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { sendOutreach } from "@/lib/sendOutreach";
+import { sendOutreach, scheduleOutreach } from "@/lib/sendOutreach";
+import { isWeekendET, getNextMondaySlot } from "@/lib/schedule";
 
 export async function sendNowAction(formData: FormData) {
   const showId = formData.get("showId") as string;
   const contactId = formData.get("contactId") as string;
+
+  if (isWeekendET()) {
+    const scheduledFor = getNextMondaySlot();
+    const result = await scheduleOutreach({ showId, contactId }, scheduledFor);
+    revalidatePath("/dashboard");
+    if (result.ok) {
+      redirect(`/dashboard?scheduled=${encodeURIComponent(contactId)}`);
+    } else {
+      redirect(`/dashboard?error=${encodeURIComponent(result.error ?? "unknown")}`);
+    }
+  }
+
   const result = await sendOutreach({ showId, contactId });
   revalidatePath("/dashboard");
   if (result.ok) {
@@ -15,6 +28,21 @@ export async function sendNowAction(formData: FormData) {
   } else {
     redirect(`/dashboard?error=${encodeURIComponent(result.error ?? "unknown")}`);
   }
+}
+
+export async function cancelScheduledAction(formData: FormData) {
+  const outreachId = formData.get("outreachId") as string;
+  if (!outreachId) redirect("/dashboard?error=missing_outreach");
+  const outreach = await db.outreach.findUnique({ where: { id: outreachId } });
+  if (outreach && outreach.status === "scheduled") {
+    await db.outreach.update({
+      where: { id: outreachId },
+      data: { status: "cancelled", scheduledFor: null },
+    });
+  }
+  revalidatePath("/dashboard");
+  revalidatePath("/outreach");
+  redirect("/dashboard?cancelled=1");
 }
 
 export async function dismissShowAction(formData: FormData) {

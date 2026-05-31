@@ -169,12 +169,14 @@ model Outreach {
   clickCount       Int            @default(0)
   bouncedAt        DateTime?
   complainedAt     DateTime?
+  scheduledFor     DateTime?
   createdAt         DateTime       @default(now())
 
   @@unique([showId, contactId])
   @@index([showId])
   @@index([contactId])
   @@index([artistId])
+  @@index([status, scheduledFor])
 }
 
 model Setting {

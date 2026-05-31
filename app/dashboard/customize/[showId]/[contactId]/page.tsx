@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { db } from "@/lib/db";
-import { sendOutreach } from "@/lib/sendOutreach";
+import { sendOutreach, scheduleOutreach } from "@/lib/sendOutreach";
+import { isWeekendET, getNextMondaySlot } from "@/lib/schedule";
 import { applyTemplate, buildVarsForShow, ensureDefaultTemplate } from "@/lib/template";
 import { Card, CardBody } from "@/components/ui/card";
 import { Button, LinkButton } from "@/components/ui/button";
@@ -16,6 +17,16 @@ async function sendCustom(formData: FormData) {
   const contactId = formData.get("contactId") as string;
   const subjectOverride = (formData.get("subject") as string) ?? "";
   const htmlOverride = (formData.get("html") as string) ?? "";
+
+  if (isWeekendET()) {
+    const result = await scheduleOutreach({ showId, contactId, subjectOverride, htmlOverride }, getNextMondaySlot());
+    if (result.ok) {
+      redirect(`/dashboard?scheduled=${encodeURIComponent(contactId)}`);
+    } else {
+      redirect(`/dashboard?error=${encodeURIComponent(result.error ?? "unknown")}`);
+    }
+  }
+
   const result = await sendOutreach({ showId, contactId, subjectOverride, htmlOverride });
   if (result.ok) {
     redirect(`/dashboard?sent=${encodeURIComponent(contactId)}`);
