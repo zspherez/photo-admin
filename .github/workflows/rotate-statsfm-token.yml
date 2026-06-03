@@ -1,0 +1,31 @@
+name: Rotate Stats.fm token
+
+on:
+  schedule:
+    # Sundays at 12:00 UTC — gives plenty of buffer before the ~7-day JWT expiry.
+    - cron: "0 12 * * 0"
+  workflow_dispatch: {}
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright + tsx
+        run: npm install --no-save playwright@^1.55.0 tsx@^4.22.3
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Rotate token
+        env:
+          SPOTIFY_SP_DC: ${{ secrets.SPOTIFY_SP_DC }}
+          STATSFM_ROTATE_URL: ${{ secrets.STATSFM_ROTATE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: npx tsx scripts/rotate-statsfm-token.ts
