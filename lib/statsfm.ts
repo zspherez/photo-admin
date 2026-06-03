@@ -64,6 +64,37 @@ export async function getMe(): Promise<StatsfmUser> {
   return data.item;
 }
 
+export interface StatsfmTopTrackItem {
+  position: number;
+  streams: number;
+  playedMs: number;
+  track: {
+    id: number;
+    name: string;
+    durationMs?: number;
+    externalIds: { spotify?: string[] } | null;
+    artists: { id: number; name: string }[];
+  };
+}
+
+export async function getTopTracks(
+  userId: string,
+  range: StatsfmRange = "weeks",
+  limit = 100
+): Promise<StatsfmTopTrackItem[]> {
+  const collected: StatsfmTopTrackItem[] = [];
+  const pageSize = Math.min(limit, 100);
+  for (let offset = 0; offset < limit; offset += pageSize) {
+    const data = await statsfmFetch<{ items: StatsfmTopTrackItem[] }>(
+      `/users/${userId}/top/tracks?range=${range}&limit=${pageSize}&offset=${offset}`
+    );
+    if (!data.items || data.items.length === 0) break;
+    collected.push(...data.items);
+    if (data.items.length < pageSize) break;
+  }
+  return collected;
+}
+
 export async function getTopArtists(
   userId: string,
   range: StatsfmRange = "lifetime",

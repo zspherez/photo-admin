@@ -3,6 +3,7 @@
   "crons": [
     { "path": "/api/cron/sync-shows", "schedule": "0 11 * * *" },
     { "path": "/api/cron/sync-listens", "schedule": "0 12 * * *" },
-    { "path": "/api/cron/send-scheduled", "schedule": "0,15 13-14 * * 1" }
+    { "path": "/api/cron/send-scheduled", "schedule": "0,15 13-14 * * 1" },
+    { "path": "/api/cron/refresh-top-playlist", "schedule": "0 8,9 * * *" }
   ]
 }

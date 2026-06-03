@@ -11,6 +11,7 @@ export const SPOTIFY_SCOPES = [
   "user-follow-read",
   "playlist-read-private",
   "playlist-read-collaborative",
+  "playlist-modify-private",
 ].join(" ");
 
 export function getRedirectUri(): string {
@@ -134,6 +135,61 @@ function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
   return v;
+}
+
+// --- Playlist write helpers (used by the daily top-tracks playlist cron) ---
+
+export async function getCurrentSpotifyUserId(): Promise<string> {
+  const me = await spotifyFetch<{ id: string }>("/me");
+  return me.id;
+}
+
+// Resolve a Spotify track URI by name + artist when stats.fm doesn't carry a
+// Spotify external id. Returns null if nothing matches.
+export async function searchTrackUri(name: string, artist: string): Promise<string | null> {
+  const q = new URLSearchParams({
+    q: artist ? `track:${name} artist:${artist}` : `track:${name}`,
+    type: "track",
+    limit: "1",
+  });
+  const res = await spotifyFetch<{ tracks?: { items?: { uri: string }[] } }>(`/search?${q.toString()}`);
+  return res.tracks?.items?.[0]?.uri ?? null;
+}
+
+export async function createPlaylist(
+  userId: string,
+  name: string,
+  description: string,
+  isPublic = false
+): Promise<{ id: string; url: string }> {
+  const res = await spotifyFetch<{ id: string; external_urls?: { spotify?: string } }>(
+    `/users/${userId}/playlists`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, description, public: isPublic }),
+    }
+  );
+  return { id: res.id, url: res.external_urls?.spotify ?? `https://open.spotify.com/playlist/${res.id}` };
+}
+
+export async function playlistExists(playlistId: string): Promise<boolean> {
+  try {
+    await spotifyFetch(`/playlists/${playlistId}?fields=id`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Replace the playlist's entire contents with the given URIs (max 100). PUT
+// is atomic and idempotent — exactly what a daily "rotate" wants.
+export async function replacePlaylistItems(playlistId: string, uris: string[]): Promise<void> {
+  await spotifyFetch(`/playlists/${playlistId}/tracks`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uris: uris.slice(0, 100) }),
+  });
 }
 
 interface SpotifyArtistLite {

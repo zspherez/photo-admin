@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { SPOTIFY_SCOPES, getValidAccessToken, syncSpotifyListens } from "@/lib/spotify";
+import { refreshTopTracksPlaylist } from "@/lib/topPlaylist";
 import { Card, CardBody } from "@/components/ui/card";
 import { Button, LinkButton } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -74,6 +75,27 @@ async function syncListens() {
   redirect(redirectTo);
 }
 
+async function refreshTopPlaylist() {
+  "use server";
+  let redirectTo: string;
+  try {
+    const result = await refreshTopTracksPlaylist(50);
+    const params = new URLSearchParams({
+      playlist: "ok",
+      tracks: String(result.matchedUris),
+      source: String(result.sourceTracks),
+      unmatched: String(result.unmatched.length),
+      url: result.playlistUrl,
+    });
+    redirectTo = `/settings/spotify?${params.toString()}`;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    redirectTo = `/settings/spotify?playlist=error&detail=${encodeURIComponent(msg.slice(0, 200))}`;
+  }
+  revalidatePath("/settings/spotify");
+  redirect(redirectTo);
+}
+
 export default async function SpotifySettingsPage({
   searchParams,
 }: {
@@ -89,11 +111,16 @@ export default async function SpotifySettingsPage({
     followed?: string;
     playlists?: string;
     playlistArtists?: string;
+    playlist?: string;
+    tracks?: string;
+    source?: string;
+    unmatched?: string;
+    url?: string;
   }>;
 }) {
   const sp = await searchParams;
   const { status, detail } = sp;
-  const [cred, lastTest, lastSync, lastResult, signalCounts] = await Promise.all([
+  const [cred, lastTest, lastSync, lastResult, signalCounts, playlistId, playlistLastSync] = await Promise.all([
     db.integrationCredential.findUnique({ where: { provider: "spotify" } }),
     db.setting.findUnique({ where: { key: "spotify_last_test" } }),
     db.setting.findUnique({ where: { key: "spotify_last_sync" } }),
@@ -103,7 +130,11 @@ export default async function SpotifySettingsPage({
       where: { source: { startsWith: "spotify_" } },
       _count: { _all: true },
     }),
+    db.setting.findUnique({ where: { key: "top_tracks_playlist_id" } }),
+    db.setting.findUnique({ where: { key: "top_tracks_playlist_last_sync" } }),
   ]);
+  const playlistUrl = playlistId ? `https://open.spotify.com/playlist/${playlistId.value}` : null;
+  const hasModifyScope = cred?.scope?.includes("playlist-modify-private") ?? false;
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
@@ -126,6 +157,16 @@ export default async function SpotifySettingsPage({
       )}
       {sp.synced === "error" && (
         <SyncBanner tone="error" title="Sync failed." detail={sp.detail ?? "unknown error"} />
+      )}
+      {sp.playlist === "ok" && (
+        <SyncBanner
+          tone="success"
+          title="Top-tracks playlist refreshed."
+          detail={`${sp.tracks ?? "?"} tracks from ${sp.source ?? "?"} stats.fm entries${Number(sp.unmatched) > 0 ? ` · ${sp.unmatched} unmatched` : ""}`}
+        />
+      )}
+      {sp.playlist === "error" && (
+        <SyncBanner tone="error" title="Playlist refresh failed." detail={sp.detail ?? "unknown error"} />
       )}
 
       <Card className="mt-6">
@@ -202,6 +243,45 @@ export default async function SpotifySettingsPage({
           )}
         </CardBody>
       </Card>
+
+      {cred && (
+        <Card className="mt-6">
+          <CardBody>
+            <div className="flex items-baseline justify-between">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Top-tracks playlist</h2>
+              {playlistLastSync && (
+                <span className="text-xs text-zinc-500">refreshed {new Date(playlistLastSync.value).toLocaleString()}</span>
+              )}
+            </div>
+            <p className="mt-2 text-xs text-zinc-500">
+              Rebuilds a private &ldquo;My Top Songs · Last 4 Weeks&rdquo; playlist from stats.fm weekly data every morning at 4am ET.
+            </p>
+
+            {!hasModifyScope && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                Your connection predates the playlist-write scope. Click <b>Reconnect Spotify</b> below to grant <code>playlist-modify-private</code>, then refresh.
+              </div>
+            )}
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <SyncForm action={refreshTopPlaylist} label="Refresh now" pendingLabel="Refreshing…" size="sm" disabled={!hasModifyScope} />
+              {!hasModifyScope && (
+                <LinkButton href="/api/spotify/login" variant="secondary" size="sm">Reconnect Spotify</LinkButton>
+              )}
+              {playlistUrl && (
+                <a
+                  href={playlistUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-emerald-700 hover:underline dark:text-emerald-400"
+                >
+                  Open playlist ↗
+                </a>
+              )}
+            </div>
+          </CardBody>
+        </Card>
+      )}
     </main>
   );
 }
