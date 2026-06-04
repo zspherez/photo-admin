@@ -87,6 +87,7 @@ export default async function StatsfmSettingsPage({
   const hasEnvToken = !!process.env.STATSFM_TOKEN;
   const activeToken = cred?.accessToken ?? process.env.STATSFM_TOKEN ?? null;
   const expiresAt = activeToken ? decodeStatsfmTokenExpiry(activeToken) : null;
+  // eslint-disable-next-line react-hooks/purity -- async Server Component, runs per-request
   const now = Date.now();
   const hoursUntilExpiry = expiresAt ? (expiresAt.getTime() - now) / 3600_000 : null;
   const expiryClass =
