@@ -73,6 +73,29 @@ const KEEP_AS_ONE = new Set([
   "sosh & mosh",
 ]);
 
+// Manual artist-ID overrides for stage-names that Spotify search maps to the
+// wrong popular namesake. Verified against the actual festival lineup (Same Same
+// But Different 2026). Keyed by normalized search term.
+const ID_OVERRIDES: Record<string, string> = {
+  babykush: "7KM79xe1Ndr7z5YLW8a1Ov", // LA bass DJ, not the Chinese-pop act
+  yamagocci: "6EuSg8aungYTh6vNgL1EpG", // festival spelling "Yamagucci"
+  strawberrydiscocircus: "2Aa5prvbqcjMJTHURdKyOO", // billed act = WonkyWilla
+  marta: "2o9cmYz3Qyeow09POTgTlt",
+  caseyclub: "2bmnpyZiHHOCrU988FwaJj",
+  contra: "2HhHusDoCRr9pgb30XX7q2", // CØNTRA — verified off Chef Boyarbeatz "Night Lurker"
+  moncion: "1t1iChemmvDzb4fzAj1tof", // SD DJ billed "Lidija x Moncion", not the rapper
+  mocha: "10zyLhydWbkMTHdbxcJWaq", // Denver funk/bass, not the zero-track namesake
+  dannygrisa: "1yhkCj51DcCDktvWb21Rny", // SSBD-confirmed profile
+};
+
+// Stage-names with no credible Spotify match in this scene — skip rather than
+// pollute the playlist with a random namesake.
+const SKIP = new Set<string>([
+  "conrxd", // real act, but no recoverable Spotify profile
+  "curlybrown", // only the wrong Russian-language artist bears this name
+  "artsandcrafts", // search only finds unrelated namesakes
+]);
+
 function expand(entry: string): string[] {
   const cleaned = entry.replace(/\s*\([^)]*\)\s*/g, " ").trim();
   if (KEEP_AS_ONE.has(cleaned.toLowerCase())) return [cleaned];
@@ -120,6 +143,14 @@ async function resolveArtist(query: string): Promise<SpotifyArtist | null> {
     (a) => norm(a.name).includes(target) || target.includes(norm(a.name))
   );
   return partial ?? items[0];
+}
+
+async function getArtistById(id: string): Promise<SpotifyArtist | null> {
+  try {
+    return await spotifyFetch<SpotifyArtist>(`/artists/${id}`);
+  } catch {
+    return null;
+  }
 }
 
 async function topTracks(artistId: string): Promise<SpotifyTrack[]> {
@@ -182,6 +213,7 @@ export interface ArtistPlaylistResult {
   trackCount: number;
   artistsResolved: number;
   unresolved: string[];
+  skipped: string[];
   report: { artist: string; searchedAs?: string; tracks: { name: string; kind: "hit" | "deep"; popularity: number | null }[] }[];
 }
 
@@ -196,8 +228,17 @@ export async function buildArtistPlaylist(
   const report: ArtistPlaylistResult["report"] = [];
   const unresolved: string[] = [];
 
+  const skipped: string[] = [];
+
   for (const term of terms) {
-    const artist = await resolveArtist(term);
+    const key = norm(term);
+    if (SKIP.has(key)) {
+      skipped.push(term);
+      continue;
+    }
+    const artist = ID_OVERRIDES[key]
+      ? await getArtistById(ID_OVERRIDES[key])
+      : await resolveArtist(term);
     if (!artist) {
       unresolved.push(term);
       continue;
@@ -242,6 +283,7 @@ export async function buildArtistPlaylist(
       trackCount: ordered.length,
       artistsResolved: seenArtistIds.size,
       unresolved,
+      skipped,
       report,
     };
   }
@@ -269,6 +311,7 @@ export async function buildArtistPlaylist(
     trackCount: ordered.length,
     artistsResolved: seenArtistIds.size,
     unresolved,
+    skipped,
     report,
   };
 }
