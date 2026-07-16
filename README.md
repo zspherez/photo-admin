@@ -68,7 +68,6 @@ The full list is in `.env.example`. Minimum to boot:
 | `EDMTRAIN_API_KEY` | for show sync | Request a key at <https://edmtrain.com/api>. |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | for Spotify | Create an app at <https://developer.spotify.com/dashboard>. Redirect URI is `${APP_BASE_URL}/api/spotify/callback`. Spotify rejects `http://localhost`, so use `http://127.0.0.1:3000` locally. |
 | `STATSFM_TOKEN` | for Stats.fm | No public API — grab a session token from DevTools (Application → Local Storage → `token`) after logging into stats.fm. |
-| `RATE_CARD_PATH` | optional | URL or local path to a PDF attached to every outreach. |
 | `GOOGLE_CREDENTIALS_JSON` / `GOOGLE_CREDENTIALS_PATH` + `SPREADSHEET_ID` | optional | Service-account credentials for importing contacts from Google Sheets. The sheet must be shared with the service account's email. |
 | `SEND_TEST_OVERRIDE` | optional | Reroutes every outbound send to this address (subject prefixed with `[TEST → original]`). The Settings UI also exposes this and wins over the env value. |
 

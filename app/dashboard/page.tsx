@@ -1,6 +1,6 @@
 import { getMatchedShowsForClient, getUnknownBigShowsForClient } from "@/lib/match";
 import { db } from "@/lib/db";
-import { getTestOverride, getRateCardInfo } from "@/lib/resend";
+import { getTestOverride } from "@/lib/resend";
 import { isWeekendET } from "@/lib/schedule";
 import { cn } from "@/lib/cn";
 import { DashboardClient } from "./dashboard-client";
@@ -41,7 +41,6 @@ export default async function DashboardPage({
   }>;
 }) {
   const sp = await searchParams;
-  const rateCard = getRateCardInfo();
 
   const [testOverride, matched, unknownBig, totalUpcoming, totalSignals] = await Promise.all([
     getTestOverride(),
@@ -60,16 +59,6 @@ export default async function DashboardPage({
           <Banner tone="warning">
             Test override active — all sends go to <b>{testOverride}</b>. Subject prefixed with <code>[TEST → original]</code>.
           </Banner>
-        )}
-        {rateCard && !rateCard.exists && (
-          <Banner tone="danger">
-            <code>RATE_CARD_PATH</code> set to <code>{rateCard.source}</code> but the file doesn&apos;t exist. Sends will go without the attachment.
-          </Banner>
-        )}
-        {rateCard && rateCard.exists && (
-          <p className="text-xs text-zinc-500">
-            Attaching <code>{rateCard.filename}</code> ({rateCard.kind === "url" ? "fetched per send" : "local file"}) to every send.
-          </p>
         )}
         {sp.sent && <Banner tone="success">Email sent.</Banner>}
         {sp.scheduled && <Banner tone="success">Email scheduled for Monday morning (9–10 AM ET). You can cancel it from the listing.</Banner>}

@@ -20,7 +20,7 @@ export const DEFAULT_TEMPLATE_NAME = "default";
 
 export const DEFAULT_TEMPLATE_SUBJECT = "{{artist}} {{sender_city}} Photo/Video";
 
-export const DEFAULT_TEMPLATE_HTML = `<html>
+const LEGACY_DEFAULT_TEMPLATE_HTML = `<html>
   <body>
     <p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p>
     <p>Gave a brief summary of my rates/deliverables below, and attached my full rate card to this email but I'm happy to work with you to meet your needs!</p>
@@ -35,9 +35,35 @@ export const DEFAULT_TEMPLATE_HTML = `<html>
   </body>
 </html>`;
 
+export const DEFAULT_TEMPLATE_HTML = `<html>
+  <body>
+    <p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p>
+    <p>Gave a brief summary of my rates/deliverables below, and I'm happy to work with you to meet your needs!</p>
+    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
+    <p>My standard {{sender_city}} show rate is $400 for photo/video, or $200 for just photo.</p>
+    <p>You can check out some examples of my previous work at <a href="{{portfolio_url}}">{{portfolio_url}}</a></p>
+    <p>I look forward to hearing from you soon!</p>
+    <p>Best,<br>
+       {{sender_name}}<br>
+       <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
+    </p>
+  </body>
+</html>`;
+
 export async function ensureDefaultTemplate() {
   const existing = await db.emailTemplate.findFirst({ where: { isDefault: true } });
-  if (existing) return existing;
+  if (existing) {
+    if (
+      existing.name === DEFAULT_TEMPLATE_NAME &&
+      existing.htmlBody === LEGACY_DEFAULT_TEMPLATE_HTML
+    ) {
+      return db.emailTemplate.update({
+        where: { id: existing.id },
+        data: { htmlBody: DEFAULT_TEMPLATE_HTML },
+      });
+    }
+    return existing;
+  }
   return db.emailTemplate.create({
     data: {
       name: DEFAULT_TEMPLATE_NAME,

@@ -1,6 +1,4 @@
 import { Resend } from "resend";
-import { readFileSync, existsSync } from "node:fs";
-import { basename } from "node:path";
 import { db } from "@/lib/db";
 
 let _client: Resend | null = null;
@@ -45,41 +43,6 @@ export async function getBccEmails(): Promise<string[]> {
     .filter((e) => e.includes("@") && e.length >= 5);
 }
 
-export interface AttachmentInfo {
-  source: string;
-  filename: string;
-  kind: "url" | "file";
-  exists: boolean;
-}
-
-export function getRateCardInfo(): AttachmentInfo | null {
-  const source = process.env.RATE_CARD_PATH?.trim();
-  if (!source) return null;
-  if (/^https?:\/\//i.test(source)) {
-    const filename = new URL(source).pathname.split("/").pop() || "rate-card.pdf";
-    return { source, filename, kind: "url", exists: true };
-  }
-  return { source, filename: basename(source), kind: "file", exists: existsSync(source) };
-}
-
-async function loadAttachments(): Promise<{ filename: string; content: string }[]> {
-  const info = getRateCardInfo();
-  if (!info) return [];
-  try {
-    if (info.kind === "url") {
-      const res = await fetch(info.source, { cache: "no-store" });
-      if (!res.ok) throw new Error(`fetch ${info.source} → ${res.status}`);
-      const buf = Buffer.from(await res.arrayBuffer());
-      return [{ filename: info.filename, content: buf.toString("base64") }];
-    }
-    if (!info.exists) return [];
-    return [{ filename: info.filename, content: readFileSync(info.source).toString("base64") }];
-  } catch (e) {
-    console.error("[attachments] failed to load rate card", e);
-    return [];
-  }
-}
-
 export async function sendEmailViaResend({ to, subject, html, outreachId }: SendArgs): Promise<SendResult> {
   const from = process.env.RESEND_FROM_EMAIL;
   if (!from) return { providerMessageId: null, error: "Missing RESEND_FROM_EMAIL" };
@@ -90,7 +53,6 @@ export async function sendEmailViaResend({ to, subject, html, outreachId }: Send
   const finalSubject = override ? `[TEST → ${toList.join(", ")}] ${subject}` : subject;
   // In test mode, skip BCC — don't accidentally CC your real address on test sends.
   const finalBcc = override ? [] : bcc;
-  const attachments = await loadAttachments();
 
   try {
     const result = await client().emails.send({
@@ -100,7 +62,6 @@ export async function sendEmailViaResend({ to, subject, html, outreachId }: Send
       html,
       headers: { "X-Outreach-Id": outreachId },
       tags: [{ name: "outreach_id", value: outreachId }],
-      ...(attachments.length > 0 ? { attachments } : {}),
       ...(finalBcc.length > 0 ? { bcc: finalBcc.length === 1 ? finalBcc[0] : finalBcc } : {}),
     });
     if (result.error) return { providerMessageId: null, error: String(result.error.message ?? result.error) };
