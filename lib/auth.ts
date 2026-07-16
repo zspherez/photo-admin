@@ -1,29 +1,297 @@
-// Edge-safe auth helpers. Uses Web Crypto so this works in both Node runtime
-// (route handlers / server actions) and the Edge runtime (middleware).
+// Core token helpers use Web Crypto across server runtimes. The Server Action
+// guard lazily imports request APIs so Proxy can reuse the same module.
 
 export const SESSION_COOKIE = "admin_session";
-const SESSION_SALT = "photo-admin-session-v1";
+export const SESSION_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
-export async function expectedSessionHash(): Promise<string | null> {
-  const pw = process.env.ADMIN_PASSWORD;
-  if (!pw) return null;
-  const enc = new TextEncoder();
-  const buf = await crypto.subtle.digest("SHA-256", enc.encode(pw + ":" + SESSION_SALT));
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+const SESSION_VERSION = "v2";
+const PASSWORD_VERSION_CONTEXT = "photo-admin/password-version/v1";
+const SESSION_KEY_CONTEXT = "photo-admin/session-signing-key/v2";
+const SESSION_NONCE_BYTES = 16;
+const MAX_SESSION_TOKEN_LENGTH = 2048;
+const MAX_CLOCK_SKEW_SECONDS = 60;
+const encoder = new TextEncoder();
+const decoder = new TextDecoder("utf-8", { fatal: true });
+
+type SessionPayload = {
+  iat: number;
+  exp: number;
+  nonce: string;
+};
+
+export type AuthConfiguration =
+  | { mode: "protected" }
+  | { mode: "open" }
+  | { mode: "misconfigured"; error: string };
+
+export interface AuthEnvironment {
+  nodeEnv?: string;
+  allowInsecureOpenMode?: string;
 }
 
-export function constantTimeEqual(a: string, b: string): boolean {
+export function getAuthConfiguration(
+  adminPassword: string | undefined = process.env.ADMIN_PASSWORD,
+  sessionSecret: string | undefined = process.env.ADMIN_SESSION_SECRET,
+  environment: AuthEnvironment = {
+    nodeEnv: process.env.NODE_ENV,
+    allowInsecureOpenMode: process.env.ALLOW_INSECURE_OPEN_MODE,
+  },
+): AuthConfiguration {
+  const hasPassword = !!adminPassword;
+  const hasSessionSecret = !!sessionSecret;
+  if (hasPassword && hasSessionSecret) return { mode: "protected" };
+
+  const production = environment.nodeEnv === "production";
+  const openModeRequested =
+    environment.allowInsecureOpenMode?.trim().toLowerCase() === "true";
+  if (!hasPassword && !production && openModeRequested) {
+    return { mode: "open" };
+  }
+
+  const missing = [
+    !hasPassword ? "ADMIN_PASSWORD" : null,
+    !hasSessionSecret ? "ADMIN_SESSION_SECRET" : null,
+  ].filter((value): value is string => value !== null);
+  const productionSuffix =
+    production && openModeRequested
+      ? "; ALLOW_INSECURE_OPEN_MODE is ignored in production"
+      : "";
+  return {
+    mode: "misconfigured",
+    error: `Authentication configuration error: missing ${missing.join(
+      " and ",
+    )}${productionSuffix}`,
+  };
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> | null {
+  if (!value || !/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) return null;
+
+  try {
+    const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return bytesToBase64Url(bytes) === value ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
+async function sha256(value: string): Promise<Uint8Array<ArrayBuffer>> {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)));
+}
+
+function concatBytes(
+  ...values: Uint8Array<ArrayBufferLike>[]
+): Uint8Array<ArrayBuffer> {
+  const length = values.reduce((total, value) => total + value.length, 0);
+  const combined = new Uint8Array(new ArrayBuffer(length));
+  let offset = 0;
+  for (const value of values) {
+    combined.set(value, offset);
+    offset += value.length;
+  }
+  return combined;
+}
+
+function constantTimeEqualBytes(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   let mismatch = 0;
-  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let index = 0; index < a.length; index++) mismatch |= a[index] ^ b[index];
   return mismatch === 0;
 }
 
-export async function isAuthenticated(cookieValue: string | undefined): Promise<boolean> {
-  const expected = await expectedSessionHash();
-  if (expected === null) return true; // no password set → open mode
-  if (!cookieValue) return false;
-  return constantTimeEqual(cookieValue, expected);
+export async function constantTimeEqual(a: string, b: string): Promise<boolean> {
+  const [aDigest, bDigest] = await Promise.all([sha256(a), sha256(b)]);
+  return constantTimeEqualBytes(aDigest, bDigest);
+}
+
+export function sanitizeNextPath(value: unknown): string {
+  if (typeof value !== "string") return "/";
+
+  const candidate = value.trim() || "/";
+  let decoded = candidate;
+
+  for (let pass = 0; pass < 8; pass++) {
+    if (
+      !decoded.startsWith("/") ||
+      decoded.startsWith("//") ||
+      /[\\\u0000-\u001f\u007f-\u009f]/.test(decoded)
+    ) {
+      return "/";
+    }
+
+    try {
+      const nextDecoded = decodeURIComponent(decoded);
+      if (nextDecoded === decoded) return candidate;
+      decoded = nextDecoded;
+    } catch {
+      return "/";
+    }
+  }
+
+  return "/";
+}
+
+async function importSessionKey(secret: string, adminPassword: string): Promise<CryptoKey> {
+  const passwordVersion = await sha256(
+    `${PASSWORD_VERSION_CONTEXT}\u0000${adminPassword}`,
+  );
+  const secretKey = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const derivedKey = await crypto.subtle.sign(
+    "HMAC",
+    secretKey,
+    concatBytes(encoder.encode(`${SESSION_KEY_CONTEXT}\u0000`), passwordVersion),
+  );
+  return crypto.subtle.importKey(
+    "raw",
+    derivedKey,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"],
+  );
+}
+
+export async function createSessionToken(
+  secret: string | undefined = process.env.ADMIN_SESSION_SECRET,
+  adminPassword: string | undefined = process.env.ADMIN_PASSWORD,
+  now = Date.now(),
+): Promise<string | null> {
+  if (!secret || !adminPassword) return null;
+
+  const issuedAt = Math.floor(now / 1000);
+  const nonceBytes = crypto.getRandomValues(new Uint8Array(SESSION_NONCE_BYTES));
+  const payload: SessionPayload = {
+    iat: issuedAt,
+    exp: issuedAt + SESSION_COOKIE_MAX_AGE_SECONDS,
+    nonce: bytesToBase64Url(nonceBytes),
+  };
+  const encodedPayload = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
+  const unsignedToken = `${SESSION_VERSION}.${encodedPayload}`;
+  const key = await importSessionKey(secret, adminPassword);
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(unsignedToken)));
+
+  return `${unsignedToken}.${bytesToBase64Url(signature)}`;
+}
+
+export async function verifySessionToken(
+  token: string | undefined,
+  secret: string | undefined = process.env.ADMIN_SESSION_SECRET,
+  adminPassword: string | undefined = process.env.ADMIN_PASSWORD,
+  now = Date.now(),
+): Promise<boolean> {
+  if (!token || !secret || !adminPassword || token.length > MAX_SESSION_TOKEN_LENGTH) return false;
+
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts[0] !== SESSION_VERSION) return false;
+
+  const [, encodedPayload, encodedSignature] = parts;
+  const signature = base64UrlToBytes(encodedSignature);
+  if (!signature || signature.length !== 32) return false;
+
+  const key = await importSessionKey(secret, adminPassword);
+  const validSignature = await crypto.subtle.verify(
+    "HMAC",
+    key,
+    signature,
+    encoder.encode(`${SESSION_VERSION}.${encodedPayload}`),
+  );
+  if (!validSignature) return false;
+
+  const payloadBytes = base64UrlToBytes(encodedPayload);
+  if (!payloadBytes) return false;
+
+  try {
+    const payload = JSON.parse(decoder.decode(payloadBytes)) as Partial<SessionPayload>;
+    const { iat, exp, nonce: encodedNonce } = payload;
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload) ||
+      Object.keys(payload).sort().join(",") !== "exp,iat,nonce" ||
+      typeof iat !== "number" ||
+      !Number.isSafeInteger(iat) ||
+      typeof exp !== "number" ||
+      !Number.isSafeInteger(exp) ||
+      typeof encodedNonce !== "string"
+    ) {
+      return false;
+    }
+
+    const nonce = base64UrlToBytes(encodedNonce);
+    if (!nonce || nonce.length !== SESSION_NONCE_BYTES) return false;
+
+    const nowSeconds = Math.floor(now / 1000);
+    return (
+      iat <= nowSeconds + MAX_CLOCK_SKEW_SECONDS &&
+      exp > nowSeconds &&
+      exp - iat === SESSION_COOKIE_MAX_AGE_SECONDS
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function isAuthenticated(
+  cookieValue: string | undefined,
+  adminPassword: string | undefined = process.env.ADMIN_PASSWORD,
+  sessionSecret: string | undefined = process.env.ADMIN_SESSION_SECRET,
+  now = Date.now(),
+  environment: AuthEnvironment = {
+    nodeEnv: process.env.NODE_ENV,
+    allowInsecureOpenMode: process.env.ALLOW_INSECURE_OPEN_MODE,
+  },
+): Promise<boolean> {
+  const configuration = getAuthConfiguration(
+    adminPassword,
+    sessionSecret,
+    environment,
+  );
+  if (configuration.mode === "open") return true;
+  if (configuration.mode === "misconfigured") return false;
+  return verifySessionToken(cookieValue, sessionSecret, adminPassword, now);
+}
+
+export function serverActionLoginPath(returnTo: unknown): string {
+  const params = new URLSearchParams({
+    next: sanitizeNextPath(returnTo),
+  });
+  return `/login?${params.toString()}`;
+}
+
+export interface ServerActionAuthDependencies {
+  readSessionCookie: () => Promise<string | undefined>;
+  authenticate: (cookieValue: string | undefined) => Promise<boolean>;
+  redirect: (location: string) => never;
+}
+
+export async function requireServerActionAuth(
+  returnTo: unknown = "/",
+  dependencies?: ServerActionAuthDependencies,
+): Promise<void> {
+  if (dependencies) {
+    const cookieValue = await dependencies.readSessionCookie();
+    if (await dependencies.authenticate(cookieValue)) return;
+    return dependencies.redirect(serverActionLoginPath(returnTo));
+  }
+
+  const [{ cookies }, { redirect }] = await Promise.all([
+    import("next/headers"),
+    import("next/navigation"),
+  ]);
+  const cookieValue = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (await isAuthenticated(cookieValue)) return;
+  redirect(serverActionLoginPath(returnTo));
 }

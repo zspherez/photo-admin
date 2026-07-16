@@ -1,23 +1,43 @@
+import type { Metadata } from "next";
 import { db } from "@/lib/db";
 import { CardLink } from "@/components/ui/card";
 import { LinkButton } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { easternTodayStoredDate } from "@/lib/calendarDate";
+import { pickEmailContact } from "@/lib/contactSelection";
+import { formatShowDate } from "@/lib/formatDate";
+import { pickTopListenSignal } from "@/lib/listenSignal";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Festivals" };
 
 type FestivalRow = Awaited<ReturnType<typeof loadFestivals>>[number];
 
-async function loadFestivals() {
+async function loadFestivals(now: Date) {
   return db.show.findMany({
-    where: { isFestival: true, date: { gte: new Date() } },
+    where: {
+      isFestival: true,
+      syncStatus: "active",
+      date: { gte: easternTodayStoredDate(now) },
+    },
     orderBy: { date: "asc" },
     include: {
       artists: {
         include: {
           artist: {
             include: {
-              listenSignals: { take: 1, orderBy: { rank: "asc" } },
-              contacts: { take: 1 },
+              listenSignals: {
+                select: { source: true, rank: true, expiresAt: true },
+              },
+              contacts: {
+                where: { state: "active" },
+                select: {
+                  email: true,
+                  phone: true,
+                  state: true,
+                  isFullTeam: true,
+                },
+              },
             },
           },
         },
@@ -58,22 +78,22 @@ function dateRangeLabel(dates: Date[]): string {
   const first = sorted[0];
   const last = sorted[sorted.length - 1];
   const fmt = (d: Date, withYear: boolean) =>
-    d.toLocaleDateString(undefined, {
+    formatShowDate(d, {
       weekday: "short",
       month: "short",
       day: "numeric",
-      timeZone: "UTC",
       ...(withYear ? { year: "numeric" } : {}),
     });
   if (sorted.length === 1) return fmt(first, true);
-  if (first.getFullYear() === last.getFullYear()) {
+  if (first.getUTCFullYear() === last.getUTCFullYear()) {
     return `${fmt(first, false)} – ${fmt(last, true)}`;
   }
   return `${fmt(first, true)} – ${fmt(last, true)}`;
 }
 
 export default async function FestivalsPage() {
-  const festivals = await loadFestivals();
+  const now = new Date();
+  const festivals = await loadFestivals(now);
   const allGroups = groupFestivals(festivals);
   const groups = allGroups.filter((g) => g.primary.artists.length > 0);
   const hiddenEmpty = allGroups.length - groups.length;
@@ -98,8 +118,12 @@ export default async function FestivalsPage() {
       ) : (
         <ul className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {groups.map(({ primary: f, dates }) => {
-            const matched = f.artists.filter((sa) => sa.artist.listenSignals.length > 0).length;
-            const withContact = f.artists.filter((sa) => sa.artist.contacts.length > 0).length;
+            const matched = f.artists.filter(
+              (sa) => pickTopListenSignal(sa.artist.listenSignals, now) !== null
+            ).length;
+            const withContact = f.artists.filter(
+              (sa) => pickEmailContact(sa.artist.contacts) !== null
+            ).length;
             const headliners = f.artists.slice(0, 3).map((sa) => sa.artist.name);
             return (
               <CardLink key={f.id} href={`/festivals/${f.id}`} className="p-5">

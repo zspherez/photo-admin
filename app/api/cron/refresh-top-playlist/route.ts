@@ -1,23 +1,72 @@
 import { NextRequest, NextResponse } from "next/server";
-import { refreshTopTracksPlaylist } from "@/lib/topPlaylist";
+import {
+  refreshTopTracksPlaylist,
+  type TopPlaylistExecutionResult,
+} from "@/lib/topPlaylist";
+import { isValidCronAuthorization } from "@/lib/cron-auth";
+import {
+  runCronSource,
+  type CronSourceResult,
+} from "@/lib/cronResult";
+import {
+  createOperationDeadline,
+  ROUTE_DEADLINE_SAFETY_MARGIN_MS,
+} from "@/lib/integrationUtils";
 
-// Daily (4am ET): rebuild the "top songs, last 4 weeks" Spotify playlist from
-// stats.fm weekly data. Vercel adds `Authorization: Bearer <CRON_SECRET>` when
-// CRON_SECRET is set — same auth as the other cron routes.
+export const maxDuration = 180;
+
+type MonitoredTopPlaylistResult =
+  | CronSourceResult<TopPlaylistExecutionResult>
+  | {
+      ok: false;
+      durationMs: number;
+      error: string;
+      data: Exclude<TopPlaylistExecutionResult, { ok: true }>;
+    };
+
+export function monitorTopPlaylistResult(
+  execution: CronSourceResult<TopPlaylistExecutionResult>
+): MonitoredTopPlaylistResult {
+  if (!execution.ok || execution.data.ok) return execution;
+  return {
+    ok: false,
+    durationMs: execution.durationMs,
+    error: execution.data.reason,
+    data: execution.data,
+  };
+}
+
+export function topPlaylistHttpStatus(
+  result: MonitoredTopPlaylistResult
+): 200 | 409 | 500 {
+  if (result.ok) return 200;
+  if (
+    "data" in result &&
+    (result.data.status === "busy" || result.data.status === "stale")
+  ) {
+    return 409;
+  }
+  return 500;
+}
+
 export async function GET(request: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
+  const deadline = createOperationDeadline(maxDuration * 1_000, {
+    safetyMarginMs: ROUTE_DEADLINE_SAFETY_MARGIN_MS,
+  });
+  if (!(await isValidCronAuthorization(request.headers.get("authorization")))) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  try {
-    const result = await refreshTopTracksPlaylist(50);
-    return NextResponse.json({ ok: true, ...result });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
-  }
+  const playlist = monitorTopPlaylistResult(
+    await runCronSource(
+      "refresh-top-playlist",
+      "spotify_playlist",
+      () => refreshTopTracksPlaylist(50, deadline)
+    )
+  );
+  const status = topPlaylistHttpStatus(playlist);
+  return NextResponse.json(
+    { ok: playlist.ok, results: { playlist } },
+    { status }
+  );
 }

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -9,11 +10,15 @@ import { Button, LinkButton } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { SyncForm } from "@/components/sync-form";
 import { SyncBanner } from "@/components/sync-banner";
+import { requireServerActionAuth } from "@/lib/auth";
+import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Spotify settings" };
 
 async function disconnect() {
   "use server";
+  await requireServerActionAuth("/settings/spotify");
   await db.integrationCredential.deleteMany({ where: { provider: "spotify" } });
   revalidatePath("/settings/spotify");
   revalidatePath("/");
@@ -21,11 +26,13 @@ async function disconnect() {
 
 async function testCall() {
   "use server";
+  await requireServerActionAuth("/settings/spotify");
   const token = await getValidAccessToken();
   if (!token) return;
   const res = await fetch("https://api.spotify.com/v1/me", {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
+    signal: AbortSignal.timeout(45_000),
   });
   const body = await res.text();
   await db.setting.upsert({
@@ -38,28 +45,58 @@ async function testCall() {
 
 async function syncListens() {
   "use server";
+  await requireServerActionAuth("/settings/spotify");
   let redirectTo: string;
   try {
-    const result = await syncSpotifyListens();
+    const execution = await syncSpotifyListens();
     await db.setting.upsert({
       where: { key: "spotify_last_result" },
-      create: { key: "spotify_last_result", value: JSON.stringify(result) },
-      update: { value: JSON.stringify(result) },
+      create: { key: "spotify_last_result", value: JSON.stringify(execution) },
+      update: { value: JSON.stringify(execution) },
     });
-    const total =
-      result.topLong + result.topMedium + result.topShort + result.recent + result.followed + result.playlists.artists;
-    const params = new URLSearchParams({
-      synced: "ok",
-      total: String(total),
-      topLong: String(result.topLong),
-      topMedium: String(result.topMedium),
-      topShort: String(result.topShort),
-      recent: String(result.recent),
-      followed: String(result.followed),
-      playlists: String(result.playlists.playlists),
-      playlistArtists: String(result.playlists.artists),
-    });
-    redirectTo = `/settings/spotify?${params.toString()}`;
+    if (!execution.ok && execution.status === "busy") {
+      redirectTo = `/settings/spotify?synced=busy&detail=${encodeURIComponent(
+        `Another Spotify sync owns ${execution.leaseKey}; retry after it finishes.`
+      )}`;
+    } else if (!execution.ok && execution.status === "deferred") {
+      redirectTo = `/settings/spotify?synced=deferred&detail=${encodeURIComponent(
+        `Spotify sync was deferred during ${execution.details.phase}; the prior snapshot was preserved.`
+      )}`;
+    } else {
+      const result = execution.data;
+      const total =
+        result.topLong +
+        result.topMedium +
+        result.topShort +
+        result.recent +
+        result.followed +
+        result.playlists.artists;
+      const params = new URLSearchParams({
+        synced: execution.ok ? "ok" : "partial",
+        total: String(total),
+        topLong: String(result.topLong),
+        topMedium: String(result.topMedium),
+        topShort: String(result.topShort),
+        recent: String(result.recent),
+        followed: String(result.followed),
+        playlists: String(result.playlists.playlists),
+        playlistArtists: String(result.playlists.artists),
+        incomplete: String(result.playlists.incomplete),
+      });
+      if (!execution.ok) {
+        const names = execution.details.playlists
+          .slice(0, 3)
+          .map((playlist) => playlist.name)
+          .join(", ");
+        params.set(
+          "detail",
+          `${result.playlists.incomplete} playlist(s) could not be read; stale playlist data was preserved${
+            names ? `: ${names}` : ""
+          }. Verify playlist access and retry.`
+        );
+      }
+      redirectTo = `/settings/spotify?${params.toString()}`;
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await db.setting.upsert({
@@ -77,17 +114,57 @@ async function syncListens() {
 
 async function refreshTopPlaylist() {
   "use server";
+  await requireServerActionAuth("/settings/spotify");
   let redirectTo: string;
   try {
-    const result = await refreshTopTracksPlaylist(50);
-    const params = new URLSearchParams({
-      playlist: "ok",
-      tracks: String(result.matchedUris),
-      source: String(result.sourceTracks),
-      unmatched: String(result.unmatched.length),
-      url: result.playlistUrl,
-    });
-    redirectTo = `/settings/spotify?${params.toString()}`;
+    const execution = await refreshTopTracksPlaylist(50);
+    if (!execution.ok) {
+      let playlistStatus: string = execution.status;
+      let detail: string;
+      const params = new URLSearchParams();
+      if (execution.status === "busy") {
+        detail = `Another Spotify operation owns ${execution.leaseKey}; retry after it finishes.`;
+      } else if (execution.status === "stale") {
+        detail = `This playlist refresh lost the Spotify lease ${execution.leaseKey}; retry to apply a fresh snapshot.`;
+      } else if (execution.status === "deferred") {
+        detail = `This playlist refresh was deferred during ${execution.details.phase}; the prior playlist snapshot was preserved.`;
+      } else if (
+        execution.reason === "playlist_creation_outcome_uncertain"
+      ) {
+        playlistStatus = "uncertain";
+        detail =
+          "Spotify received a playlist creation request, but the response and automatic recovery were inconclusive. Inspect Spotify for a newly created playlist before retrying.";
+      } else if (execution.reason === "created_playlist_incomplete") {
+        playlistStatus = "recoverable";
+        detail = `Spotify created playlist ${execution.data.playlistId}, but ${execution.details.phase.replaceAll("_", " ")} did not complete. The created playlist ID is retained here; open it and retry to reconcile it.`;
+        params.set("playlistId", execution.data.playlistId);
+        params.set("url", execution.data.playlistUrl);
+      } else if (execution.reason === "external_write_outcome_uncertain") {
+        playlistStatus = "uncertain";
+        detail =
+          "Spotify may have completed the playlist replacement, but its response was lost. Freshness was not advanced; inspect the playlist and retry.";
+        params.set("playlistId", execution.data.playlistId);
+        params.set("url", execution.data.playlistUrl);
+      } else {
+        detail =
+          "Spotify completed the playlist replacement, but freshness could not be saved. Freshness was not advanced; retry.";
+        params.set("playlistId", execution.data.playlistId);
+        params.set("url", execution.data.playlistUrl);
+      }
+      params.set("playlist", playlistStatus);
+      params.set("detail", detail);
+      redirectTo = `/settings/spotify?${params.toString()}`;
+    } else {
+      const result = execution.data;
+      const params = new URLSearchParams({
+        playlist: "ok",
+        tracks: String(result.matchedUris),
+        source: String(result.sourceTracks),
+        unmatched: String(result.unmatched.length),
+        url: result.playlistUrl,
+      });
+      redirectTo = `/settings/spotify?${params.toString()}`;
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     redirectTo = `/settings/spotify?playlist=error&detail=${encodeURIComponent(msg.slice(0, 200))}`;
@@ -100,25 +177,33 @@ export default async function SpotifySettingsPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    status?: string;
-    detail?: string;
-    synced?: string;
-    total?: string;
-    topLong?: string;
-    topMedium?: string;
-    topShort?: string;
-    recent?: string;
-    followed?: string;
-    playlists?: string;
-    playlistArtists?: string;
-    playlist?: string;
-    tracks?: string;
-    source?: string;
-    unmatched?: string;
-    url?: string;
+    status?: SearchParamValue;
+    detail?: SearchParamValue;
+    synced?: SearchParamValue;
+    total?: SearchParamValue;
+    topLong?: SearchParamValue;
+    topMedium?: SearchParamValue;
+    topShort?: SearchParamValue;
+    recent?: SearchParamValue;
+    followed?: SearchParamValue;
+    playlists?: SearchParamValue;
+    playlistArtists?: SearchParamValue;
+    incomplete?: SearchParamValue;
+    playlist?: SearchParamValue;
+    tracks?: SearchParamValue;
+    source?: SearchParamValue;
+    unmatched?: SearchParamValue;
+    playlistId?: SearchParamValue;
+    url?: SearchParamValue;
   }>;
 }) {
-  const sp = await searchParams;
+  const rawSearchParams = await searchParams;
+  const sp = Object.fromEntries(
+    Object.entries(rawSearchParams).map(([key, value]) => [
+      key,
+      firstSearchParam(value),
+    ]),
+  ) as Record<keyof typeof rawSearchParams, string | undefined>;
   const { status, detail } = sp;
   const [cred, lastTest, lastSync, lastResult, signalCounts, playlistId, playlistLastSync] = await Promise.all([
     db.integrationCredential.findUnique({ where: { provider: "spotify" } }),
@@ -158,6 +243,23 @@ export default async function SpotifySettingsPage({
       {sp.synced === "error" && (
         <SyncBanner tone="error" title="Sync failed." detail={sp.detail ?? "unknown error"} />
       )}
+      {sp.synced === "busy" && (
+        <SyncBanner
+          tone="error"
+          title="Sync already running."
+          detail={sp.detail ?? "Retry shortly."}
+        />
+      )}
+      {sp.synced === "partial" && (
+        <SyncBanner
+          tone="error"
+          title="Listen sync incomplete."
+          detail={
+            sp.detail ??
+            `${sp.incomplete ?? "Some"} playlist snapshot(s) were preserved but not reconciled.`
+          }
+        />
+      )}
       {sp.playlist === "ok" && (
         <SyncBanner
           tone="success"
@@ -167,6 +269,51 @@ export default async function SpotifySettingsPage({
       )}
       {sp.playlist === "error" && (
         <SyncBanner tone="error" title="Playlist refresh failed." detail={sp.detail ?? "unknown error"} />
+      )}
+      {(sp.playlist === "busy" || sp.playlist === "stale") && (
+        <SyncBanner
+          tone="error"
+          title={
+            sp.playlist === "busy"
+              ? "Playlist refresh already running."
+              : "Playlist refresh lost its lease."
+          }
+          detail={sp.detail ?? "Retry the playlist refresh."}
+        />
+      )}
+      {sp.playlist === "deferred" && (
+        <SyncBanner
+          tone="error"
+          title="Playlist refresh deferred."
+          detail={sp.detail ?? "Retry with a fresh execution budget."}
+        />
+      )}
+      {(sp.playlist === "partial" ||
+        sp.playlist === "uncertain" ||
+        sp.playlist === "recoverable") && (
+        <>
+          <SyncBanner
+            tone="error"
+            title={
+              sp.playlist === "uncertain"
+                ? "Playlist refresh outcome uncertain."
+                : sp.playlist === "recoverable"
+                  ? "Created playlist needs reconciliation."
+                  : "Playlist refreshed, freshness not saved."
+            }
+            detail={sp.detail ?? "Inspect the playlist and retry."}
+          />
+          {sp.url && (
+            <a
+              href={sp.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-block text-xs text-emerald-700 hover:underline dark:text-emerald-400"
+            >
+              Open playlist {sp.playlistId ? `(${sp.playlistId})` : ""} ↗
+            </a>
+          )}
+        </>
       )}
 
       <Card className="mt-6">
@@ -209,14 +356,32 @@ export default async function SpotifySettingsPage({
               )}
               {lastResult && !lastResult.value.startsWith("ERROR:") && (() => {
                 try {
-                  const r = JSON.parse(lastResult.value) as {
+                  const stored = JSON.parse(lastResult.value) as {
+                    status?: "completed" | "partial" | "busy";
+                    data?: {
+                      topLong: number; topMedium: number; topShort: number;
+                      recent: number; followed: number;
+                      playlists: { playlists: number; artists: number; incomplete?: number };
+                    };
+                    leaseKey?: string;
                     topLong: number; topMedium: number; topShort: number;
                     recent: number; followed: number;
-                    playlists: { playlists: number; artists: number };
+                    playlists: { playlists: number; artists: number; incomplete?: number };
                   };
+                  if (stored.status === "busy") {
+                    return (
+                      <p className="mt-1 text-xs text-red-700 dark:text-red-400">
+                        Last result: sync already running ({stored.leaseKey ?? "lease conflict"}).
+                      </p>
+                    );
+                  }
+                  const r = stored.data ?? stored;
+                  const partial =
+                    stored.status === "partial" ||
+                    Number(r.playlists.incomplete ?? 0) > 0;
                   return (
-                    <p className="mt-1 text-xs text-zinc-500">
-                      Last result: top {r.topLong}/{r.topMedium}/{r.topShort} · recent {r.recent} · followed {r.followed} · playlists {r.playlists.playlists} ({r.playlists.artists} artists)
+                    <p className={partial ? "mt-1 text-xs text-red-700 dark:text-red-400" : "mt-1 text-xs text-zinc-500"}>
+                      Last result{partial ? " (incomplete)" : ""}: top {r.topLong}/{r.topMedium}/{r.topShort} · recent {r.recent} · followed {r.followed} · playlists {r.playlists.playlists} ({r.playlists.artists} artists)
                     </p>
                   );
                 } catch {
@@ -254,7 +419,8 @@ export default async function SpotifySettingsPage({
               )}
             </div>
             <p className="mt-2 text-xs text-zinc-500">
-              Rebuilds a private &ldquo;My Top Songs · Last 4 Weeks&rdquo; playlist from stats.fm weekly data every morning at 4am ET.
+              Rebuilds a private &ldquo;My Top Songs · Last 4 Weeks&rdquo;
+              playlist from stats.fm weekly data daily at 08:00 UTC.
             </p>
 
             {!hasModifyScope && (

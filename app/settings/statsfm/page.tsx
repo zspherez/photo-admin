@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -16,11 +17,15 @@ import { TextArea } from "@/components/ui/field";
 import { cn } from "@/lib/cn";
 import { SyncForm } from "@/components/sync-form";
 import { SyncBanner } from "@/components/sync-banner";
+import { requireServerActionAuth } from "@/lib/auth";
+import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Stats.fm settings" };
 
 async function testAndSave() {
   "use server";
+  await requireServerActionAuth("/settings/statsfm");
   const me = await getMe();
   await saveStatsfmCredential(me);
   revalidatePath("/settings/statsfm");
@@ -29,6 +34,7 @@ async function testAndSave() {
 
 async function rotateToken(formData: FormData) {
   "use server";
+  await requireServerActionAuth("/settings/statsfm");
   const newToken = ((formData.get("token") as string) ?? "").trim();
   if (!newToken) redirect("/settings/statsfm?rotate=missing");
   try {
@@ -44,18 +50,29 @@ async function rotateToken(formData: FormData) {
 
 async function syncLifetime() {
   "use server";
+  await requireServerActionAuth("/settings/statsfm");
   const cred = await db.integrationCredential.findUnique({ where: { provider: "statsfm" } });
   if (!cred?.meta) redirect("/settings/statsfm?synced=error&detail=not_connected");
   const { userId } = JSON.parse(cred!.meta!);
   let redirectTo: string;
   try {
     const result = await syncStatsfmTopArtists(userId, "lifetime", 500);
-    const params = new URLSearchParams({
-      synced: "ok",
-      fetched: String(result.fetched),
-      written: String(result.written),
-    });
-    redirectTo = `/settings/statsfm?${params.toString()}`;
+    if (!result.ok) {
+      const detail =
+        result.status === "busy"
+          ? `Another Stats.fm sync owns ${result.leaseKey}; retry after it finishes.`
+          : `Stats.fm sync was deferred during ${result.details.phase}; the prior snapshot was preserved.`;
+      redirectTo = `/settings/statsfm?synced=${result.status}&detail=${encodeURIComponent(
+        detail
+      )}`;
+    } else {
+      const params = new URLSearchParams({
+        synced: "ok",
+        fetched: String(result.data.fetched),
+        written: String(result.data.written),
+      });
+      redirectTo = `/settings/statsfm?${params.toString()}`;
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     redirectTo = `/settings/statsfm?synced=error&detail=${encodeURIComponent(msg.slice(0, 200))}`;
@@ -67,6 +84,7 @@ async function syncLifetime() {
 
 async function disconnect() {
   "use server";
+  await requireServerActionAuth("/settings/statsfm");
   await db.integrationCredential.deleteMany({ where: { provider: "statsfm" } });
   revalidatePath("/settings/statsfm");
   revalidatePath("/");
@@ -75,9 +93,22 @@ async function disconnect() {
 export default async function StatsfmSettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ rotate?: string; detail?: string; synced?: string; fetched?: string; written?: string }>;
+  searchParams: Promise<{
+    rotate?: SearchParamValue;
+    detail?: SearchParamValue;
+    synced?: SearchParamValue;
+    fetched?: SearchParamValue;
+    written?: SearchParamValue;
+  }>;
 }) {
-  const sp = await searchParams;
+  const rawSearchParams = await searchParams;
+  const sp = {
+    rotate: firstSearchParam(rawSearchParams.rotate),
+    detail: firstSearchParam(rawSearchParams.detail),
+    synced: firstSearchParam(rawSearchParams.synced),
+    fetched: firstSearchParam(rawSearchParams.fetched),
+    written: firstSearchParam(rawSearchParams.written),
+  };
   const [cred, lifetimeSync, lifetimeCount] = await Promise.all([
     db.integrationCredential.findUnique({ where: { provider: "statsfm" } }),
     db.setting.findUnique({ where: { key: "statsfm_last_sync_lifetime" } }),
@@ -111,6 +142,13 @@ export default async function StatsfmSettingsPage({
         <SyncBanner tone="error" title="Token rejected." detail={sp.detail ?? undefined} />
       )}
       {sp.rotate === "missing" && <SyncBanner tone="error" title="Paste a token first." />}
+      {sp.synced === "busy" && (
+        <SyncBanner
+          tone="error"
+          title="Sync already running."
+          detail={sp.detail ?? "Retry shortly."}
+        />
+      )}
       {sp.synced === "ok" && (
         <SyncBanner
           tone="success"

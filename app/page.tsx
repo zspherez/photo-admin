@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { LinkButton } from "@/components/ui/button";
@@ -5,13 +6,14 @@ import { Card, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Overview" };
 
 export default async function Home() {
   const [showCount, festivalCount, artistCount, contactCount, integrations, defaultTemplate] = await Promise.all([
     db.show.count({ where: { isFestival: false } }),
     db.show.count({ where: { isFestival: true } }),
     db.artist.count(),
-    db.contact.count(),
+    db.contact.count({ where: { state: "active" } }),
     db.integrationCredential.findMany({ select: { provider: true } }),
     db.emailTemplate.findFirst({ where: { isDefault: true }, select: { id: true } }),
   ]);

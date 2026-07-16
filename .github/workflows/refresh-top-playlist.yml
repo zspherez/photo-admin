@@ -1,0 +1,110 @@
+name: Refresh top playlist
+
+on:
+  schedule:
+    # The 11:00 UTC Vercel listen sync may start anywhere within that hour and
+    # can run for five minutes. This leaves at least 25 minutes before refresh.
+    - cron: "30 12 * * *"
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: photo-admin-refresh-top-playlist
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - name: Refresh top-tracks playlist
+        shell: bash
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${APP_BASE_URL}" || -z "${CRON_SECRET}" ]]; then
+            echo "::error::APP_BASE_URL and CRON_SECRET repository secrets are required"
+            exit 1
+          fi
+
+          attempt=1
+          delay=60
+          deadline=$((SECONDS + 60 * 60))
+          endpoint="${APP_BASE_URL%/}/api/cron/refresh-top-playlist"
+
+          while (( SECONDS < deadline )); do
+            remaining=$((deadline - SECONDS))
+            request_timeout=240
+            if (( remaining < request_timeout )); then
+              request_timeout="${remaining}"
+            fi
+
+            echo "Top-playlist refresh attempt ${attempt}"
+            if response="$(
+              curl \
+                --fail-with-body \
+                --silent \
+                --show-error \
+                --connect-timeout 15 \
+                --max-time "${request_timeout}" \
+                --write-out $'\n__PHOTO_ADMIN_HTTP_STATUS__:%{http_code}' \
+                --header "Authorization: Bearer ${CRON_SECRET}" \
+                --header "Accept: application/json" \
+                "${endpoint}"
+            )"; then
+              curl_status=0
+            else
+              curl_status=$?
+            fi
+
+            marker="${response##*$'\n'}"
+            if [[ "${marker}" == __PHOTO_ADMIN_HTTP_STATUS__:* ]]; then
+              http_status="${marker#*:}"
+              body="${response%$'\n'*}"
+            else
+              http_status="000"
+              body="${response}"
+            fi
+            if [[ -n "${body}" ]]; then
+              printf '%s\n' "${body}"
+            fi
+
+            if (( curl_status == 0 )) && [[ "${http_status}" =~ ^2[0-9]{2}$ ]]; then
+              echo "Top-playlist refresh succeeded with HTTP ${http_status}"
+              exit 0
+            fi
+
+            retryable=false
+            if (( curl_status == 22 )); then
+              case "${http_status}" in
+                408|409|425|429|500|502|503|504) retryable=true ;;
+              esac
+            else
+              case "${curl_status}" in
+                6|7|18|28|35|52|55|56|92) retryable=true ;;
+              esac
+            fi
+            if [[ "${retryable}" != "true" ]]; then
+              echo "::error::Top-playlist refresh failed with non-retryable curl status ${curl_status} and HTTP ${http_status}"
+              exit 1
+            fi
+
+            remaining=$((deadline - SECONDS))
+            if (( remaining <= delay )); then
+              break
+            fi
+            echo "::warning::Top-playlist refresh attempt ${attempt} failed with curl status ${curl_status} and HTTP ${http_status}; retrying in ${delay}s"
+            sleep "${delay}"
+            attempt=$((attempt + 1))
+            delay=$((delay * 2))
+            if (( delay > 300 )); then
+              delay=300
+            fi
+          done
+
+          echo "::error::Top-playlist refresh did not succeed within the 60-minute maintenance retry window"
+          exit 1

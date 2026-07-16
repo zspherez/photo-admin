@@ -1,7 +1,7 @@
 // Drives stats.fm's Spotify-OAuth signin in a headless browser using a
 // stored sp_dc cookie, extracts the resulting identityToken JWT, and POSTs
-// it to the photo-admin app's rotate endpoint. Intended for the weekly
-// GitHub-Actions cron — see .github/workflows/rotate-statsfm-token.yml.
+// it to the photo-admin app's rotate endpoint. Intended for the recurring
+// scheduled GitHub Actions job — see .github/workflows/rotate-statsfm-token.yml.
 //
 // Required env:
 //   SPOTIFY_SP_DC          — long-lived Spotify session cookie value
@@ -84,6 +84,7 @@ async function main() {
 
   const res = await fetch(ROTATE_URL!, {
     method: "POST",
+    signal: AbortSignal.timeout(60_000),
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${CRON_SECRET}`,

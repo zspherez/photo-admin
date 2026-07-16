@@ -1,10 +1,57 @@
+import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import {
+  addDateOnlyDays,
+  easternDateOnly,
+  easternTodayStoredDate,
+  parseDateOnly,
+} from "@/lib/calendarDate";
+import {
+  activeListenSignalWhere,
+  isListenSignalActive,
+  pickTopListenSignal,
+  type ListenSignalRank,
+} from "@/lib/listenSignal";
+import {
+  canMarkOutreachManually,
+  MANUAL_OUTREACH_MARKER_WHERE,
+} from "@/lib/manualOutreach";
+import {
+  DASHBOARD_PAGE_SIZE,
+  getPagination,
+  type DashboardMode,
+  type DashboardPagination,
+  type DashboardQuery,
+  type MatchFilters,
+  type RangeFilter,
+  type SourceFilter,
+} from "@/lib/dashboardQuery";
+
+export {
+  DASHBOARD_PAGE_SIZE,
+  DEFAULT_FILTERS,
+  buildDashboardHref,
+  firstSearchParam,
+  getPagination,
+  parseDashboardQuery,
+} from "@/lib/dashboardQuery";
+export type {
+  ContactFilter,
+  DashboardMode,
+  DashboardPagination,
+  DashboardQuery,
+  MatchFilters,
+  RangeFilter,
+  SourceFilter,
+  StatusFilter,
+} from "@/lib/dashboardQuery";
+
+export const UNKNOWN_BIG_MIN_POPULARITY = 60;
 
 export interface MatchedShow {
   id: string;
   date: Date;
   venueName: string;
-  city: string;
   state: string | null;
   ticketUrl: string | null;
   dismissedAt: Date | null;
@@ -15,14 +62,16 @@ export interface MatchedShow {
     genres: string[];
     popularity: number | null;
     topSignal: { source: string; rank: number | null } | null;
-    playlists: { spotifyId: string; name: string; url: string }[];
+    playlists: { spotifyId: string; name: string }[];
+    playlistCount: number;
+    canMarkManually: boolean;
     contacts: {
       id: string;
       email: string | null;
       phone: string | null;
       name: string | null;
-      role: string | null;
       customPrice: string | null;
+      state: "active" | "quarantined";
       isFullTeam: boolean;
     }[];
   }[];
@@ -35,304 +84,465 @@ export interface MatchedShow {
     deliveredAt: Date | null;
     status: string;
     scheduledFor: Date | null;
-    firstClickedAt: Date | null;
+    nextAttemptAt: Date | null;
     clickCount: number;
-    firstOpenedAt: Date | null;
     openCount: number;
+    isManualMarker: boolean;
   }[];
 }
 
-export type RangeFilter = "7d" | "30d" | "30-60d" | "90d";
-export type SourceFilter = "any" | "statsfm" | "spotify";
-export type ContactFilter = "any" | "has" | "needs";
-export type StatusFilter = "any" | "unsent" | "sent" | "opened" | "clicked";
-
-export interface MatchFilters {
-  range: RangeFilter;
-  source: SourceFilter;
-  contact: ContactFilter;
-  status: StatusFilter;
-  search: string;
-  includeDismissed?: boolean;
+export interface DashboardData {
+  shows: MatchedShow[];
+  modeCounts: Record<DashboardMode, number>;
+  pagination: DashboardPagination;
+  totalUpcoming: number;
+  totalSignals: number;
 }
 
-export const DEFAULT_FILTERS: MatchFilters = {
-  range: "90d",
-  source: "any",
-  contact: "any",
-  status: "any",
-  search: "",
-  includeDismissed: false,
-};
-
-function rangeEndDate(range: RangeFilter): Date {
-  const now = new Date();
-  const days = range === "7d" ? 7 : range === "30d" ? 30 : range === "30-60d" ? 60 : 90;
-  return new Date(now.getTime() + days * 86400_000);
+export function getDashboardDateRange(
+  range: RangeFilter,
+  now: Date = new Date()
+): { start: Date; end: Date } {
+  const today = easternDateOnly(now);
+  const startOffset = range === "30-60d" ? 30 : 0;
+  const endOffset =
+    range === "7d" ? 7 : range === "30d" ? 30 : range === "30-60d" ? 60 : 90;
+  return {
+    start: parseDateOnly(addDateOnlyDays(today, startOffset)),
+    end: parseDateOnly(addDateOnlyDays(today, endOffset)),
+  };
 }
 
-function rangeStartDate(range: RangeFilter): Date {
-  const now = new Date();
-  // The "30-60d" range starts 30 days out — useful for "what's coming up but
-  // I'm not in panic-send mode about it yet" planning.
-  if (range === "30-60d") return new Date(now.getTime() + 30 * 86400_000);
-  return now;
+export function isDashboardArtistMatch(
+  artist: {
+    popularity: number | null;
+    listenSignals: readonly ListenSignalRank[];
+  },
+  mode: DashboardMode,
+  now: Date = new Date(),
+  minPopularity: number = UNKNOWN_BIG_MIN_POPULARITY,
+  source: SourceFilter = "any"
+): boolean {
+  const hasActiveSignal = artist.listenSignals.some((signal) =>
+    isListenSignalActive(signal, now)
+  );
+  const prefix = sourcePrefix(source);
+  const hasSourceSignal = artist.listenSignals.some(
+    (signal) =>
+      isListenSignalActive(signal, now) &&
+      (prefix === null || signal.source.startsWith(prefix))
+  );
+  const isUnknown =
+    artist.popularity != null &&
+    artist.popularity >= minPopularity &&
+    !hasActiveSignal;
+
+  if (mode === "unknown") return isUnknown;
+  if (mode === "matched") return hasSourceSignal;
+  return hasSourceSignal || isUnknown;
 }
 
-// Loads the maximum useful window once; client-side filtering handles
-// range/source/contact/status/search. The widest range we offer is 90d, so
-// load 90d and let the client narrow. Pass includeDismissed to surface
-// dismissed shows in the same payload (client toggles visibility).
-export async function getMatchedShowsForClient(includeDismissed = true): Promise<MatchedShow[]> {
-  return getMatchedUpcomingShows({ ...DEFAULT_FILTERS, range: "90d", includeDismissed });
+function sourcePrefix(source: SourceFilter): string | null {
+  return source === "statsfm" ? "statsfm_" : source === "spotify" ? "spotify_" : null;
 }
 
-export async function getMatchedUpcomingShows(
-  filters: MatchFilters = DEFAULT_FILTERS
-): Promise<MatchedShow[]> {
-  const sourcePrefix =
-    filters.source === "statsfm" ? "statsfm_" : filters.source === "spotify" ? "spotify_" : null;
+function matchingArtistWhere(
+  source: SourceFilter,
+  mode: DashboardMode,
+  now: Date
+): Prisma.ArtistWhereInput {
+  const matched: Prisma.ArtistWhereInput = {
+    listenSignals: {
+      some: activeListenSignalWhere(now, sourcePrefix(source)),
+    },
+  };
+  const unknown: Prisma.ArtistWhereInput = {
+    popularity: { gte: UNKNOWN_BIG_MIN_POPULARITY },
+    listenSignals: { none: activeListenSignalWhere(now) },
+  };
 
-  const shows = await db.show.findMany({
-    where: {
-      date: { gte: rangeStartDate(filters.range), lte: rangeEndDate(filters.range) },
-      isFestival: false,
-      dismissedAt: filters.includeDismissed ? undefined : null,
-      artists: {
-        some: {
-          artist: {
-            listenSignals: sourcePrefix
-              ? { some: { source: { startsWith: sourcePrefix } } }
-              : { some: {} },
-            ...(filters.search
-              ? { name: { contains: filters.search } }
-              : {}),
-          },
+  if (mode === "matched") return matched;
+  if (mode === "unknown") return unknown;
+  return { OR: [matched, unknown] };
+}
+
+function showWhere(
+  mode: DashboardMode,
+  filters: MatchFilters,
+  now: Date
+): Prisma.ShowWhereInput {
+  const artist = matchingArtistWhere(filters.source, mode, now);
+  const dates = getDashboardDateRange(filters.range, now);
+  const artistFilters: Prisma.ArtistWhereInput[] = [artist];
+  if (filters.search) {
+    artistFilters.push({
+      name: {
+        contains: filters.search,
+        mode: "insensitive",
+      },
+    });
+  }
+  if (filters.contact !== "any") {
+    artistFilters.push({
+      contacts:
+        filters.contact === "has"
+          ? { some: { state: "active" } }
+          : { none: { state: "active" } },
+    });
+  }
+
+  const where: Prisma.ShowWhereInput = {
+    date: { gte: dates.start, lte: dates.end },
+    isFestival: false,
+    syncStatus: "active",
+    dismissedAt: mode === "dismissed" ? { not: null } : null,
+    ...(mode === "interested" ? { interestedAt: { not: null } } : {}),
+    artists: {
+      some: {
+        artist: {
+          AND: artistFilters,
         },
       },
     },
-    orderBy: { date: "asc" },
-    include: {
-      artists: {
-        include: {
-          artist: {
-            include: {
-              listenSignals: { orderBy: { rank: "asc" } },
-              contacts: true,
-              playlists: { include: { playlist: true } },
+  };
+
+  if (filters.status === "sent") {
+    where.outreaches = {
+      some: {
+        status: { in: ["sent", "scheduled", "retry_scheduled"] },
+      },
+    };
+  } else if (filters.status === "unsent") {
+    where.outreaches = {
+      none: {
+        status: { in: ["sent", "scheduled", "retry_scheduled"] },
+      },
+    };
+  } else if (filters.status === "opened") {
+    where.outreaches = { some: { openCount: { gt: 0 } } };
+  } else if (filters.status === "clicked") {
+    where.outreaches = { some: { clickCount: { gt: 0 } } };
+  }
+  return where;
+}
+
+function dashboardShowSelect(
+  now: Date
+) {
+  return {
+    id: true,
+    date: true,
+    venueName: true,
+    state: true,
+    ticketUrl: true,
+    dismissedAt: true,
+    interestedAt: true,
+    artists: {
+      orderBy: [{ artist: { name: "asc" } }, { artistId: "asc" }],
+      select: {
+        artist: {
+          select: {
+            id: true,
+            name: true,
+            genres: true,
+            popularity: true,
+            listenSignals: {
+              where: activeListenSignalWhere(now),
+              select: {
+                source: true,
+                rank: true,
+                expiresAt: true,
+              },
             },
           },
         },
       },
-      outreaches: true,
     },
-    take: 500,
-  });
-
-  type ShowArtist = (typeof shows)[number]["artists"][number];
-
-  const sourceMatches = (sa: ShowArtist) =>
-    sourcePrefix
-      ? sa.artist.listenSignals.some((s) => s.source.startsWith(sourcePrefix))
-      : sa.artist.listenSignals.length > 0;
-
-  const mapped = shows.map((show) => {
-    const matched: MatchedShow["matchedArtists"] = [];
-    const others: MatchedShow["otherArtists"] = [];
-    for (const sa of show.artists as ShowArtist[]) {
-      if (sourceMatches(sa)) {
-        const top = sa.artist.listenSignals[0];
-        let genres: string[] = [];
-        if (sa.artist.genres) {
-          try {
-            const parsed = JSON.parse(sa.artist.genres) as unknown;
-            if (Array.isArray(parsed)) genres = parsed.filter((g): g is string => typeof g === "string");
-          } catch {
-            // ignore malformed
-          }
-        }
-        matched.push({
-          id: sa.artist.id,
-          name: sa.artist.name,
-          genres,
-          popularity: sa.artist.popularity,
-          topSignal: top ? { source: top.source, rank: top.rank } : null,
-          playlists: sa.artist.playlists.map((ap) => ({
-            spotifyId: ap.playlist.spotifyId,
-            name: ap.playlist.name,
-            url: ap.playlist.url,
-          })),
-          contacts: sa.artist.contacts.map((c) => ({
-            id: c.id,
-            email: c.email,
-            phone: c.phone,
-            name: c.name,
-            role: c.role,
-            customPrice: c.customPrice,
-            isFullTeam: c.isFullTeam,
-          })),
-        });
-      } else {
-        others.push({ id: sa.artist.id, name: sa.artist.name });
-      }
-    }
-    return {
-      id: show.id,
-      date: show.date,
-      venueName: show.venueName,
-      city: show.city,
-      state: show.state,
-      ticketUrl: show.ticketUrl,
-      dismissedAt: show.dismissedAt,
-      interestedAt: show.interestedAt,
-      matchedArtists: matched,
-      otherArtists: others,
-      outreach: show.outreaches.map((o) => ({
-        id: o.id,
-        artistId: o.artistId,
-        contactId: o.contactId,
-        sentAt: o.sentAt,
-        deliveredAt: o.deliveredAt,
-        status: o.status,
-        scheduledFor: o.scheduledFor,
-        firstClickedAt: o.firstClickedAt,
-        clickCount: o.clickCount,
-        firstOpenedAt: o.firstOpenedAt,
-        openCount: o.openCount,
-      })),
-    };
-  });
-
-  const filtered = mapped.filter((show) => {
-    if (show.matchedArtists.length === 0) return false;
-
-    if (filters.contact === "has" && !show.matchedArtists.some((a) => a.contacts.length > 0))
-      return false;
-    if (filters.contact === "needs" && !show.matchedArtists.some((a) => a.contacts.length === 0))
-      return false;
-
-    if (filters.status !== "any") {
-      const anySent = show.outreach.some((o) => o.status === "sent");
-      const anyOpened = show.outreach.some((o) => o.openCount > 0);
-      const anyClicked = show.outreach.some((o) => o.clickCount > 0);
-      if (filters.status === "sent" && !anySent) return false;
-      if (filters.status === "unsent" && anySent) return false;
-      if (filters.status === "opened" && !anyOpened) return false;
-      if (filters.status === "clicked" && !anyClicked) return false;
-    }
-    return true;
-  });
-
-  return filtered.slice(0, 200);
+    outreaches: {
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+      select: {
+        id: true,
+        artistId: true,
+        contactId: true,
+        sentAt: true,
+        deliveredAt: true,
+        status: true,
+        scheduledFor: true,
+        nextAttemptAt: true,
+        clickCount: true,
+        openCount: true,
+        providerMessageId: true,
+        attemptCount: true,
+        _count: { select: { sendAttempts: true } },
+      },
+    },
+  } satisfies Prisma.ShowSelect;
 }
 
-// Shows where I have NO listen signal but the artist is otherwise notable —
-// high Spotify popularity. Helps surface gigs I'd want despite the artist
-// not being in my listening graph. Loads 90d, client narrows further.
-export async function getUnknownBigShowsForClient(
-  minPopularity = 60
-): Promise<MatchedShow[]> {
-  const shows = await db.show.findMany({
-    where: {
-      date: { gte: new Date(), lte: rangeEndDate("90d") },
-      isFestival: false,
-      dismissedAt: null,
-      artists: {
-        some: {
-          artist: {
-            popularity: { gte: minPopularity },
-            listenSignals: { none: {} },
-          },
-        },
-      },
+const CONTACT_SELECT = {
+  artistId: true,
+  id: true,
+  email: true,
+  phone: true,
+  name: true,
+  customPrice: true,
+  state: true,
+  isFullTeam: true,
+} satisfies Prisma.ContactSelect;
+
+const PLAYLIST_SELECT = {
+  artistId: true,
+  playlist: {
+    select: {
+      spotifyId: true,
+      name: true,
     },
-    orderBy: { date: "asc" },
-    include: {
-      artists: {
-        include: {
-          artist: {
-            include: {
-              listenSignals: { orderBy: { rank: "asc" } },
-              contacts: true,
-              playlists: { include: { playlist: true } },
-            },
-          },
-        },
-      },
-      outreaches: true,
-    },
-    take: 200,
+  },
+} satisfies Prisma.ArtistPlaylistSelect;
+
+type DashboardShowRow = Prisma.ShowGetPayload<{
+  select: ReturnType<typeof dashboardShowSelect>;
+}>;
+type DashboardContactRow = Prisma.ContactGetPayload<{ select: typeof CONTACT_SELECT }>;
+type DashboardPlaylistRow = Prisma.ArtistPlaylistGetPayload<{
+  select: typeof PLAYLIST_SELECT;
+}>;
+
+function countShows(where: Prisma.ShowWhereInput): Promise<number> {
+  return db.show.count({ where });
+}
+
+function parseGenres(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((genre): genre is string => typeof genre === "string").slice(0, 2)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getDashboardData(
+  query: DashboardQuery,
+  now: Date = new Date()
+): Promise<DashboardData> {
+  if (!Number.isSafeInteger(query.page) || query.page < 1) {
+    throw new Error("Dashboard page must be a positive integer");
+  }
+
+  const selectedWhere = showWhere(query.mode, query.filters, now);
+  const select = dashboardShowSelect(now);
+  const skip = (query.page - 1) * DASHBOARD_PAGE_SIZE;
+  const showRowsPromise: Promise<DashboardShowRow[]> = db.show.findMany({
+    where: selectedWhere,
+    orderBy: [{ date: "asc" }, { id: "asc" }],
+    skip,
+    take: DASHBOARD_PAGE_SIZE,
+    select,
   });
 
-  type ShowArtist = (typeof shows)[number]["artists"][number];
+  const [
+    showRows,
+    matchedCount,
+    unknownCount,
+    interestedCount,
+    dismissedCount,
+    totalUpcoming,
+    totalSignals,
+  ] = await Promise.all([
+    showRowsPromise,
+    countShows(showWhere("matched", query.filters, now)),
+    countShows(showWhere("unknown", query.filters, now)),
+    countShows(showWhere("interested", query.filters, now)),
+    countShows(showWhere("dismissed", query.filters, now)),
+    db.show.count({
+      where: {
+        date: { gte: easternTodayStoredDate(now) },
+        isFestival: false,
+        syncStatus: "active",
+      },
+    }),
+    db.listenSignal.count({ where: activeListenSignalWhere(now) }),
+  ]);
 
-  return shows.map((show) => {
-    const featured: MatchedShow["matchedArtists"] = [];
-    const others: MatchedShow["otherArtists"] = [];
-    for (const sa of show.artists as ShowArtist[]) {
-      const isFeatured =
-        sa.artist.popularity != null &&
-        sa.artist.popularity >= minPopularity &&
-        sa.artist.listenSignals.length === 0;
-      if (isFeatured) {
-        let genres: string[] = [];
-        if (sa.artist.genres) {
-          try {
-            const parsed = JSON.parse(sa.artist.genres) as unknown;
-            if (Array.isArray(parsed)) genres = parsed.filter((g): g is string => typeof g === "string");
-          } catch {
-            // ignore
-          }
-        }
-        featured.push({
-          id: sa.artist.id,
-          name: sa.artist.name,
-          genres,
-          popularity: sa.artist.popularity,
-          topSignal: null,
-          playlists: sa.artist.playlists.map((ap) => ({
-            spotifyId: ap.playlist.spotifyId,
-            name: ap.playlist.name,
-            url: ap.playlist.url,
-          })),
-          contacts: sa.artist.contacts.map((c) => ({
-            id: c.id,
-            email: c.email,
-            phone: c.phone,
-            name: c.name,
-            role: c.role,
-            customPrice: c.customPrice,
-            isFullTeam: c.isFullTeam,
-          })),
-        });
-      } else {
-        others.push({ id: sa.artist.id, name: sa.artist.name });
+  const modeCounts: Record<DashboardMode, number> = {
+    matched: matchedCount,
+    unknown: unknownCount,
+    interested: interestedCount,
+    dismissed: dismissedCount,
+  };
+  const pagination = getPagination(modeCounts[query.mode], query.page);
+
+  const featuredArtistIds = new Set<string>();
+  for (const show of showRows) {
+    for (const showArtist of show.artists) {
+      if (
+        isDashboardArtistMatch(
+          showArtist.artist,
+          query.mode,
+          now,
+          UNKNOWN_BIG_MIN_POPULARITY,
+          query.filters.source
+        )
+      ) {
+        featuredArtistIds.add(showArtist.artist.id);
       }
     }
+  }
+  const artistIds = [...featuredArtistIds];
+  const outreachIds = showRows.flatMap((show) =>
+    show.outreaches.map((outreach) => outreach.id)
+  );
+
+  const contactsPromise: Promise<DashboardContactRow[]> =
+    artistIds.length === 0
+      ? Promise.resolve([])
+      : db.contact.findMany({
+          where: { artistId: { in: artistIds }, state: "active" },
+          orderBy: [{ artistId: "asc" }, { updatedAt: "desc" }, { id: "asc" }],
+          select: CONTACT_SELECT,
+        });
+  const playlistsPromise: Promise<DashboardPlaylistRow[]> =
+    artistIds.length === 0
+      ? Promise.resolve([])
+      : db.artistPlaylist.findMany({
+          where: { artistId: { in: artistIds } },
+          orderBy: [{ artistId: "asc" }, { playlist: { name: "asc" } }],
+          select: PLAYLIST_SELECT,
+        });
+  const manualMarkersPromise =
+    outreachIds.length === 0
+      ? Promise.resolve([])
+      : db.outreach.findMany({
+          where: {
+            id: { in: outreachIds },
+            ...MANUAL_OUTREACH_MARKER_WHERE,
+          },
+          select: { id: true },
+        });
+  const [contacts, playlistRows, manualMarkers] = await Promise.all([
+    contactsPromise,
+    playlistsPromise,
+    manualMarkersPromise,
+  ]);
+  const manualMarkerIds = new Set(manualMarkers.map((row) => row.id));
+
+  const contactsByArtist = new Map<
+    string,
+    MatchedShow["matchedArtists"][number]["contacts"]
+  >();
+  for (const contact of contacts) {
+    const rows = contactsByArtist.get(contact.artistId) ?? [];
+    rows.push({
+      id: contact.id,
+      email: contact.email,
+      phone: contact.phone,
+      name: contact.name,
+      customPrice: contact.customPrice,
+      state: contact.state,
+      isFullTeam: contact.isFullTeam,
+    });
+    contactsByArtist.set(contact.artistId, rows);
+  }
+
+  const playlistsByArtist = new Map<
+    string,
+    MatchedShow["matchedArtists"][number]["playlists"]
+  >();
+  for (const row of playlistRows) {
+    const rows = playlistsByArtist.get(row.artistId) ?? [];
+    rows.push({
+      spotifyId: row.playlist.spotifyId,
+      name: row.playlist.name,
+    });
+    playlistsByArtist.set(row.artistId, rows);
+  }
+
+  const shows = showRows.map((show): MatchedShow => {
+    const matchedArtists: MatchedShow["matchedArtists"] = [];
+    const otherArtists: MatchedShow["otherArtists"] = [];
+
+    for (const showArtist of show.artists) {
+      const artist = showArtist.artist;
+      if (
+        !isDashboardArtistMatch(
+          artist,
+          query.mode,
+          now,
+          UNKNOWN_BIG_MIN_POPULARITY,
+          query.filters.source
+        )
+      ) {
+        otherArtists.push({ id: artist.id, name: artist.name });
+        continue;
+      }
+
+      const prefix = sourcePrefix(query.filters.source);
+      const topSignal = pickTopListenSignal(
+        artist.listenSignals.filter(
+          (signal) => prefix === null || signal.source.startsWith(prefix)
+        ),
+        now
+      );
+      const playlists = playlistsByArtist.get(artist.id) ?? [];
+      const artistOutreaches = show.outreaches.filter(
+        (outreach) => outreach.artistId === artist.id
+      );
+      matchedArtists.push({
+        id: artist.id,
+        name: artist.name,
+        genres: parseGenres(artist.genres),
+        popularity: artist.popularity,
+        topSignal: topSignal
+          ? { source: topSignal.source, rank: topSignal.rank }
+          : null,
+        playlists: playlists.slice(0, 3),
+        playlistCount: playlists.length,
+        canMarkManually: canMarkOutreachManually(
+          artistOutreaches.map((outreach) => ({
+            status: outreach.status,
+            providerMessageId: outreach.providerMessageId,
+            attemptCount: outreach.attemptCount,
+            sendAttemptCount: outreach._count.sendAttempts,
+          }))
+        ),
+        contacts: contactsByArtist.get(artist.id) ?? [],
+      });
+    }
+
     return {
       id: show.id,
       date: show.date,
       venueName: show.venueName,
-      city: show.city,
       state: show.state,
       ticketUrl: show.ticketUrl,
       dismissedAt: show.dismissedAt,
       interestedAt: show.interestedAt,
-      matchedArtists: featured,
-      otherArtists: others,
-      outreach: show.outreaches.map((o) => ({
-        id: o.id,
-        artistId: o.artistId,
-        contactId: o.contactId,
-        sentAt: o.sentAt,
-        deliveredAt: o.deliveredAt,
-        status: o.status,
-        scheduledFor: o.scheduledFor,
-        firstClickedAt: o.firstClickedAt,
-        clickCount: o.clickCount,
-        firstOpenedAt: o.firstOpenedAt,
-        openCount: o.openCount,
+      matchedArtists,
+      otherArtists,
+      outreach: show.outreaches.map((outreach) => ({
+        id: outreach.id,
+        artistId: outreach.artistId,
+        contactId: outreach.contactId,
+        sentAt: outreach.sentAt,
+        deliveredAt: outreach.deliveredAt,
+        status: outreach.status,
+        scheduledFor: outreach.scheduledFor,
+        nextAttemptAt: outreach.nextAttemptAt,
+        clickCount: outreach.clickCount,
+        openCount: outreach.openCount,
+        isManualMarker: manualMarkerIds.has(outreach.id),
       })),
     };
-  }).filter((s) => s.matchedArtists.length > 0);
+  });
+
+  return {
+    shows,
+    modeCounts,
+    pagination,
+    totalUpcoming,
+    totalSignals,
+  };
 }

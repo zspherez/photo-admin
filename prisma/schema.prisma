@@ -21,10 +21,26 @@ model IntegrationCredential {
   createdAt    DateTime  @default(now())
 }
 
+model IntegrationSyncLease {
+  key        String   @id
+  ownerToken String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+model ArtistIdentityNameClaim {
+  normalizedName String   @id
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
 model Artist {
   id             String           @id @default(cuid())
   name           String
-  normalizedName String           @unique
+  normalizedName String
   spotifyId      String?          @unique
   statsfmId      String?          @unique
   edmtrainId     Int?             @unique
@@ -38,6 +54,8 @@ model Artist {
   outreaches     Outreach[]
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
+
+  @@index([normalizedName])
 }
 
 model SpotifyPlaylist {
@@ -60,49 +78,66 @@ model ArtistPlaylist {
   @@index([playlistId])
 }
 
+enum ContactState {
+  active
+  quarantined
+}
+
 model Contact {
-  id          String     @id @default(cuid())
-  artistId    String
-  artist      Artist     @relation(fields: [artistId], references: [id], onDelete: Cascade)
-  email       String?
-  phone       String?
-  name        String?
-  role        String?
-  customPrice String?
-  notes       String?
-  source      String?
-  isFullTeam  Boolean    @default(false)
-  outreaches  Outreach[]
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id             String       @id @default(cuid())
+  artistId       String
+  artist         Artist       @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  email          String?
+  phone          String?
+  name           String?
+  role           String?
+  customPrice    String?
+  notes          String?
+  source         String?
+  /// Stable provider-owned identity. Sheet contacts use spreadsheet/tab/row/slot identity.
+  sourceKey      String?      @unique
+  sourceSyncedAt DateTime?
+  /// Only active contacts are eligible for normal selection; quarantined preserves unresolved legacy history.
+  state          ContactState @default(active)
+  isFullTeam     Boolean      @default(false)
+  outreaches     Outreach[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   @@unique([artistId, email])
   @@index([artistId])
+  @@index([source])
+  @@index([state])
 }
 
 model Show {
-  id              String       @id @default(cuid())
-  edmtrainId      Int?         @unique
-  date            DateTime
-  venueName       String
-  city            String
-  state           String?
-  ticketUrl       String?
-  ages            String?
-  electronicGenre String?
-  isFestival      Boolean      @default(false)
-  eventName       String?
-  source          String?
-  dismissedAt     DateTime?
-  interestedAt    DateTime?
-  raw             String?
-  artists         ShowArtist[]
-  outreaches      Outreach[]
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  id               String       @id @default(cuid())
+  edmtrainId       Int?         @unique
+  date             DateTime
+  venueName        String
+  city             String
+  state            String?
+  ticketUrl        String?
+  ages             String?
+  electronicGenre  String?
+  isFestival       Boolean      @default(false)
+  eventName        String?
+  source           String?
+  /// active, cancelled, blocked, or missing for provider-managed events.
+  syncStatus       String       @default("active")
+  sourceLastSeenAt DateTime?
+  sourceGeneration String?
+  dismissedAt      DateTime?
+  interestedAt     DateTime?
+  raw              String?
+  artists          ShowArtist[]
+  outreaches       Outreach[]
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   @@index([date])
   @@index([isFestival, date])
+  @@index([source, syncStatus, date])
   @@index([dismissedAt])
   @@index([interestedAt])
 }
@@ -119,18 +154,23 @@ model ShowArtist {
 }
 
 model ListenSignal {
-  id         String    @id @default(cuid())
-  artistId   String
-  artist     Artist    @relation(fields: [artistId], references: [id], onDelete: Cascade)
-  source     String
-  rank       Int?
-  playCount  Int?
-  score      Float?
-  lastSeenAt DateTime?
-  fetchedAt  DateTime  @default(now())
+  id             String    @id @default(cuid())
+  artistId       String
+  artist         Artist    @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  source         String
+  rank           Int?
+  playCount      Int?
+  score          Float?
+  lastSeenAt     DateTime?
+  /// Null for complete ranking/membership snapshots; recent-play signals expire.
+  expiresAt      DateTime?
+  /// Identifies the complete atomic source snapshot that wrote this signal.
+  syncGeneration String?
+  fetchedAt      DateTime  @default(now())
 
   @@unique([artistId, source])
   @@index([artistId])
+  @@index([source, expiresAt])
 }
 
 model EmailTemplate {
@@ -145,38 +185,127 @@ model EmailTemplate {
 }
 
 model Outreach {
-  id                String         @id @default(cuid())
-  showId            String
-  show              Show           @relation(fields: [showId], references: [id], onDelete: Cascade)
-  artistId          String
-  artist            Artist         @relation(fields: [artistId], references: [id], onDelete: Cascade)
-  contactId         String?
-  contact           Contact?       @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  templateId        String?
-  template          EmailTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
-  finalSubject      String
-  finalHtml         String
-  status            String
-  error             String?
-  providerMessageId String?
-  sentAt            DateTime?
-  deliveredAt       DateTime?
-  firstOpenedAt    DateTime?
-  lastOpenedAt     DateTime?
-  openCount        Int            @default(0)
-  firstClickedAt   DateTime?
-  lastClickedAt    DateTime?
-  clickCount       Int            @default(0)
-  bouncedAt        DateTime?
-  complainedAt     DateTime?
-  scheduledFor     DateTime?
-  createdAt         DateTime       @default(now())
+  id                     String                @id @default(cuid())
+  showId                 String
+  show                   Show                  @relation(fields: [showId], references: [id], onDelete: Cascade)
+  artistId               String
+  artist                 Artist                @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  contactId              String?
+  contact                Contact?              @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  templateId             String?
+  template               EmailTemplate?        @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  finalSubject           String
+  finalHtml              String
+  recipientEmails        String[]              @default([])
+  recipientSnapshotState String                @default("legacy_unknown")
+  fullTeamSend           Boolean               @default(false)
+  status                 String
+  error                  String?
+  providerMessageId      String?
+  idempotencyKey         String                @unique @default(dbgenerated("('outreach/'::text || md5(((random())::text || (clock_timestamp())::text)))"))
+  attemptCount           Int                   @default(0)
+  claimedAt              DateTime?
+  claimToken             String?
+  lastAttemptAt          DateTime?
+  sentAt                 DateTime?
+  deliveredAt            DateTime?
+  firstOpenedAt          DateTime?
+  lastOpenedAt           DateTime?
+  openCount              Int                   @default(0)
+  firstClickedAt         DateTime?
+  lastClickedAt          DateTime?
+  clickCount             Int                   @default(0)
+  bouncedAt              DateTime?
+  complainedAt           DateTime?
+  scheduledFor           DateTime?
+  nextAttemptAt          DateTime?
+  sendAttempts           OutreachSendAttempt[]
+  webhookEvents          ResendWebhookEvent[]
+  createdAt              DateTime              @default(now())
 
   @@unique([showId, contactId])
   @@index([showId])
   @@index([contactId])
   @@index([artistId])
   @@index([status, scheduledFor])
+  @@index([status, nextAttemptAt])
+  @@index([status, claimedAt])
+}
+
+model OutreachSendAttempt {
+  id                      String               @id
+  outreachId              String
+  outreach                Outreach             @relation(fields: [outreachId], references: [id], onDelete: Cascade)
+  status                  String
+  idempotencyKey          String               @unique
+  providerRequest         Json?
+  requestHash             String?
+  testSend                Boolean?
+  /// Stable SHA-256 fingerprint of the Resend API credential; never the secret key.
+  providerCredentialScope String?
+  providerMessageId       String?              @unique
+  firstAttemptAt          DateTime?
+  lastAttemptAt           DateTime?
+  attemptCount            Int                  @default(0)
+  /// configuration and retryable are proven unsent; in_flight and uncertain may have been accepted.
+  failureDisposition      String?
+  nextAttemptAt           DateTime?
+  acceptedAt              DateTime?
+  error                   String?
+  deliveredAt             DateTime?
+  firstOpenedAt           DateTime?
+  lastOpenedAt            DateTime?
+  openCount               Int                  @default(0)
+  firstClickedAt          DateTime?
+  lastClickedAt           DateTime?
+  clickCount              Int                  @default(0)
+  bouncedAt               DateTime?
+  complainedAt            DateTime?
+  webhookEvents           ResendWebhookEvent[]
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+
+  @@index([outreachId, createdAt])
+  @@index([status, lastAttemptAt])
+  @@index([status, nextAttemptAt])
+  @@index([providerCredentialScope])
+}
+
+model OutreachAttachmentBlob {
+  sha256     String   @id
+  content    Bytes
+  byteLength Int
+  createdAt  DateTime @default(now())
+}
+
+model EmailSuppression {
+  normalizedEmail String   @id
+  reason          String
+  source          String   @default("resend")
+  sourceEventId   String?
+  suppressedAt    DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([suppressedAt])
+}
+
+model ResendWebhookEvent {
+  eventId           String               @id
+  type              String
+  providerMessageId String?
+  recipientEmails   String[]             @default([])
+  providerCreatedAt DateTime
+  outreachId        String?
+  outreach          Outreach?            @relation(fields: [outreachId], references: [id], onDelete: SetNull)
+  attemptId         String?
+  attempt           OutreachSendAttempt? @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+  correlationStatus String               @default("unmatched")
+  correlationError  String?
+  processedAt       DateTime             @default(now())
+
+  @@index([outreachId, providerCreatedAt])
+  @@index([attemptId, providerCreatedAt])
 }
 
 model Setting {

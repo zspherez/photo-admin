@@ -2,12 +2,25 @@
   "name": "photo-admin",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && prisma migrate deploy && next build",
+    "build": "npm run db:generate && next build",
+    "db:generate": "prisma generate",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:verify-targets": "tsx scripts/verify-database-targets.ts",
+    "db:verify-release-compatibility": "tsx scripts/verify-release-compatibility.ts",
+    "db:backfill:normalized-artists": "tsx scripts/backfill-normalized-artists.ts",
+    "db:adopt-sheet-contacts": "tsx scripts/adopt-sheet-contacts.ts",
+    "db:setup": "npm run db:generate && npm run db:migrate:deploy && npm run db:backfill:normalized-artists",
     "start": "next start",
+    "test": "tsx --test \"**/*.{test,spec}.{ts,tsx,mts}\"",
+    "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint",
-    "postinstall": "prisma generate"
+    "rotate:statsfm-token": "tsx scripts/rotate-statsfm-token.ts",
+    "postinstall": "npm run db:generate"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -16,17 +29,13 @@
     "@tiptap/react": "^3.23.5",
     "@tiptap/starter-kit": "^3.23.5",
     "clsx": "^2.1.1",
-    "csv-parse": "^6.2.1",
-    "date-fns": "^4.2.1",
     "googleapis": "^171.4.0",
-    "lucide-react": "^1.16.0",
     "next": "16.2.6",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "resend": "^6.12.3",
     "svix": "^1.94.0",
-    "tailwind-merge": "^3.6.0",
-    "zod": "^4.4.3"
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -37,6 +46,7 @@
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
+    "playwright": "1.55.0",
     "prisma": "^6.19.3",
     "tailwindcss": "^4",
     "tsx": "^4.22.3",

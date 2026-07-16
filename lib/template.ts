@@ -2,10 +2,39 @@ import { db } from "@/lib/db";
 
 export type TemplateVars = Record<string, string>;
 
-export function applyTemplate(template: string, vars: TemplateVars): string {
+function substituteTemplate(
+  template: string,
+  vars: TemplateVars,
+  transform: (value: string) => string
+): string {
   return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key) =>
-    Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : ""
+    Object.prototype.hasOwnProperty.call(vars, key) ? transform(vars[key]) : ""
   );
+}
+
+export function applyTemplate(template: string, vars: TemplateVars): string {
+  return substituteTemplate(template, vars, (value) => value);
+}
+
+export function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => {
+    switch (character) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case '"':
+        return "&quot;";
+      default:
+        return "&#39;";
+    }
+  });
+}
+
+export function applyHtmlTemplate(template: string, vars: TemplateVars): string {
+  return substituteTemplate(template, vars, escapeHtml);
 }
 
 export function extractVars(template: string): string[] {
@@ -40,7 +69,7 @@ export const DEFAULT_TEMPLATE_HTML = `<html>
     <p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p>
     <p>Gave a brief summary of my rates/deliverables below, and I'm happy to work with you to meet your needs!</p>
     <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
-    <p>My standard {{sender_city}} show rate is $400 for photo/video, or $200 for just photo.</p>
+    <p>My standard {{sender_city}} show rate is {{rate}} for photo/video, or $200 for just photo.</p>
     <p>You can check out some examples of my previous work at <a href="{{portfolio_url}}">{{portfolio_url}}</a></p>
     <p>I look forward to hearing from you soon!</p>
     <p>Best,<br>
@@ -64,8 +93,10 @@ export async function ensureDefaultTemplate() {
     }
     return existing;
   }
-  return db.emailTemplate.create({
-    data: {
+  return db.emailTemplate.upsert({
+    where: { name: DEFAULT_TEMPLATE_NAME },
+    update: { isDefault: true },
+    create: {
       name: DEFAULT_TEMPLATE_NAME,
       subject: DEFAULT_TEMPLATE_SUBJECT,
       htmlBody: DEFAULT_TEMPLATE_HTML,
@@ -87,13 +118,24 @@ export interface ShowContext {
   managerName: string | null;
 }
 
-export async function buildVarsForShow(ctx: ShowContext): Promise<TemplateVars> {
-  const [portfolioUrl, senderName, senderEmail, senderPhone, senderCity] = await Promise.all([
-    getSetting("portfolio_url", ""),
-    getSetting("sender_name", ""),
-    getSetting("sender_email", ""),
-    getSetting("sender_phone", ""),
-    getSetting("sender_city", ""),
+export async function buildVarsForShow(
+  ctx: ShowContext,
+  readSetting: typeof getSetting = getSetting
+): Promise<TemplateVars> {
+  const [
+    portfolioUrl,
+    senderName,
+    senderEmail,
+    senderPhone,
+    senderCity,
+    defaultRate,
+  ] = await Promise.all([
+    readSetting("portfolio_url", ""),
+    readSetting("sender_name", ""),
+    readSetting("sender_email", ""),
+    readSetting("sender_phone", ""),
+    readSetting("sender_city", ""),
+    readSetting("default_rate", "$400"),
   ]);
   return {
     artist: ctx.artistName,
@@ -104,7 +146,7 @@ export async function buildVarsForShow(ctx: ShowContext): Promise<TemplateVars> 
       day: "numeric",
       timeZone: "UTC",
     }),
-    rate: ctx.customPrice?.trim() ?? "",
+    rate: ctx.customPrice?.trim() || defaultRate.trim(),
     portfolio_url: portfolioUrl,
     sender_name: senderName,
     sender_email: senderEmail,

@@ -1,56 +1,179 @@
+import type { Metadata } from "next";
+import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, LinkButton } from "@/components/ui/button";
 import { formatShowDate } from "@/lib/formatDate";
+import { easternTodayStoredDate } from "@/lib/calendarDate";
+import { activeListenSignalWhere } from "@/lib/listenSignal";
+import { requireServerActionAuth } from "@/lib/auth";
+import type { SearchParamValue } from "@/lib/searchParams";
+import {
+  NEW_SHOWS_PAGE_SIZE,
+  parseSnapshotCursor,
+  parseSnapshotCutoff,
+  snapshotPageHref,
+  traverseNewShowSnapshot,
+  type NewShowSnapshotCursor,
+} from "./new-shows-snapshot";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Newly announced" };
 const LAST_SEEN_KEY = "last_seen_new_shows";
 
-async function markAllSeen() {
-  "use server";
+function storedCheckpoint(value: string | undefined): Date {
+  if (!value) return new Date(0);
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value
+    ? parsed
+    : new Date(0);
+}
+
+function snapshotWhere(
+  lastSeen: Date,
+  cutoff: Date,
+  today: Date,
+  cursor: NewShowSnapshotCursor | null,
+): Prisma.ShowWhereInput {
+  return {
+    createdAt: { gt: lastSeen, lte: cutoff },
+    date: { gte: today },
+    syncStatus: "active",
+    ...(cursor
+      ? {
+          AND: [
+            {
+              OR: [
+                { createdAt: { lt: cursor.createdAt } },
+                {
+                  createdAt: cursor.createdAt,
+                  id: { lt: cursor.id },
+                },
+              ],
+            },
+          ],
+        }
+      : {}),
+  };
+}
+
+async function advanceCheckpoint(cutoff: Date): Promise<void> {
+  const value = cutoff.toISOString();
   await db.setting.upsert({
     where: { key: LAST_SEEN_KEY },
-    create: { key: LAST_SEEN_KEY, value: new Date().toISOString() },
-    update: { value: new Date().toISOString() },
+    create: { key: LAST_SEEN_KEY, value },
+    update: {},
   });
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const current = await db.setting.findUnique({
+      where: { key: LAST_SEEN_KEY },
+    });
+    if (!current || storedCheckpoint(current.value) >= cutoff) return;
+    const updated = await db.setting.updateMany({
+      where: { key: LAST_SEEN_KEY, value: current.value },
+      data: { value },
+    });
+    if (updated.count === 1) return;
+  }
+
+  throw new Error("Could not advance the new-shows checkpoint");
+}
+
+async function markAllSeen(formData: FormData) {
+  "use server";
+  await requireServerActionAuth("/new");
+  const actionNow = new Date();
+  const cutoff = parseSnapshotCutoff(formData.get("cutoff"), actionNow);
+  if (!cutoff) redirect("/new");
+
+  const current = await db.setting.findUnique({
+    where: { key: LAST_SEEN_KEY },
+  });
+  const lastSeen = storedCheckpoint(current?.value);
+  if (lastSeen < cutoff) {
+    const today = easternTodayStoredDate(actionNow);
+    await traverseNewShowSnapshot({
+      cutoff,
+      fetchPage: ({ cursor, take }) =>
+        db.show.findMany({
+          where: snapshotWhere(lastSeen, cutoff, today, cursor),
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take,
+          select: { id: true, createdAt: true },
+        }),
+    });
+    await advanceCheckpoint(cutoff);
+  }
+
   revalidatePath("/new");
   revalidatePath("/");
   redirect("/new");
 }
 
-export default async function NewlyAnnouncedPage() {
+export default async function NewlyAnnouncedPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    cutoff?: SearchParamValue;
+    beforeCreatedAt?: SearchParamValue;
+    beforeId?: SearchParamValue;
+  }>;
+}) {
+  const rawSearchParams = await searchParams;
+  const now = new Date();
+  const cutoff = parseSnapshotCutoff(rawSearchParams.cutoff, now) ?? now;
+  const cursor = parseSnapshotCursor(
+    rawSearchParams.beforeCreatedAt,
+    rawSearchParams.beforeId,
+    cutoff,
+  );
   const lastSeenSetting = await db.setting.findUnique({ where: { key: LAST_SEEN_KEY } });
-  const lastSeen = lastSeenSetting ? new Date(lastSeenSetting.value) : new Date(0);
+  const lastSeen = storedCheckpoint(lastSeenSetting?.value);
 
   const shows = await db.show.findMany({
-    where: {
-      createdAt: { gt: lastSeen },
-      date: { gte: new Date() },
-    },
-    orderBy: { createdAt: "desc" },
+    where: snapshotWhere(
+      lastSeen,
+      cutoff,
+      easternTodayStoredDate(now),
+      cursor,
+    ),
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     include: {
       artists: {
         include: {
           artist: {
             include: {
-              listenSignals: { take: 1, orderBy: { rank: "asc" } },
-              contacts: { take: 1 },
+              listenSignals: {
+                where: activeListenSignalWhere(now),
+                take: 1,
+                orderBy: { rank: "asc" },
+              },
+              contacts: { where: { state: "active" }, take: 1 },
             },
           },
         },
       },
     },
-    take: 300,
+    take: NEW_SHOWS_PAGE_SIZE + 1,
   });
+  const hasNextPage = shows.length > NEW_SHOWS_PAGE_SIZE;
+  const pageShows = shows.slice(0, NEW_SHOWS_PAGE_SIZE);
+  const nextCursor = hasNextPage
+    ? {
+        createdAt: pageShows[pageShows.length - 1].createdAt,
+        id: pageShows[pageShows.length - 1].id,
+      }
+    : null;
 
   // Roll up festivals: show only one row per festival (the one we just created).
   // Regular shows pass through. Plus dedupe same-festival names for cleanliness.
   const seenFestivalKeys = new Set<string>();
-  const items = shows.filter((s) => {
+  const items = pageShows.filter((s) => {
     if (!s.isFestival) return true;
     const key = `${(s.eventName ?? s.venueName).toLowerCase()}|${s.venueName.toLowerCase()}|${s.city.toLowerCase()}`;
     if (seenFestivalKeys.has(key)) return false;
@@ -69,8 +192,9 @@ export default async function NewlyAnnouncedPage() {
               : `${items.length} new since ${lastSeen.toLocaleString()}`}
           </p>
         </div>
-        {items.length > 0 && (
+        {pageShows.length > 0 && (
           <form action={markAllSeen}>
+            <input type="hidden" name="cutoff" value={cutoff.toISOString()} />
             <Button type="submit" variant="primary" size="md">Mark all seen</Button>
           </form>
         )}
@@ -78,7 +202,7 @@ export default async function NewlyAnnouncedPage() {
 
       {items.length === 0 ? (
         <div className="mt-10 rounded-xl border border-dashed border-zinc-300 p-12 text-center text-sm text-zinc-500 dark:border-zinc-700">
-          Caught up. Come back after the next sync (daily at 11am UTC).
+          Caught up. Come back after the next sync (daily at 09:00 UTC).
         </div>
       ) : (
         <Card className="mt-6">
@@ -119,6 +243,27 @@ export default async function NewlyAnnouncedPage() {
             })}
           </ul>
         </Card>
+      )}
+
+      {(cursor || nextCursor) && (
+        <nav className="mt-4 flex items-center justify-between gap-3" aria-label="New show pages">
+          <div>
+            {cursor && (
+              <LinkButton href={snapshotPageHref(cutoff)} variant="secondary" size="sm">
+                First page
+              </LinkButton>
+            )}
+          </div>
+          {nextCursor && (
+            <LinkButton
+              href={snapshotPageHref(cutoff, nextCursor)}
+              variant="secondary"
+              size="sm"
+            >
+              Next page
+            </LinkButton>
+          )}
+        </nav>
       )}
     </main>
   );

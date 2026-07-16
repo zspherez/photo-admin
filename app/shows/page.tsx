@@ -1,27 +1,51 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { syncEdmtrainShows } from "@/lib/edmtrain";
 import { Card } from "@/components/ui/card";
 import { formatShowDate } from "@/lib/formatDate";
+import { easternTodayStoredDate } from "@/lib/calendarDate";
 import { SyncForm } from "@/components/sync-form";
 import { SyncBanner } from "@/components/sync-banner";
+import { requireServerActionAuth } from "@/lib/auth";
+import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
+import {
+  createOperationDeadline,
+  ROUTE_DEADLINE_SAFETY_MARGIN_MS,
+} from "@/lib/integrationUtils";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 180;
+export const metadata: Metadata = { title: "NYC shows" };
 
 async function refreshShows() {
   "use server";
+  await requireServerActionAuth("/shows");
   let redirectTo: string;
   try {
-    const result = await syncEdmtrainShows(90);
-    const params = new URLSearchParams({
-      synced: "ok",
-      fetched: String(result.fetched),
-      upserted: String(result.upserted),
-      skipped: String(result.skippedVenue),
-      linked: String(result.artistsLinked),
+    const deadline = createOperationDeadline(maxDuration * 1_000, {
+      safetyMarginMs: ROUTE_DEADLINE_SAFETY_MARGIN_MS,
     });
-    redirectTo = `/shows?${params.toString()}`;
+    const result = await syncEdmtrainShows(90, deadline);
+    if (!result.ok) {
+      const busy = "status" in result && result.status === "busy";
+      const detail = busy
+        ? `Another NYC EDMTrain sync owns ${result.leaseKey}; retry after it finishes.`
+        : "error" in result
+          ? result.error
+          : "NYC EDMTrain sync could not start.";
+      redirectTo = `/shows?synced=${busy ? "busy" : "error"}&detail=${encodeURIComponent(detail.slice(0, 200))}`;
+    } else {
+      const params = new URLSearchParams({
+        synced: "ok",
+        fetched: String(result.data.fetched),
+        upserted: String(result.data.upserted),
+        skipped: String(result.data.skippedVenue),
+        linked: String(result.data.artistsLinked),
+      });
+      redirectTo = `/shows?${params.toString()}`;
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     redirectTo = `/shows?synced=error&detail=${encodeURIComponent(msg.slice(0, 200))}`;
@@ -34,12 +58,32 @@ async function refreshShows() {
 export default async function ShowsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ synced?: string; fetched?: string; upserted?: string; skipped?: string; linked?: string; detail?: string }>;
+  searchParams: Promise<{
+    synced?: SearchParamValue;
+    fetched?: SearchParamValue;
+    upserted?: SearchParamValue;
+    skipped?: SearchParamValue;
+    linked?: SearchParamValue;
+    detail?: SearchParamValue;
+  }>;
 }) {
-  const sp = await searchParams;
+  const rawSearchParams = await searchParams;
+  const sp = {
+    synced: firstSearchParam(rawSearchParams.synced),
+    fetched: firstSearchParam(rawSearchParams.fetched),
+    upserted: firstSearchParam(rawSearchParams.upserted),
+    skipped: firstSearchParam(rawSearchParams.skipped),
+    linked: firstSearchParam(rawSearchParams.linked),
+    detail: firstSearchParam(rawSearchParams.detail),
+  };
+  const today = easternTodayStoredDate();
   const [shows, lastSync, totalArtists] = await Promise.all([
     db.show.findMany({
-      where: { date: { gte: new Date() }, isFestival: false },
+      where: {
+        date: { gte: today },
+        isFestival: false,
+        syncStatus: "active",
+      },
       orderBy: { date: "asc" },
       include: { artists: { include: { artist: true } } },
       take: 200,
@@ -70,6 +114,9 @@ export default async function ShowsPage({
       )}
       {sp.synced === "error" && (
         <SyncBanner tone="error" title="Sync failed." detail={sp.detail ?? "unknown error"} />
+      )}
+      {sp.synced === "busy" && (
+        <SyncBanner tone="error" title="Sync already running." detail={sp.detail ?? "Retry shortly."} />
       )}
 
       {shows.length === 0 ? (

@@ -4,36 +4,99 @@
  */
 
 const TZ = "America/New_York";
+export const OUTREACH_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
+export const OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS = 30 * 1000;
+export const SCHEDULED_DISPATCH_ROUTE_TIMEOUT_MS = 60 * 1000;
+export const SCHEDULED_DISPATCH_TRANSACTION_RESPONSE_MARGIN_MS = 10 * 1000;
+export const SCHEDULED_DISPATCH_MAX_ROWS = 100;
+export const SCHEDULED_DISPATCH_MAX_MS =
+  SCHEDULED_DISPATCH_ROUTE_TIMEOUT_MS -
+  OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS -
+  SCHEDULED_DISPATCH_TRANSACTION_RESPONSE_MARGIN_MS;
 
-function nowInET(): Date {
-  const str = new Date().toLocaleString("en-US", { timeZone: TZ });
-  return new Date(str);
+export type ScheduledDispatchDisposition =
+  | "success"
+  | "skipped"
+  | "retryable"
+  | "terminal";
+
+export type ScheduledDispatchState =
+  | "complete"
+  | "pending_claims"
+  | "scheduled_retries"
+  | "retryable_failure"
+  | "terminal_failure"
+  | "bounded";
+
+export interface ScheduledDispatchStateInput {
+  terminalFailures: number;
+  unscheduledRetryableFailures: number;
+  pendingClaims: number;
+  scheduledRetries: number;
+  bounded: boolean;
 }
 
-/** True when the current time in ET is Saturday (6) or Sunday (0). */
-export function isWeekendET(): boolean {
-  const day = nowInET().getDay();
-  return day === 0 || day === 6;
+export function getScheduledDispatchDisposition(result: {
+  ok: boolean;
+  skipped?: boolean;
+  retryScheduled?: boolean;
+}): ScheduledDispatchDisposition {
+  if (result.skipped) return "skipped";
+  if (result.ok) return "success";
+  return result.retryScheduled ? "retryable" : "terminal";
 }
 
-/**
- * Returns the next Monday at 9:00 AM ET as a UTC Date.
- */
-export function getNextMondaySlot(): Date {
-  const et = nowInET();
-  const day = et.getDay(); // 0=Sun, 6=Sat
-  const daysUntilMonday = day === 0 ? 1 : day === 6 ? 2 : (8 - day) % 7 || 7;
+export function getScheduledDispatchState({
+  terminalFailures,
+  unscheduledRetryableFailures,
+  pendingClaims,
+  scheduledRetries,
+  bounded,
+}: ScheduledDispatchStateInput): ScheduledDispatchState {
+  if (terminalFailures > 0) return "terminal_failure";
+  if (unscheduledRetryableFailures > 0) return "retryable_failure";
+  if (pendingClaims > 0) return "pending_claims";
+  if (bounded) return "bounded";
+  if (scheduledRetries > 0) return "scheduled_retries";
+  return "complete";
+}
 
-  const monday = new Date(et);
-  monday.setDate(monday.getDate() + daysUntilMonday);
-  monday.setHours(9, 0, 0, 0);
+export function getScheduledDispatchHttpStatus(
+  state: ScheduledDispatchState,
+): number {
+  if (state === "terminal_failure") return 500;
+  if (state === "retryable_failure") return 503;
+  if (state === "pending_claims") return 202;
+  return 200;
+}
 
-  // Convert ET time to UTC
-  const etYear = monday.getFullYear();
-  const etMonth = String(monday.getMonth() + 1).padStart(2, "0");
-  const etDay = String(monday.getDate()).padStart(2, "0");
+interface ZonedParts {
+  year: number;
+  month: number;
+  day: number;
+  weekday: string;
+}
 
-  // Determine ET→UTC offset on that day (handles EDT vs EST)
+function partsInET(date: Date): ZonedParts {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return {
+    year: Number(value("year")),
+    month: Number(value("month")),
+    day: Number(value("day")),
+    weekday: value("weekday"),
+  };
+}
+
+function localETToUtc(year: number, month: number, day: number, hour: number): Date {
+  const localAsUtc = Date.UTC(year, month - 1, day, hour);
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: TZ,
     year: "numeric",
@@ -42,18 +105,59 @@ export function getNextMondaySlot(): Date {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
   });
-  const tempDate = new Date(`${etYear}-${etMonth}-${etDay}T12:00:00Z`);
-  const parts = formatter.formatToParts(tempDate);
-  const findPart = (type: string) =>
-    parts.find((p) => p.type === type)?.value ?? "0";
-  const utcNoon = 12;
-  const etNoon = parseInt(findPart("hour"), 10);
-  const offsetHours = utcNoon - etNoon; // 4 (EDT) or 5 (EST)
+  const parts = formatter.formatToParts(new Date(localAsUtc));
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value ?? "0");
+  const representedAsUtc = Date.UTC(
+    value("year"),
+    value("month") - 1,
+    value("day"),
+    value("hour"),
+    value("minute"),
+    value("second")
+  );
+  return new Date(localAsUtc - (representedAsUtc - localAsUtc));
+}
 
-  return new Date(
-    Date.UTC(etYear, monday.getMonth(), monday.getDate(), 9 + offsetHours, 0, 0, 0)
+/** True when the supplied instant is Saturday or Sunday in ET. */
+export function isWeekendET(now: Date = new Date()): boolean {
+  const weekday = partsInET(now).weekday;
+  return weekday === "Sat" || weekday === "Sun";
+}
+
+/**
+ * Returns the next Monday at 9:00 AM ET as a UTC Date.
+ */
+export function getNextMondaySlot(now: Date = new Date()): Date {
+  const et = partsInET(now);
+  const weekdayIndex = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(et.weekday);
+  const daysUntilMonday = weekdayIndex === 0 ? 1 : weekdayIndex === 6 ? 2 : 8 - weekdayIndex;
+  const target = new Date(Date.UTC(et.year, et.month - 1, et.day + daysUntilMonday));
+  return localETToUtc(
+    target.getUTCFullYear(),
+    target.getUTCMonth() + 1,
+    target.getUTCDate(),
+    9
+  );
+}
+
+export function isStaleOutreachClaim(
+  claimedAt: Date | null,
+  now: Date = new Date()
+): boolean {
+  return !claimedAt || now.getTime() - claimedAt.getTime() >= OUTREACH_CLAIM_TIMEOUT_MS;
+}
+
+export function shouldContinueScheduledDispatch(
+  startedAtMs: number,
+  processed: number,
+  nowMs: number = Date.now()
+): boolean {
+  return (
+    processed < SCHEDULED_DISPATCH_MAX_ROWS &&
+    nowMs - startedAtMs < SCHEDULED_DISPATCH_MAX_MS
   );
 }
 

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
@@ -5,6 +6,7 @@ import {
   DEFAULT_TEMPLATE_HTML,
   DEFAULT_TEMPLATE_NAME,
   DEFAULT_TEMPLATE_SUBJECT,
+  applyHtmlTemplate,
   applyTemplate,
   buildVarsForShow,
   ensureDefaultTemplate,
@@ -14,8 +16,13 @@ import { TemplateEditor } from "@/components/template-editor";
 import { Card, CardBody } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { easternTodayStoredDate } from "@/lib/calendarDate";
+import { pickEmailContact } from "@/lib/contactSelection";
+import { activeListenSignalWhere } from "@/lib/listenSignal";
+import { requireServerActionAuth } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Email template" };
 
 const KNOWN_VARS = [
   "artist",
@@ -32,6 +39,7 @@ const KNOWN_VARS = [
 
 async function saveTemplate(formData: FormData) {
   "use server";
+  await requireServerActionAuth("/settings/template");
   const subject = (formData.get("subject") as string)?.trim() ?? "";
   const htmlBody = (formData.get("html") as string) ?? "";
   if (!subject || !htmlBody) return;
@@ -52,6 +60,7 @@ async function saveTemplate(formData: FormData) {
 
 async function resetToDefault() {
   "use server";
+  await requireServerActionAuth("/settings/template");
   const existing = await db.emailTemplate.findFirst({ where: { isDefault: true } });
   if (existing) {
     await db.emailTemplate.update({
@@ -63,30 +72,60 @@ async function resetToDefault() {
 }
 
 export default async function TemplateSettingsPage() {
-  const template = await ensureDefaultTemplate();
-  const usedVars = extractVars(template.subject + " " + template.htmlBody);
-  const allVars = Array.from(new Set([...KNOWN_VARS, ...usedVars])).sort();
-
-  const sample = await db.show.findFirst({
-    where: {
-      date: { gte: new Date() },
-      artists: {
-        some: {
-          artist: { contacts: { some: {} }, listenSignals: { some: {} } },
+  const now = new Date();
+  const [template, sample] = await Promise.all([
+    ensureDefaultTemplate(),
+    db.show.findFirst({
+      where: {
+        date: { gte: easternTodayStoredDate(now) },
+        syncStatus: "active",
+        artists: {
+          some: {
+            artist: {
+              contacts: {
+                some: { state: "active", email: { not: null } },
+              },
+              listenSignals: { some: activeListenSignalWhere(now) },
+            },
+          },
         },
       },
-    },
-    include: { artists: { include: { artist: { include: { contacts: true } } } } },
-    orderBy: { date: "asc" },
-  });
+      include: {
+        artists: {
+          include: {
+            artist: {
+              include: {
+                contacts: {
+                  where: { state: "active" },
+                  orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+                },
+                listenSignals: {
+                  where: activeListenSignalWhere(now),
+                  select: { id: true },
+                },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { date: "asc" },
+    }),
+  ]);
+  const usedVars = extractVars(template.subject + " " + template.htmlBody);
+  const allVars = Array.from(new Set([...KNOWN_VARS, ...usedVars])).sort();
 
   let previewSubject = template.subject;
   let previewHtml = template.htmlBody;
   let sampleLabel = "No sample available";
   if (sample) {
-    const matched = sample.artists.find((sa) => sa.artist.contacts.length > 0);
+    const matched = sample.artists.find(
+      (showArtist) =>
+        showArtist.artist.listenSignals.length > 0 &&
+        pickEmailContact(showArtist.artist.contacts)
+    );
     if (matched) {
-      const contact = matched.artist.contacts[0];
+      const contact = pickEmailContact(matched.artist.contacts);
+      if (!contact) throw new Error("Template sample contact disappeared");
       const sampleVars = await buildVarsForShow({
         artistName: matched.artist.name,
         venueName: sample.venueName,
@@ -95,7 +134,7 @@ export default async function TemplateSettingsPage() {
         managerName: contact.name,
       });
       previewSubject = applyTemplate(template.subject, sampleVars);
-      previewHtml = applyTemplate(template.htmlBody, sampleVars);
+      previewHtml = applyHtmlTemplate(template.htmlBody, sampleVars);
       sampleLabel = `Preview: ${matched.artist.name} at ${sample.venueName}`;
     }
   }
@@ -117,6 +156,7 @@ export default async function TemplateSettingsPage() {
         <CardBody>
           <form action={saveTemplate}>
             <TemplateEditor
+              key={template.updatedAt.toISOString()}
               initialSubject={template.subject}
               initialHtml={template.htmlBody}
               variables={allVars}
@@ -141,9 +181,11 @@ export default async function TemplateSettingsPage() {
             <p className="text-xs font-medium text-zinc-500">Subject</p>
             <p className="mt-1 font-medium">{previewSubject}</p>
             <p className="mt-4 text-xs font-medium text-zinc-500">Body</p>
-            <div
-              className="prose prose-sm mt-1 max-w-none rounded-md border border-zinc-100 bg-zinc-50/40 p-3 dark:prose-invert dark:border-zinc-900 dark:bg-zinc-900/40"
-              dangerouslySetInnerHTML={{ __html: previewHtml }}
+            <iframe
+              title="Email template preview"
+              sandbox=""
+              srcDoc={previewHtml}
+              className="mt-1 min-h-80 w-full rounded-md border border-zinc-100 bg-white dark:border-zinc-900"
             />
           </CardBody>
         </Card>

@@ -1,27 +1,56 @@
 import { NextRequest, NextResponse } from "next/server";
-import { syncEdmtrainFestivals, syncEdmtrainShows } from "@/lib/edmtrain";
+import {
+  syncAllEdmtrain,
+  type EdmtrainSyncResult,
+} from "@/lib/edmtrain";
+import { isValidCronAuthorization } from "@/lib/cron-auth";
+import { runCronSource } from "@/lib/cronResult";
+import {
+  createOperationDeadline,
+  ROUTE_DEADLINE_SAFETY_MARGIN_MS,
+} from "@/lib/integrationUtils";
 
-// Daily: refresh EDMTrain NYC shows (90 days) + all US festivals (365 days).
-// Triggered by Vercel cron (see vercel.json) — also callable manually with the right auth header.
+export const maxDuration = 300;
+
+export function edmtrainCompletion(result: EdmtrainSyncResult): {
+  ok: boolean;
+  status: 200 | 409 | 500;
+} {
+  const scopes = [result.nyc, result.festivals];
+  const failures = scopes.filter((scope) => !scope.ok);
+  if (failures.length === 0) return { ok: true, status: 200 };
+  const conflictsOnly = failures.every(
+    (scope) => "status" in scope && scope.status === "busy"
+  );
+  return { ok: false, status: conflictsOnly ? 409 : 500 };
+}
+
 export async function GET(request: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
+  const deadline = createOperationDeadline(maxDuration * 1_000, {
+    safetyMarginMs: ROUTE_DEADLINE_SAFETY_MARGIN_MS,
+  });
+  if (!(await isValidCronAuthorization(request.headers.get("authorization")))) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const results: Record<string, unknown> = {};
-  try {
-    results.nyc = await syncEdmtrainShows(90);
-  } catch (e) {
-    results.nyc = { error: e instanceof Error ? e.message : String(e) };
+  const execution = await runCronSource("sync-shows", "edmtrain", () =>
+    syncAllEdmtrain(90, 365, deadline)
+  );
+  if (!execution.ok) {
+    return NextResponse.json(
+      { ok: false, results: { edmtrain: execution } },
+      { status: 500 }
+    );
   }
-  try {
-    results.festivals = await syncEdmtrainFestivals(365);
-  } catch (e) {
-    results.festivals = { error: e instanceof Error ? e.message : String(e) };
-  }
-  return NextResponse.json({ ok: true, results });
+
+  const completion = edmtrainCompletion(execution.data);
+  const edmtrain = {
+    ok: completion.ok,
+    durationMs: execution.durationMs,
+    ...execution.data,
+  };
+  return NextResponse.json(
+    { ok: completion.ok, results: { edmtrain } },
+    { status: completion.status }
+  );
 }

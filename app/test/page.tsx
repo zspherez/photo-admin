@@ -1,11 +1,23 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  activeListenSignalWhere,
+  formatRankLabel,
+} from "@/lib/listenSignal";
+import {
+  addDateOnlyDays,
+  easternDateOnly,
+  easternTodayStoredDate,
+  parseDateOnly,
+} from "@/lib/calendarDate";
+import { formatShowDate } from "@/lib/formatDate";
 
 export const dynamic = "force-dynamic";
 
-export const metadata = { title: "Demo" };
+export const metadata: Metadata = { title: "Demo" };
 
 interface DemoArtist {
   id: string;
@@ -27,32 +39,21 @@ interface DemoShow {
   otherArtists: { id: string; name: string }[];
 }
 
-function formatRankLabel(source: string, rank: number | null): string {
-  const map: Record<string, string> = {
-    statsfm_lifetime: "Stats.fm lifetime",
-    statsfm_months: "Stats.fm 6mo",
-    statsfm_weeks: "Stats.fm 4wk",
-    spotify_top_long: "Spotify all-time",
-    spotify_top_medium: "Spotify 6mo",
-    spotify_top_short: "Spotify 4wk",
-    spotify_recent: "Spotify recent",
-    spotify_followed: "Spotify follow",
-    spotify_playlist: "Spotify playlist",
-  };
-  const niceSource = map[source] ?? source;
-  return rank ? `${niceSource} #${rank}` : niceSource;
-}
-
 async function getDemoShows(): Promise<DemoShow[]> {
   const now = new Date();
-  const end = new Date(now.getTime() + 60 * 86400_000);
+  const end = parseDateOnly(addDateOnlyDays(easternDateOnly(now), 60));
   const shows = await db.show.findMany({
     where: {
-      date: { gte: now, lte: end },
+      date: { gte: easternTodayStoredDate(now), lte: end },
       isFestival: false,
+      syncStatus: "active",
       dismissedAt: null,
       artists: {
-        some: { artist: { listenSignals: { some: {} } } },
+        some: {
+          artist: {
+            listenSignals: { some: activeListenSignalWhere(now) },
+          },
+        },
       },
     },
     orderBy: { date: "asc" },
@@ -61,7 +62,10 @@ async function getDemoShows(): Promise<DemoShow[]> {
         include: {
           artist: {
             include: {
-              listenSignals: { orderBy: { rank: "asc" } },
+              listenSignals: {
+                where: activeListenSignalWhere(now),
+                orderBy: { rank: "asc" },
+              },
               playlists: { include: { playlist: true } },
             },
           },
@@ -143,12 +147,11 @@ export default async function TestPage() {
       ) : (
         <div className="mt-6 space-y-3">
           {shows.map((show) => {
-            const date = typeof show.date === "string" ? new Date(show.date) : show.date;
             return (
               <Card key={show.id} className="p-5">
                 <p className="text-sm text-zinc-500">
                   <span className="font-medium text-zinc-900 dark:text-zinc-100">
-                    {date.toLocaleDateString(undefined, {
+                    {formatShowDate(show.date, {
                       weekday: "short",
                       month: "short",
                       day: "numeric",

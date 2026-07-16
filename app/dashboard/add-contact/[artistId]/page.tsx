@@ -1,14 +1,47 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { cache } from "react";
 import { db } from "@/lib/db";
-import { appendContactToSheet } from "@/lib/sheets";
+import { appendContactToSheet, updateContactInSheet } from "@/lib/sheets";
 import { Card, CardBody } from "@/components/ui/card";
-import { Button, LinkButton } from "@/components/ui/button";
+import { LinkButton } from "@/components/ui/button";
 import { Field, TextArea } from "@/components/ui/field";
 import { formatShowDate } from "@/lib/formatDate";
+import { easternTodayStoredDate } from "@/lib/calendarDate";
+import {
+  appendWorkflowResult,
+  workflowReturnPath,
+} from "@/lib/dashboardReturnUrl";
+import { withWorkflowReturnTo } from "@/lib/workflowLinks";
+import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { requireServerActionAuth } from "@/lib/auth";
+import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 
 export const dynamic = "force-dynamic";
+
+const getArtistForContact = cache(async (artistId: string) =>
+  db.artist.findUnique({
+    where: { id: artistId },
+    include: {
+      contacts: { where: { state: "active" } },
+      shows: { include: { show: true } },
+    },
+  }),
+);
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ artistId: string }>;
+}): Promise<Metadata> {
+  const { artistId } = await params;
+  const artist = await getArtistForContact(artistId);
+  return {
+    title: artist ? `Add contacts for ${artist.name}` : "Add contacts",
+  };
+}
 
 function parseEmails(raw: string): string[] {
   return Array.from(
@@ -23,7 +56,9 @@ function parseEmails(raw: string): string[] {
 
 async function createContacts(formData: FormData) {
   "use server";
+  await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
   const artistId = formData.get("artistId") as string;
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
   const emailsRaw = ((formData.get("emails") as string) ?? "").trim();
   const phone = ((formData.get("phone") as string) ?? "").trim() || null;
   const name = ((formData.get("name") as string) ?? "").trim() || null;
@@ -32,12 +67,22 @@ async function createContacts(formData: FormData) {
   const notes = ((formData.get("notes") as string) ?? "").trim() || null;
 
   if (!artistId) {
-    redirect(`/dashboard/add-contact/${artistId}?error=missing_fields`);
+    redirect(
+      `${withWorkflowReturnTo(
+        `/dashboard/add-contact/${encodeURIComponent(artistId)}`,
+        returnTo
+      )}&error=missing_fields`
+    );
   }
 
   const emails = parseEmails(emailsRaw);
   if (emails.length === 0 && !phone) {
-    redirect(`/dashboard/add-contact/${artistId}?error=missing_target`);
+    redirect(
+      `${withWorkflowReturnTo(
+        `/dashboard/add-contact/${encodeURIComponent(artistId)}`,
+        returnTo
+      )}&error=missing_target`
+    );
   }
 
   let createdCount = 0;
@@ -54,12 +99,88 @@ async function createContacts(formData: FormData) {
     for (const email of emails) {
       const existing = await db.contact.findUnique({
         where: { artistId_email: { artistId, email } },
+        include: { artist: true },
       });
+
+      if (existing?.source === "sheet") {
+        let sheetUpdate: Awaited<
+          ReturnType<typeof updateContactInSheet>
+        > | null = null;
+        try {
+          sheetUpdate = await updateContactInSheet({
+            artistName: existing.artist.name,
+            oldEmail: existing.email ?? email,
+            newEmail: email,
+            sourceKey: existing.sourceKey,
+            managerName: name,
+            role,
+            customPrice,
+            notes,
+          });
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          sheetErrors.push(`${email}: ${message.slice(0, 80)}`);
+          continue;
+        }
+
+        try {
+          await db.contact.update({
+            where: { id: existing.id },
+            data: {
+              phone,
+              name,
+              role,
+              customPrice,
+              notes,
+              sourceKey: sheetUpdate.sourceKey,
+              sourceSyncedAt: new Date(),
+              state: "active",
+            },
+          });
+          updatedCount++;
+        } catch (error) {
+          let rollbackError: string | null = null;
+          try {
+            await updateContactInSheet({
+              artistName: existing.artist.name,
+              oldEmail: email,
+              newEmail: existing.email ?? email,
+              sourceKey: sheetUpdate.sourceKey,
+              managerName: existing.name,
+              role: existing.role,
+              customPrice: existing.customPrice,
+              notes: existing.notes,
+            });
+          } catch (rollback) {
+            rollbackError =
+              rollback instanceof Error ? rollback.message : String(rollback);
+          }
+          const databaseError =
+            error instanceof Error ? error.message : String(error);
+          console.error(
+            JSON.stringify({
+              event: "contact_sheet_database_divergence",
+              contactId: existing.id,
+              databaseError,
+              rollbackError,
+            })
+          );
+          sheetErrors.push(
+            `${email}: ${
+              rollbackError
+                ? `database update and Sheet rollback failed: ${rollbackError}`
+                : `database update failed; Sheet rolled back: ${databaseError}`
+            }`.slice(0, 160)
+          );
+        }
+        continue;
+      }
 
       const contact = await db.contact.upsert({
         where: { artistId_email: { artistId, email } },
         create: { artistId, email, phone, name, role, customPrice, notes, source: "manual" },
-        update: { phone, name, role, customPrice, notes },
+        update: { phone, name, role, customPrice, notes, state: "active" },
         include: { artist: true },
       });
 
@@ -68,13 +189,22 @@ async function createContacts(formData: FormData) {
       } else {
         createdCount++;
         try {
-          await appendContactToSheet({
+          const appended = await appendContactToSheet({
             artistName: contact.artist.name,
             email,
             managerName: name,
             role,
             customPrice,
             notes,
+          });
+          await db.contact.update({
+            where: { id: contact.id },
+            data: {
+              source: "sheet",
+              sourceKey: appended.sourceKey,
+              sourceSyncedAt: new Date(),
+              state: "active",
+            },
           });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -89,11 +219,14 @@ async function createContacts(formData: FormData) {
   revalidatePath("/settings/contacts");
   revalidatePath("/");
 
-  const params = new URLSearchParams();
-  params.set("added", String(createdCount));
-  if (updatedCount > 0) params.set("updated", String(updatedCount));
-  if (sheetErrors.length) params.set("sheet_errors", sheetErrors.slice(0, 2).join(" | "));
-  redirect(`/dashboard?${params.toString()}`);
+  const results: Record<string, string> = {
+    added: String(createdCount),
+  };
+  if (updatedCount > 0) results.updated = String(updatedCount);
+  if (sheetErrors.length) {
+    results.sheet_errors = sheetErrors.slice(0, 2).join(" | ");
+  }
+  redirect(appendWorkflowResult(returnTo, results));
 }
 
 export default async function AddContactPage({
@@ -101,24 +234,27 @@ export default async function AddContactPage({
   searchParams,
 }: {
   params: Promise<{ artistId: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{
+    error?: SearchParamValue;
+    returnTo?: SearchParamValue;
+  }>;
 }) {
   const { artistId } = await params;
-  const { error } = await searchParams;
-  const artist = await db.artist.findUnique({
-    where: { id: artistId },
-    include: { contacts: true, shows: { include: { show: true } } },
-  });
+  const search = await searchParams;
+  const error = firstSearchParam(search.error);
+  const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
+  const artist = await getArtistForContact(artistId);
   if (!artist) return notFound();
 
+  const today = easternTodayStoredDate();
   const upcomingShows = artist.shows
     .map((sa) => sa.show)
-    .filter((s) => s.date >= new Date())
+    .filter((s) => s.date >= today && s.syncStatus === "active")
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
-      <Link href="/dashboard" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Dashboard</Link>
+      <Link href={safeReturnTo} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Back</Link>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">Add contacts</h1>
       <p className="mt-1 text-sm text-zinc-500">
         Artist: <b>{artist.name}</b>
@@ -138,7 +274,9 @@ export default async function AddContactPage({
             <ul className="mt-2 space-y-1 text-sm">
               {artist.contacts.map((c) => (
                 <li key={c.id}>
-                  {c.name ? `${c.name} · ` : ""}{c.email}{c.role ? ` · ${c.role}` : ""}
+                  {c.name ? `${c.name} · ` : ""}
+                  {c.email ?? c.phone ?? "(no contact info)"}
+                  {c.role ? ` · ${c.role}` : ""}
                 </li>
               ))}
             </ul>
@@ -160,6 +298,7 @@ export default async function AddContactPage({
         <CardBody>
           <form action={createContacts} className="space-y-4">
             <input type="hidden" name="artistId" value={artistId} />
+            <input type="hidden" name="returnTo" value={safeReturnTo} />
             <TextArea
               name="emails"
               label="Emails (optional if phone given)"
@@ -178,8 +317,13 @@ export default async function AddContactPage({
               names/roles/rates, save them, then edit each via the dashboard.
             </p>
             <div className="flex gap-2">
-              <Button type="submit" variant="primary">Save contacts</Button>
-              <LinkButton href="/dashboard" variant="secondary">Cancel</LinkButton>
+              <PendingSubmitButton
+                variant="primary"
+                pendingLabel="Saving…"
+              >
+                Save contacts
+              </PendingSubmitButton>
+              <LinkButton href={safeReturnTo} variant="secondary">Cancel</LinkButton>
             </div>
           </form>
         </CardBody>

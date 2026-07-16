@@ -1,9 +1,14 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
+import { withWorkflowReturnTo } from "@/lib/workflowLinks";
+import { formatShowDate } from "@/lib/formatDate";
+import { formatRankLabel } from "@/lib/listenSignal";
+import { artistModalLoginPath } from "@/components/artist-modal-utils";
 
 interface ArtistData {
   id: string;
@@ -19,7 +24,8 @@ interface ArtistData {
   contacts: {
     id: string;
     name: string | null;
-    email: string;
+    email: string | null;
+    phone: string | null;
     role: string | null;
     customPrice: string | null;
     isFullTeam: boolean;
@@ -35,28 +41,14 @@ interface ArtistData {
   }[];
 }
 
-function formatRankLabel(source: string, rank: number | null): string {
-  const map: Record<string, string> = {
-    statsfm_lifetime: "Stats.fm lifetime",
-    statsfm_months: "Stats.fm 6mo",
-    statsfm_weeks: "Stats.fm 4wk",
-    spotify_top_long: "Spotify all-time",
-    spotify_top_medium: "Spotify 6mo",
-    spotify_top_short: "Spotify 4wk",
-    spotify_recent: "Spotify recent",
-    spotify_followed: "Spotify follow",
-    spotify_playlist: "Spotify playlist",
-  };
-  const nice = map[source] ?? source;
-  return rank ? `${nice} #${rank}` : nice;
-}
-
 export function ArtistLink({
   artistId,
+  returnTo,
   children,
   className,
 }: {
   artistId: string;
+  returnTo?: string;
   children: React.ReactNode;
   className?: string;
 }) {
@@ -73,13 +65,28 @@ export function ArtistLink({
       >
         {children}
       </button>
-      {open && <ArtistModal artistId={artistId} onClose={() => setOpen(false)} />}
+      {open && (
+        <ArtistModal
+          artistId={artistId}
+          returnTo={returnTo}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </>
   );
 }
 
-function ArtistModal({ artistId, onClose }: { artistId: string; onClose: () => void }) {
+function ArtistModal({
+  artistId,
+  returnTo,
+  onClose,
+}: {
+  artistId: string;
+  returnTo?: string;
+  onClose: () => void;
+}) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   const [data, setData] = useState<ArtistData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,18 +94,28 @@ function ArtistModal({ artistId, onClose }: { artistId: string; onClose: () => v
     const dlg = dialogRef.current;
     if (dlg && !dlg.open) dlg.showModal();
     let cancelled = false;
-    fetch(`/api/artists/${artistId}`)
-      .then((r) => r.json())
-      .then((d) => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch(`/api/artists/${artistId}`, {
+          signal: controller.signal,
+        });
+        if (cancelled) return;
+        if (response.status === 401) {
+          window.location.assign(artistModalLoginPath(window.location));
+          return;
+        }
+        const d = await response.json();
         if (cancelled) return;
         if (d.error) setError(d.error);
         else setData(d);
-      })
-      .catch((e) => {
+      } catch (e) {
         if (!cancelled) setError(String(e));
-      });
+      }
+    })();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [artistId]);
 
@@ -115,6 +132,7 @@ function ArtistModal({ artistId, onClose }: { artistId: string; onClose: () => v
   return (
     <dialog
       ref={dialogRef}
+      aria-labelledby={titleId}
       onClick={(e) => {
         // Backdrop click closes
         if (e.target === dialogRef.current) dialogRef.current?.close();
@@ -124,11 +142,18 @@ function ArtistModal({ artistId, onClose }: { artistId: string; onClose: () => v
       <div className="flex items-start justify-between gap-2 border-b border-zinc-100 px-5 py-3 dark:border-zinc-900">
         <div className="flex min-w-0 items-center gap-3">
           {data?.imageUrl && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={data.imageUrl} alt="" className="h-10 w-10 rounded-md object-cover" />
+            <Image
+              src={data.imageUrl}
+              alt=""
+              width={40}
+              height={40}
+              className="h-10 w-10 rounded-md object-cover"
+            />
           )}
           <div className="min-w-0">
-            <p className="truncate font-semibold">{data?.name ?? "Loading…"}</p>
+            <h2 id={titleId} className="truncate font-semibold">
+              {data?.name ?? "Loading…"}
+            </h2>
             {data && (
               <div className="mt-1 flex flex-wrap items-center gap-1">
                 {data.genres.slice(0, 4).map((g) => (
@@ -219,8 +244,18 @@ function ArtistModal({ artistId, onClose }: { artistId: string; onClose: () => v
                         <p className="truncate">
                           {c.name && <b>{c.name}</b>}
                           {c.name ? " · " : ""}
-                          <Link href={`/dashboard/contact/${c.id}`} className="text-zinc-700 hover:underline dark:text-zinc-300">
-                            {c.email}
+                          <Link
+                            href={
+                              returnTo
+                                ? withWorkflowReturnTo(
+                                    `/dashboard/contact/${c.id}`,
+                                    returnTo
+                                  )
+                                : `/dashboard/contact/${c.id}`
+                            }
+                            className="text-zinc-700 hover:underline dark:text-zinc-300"
+                          >
+                            {c.email ?? c.phone ?? "(no contact info)"}
                           </Link>
                           {c.role && <span className="text-zinc-500"> · {c.role}</span>}
                         </p>
@@ -236,7 +271,20 @@ function ArtistModal({ artistId, onClose }: { artistId: string; onClose: () => v
             ) : (
               <p className="text-xs text-zinc-500">
                 No contact yet.{" "}
-                <Link href={`/dashboard/add-contact/${data.id}`} className="underline">Add one</Link>.
+                <Link
+                  href={
+                    returnTo
+                      ? withWorkflowReturnTo(
+                          `/dashboard/add-contact/${data.id}`,
+                          returnTo
+                        )
+                      : `/dashboard/add-contact/${data.id}`
+                  }
+                  className="underline"
+                >
+                  Add one
+                </Link>
+                .
               </p>
             )}
 
@@ -251,7 +299,10 @@ function ArtistModal({ artistId, onClose }: { artistId: string; onClose: () => v
                       <p className="min-w-0 truncate">
                         <span className="font-medium">{s.eventName || s.venueName}</span>
                         <span className="ml-2 text-xs text-zinc-500">
-                          {new Date(s.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                          {formatShowDate(s.date, {
+                            month: "short",
+                            day: "numeric",
+                          })}
                           {" · "}{s.venueName}{s.state ? `, ${s.state}` : ""}
                         </span>
                       </p>
@@ -263,7 +314,14 @@ function ArtistModal({ artistId, onClose }: { artistId: string; onClose: () => v
             )}
 
             <div className="pt-2">
-              <Link href={`/artists/${data.id}`} className="text-xs text-zinc-500 hover:underline">
+              <Link
+                href={
+                  returnTo
+                    ? withWorkflowReturnTo(`/artists/${data.id}`, returnTo)
+                    : `/artists/${data.id}`
+                }
+                className="text-xs text-zinc-500 hover:underline"
+              >
                 Open full page →
               </Link>
             </div>

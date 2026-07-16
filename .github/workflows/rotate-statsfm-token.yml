@@ -2,30 +2,59 @@ name: Rotate Stats.fm token
 
 on:
   schedule:
-    # Sundays at 12:00 UTC — gives plenty of buffer before the ~7-day JWT expiry.
-    - cron: "0 12 * * 0"
+    # Rotate every 2-3 days, well before the ~7-day expiry and away from sync jobs.
+    - cron: "17 3 * * 1,4,6"
   workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: photo-admin-rotate-statsfm-token
+  cancel-in-progress: false
 
 jobs:
   rotate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
-      - name: Install Playwright + tsx
-        run: npm install --no-save playwright@^1.55.0 tsx@^4.22.3
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
 
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        run: npx --no-install playwright install --with-deps chromium
 
-      - name: Rotate token
+      - name: Rotate token with retries
+        shell: bash
         env:
           SPOTIFY_SP_DC: ${{ secrets.SPOTIFY_SP_DC }}
           STATSFM_ROTATE_URL: ${{ secrets.STATSFM_ROTATE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-        run: npx tsx scripts/rotate-statsfm-token.ts
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SPOTIFY_SP_DC}" || -z "${STATSFM_ROTATE_URL}" || -z "${CRON_SECRET}" ]]; then
+            echo "::error::SPOTIFY_SP_DC, STATSFM_ROTATE_URL, and CRON_SECRET secrets are required"
+            exit 1
+          fi
+
+          for attempt in 1 2 3; do
+            if npm run rotate:statsfm-token; then
+              exit 0
+            fi
+
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "::error::Stats.fm token rotation failed after 3 attempts"
+              exit 1
+            fi
+
+            delay=$((attempt * 60))
+            echo "::warning::Rotation attempt ${attempt} failed; retrying in ${delay}s"
+            sleep "${delay}"
+          done

@@ -1,16 +1,25 @@
+import type { Metadata } from "next";
 import { db } from "@/lib/db";
 import { CardLink } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { easternTodayStoredDate } from "@/lib/calendarDate";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Settings" };
 
 export default async function SettingsIndex() {
   const [spotify, statsfm, contactCount, template, showCount, settings] = await Promise.all([
     db.integrationCredential.findUnique({ where: { provider: "spotify" } }),
     db.integrationCredential.findUnique({ where: { provider: "statsfm" } }),
-    db.contact.count(),
+    db.contact.count({ where: { state: "active" } }),
     db.emailTemplate.findFirst({ where: { isDefault: true } }),
-    db.show.count({ where: { date: { gte: new Date() } } }),
+    db.show.count({
+      where: {
+        date: { gte: easternTodayStoredDate() },
+        isFestival: false,
+        syncStatus: "active",
+      },
+    }),
     db.setting.findMany({ where: { key: { in: ["portfolio_url", "default_rate", "venue_blocklist"] } } }),
   ]);
   const settingMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));

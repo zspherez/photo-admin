@@ -1,29 +1,34 @@
+import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { cache } from "react";
 import { db } from "@/lib/db";
-import { Card, CardBody } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatShowDate } from "@/lib/formatDate";
-import { sendNowAction } from "@/app/dashboard/actions";
+import {
+  cancelScheduledAction,
+  sendNowAction,
+} from "@/app/dashboard/actions";
 import { SendButton } from "@/components/send-button";
+import {
+  pickEmailContact,
+  pickPhoneContact,
+} from "@/lib/contactSelection";
+import { isWeekendET } from "@/lib/schedule";
+import { easternTodayStoredDate } from "@/lib/calendarDate";
+import {
+  activeListenSignalWhere,
+  formatRankLabel,
+} from "@/lib/listenSignal";
+import { getOutreachSendabilityBatch } from "@/lib/sendOutreach";
+import { workflowReturnPath } from "@/lib/dashboardReturnUrl";
+import { withWorkflowReturnTo } from "@/lib/workflowLinks";
+import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
+import { isCancellableOutreachStatus } from "@/lib/outreachStatus";
 
 export const dynamic = "force-dynamic";
-
-function formatRankLabel(source: string, rank: number | null): string {
-  const map: Record<string, string> = {
-    statsfm_lifetime: "Stats.fm lifetime",
-    statsfm_months: "Stats.fm 6mo",
-    statsfm_weeks: "Stats.fm 4wk",
-    spotify_top_long: "Spotify all-time",
-    spotify_top_medium: "Spotify 6mo",
-    spotify_top_short: "Spotify 4wk",
-    spotify_recent: "Spotify recent",
-    spotify_followed: "Spotify follow",
-    spotify_playlist: "Spotify playlist",
-  };
-  const nice = map[source] ?? source;
-  return rank ? `${nice} #${rank}` : nice;
-}
 
 interface ExternalLink {
   label: string;
@@ -70,20 +75,69 @@ function getExternalLinks(artist: {
   return links;
 }
 
-export default async function ArtistPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const artist = await db.artist.findUnique({
-    where: { id },
-    include: {
-      listenSignals: { orderBy: { rank: "asc" } },
-      contacts: { orderBy: { updatedAt: "desc" } },
-      playlists: { include: { playlist: true } },
-      shows: {
-        include: { show: true },
-        orderBy: { show: { date: "asc" } },
+const getArtistPageData = cache(async (id: string) => {
+  const now = new Date();
+  const [artist, outreaches] = await Promise.all([
+    db.artist.findUnique({
+      where: { id },
+      include: {
+        listenSignals: {
+          where: activeListenSignalWhere(now),
+          orderBy: { rank: "asc" },
+        },
+        contacts: {
+          where: { state: "active" },
+          orderBy: { updatedAt: "desc" },
+        },
+        playlists: { include: { playlist: true } },
+        shows: {
+          include: { show: true },
+          orderBy: { show: { date: "asc" } },
+        },
       },
-    },
-  });
+    }),
+    db.outreach.findMany({
+      where: {
+        artistId: id,
+        status: {
+          in: [
+            "sent",
+            "scheduled",
+            "retry_scheduled",
+            "queued",
+            "manual_review",
+          ],
+        },
+      },
+      select: { showId: true, status: true },
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+    }),
+  ]);
+  return { artist, outreaches, now };
+});
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const { artist } = await getArtistPageData(id);
+  return { title: artist?.name ?? "Artist" };
+}
+
+export default async function ArtistPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ returnTo?: SearchParamValue }>;
+}) {
+  const { id } = await params;
+  const search = await searchParams;
+  const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
+  const { artist, outreaches, now } = await getArtistPageData(id);
+  const today = easternTodayStoredDate(now);
   if (!artist) return notFound();
 
   const genres: string[] = (() => {
@@ -97,28 +151,45 @@ export default async function ArtistPage({ params }: { params: Promise<{ id: str
   const links = getExternalLinks(artist);
   const upcomingShows = artist.shows
     .map((sa) => sa.show)
-    .filter((s) => s.date >= new Date())
+    .filter((s) => s.date >= today && s.syncStatus === "active")
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
-  const outreaches = await db.outreach.findMany({
-    where: { artistId: artist.id, showId: { in: upcomingShows.map((s) => s.id) } },
-    select: { id: true, showId: true, status: true },
-  });
-  const sentByShow = new Set(
-    outreaches.filter((o) => o.status === "sent" || o.status === "test").map((o) => o.showId),
+  const outreachByShow = new Map<
+    string,
+    (typeof outreaches)[number]
+  >();
+  for (const outreach of outreaches) {
+    if (!outreachByShow.has(outreach.showId)) {
+      outreachByShow.set(outreach.showId, outreach);
+    }
+  }
+  const emailContact = pickEmailContact(artist.contacts);
+  const phoneContact = pickPhoneContact(artist.contacts, emailContact);
+  const weekend = isWeekendET();
+  const sendabilityRows = emailContact
+    ? await getOutreachSendabilityBatch(
+        upcomingShows.map((show) => ({
+          showId: show.id,
+          contactId: emailContact.id,
+        })),
+        now
+      )
+    : [];
+  const sendabilityByShow = new Map(
+    sendabilityRows.map((result) => [result.showId, result])
   );
-  const primaryContact = artist.contacts[0] ?? null;
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
-      <Link href="/dashboard" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Dashboard</Link>
+      <Link href={safeReturnTo} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Back</Link>
 
       <div className="mt-2 flex items-start gap-4">
         {artist.imageUrl && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <Image
             src={artist.imageUrl}
             alt=""
+            width={64}
+            height={64}
             className="h-16 w-16 rounded-lg object-cover"
           />
         )}
@@ -202,7 +273,13 @@ export default async function ArtistPage({ params }: { params: Promise<{ id: str
                       <p className="truncate">
                         {c.name && <b>{c.name}</b>}
                         {c.name ? " · " : ""}
-                        <Link href={`/dashboard/contact/${c.id}`} className="text-zinc-700 hover:underline dark:text-zinc-300">
+                        <Link
+                          href={withWorkflowReturnTo(
+                            `/dashboard/contact/${c.id}`,
+                            safeReturnTo
+                          )}
+                          className="text-zinc-700 hover:underline dark:text-zinc-300"
+                        >
                           {c.email ?? c.phone ?? "(no contact info)"}
                         </Link>
                         {c.role && <span className="text-zinc-500"> · {c.role}</span>}
@@ -226,7 +303,48 @@ export default async function ArtistPage({ params }: { params: Promise<{ id: str
           <Card className="mt-2">
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
               {upcomingShows.map((s) => {
-                const alreadySent = sentByShow.has(s.id);
+                const outreach = outreachByShow.get(s.id);
+                const sendability = sendabilityByShow.get(s.id);
+                const alreadySent =
+                  sendability?.blockingStatus === "sent" ||
+                  outreach?.status === "sent";
+                const scheduledInfo =
+                  isCancellableOutreachStatus(
+                    sendability?.blockingStatus
+                  ) &&
+                  sendability.blockingOutreachId
+                    ? {
+                        outreachId: sendability.blockingOutreachId,
+                        scheduledLabel: sendability.blockingNextAttemptAt
+                          ? `${
+                              sendability.blockingStatus === "retry_scheduled"
+                                ? "Retry"
+                                : "Scheduled"
+                            } · ${sendability.blockingNextAttemptAt.toLocaleString(
+                              "en-US",
+                              {
+                                timeZone: "America/New_York",
+                                weekday: "short",
+                                hour: "numeric",
+                                minute: "2-digit",
+                                hour12: true,
+                              }
+                            )}`
+                          : sendability.blockingStatus === "retry_scheduled"
+                            ? "Retry scheduled"
+                            : "Scheduled",
+                      }
+                    : null;
+                const emailDisabledLabel =
+                  !sendability || sendability.sendable || scheduledInfo
+                    ? undefined
+                    : sendability.blockingStatus === "queued"
+                      ? "In progress"
+                      : sendability.blockingStatus === "manual_review"
+                        ? "Review"
+                        : sendability.blockingStatus === "retry_scheduled"
+                          ? "Retry scheduled"
+                        : "Unavailable";
                 return (
                   <li key={s.id} className="flex items-center justify-between gap-2 px-4 py-3 text-sm">
                     <Link
@@ -243,14 +361,22 @@ export default async function ArtistPage({ params }: { params: Promise<{ id: str
                     </Link>
                     <div className="flex shrink-0 items-center gap-1.5">
                       {s.isFestival && <Badge tone="accent" size="xs">Festival</Badge>}
-                      {primaryContact && (
+                      {(emailContact || phoneContact) && (
                         <SendButton
                           showId={s.id}
-                          contactId={primaryContact.id}
-                          contactName={primaryContact.name}
-                          phone={primaryContact.phone}
+                          contactId={emailContact?.id ?? null}
+                          contactName={emailContact?.name ?? null}
+                          phone={phoneContact?.phone ?? null}
+                          phoneContactName={phoneContact?.name ?? null}
                           alreadySent={alreadySent}
+                          emailDisabledLabel={emailDisabledLabel}
+                          emailDisabledReason={sendability?.reason ?? undefined}
+                          isRetry={sendability?.mode === "retry"}
+                          isWeekend={weekend}
+                          scheduledInfo={scheduledInfo}
+                          returnTo={safeReturnTo}
                           action={sendNowAction}
+                          cancelAction={cancelScheduledAction}
                         />
                       )}
                     </div>
@@ -265,7 +391,16 @@ export default async function ArtistPage({ params }: { params: Promise<{ id: str
       {artist.contacts.length === 0 && (
         <p className="mt-6 text-xs text-zinc-500">
           No contact yet.{" "}
-          <Link href={`/dashboard/add-contact/${artist.id}`} className="underline">Add one</Link>.
+          <Link
+            href={withWorkflowReturnTo(
+              `/dashboard/add-contact/${artist.id}`,
+              safeReturnTo
+            )}
+            className="underline"
+          >
+            Add one
+          </Link>
+          .
         </p>
       )}
     </main>

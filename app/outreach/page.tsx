@@ -1,24 +1,49 @@
+import type { Metadata } from "next";
+import type { Prisma } from "@prisma/client";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { Card } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { ArtistLink } from "@/components/artist-modal";
 import { cn } from "@/lib/cn";
 import { formatShowDate } from "@/lib/formatDate";
+import { getPagination } from "@/lib/match";
+import {
+  firstSearchParam,
+  positiveIntegerSearchParam,
+  validatedTrimmedSearchParam,
+  type SearchParamValue,
+} from "@/lib/searchParams";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Outreach log" };
 
-type StatusFilter = "all" | "sent" | "delivered" | "opened" | "clicked" | "test" | "failed" | "scheduled";
+const OUTREACH_PAGE_SIZE = 50;
+
+type StatusFilter =
+  | "all"
+  | "sent"
+  | "delivered"
+  | "opened"
+  | "clicked"
+  | "test"
+  | "failed"
+  | "manual_review"
+  | "retry_scheduled"
+  | "scheduled";
 
 const STATUS_OPTIONS: { key: StatusFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "scheduled", label: "Scheduled" },
+  { key: "retry_scheduled", label: "Retry scheduled" },
   { key: "sent", label: "Sent" },
   { key: "delivered", label: "Delivered" },
   { key: "opened", label: "Opened" },
   { key: "clicked", label: "Clicked" },
   { key: "test", label: "Test" },
   { key: "failed", label: "Failed" },
+  { key: "manual_review", label: "Manual review" },
 ];
 
 interface OutreachLike {
@@ -31,8 +56,10 @@ interface OutreachLike {
 
 function statusLabels(o: OutreachLike): string[] {
   if (o.status === "failed") return ["Failed"];
+  if (o.status === "manual_review") return ["Manual review"];
   if (o.status === "queued") return ["Queued"];
   if (o.status === "scheduled") return ["Scheduled"];
+  if (o.status === "retry_scheduled") return ["Retry scheduled"];
   if (o.status === "cancelled") return ["Cancelled"];
   const labels: string[] = [];
   if (o.status === "test") labels.push("Test sent");
@@ -45,8 +72,11 @@ function statusLabels(o: OutreachLike): string[] {
 
 function statusTone(o: OutreachLike): BadgeTone {
   if (o.status === "failed") return "danger";
+  if (o.status === "manual_review") return "warning";
   if (o.status === "cancelled") return "default";
-  if (o.status === "scheduled") return "warning";
+  if (o.status === "scheduled" || o.status === "retry_scheduled") {
+    return "warning";
+  }
   if (o.clickCount > 0) return "info";
   if (o.openCount > 0) return "info";
   if (o.deliveredAt) return "success";
@@ -54,12 +84,17 @@ function statusTone(o: OutreachLike): BadgeTone {
   return "default";
 }
 
-function buildWhere(status: StatusFilter, search: string) {
-  const where: Record<string, unknown> = {};
+function buildWhere(
+  status: StatusFilter,
+  search: string
+): Prisma.OutreachWhereInput {
+  const where: Prisma.OutreachWhereInput = {};
   if (status === "sent") where.status = "sent";
   else if (status === "scheduled") where.status = "scheduled";
+  else if (status === "retry_scheduled") where.status = "retry_scheduled";
   else if (status === "test") where.status = "test";
   else if (status === "failed") where.status = "failed";
+  else if (status === "manual_review") where.status = "manual_review";
   else if (status === "delivered") where.deliveredAt = { not: null };
   else if (status === "opened") where.openCount = { gt: 0 };
   else if (status === "clicked") where.clickCount = { gt: 0 };
@@ -69,28 +104,48 @@ function buildWhere(status: StatusFilter, search: string) {
   return where;
 }
 
+function outreachHref(
+  status: StatusFilter,
+  search: string,
+  page = 1
+): string {
+  const params = new URLSearchParams();
+  if (status !== "all") params.set("status", status);
+  if (search) params.set("search", search);
+  if (page > 1) params.set("page", String(page));
+  const query = params.toString();
+  return query ? `/outreach?${query}` : "/outreach";
+}
+
 export default async function OutreachLogPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; search?: string }>;
+  searchParams: Promise<{
+    status?: SearchParamValue;
+    search?: SearchParamValue;
+    page?: SearchParamValue;
+  }>;
 }) {
   const sp = await searchParams;
-  const status = (STATUS_OPTIONS.find((s) => s.key === sp.status)?.key ?? "all") as StatusFilter;
-  const search = (sp.search ?? "").trim();
+  const requestedStatus = firstSearchParam(sp.status);
+  const status = (STATUS_OPTIONS.find((s) => s.key === requestedStatus)?.key ??
+    "all") as StatusFilter;
+  const search =
+    validatedTrimmedSearchParam(sp.search, { maxLength: 200 }) ?? "";
+  const requestedPage = positiveIntegerSearchParam(sp.page);
 
   const where = buildWhere(status, search);
 
-  const [outreach, totalAll, totalSent, totalDelivered, totalOpened, totalClicked, totalFailed] = await Promise.all([
-    db.outreach.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      take: 300,
-      include: {
-        show: true,
-        artist: true,
-        contact: true,
-      },
-    }),
+  const [
+    filteredTotal,
+    totalAll,
+    totalSent,
+    totalDelivered,
+    totalOpened,
+    totalClicked,
+    totalFailed,
+  ] = await Promise.all([
+    db.outreach.count({ where }),
     db.outreach.count(),
     db.outreach.count({ where: { status: "sent" } }),
     db.outreach.count({ where: { deliveredAt: { not: null } } }),
@@ -98,6 +153,51 @@ export default async function OutreachLogPage({
     db.outreach.count({ where: { clickCount: { gt: 0 } } }),
     db.outreach.count({ where: { status: "failed" } }),
   ]);
+  const pagination = getPagination(
+    filteredTotal,
+    requestedPage,
+    OUTREACH_PAGE_SIZE
+  );
+  if (pagination.page !== requestedPage) {
+    redirect(outreachHref(status, search, pagination.page));
+  }
+  const outreach = await db.outreach.findMany({
+    where,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    skip: (pagination.page - 1) * OUTREACH_PAGE_SIZE,
+    take: OUTREACH_PAGE_SIZE,
+    select: {
+      id: true,
+      artistId: true,
+      status: true,
+      sentAt: true,
+      createdAt: true,
+      nextAttemptAt: true,
+      deliveredAt: true,
+      openCount: true,
+      clickCount: true,
+      error: true,
+      show: {
+        select: {
+          id: true,
+          isFestival: true,
+          eventName: true,
+          venueName: true,
+          date: true,
+        },
+      },
+      artist: { select: { name: true } },
+      contact: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          state: true,
+        },
+      },
+    },
+  });
 
   const stats = [
     { label: "Total", value: totalAll },
@@ -144,14 +244,10 @@ export default async function OutreachLogPage({
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           <span className="mr-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Status</span>
           {STATUS_OPTIONS.map((opt) => {
-            const params = new URLSearchParams();
-            if (opt.key !== "all") params.set("status", opt.key);
-            if (search) params.set("search", search);
-            const qs = params.toString();
             return (
               <Link
                 key={opt.key}
-                href={qs ? `/outreach?${qs}` : "/outreach"}
+                href={outreachHref(opt.key, search)}
                 className={cn(
                   "rounded-full px-2.5 py-0.5 text-xs font-medium transition",
                   status === opt.key
@@ -171,11 +267,32 @@ export default async function OutreachLogPage({
           {totalAll === 0 ? "No outreach yet. Send your first one from the dashboard." : "No outreach matches this filter."}
         </div>
       ) : (
-        <Card className="mt-6">
-          <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
+        <>
+          <div className="mt-5 flex items-center justify-between gap-3 text-xs text-zinc-500">
+            <span>
+              {pagination.start}–{pagination.end} of {pagination.total}
+            </span>
+            <span>
+              Page {pagination.page} of {pagination.pageCount}
+            </span>
+          </div>
+          <Card className="mt-3">
+            <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
             {outreach.map((o) => {
               const sentDate = o.sentAt ?? o.createdAt;
-              const showHref = o.show.isFestival ? `/festivals/${o.show.id}` : "/dashboard";
+              const activeContact =
+                o.contact?.state === "active" ? o.contact : null;
+              const showLabel = (
+                <>
+                  {o.show.eventName || o.show.venueName}
+                  {" · "}
+                  {formatShowDate(o.show.date, {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  })}
+                </>
+              );
               return (
                 <li key={o.id} className="px-4 py-3">
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -188,23 +305,52 @@ export default async function OutreachLogPage({
                         {o.show.isFestival && <Badge tone="accent" size="xs">Festival</Badge>}
                       </div>
                       <p className="mt-0.5 truncate text-xs text-zinc-500">
-                        <Link href={showHref} className="hover:underline">
-                          {o.show.eventName || o.show.venueName}
-                          {" · "}
-                          {formatShowDate(o.show.date, { month: "short", day: "numeric", year: "numeric" })}
-                        </Link>
-                        {" · "}
-                        {o.contact ? (
-                          <Link href={`/dashboard/contact/${o.contact.id}`} className="hover:underline">
-                            {o.contact.name ? `${o.contact.name} <${o.contact.email}>` : o.contact.email}
+                        {o.show.isFestival ? (
+                          <Link
+                            href={`/festivals/${o.show.id}`}
+                            className="hover:underline"
+                          >
+                            {showLabel}
                           </Link>
                         ) : (
-                          <span className="italic text-zinc-400">no contact</span>
+                          <span>{showLabel}</span>
+                        )}
+                        {" · "}
+                        {activeContact ? (
+                          <Link href={`/dashboard/contact/${activeContact.id}`} className="hover:underline">
+                            {activeContact.name
+                              ? `${activeContact.name} <${
+                                  activeContact.email ??
+                                  activeContact.phone ??
+                                  "no address"
+                                }>`
+                              : activeContact.email ??
+                                activeContact.phone ??
+                                "no contact address"}
+                          </Link>
+                        ) : (
+                          <span className="italic text-zinc-400">
+                            no active contact
+                          </span>
                         )}
                       </p>
                       {o.error && (
                         <p className="mt-0.5 truncate text-xs text-red-700 dark:text-red-400">
                           Error: {o.error}
+                        </p>
+                      )}
+                      {o.status === "retry_scheduled" && o.nextAttemptAt && (
+                        <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
+                          Next attempt:{" "}
+                          {o.nextAttemptAt.toLocaleString("en-US", {
+                            timeZone: "America/New_York",
+                            weekday: "short",
+                            month: "short",
+                            day: "numeric",
+                            hour: "numeric",
+                            minute: "2-digit",
+                            hour12: true,
+                          })}
                         </p>
                       )}
                     </div>
@@ -215,8 +361,39 @@ export default async function OutreachLogPage({
                 </li>
               );
             })}
-          </ul>
-        </Card>
+            </ul>
+          </Card>
+          {pagination.pageCount > 1 && (
+            <nav
+              aria-label="Outreach log pages"
+              className="mt-5 flex items-center justify-between gap-3"
+            >
+              {pagination.hasPrevious ? (
+                <Link
+                  href={outreachHref(status, search, pagination.page - 1)}
+                  className="inline-flex h-9 items-center justify-center rounded-md border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+                >
+                  ← Previous
+                </Link>
+              ) : (
+                <span />
+              )}
+              <span className="text-xs text-zinc-500">
+                Page {pagination.page} of {pagination.pageCount}
+              </span>
+              {pagination.hasNext ? (
+                <Link
+                  href={outreachHref(status, search, pagination.page + 1)}
+                  className="inline-flex h-9 items-center justify-center rounded-md border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+                >
+                  Next →
+                </Link>
+              ) : (
+                <span />
+              )}
+            </nav>
+          )}
+        </>
       )}
     </main>
   );

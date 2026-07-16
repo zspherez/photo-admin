@@ -3,7 +3,8 @@
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { insertTextAtSelection } from "./template-editor-utils";
 
 type View = "visual" | "html" | "preview";
 
@@ -17,6 +18,7 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
   const [subject, setSubject] = useState(initialSubject);
   const [html, setHtml] = useState(initialHtml);
   const [view, setView] = useState<View>("visual");
+  const htmlTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const editor = useEditor({
     extensions: [
@@ -28,6 +30,7 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
     onUpdate: ({ editor }) => setHtml(editor.getHTML()),
     editorProps: {
       attributes: {
+        "aria-label": "Email template visual editor",
         class:
           "prose prose-sm max-w-none min-h-[300px] rounded-md border border-zinc-300 bg-white px-3 py-2 dark:prose-invert dark:border-zinc-700 dark:bg-zinc-900 focus:outline-none focus:ring-1 focus:ring-emerald-500",
       },
@@ -42,8 +45,26 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
   }, [view, editor, html]);
 
   const insertVar = (v: string) => {
-    if (!editor) return;
-    editor.chain().focus().insertContent(`{{${v}}}`).run();
+    const insertion = `{{${v}}}`;
+    if (view === "html") {
+      const textarea = htmlTextareaRef.current;
+      const result = insertTextAtSelection(
+        html,
+        insertion,
+        textarea?.selectionStart ?? html.length,
+        textarea?.selectionEnd ?? html.length,
+      );
+      setHtml(result.value);
+      requestAnimationFrame(() => {
+        const current = htmlTextareaRef.current;
+        current?.focus();
+        current?.setSelectionRange(result.cursor, result.cursor);
+      });
+      return;
+    }
+    if (view === "visual" && editor) {
+      editor.chain().focus().insertContent(insertion).run();
+    }
   };
 
   const setLink = () => {
@@ -73,7 +94,11 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-1 rounded-md border border-zinc-200 p-1 dark:border-zinc-800">
+      <div
+        role="toolbar"
+        aria-label="Template editor controls"
+        className="flex flex-wrap items-center gap-1 rounded-md border border-zinc-200 p-1 dark:border-zinc-800"
+      >
         <Tab active={view === "visual"} onClick={() => setView("visual")}>Visual</Tab>
         <Tab active={view === "html"} onClick={() => setView("html")}>HTML</Tab>
         <Tab active={view === "preview"} onClick={() => setView("preview")}>Preview</Tab>
@@ -120,9 +145,11 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
             </ToolbarBtn>
           </>
         )}
-        {variables.length > 0 && (
+        {variables.length > 0 &&
+          (view === "html" || (view === "visual" && editor)) && (
           <div className="ml-auto">
             <select
+              aria-label="Insert template variable"
               onChange={(e) => {
                 const v = e.target.value;
                 if (!v) return;
@@ -145,6 +172,8 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
 
       {view === "html" && (
         <textarea
+          ref={htmlTextareaRef}
+          aria-label="Email template HTML"
           value={html}
           onChange={(e) => setHtml(e.target.value)}
           rows={20}
@@ -153,9 +182,11 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
       )}
 
       {view === "preview" && (
-        <div
-          className="prose prose-sm max-w-none rounded-md border border-zinc-200 bg-white p-4 dark:prose-invert dark:border-zinc-800 dark:bg-zinc-900"
-          dangerouslySetInnerHTML={{ __html: html }}
+        <iframe
+          title="Email HTML preview"
+          sandbox=""
+          srcDoc={html}
+          className="min-h-[360px] w-full rounded-md border border-zinc-200 bg-white dark:border-zinc-800"
         />
       )}
     </div>
@@ -166,6 +197,7 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
   return (
     <button
       type="button"
+      aria-pressed={active}
       onClick={onClick}
       className={`rounded px-2.5 py-1 text-xs font-medium ${
         active
@@ -192,6 +224,8 @@ function ToolbarBtn({
   return (
     <button
       type="button"
+      aria-label={title}
+      aria-pressed={active}
       onClick={onClick}
       title={title}
       className={`rounded px-2 py-1 text-xs ${

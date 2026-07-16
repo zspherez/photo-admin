@@ -1,34 +1,50 @@
+import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
-import { SESSION_COOKIE, expectedSessionHash, constantTimeEqual } from "@/lib/auth";
+import {
+  SESSION_COOKIE,
+  SESSION_COOKIE_MAX_AGE_SECONDS,
+  constantTimeEqual,
+  createSessionToken,
+  getAuthConfiguration,
+  sanitizeNextPath,
+} from "@/lib/auth";
 import { Card, CardBody } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Sign in" };
 
 async function login(formData: FormData) {
   "use server";
-  const password = ((formData.get("password") as string) ?? "").trim();
-  const next = ((formData.get("next") as string) ?? "/").trim() || "/";
-  const expected = await expectedSessionHash();
-  if (expected === null) redirect(next);
+  const submittedPassword = formData.get("password");
+  const password = typeof submittedPassword === "string" ? submittedPassword.trim() : "";
+  const next = sanitizeNextPath(formData.get("next"));
+  const configuration = getAuthConfiguration();
+  if (configuration.mode === "open") redirect(next);
+  if (configuration.mode === "misconfigured") {
+    redirect(`/login?error=config&next=${encodeURIComponent(next)}`);
+  }
 
-  const enc = new TextEncoder();
-  const buf = await crypto.subtle.digest("SHA-256", enc.encode(password + ":photo-admin-session-v1"));
-  const submitted = Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-
-  if (!constantTimeEqual(submitted, expected)) {
+  const expected = process.env.ADMIN_PASSWORD!;
+  if (!(await constantTimeEqual(password, expected))) {
     redirect(`/login?error=invalid${next ? `&next=${encodeURIComponent(next)}` : ""}`);
   }
+
+  const sessionToken = await createSessionToken();
+  if (!sessionToken) {
+    redirect(`/login?error=config&next=${encodeURIComponent(next)}`);
+  }
+
   const jar = await cookies();
-  jar.set(SESSION_COOKIE, expected, {
+  jar.set(SESSION_COOKIE, sessionToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30, // 30 days
+    maxAge: SESSION_COOKIE_MAX_AGE_SECONDS,
   });
   redirect(next);
 }
@@ -36,10 +52,16 @@ async function login(formData: FormData) {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string; error?: string }>;
+  searchParams: Promise<{
+    next?: SearchParamValue;
+    error?: SearchParamValue;
+  }>;
 }) {
-  const { next, error } = await searchParams;
-  const pwSet = !!process.env.ADMIN_PASSWORD;
+  const rawSearchParams = await searchParams;
+  const next = firstSearchParam(rawSearchParams.next);
+  const error = firstSearchParam(rawSearchParams.error);
+  const safeNext = sanitizeNextPath(next);
+  const configuration = getAuthConfiguration();
   return (
     <main className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col items-center justify-center px-6">
       <div className="mb-8 flex items-center gap-2">
@@ -49,35 +71,59 @@ export default async function LoginPage({
       <Card className="w-full">
         <CardBody>
           <h2 className="text-sm font-medium">Sign in</h2>
-          <p className="mt-1 text-xs text-zinc-500">Enter the admin password to continue.</p>
+          <p className="mt-1 text-xs text-zinc-500">
+            {configuration.mode === "protected"
+              ? "Enter the admin password to continue."
+              : "Authentication status for this environment."}
+          </p>
 
-          {!pwSet && (
+          {configuration.mode === "open" && (
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-              <code>ADMIN_PASSWORD</code> not set — auth is disabled.
+              Explicit local open mode is active. No password is required.
             </div>
           )}
-          {error && (
+          {configuration.mode === "misconfigured" && (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+              {configuration.error}
+            </div>
+          )}
+          {error === "invalid" && (
             <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
               Incorrect password.
             </div>
           )}
+          {error === "config" && (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+              Authentication is not fully configured.
+            </div>
+          )}
 
-          <form action={login} className="mt-4 space-y-3">
-            <input type="hidden" name="next" value={next ?? "/"} />
-            <input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              autoFocus
-              required
-              placeholder="Password"
-              className="block h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950"
-            />
-            <Button type="submit" variant="primary" size="md" className="w-full">
-              Sign in
-            </Button>
-          </form>
+          {configuration.mode === "protected" && (
+            <form action={login} className="mt-4 space-y-3">
+              <input type="hidden" name="next" value={safeNext} />
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                autoFocus
+                required
+                placeholder="Password"
+                className="block h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950"
+              />
+              <Button type="submit" variant="primary" size="md" className="w-full">
+                Sign in
+              </Button>
+            </form>
+          )}
+          {configuration.mode === "open" && (
+            <Link
+              href={safeNext}
+              className="mt-4 inline-flex h-9 w-full items-center justify-center rounded-md bg-zinc-900 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+            >
+              Continue
+            </Link>
+          )}
         </CardBody>
       </Card>
     </main>

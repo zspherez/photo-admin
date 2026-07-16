@@ -1,0 +1,1213 @@
+name: Release production
+
+run-name: Release ${{ inputs.revision }} by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Full 40-character commit SHA from main
+        required: true
+        type: string
+      confirmation:
+        description: Type RELEASE to confirm the maintenance window
+        required: true
+        type: string
+      sheet_target_change_confirmation:
+        description: Type CONFIRM only when intentionally replacing the stored Sheet target
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: photo-admin-release-production
+  cancel-in-progress: false
+
+env:
+  VERCEL_CLI_VERSION: "56.2.1"
+
+jobs:
+  trust:
+    name: Validate trusted main dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+      main_sha: ${{ steps.validate.outputs.main_sha }}
+    steps:
+      - name: Reject untrusted repository or ref
+        shell: bash
+        env:
+          EVENT_REPOSITORY: ${{ github.event.repository.full_name }}
+          EVENT_REPOSITORY_FORK: ${{ github.event.repository.fork }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" \
+            || "${GITHUB_REPOSITORY}" != "zspherez/photo-admin" \
+            || "${EVENT_REPOSITORY}" != "zspherez/photo-admin" \
+            || "${EVENT_REPOSITORY_FORK}" != "false" \
+            || "${GITHUB_REF}" != "refs/heads/main" \
+            || "${GITHUB_REF_TYPE}" != "branch" \
+            || "${GITHUB_REF_NAME}" != "main" \
+            || "${WORKFLOW_REF}" != "zspherez/photo-admin/.github/workflows/release-production.yml@refs/heads/main" ]]; then
+            echo "::error::Production releases must be dispatched from refs/heads/main in zspherez/photo-admin using the trusted main workflow."
+            exit 1
+          fi
+
+      - name: Check out trusted main without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate requested revision against trusted main
+        id: validate
+        shell: bash
+        env:
+          REQUESTED_REVISION: ${{ inputs.revision }}
+          RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+          SHEET_TARGET_CHANGE_CONFIRMATION: ${{ inputs.sheet_target_change_confirmation }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${REQUESTED_REVISION}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::revision must be a full 40-character commit SHA"
+            exit 1
+          fi
+          if [[ "${RELEASE_CONFIRMATION}" != "RELEASE" ]]; then
+            echo "::error::confirmation must be exactly RELEASE"
+            exit 1
+          fi
+          if [[ -n "${SHEET_TARGET_CHANGE_CONFIRMATION}" \
+            && "${SHEET_TARGET_CHANGE_CONFIRMATION}" != "CONFIRM" ]]; then
+            echo "::error::sheet_target_change_confirmation must be blank or exactly CONFIRM"
+            exit 1
+          fi
+          if [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::trusted workflow SHA is unavailable"
+            exit 1
+          fi
+
+          main_sha="$(git rev-parse HEAD^{commit})"
+          workflow_sha="$(git rev-parse "${WORKFLOW_SHA}^{commit}")"
+          release_sha="$(git rev-parse "${REQUESTED_REVISION}^{commit}")"
+          if [[ "${WORKFLOW_SHA,,}" != "${workflow_sha}" ]] \
+            || ! git merge-base --is-ancestor "${workflow_sha}" "${main_sha}"; then
+            echo "::error::workflow code is not an exact commit from trusted main"
+            exit 1
+          fi
+          if [[ "${REQUESTED_REVISION,,}" != "${release_sha}" ]] \
+            || ! git merge-base --is-ancestor "${release_sha}" "${main_sha}"; then
+            echo "::error::revision must be an exact commit reachable from trusted main"
+            exit 1
+          fi
+
+          {
+            echo "release_sha=${release_sha}"
+            echo "main_sha=${main_sha}"
+          } >> "${GITHUB_OUTPUT}"
+
+  recovery_preflight:
+    name: Validate dedicated recovery environment
+    needs: trust
+    if: >-
+      ${{
+        needs.trust.result == 'success' &&
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main' &&
+        github.repository == 'zspherez/photo-admin' &&
+        github.event.repository.full_name == 'zspherez/photo-admin' &&
+        github.event.repository.fork == false &&
+        github.workflow_ref == 'zspherez/photo-admin/.github/workflows/release-production.yml@refs/heads/main'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: production-recovery
+    outputs:
+      project_fingerprint: ${{ steps.credentials.outputs.project_fingerprint }}
+    steps:
+      - name: Validate production-recovery credentials and project access
+        id: credentials
+        shell: bash
+        timeout-minutes: 2
+        env:
+          VERCEL_TOKEN: ${{ secrets.RECOVERY_VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.RECOVERY_VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.RECOVERY_VERCEL_PROJECT_ID }}
+          RECOVERY_ENVIRONMENT_GUARD: ${{ vars.RECOVERY_ENVIRONMENT_GUARD }}
+        run: |
+          set -euo pipefail
+          if [[ "${RECOVERY_ENVIRONMENT_GUARD}" != "production-recovery-main-only-v1" ]]; then
+            echo "::error::The production-recovery environment guard is missing. Configure RECOVERY_ENVIRONMENT_GUARD on the main-only environment before releasing."
+            exit 1
+          fi
+          if [[ -z "${VERCEL_TOKEN}" \
+            || -z "${VERCEL_ORG_ID}" \
+            || -z "${VERCEL_PROJECT_ID}" ]]; then
+            echo "::error::The production-recovery environment is missing RECOVERY_VERCEL_TOKEN, RECOVERY_VERCEL_ORG_ID, or RECOVERY_VERCEL_PROJECT_ID. Configure the main-only environment before releasing."
+            exit 1
+          fi
+          if [[ ! "${VERCEL_ORG_ID}" =~ ^[A-Za-z0-9_-]+$ \
+            || ! "${VERCEL_PROJECT_ID}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            echo "::error::The production-recovery Vercel identifiers are invalid."
+            exit 1
+          fi
+
+          printf -v authorization_header '%s: %s %s' \
+            "Authorization" \
+            "Bearer" \
+            "${VERCEL_TOKEN}"
+          endpoint="https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?teamId=${VERCEL_ORG_ID}"
+          response=""
+          if response="$(
+            curl \
+              --silent \
+              --show-error \
+              --connect-timeout 15 \
+              --max-time 60 \
+              --request GET \
+              --header "${authorization_header}" \
+              --write-out $'\n__PHOTO_ADMIN_HTTP_STATUS__:%{http_code}' \
+              "${endpoint}"
+          )"; then
+            curl_status=0
+          else
+            curl_status=$?
+          fi
+          marker="${response##*$'\n'}"
+          if [[ "${marker}" == __PHOTO_ADMIN_HTTP_STATUS__:* ]]; then
+            http_status="${marker#*:}"
+          else
+            http_status="000"
+          fi
+          if (( curl_status != 0 )) || [[ ! "${http_status}" =~ ^2[0-9]{2}$ ]]; then
+            echo "::error::The production-recovery token cannot access its configured Vercel project (curl ${curl_status}, HTTP ${http_status})."
+            exit 1
+          fi
+
+          project_fingerprint="$(
+            printf '%s\n%s\n' "${VERCEL_ORG_ID}" "${VERCEL_PROJECT_ID}" |
+              sha256sum |
+              cut -d ' ' -f 1
+          )"
+          echo "project_fingerprint=${project_fingerprint}" >> "${GITHUB_OUTPUT}"
+
+  release:
+    name: Stage, cut over, and resume exact revision
+    needs:
+      - trust
+      - recovery_preflight
+    if: >-
+      ${{
+        needs.trust.result == 'success' &&
+        needs.recovery_preflight.result == 'success' &&
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main' &&
+        github.repository == 'zspherez/photo-admin' &&
+        github.event.repository.full_name == 'zspherez/photo-admin' &&
+        github.event.repository.fork == false &&
+        github.workflow_ref == 'zspherez/photo-admin/.github/workflows/release-production.yml@refs/heads/main'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    environment:
+      name: production
+    outputs:
+      release_sha: ${{ steps.revision.outputs.sha }}
+      staged_url: ${{ steps.deploy.outputs.url }}
+      staged_verified: ${{ steps.verify-staged.outputs.verified || steps.initial-state.outputs.staged_verified }}
+      pause_requested: ${{ steps.arm-pause.outputs.pause_requested || steps.initial-state.outputs.pause_requested }}
+      schema_started: ${{ steps.arm-schema.outputs.schema_started || steps.initial-state.outputs.schema_started }}
+      schema_ready: ${{ steps.schema-ready.outputs.schema_ready || steps.initial-state.outputs.schema_ready }}
+      ownership_ready: ${{ steps.ownership-ready.outputs.ownership_ready || steps.initial-state.outputs.ownership_ready }}
+      target_promoted: ${{ steps.promote.outputs.promoted || steps.initial-state.outputs.target_promoted }}
+      resumed: ${{ steps.resume.outputs.resumed || steps.recover-in-job.outputs.resumed || steps.initial-state.outputs.resumed }}
+    steps:
+      - name: Initialize conservative release state
+        id: initial-state
+        shell: bash
+        run: |
+          {
+            echo "staged_verified=false"
+            echo "pause_requested=false"
+            echo "schema_started=false"
+            echo "schema_ready=false"
+            echo "ownership_ready=false"
+            echo "target_promoted=false"
+            echo "resumed=false"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Check out previously validated main revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.trust.outputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify trusted release checkout
+        id: revision
+        shell: bash
+        env:
+          TRUSTED_RELEASE_SHA: ${{ needs.trust.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+
+          actual_revision="$(git rev-parse HEAD)"
+          if [[ "${TRUSTED_RELEASE_SHA}" != "${actual_revision}" ]]; then
+            echo "::error::checked-out revision does not match the previously validated main SHA"
+            exit 1
+          fi
+
+          echo "sha=${actual_revision}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install project dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Generate Prisma Client
+        run: |
+          database_scheme="postgresql"
+          DATABASE_URL="${database_scheme}://localhost:5432/generate" \
+            DIRECT_URL="${database_scheme}://localhost:5432/generate" \
+            npm run db:generate
+
+      - name: Test, type-check, and lint revision
+        run: |
+          database_scheme="postgresql"
+          export DATABASE_URL="${database_scheme}://localhost:5432/validate"
+          export DIRECT_URL="${database_scheme}://localhost:5432/validate"
+          npm test && npm run typecheck && npm run lint
+
+      - name: Install pinned Vercel CLI
+        run: npm install --global "vercel@${VERCEL_CLI_VERSION}"
+
+      - name: Validate protected environment and recovery target binding
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          RECOVERY_PROJECT_FINGERPRINT: ${{ needs.recovery_preflight.outputs.project_fingerprint }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SHEETS_SPREADSHEET_ID: ${{ vars.SHEETS_SPREADSHEET_ID || secrets.SHEETS_SPREADSHEET_ID }}
+          SHEETS_TAB: ${{ vars.SHEETS_TAB || secrets.SHEETS_TAB }}
+          SHEETS_SPREADSHEET_ID_VARIABLE: ${{ vars.SHEETS_SPREADSHEET_ID }}
+          SHEETS_SPREADSHEET_ID_SECRET: ${{ secrets.SHEETS_SPREADSHEET_ID }}
+          SHEETS_TAB_VARIABLE: ${{ vars.SHEETS_TAB }}
+          SHEETS_TAB_SECRET: ${{ secrets.SHEETS_TAB }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${VERCEL_TOKEN}" || -z "${VERCEL_ORG_ID}" || -z "${VERCEL_PROJECT_ID}" ]]; then
+            echo "::error::VERCEL_TOKEN, VERCEL_ORG_ID, and VERCEL_PROJECT_ID are required"
+            exit 1
+          fi
+          if [[ ! "${VERCEL_ORG_ID}" =~ ^[A-Za-z0-9_-]+$ \
+            || ! "${VERCEL_PROJECT_ID}" =~ ^[A-Za-z0-9_-]+$ \
+            || ! "${RECOVERY_PROJECT_FINGERPRINT}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Production or recovery project identity is invalid"
+            exit 1
+          fi
+          production_project_fingerprint="$(
+            printf '%s\n%s\n' "${VERCEL_ORG_ID}" "${VERCEL_PROJECT_ID}" |
+              sha256sum |
+              cut -d ' ' -f 1
+          )"
+          if [[ "${RECOVERY_PROJECT_FINGERPRINT}" != "${production_project_fingerprint}" ]]; then
+            echo "::error::The production-recovery credentials must target the protected production project"
+            exit 1
+          fi
+          if [[ -z "${DATABASE_URL}" || -z "${DIRECT_URL}" ]]; then
+            echo "::error::DATABASE_URL and DIRECT_URL production environment secrets are required"
+            exit 1
+          fi
+          if [[ -z "${APP_BASE_URL}" || -z "${CRON_SECRET}" ]]; then
+            echo "::error::APP_BASE_URL and CRON_SECRET production environment secrets are required"
+            exit 1
+          fi
+          if [[ ! "${APP_BASE_URL}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]; then
+            echo "::error::APP_BASE_URL must be a production HTTPS origin with no path, query, or fragment"
+            exit 1
+          fi
+          if [[ -n "${SHEETS_SPREADSHEET_ID_VARIABLE}" \
+            && -n "${SHEETS_SPREADSHEET_ID_SECRET}" \
+            && "${SHEETS_SPREADSHEET_ID_VARIABLE}" != "${SHEETS_SPREADSHEET_ID_SECRET}" ]]; then
+            echo "::error::SHEETS_SPREADSHEET_ID production variable and secret disagree"
+            exit 1
+          fi
+          if [[ -n "${SHEETS_TAB_VARIABLE}" \
+            && -n "${SHEETS_TAB_SECRET}" \
+            && "${SHEETS_TAB_VARIABLE}" != "${SHEETS_TAB_SECRET}" ]]; then
+            echo "::error::SHEETS_TAB production variable and secret disagree"
+            exit 1
+          fi
+          if [[ -n "${SHEETS_SPREADSHEET_ID}" && -z "${SHEETS_TAB}" ]] \
+            || [[ -z "${SHEETS_SPREADSHEET_ID}" && -n "${SHEETS_TAB}" ]]; then
+            echo "::error::SHEETS_SPREADSHEET_ID and SHEETS_TAB must be configured together"
+            exit 1
+          fi
+
+      - name: Pull exact production project settings and environment
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          vercel pull --yes --environment=production --token "${VERCEL_TOKEN}"
+          vercel env pull \
+            .vercel/.env.production.local \
+            --yes \
+            --environment=production \
+            --token "${VERCEL_TOKEN}"
+
+      - name: Verify protected settings match Vercel production
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const dotenv = require("dotenv");
+
+          const path = ".vercel/.env.production.local";
+          if (!fs.existsSync(path)) {
+            throw new Error(`Vercel production environment file is missing: ${path}`);
+          }
+
+          const pulled = dotenv.parse(fs.readFileSync(path));
+          for (const key of ["DATABASE_URL", "DIRECT_URL"]) {
+            if (!pulled[key] || pulled[key] !== process.env[key]) {
+              throw new Error(
+                `${key} GitHub environment secret does not match Vercel Production`,
+              );
+            }
+          }
+          const normalizeOrigin = (value) => value.replace(/\/$/, "");
+          if (
+            !pulled.APP_BASE_URL ||
+            normalizeOrigin(pulled.APP_BASE_URL) !==
+              normalizeOrigin(process.env.APP_BASE_URL)
+          ) {
+            throw new Error(
+              "APP_BASE_URL GitHub environment secret does not match Vercel Production",
+            );
+          }
+          if (
+            !pulled.CRON_SECRET ||
+            pulled.CRON_SECRET !== process.env.CRON_SECRET
+          ) {
+            throw new Error(
+              "CRON_SECRET GitHub environment secret does not match Vercel Production",
+            );
+          }
+          NODE
+
+      - name: Bind requested SHA to production migration history and verify database connections
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -u DATABASE_URL -u DIRECT_URL \
+            node --env-file=.vercel/.env.production.local \
+            "$(command -v npm)" --silent run db:verify-targets
+
+      - name: Validate Sheet cutover target before staging
+        shell: bash
+        env:
+          SHEETS_SPREADSHEET_ID: ${{ vars.SHEETS_SPREADSHEET_ID || secrets.SHEETS_SPREADSHEET_ID }}
+          SHEETS_TAB: ${{ vars.SHEETS_TAB || secrets.SHEETS_TAB }}
+          SHEETS_TARGET_CHANGE_CONFIRMATION: ${{ inputs.sheet_target_change_confirmation }}
+        run: |
+          set -euo pipefail
+          env -u DATABASE_URL -u DIRECT_URL \
+            -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
+            -u SPREADSHEET_ID \
+            node --env-file=.vercel/.env.production.local \
+            "$(command -v npm)" --silent run db:adopt-sheet-contacts -- \
+            --validate-target-only
+
+      - name: Build exact production revision before pausing
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel build --prod --token "${VERCEL_TOKEN}"
+
+      - name: Deploy exact target as an unpromoted production artifact
+        id: deploy
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          RELEASE_SHA: ${{ steps.revision.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          deployment_url="$(
+            vercel deploy \
+              --prebuilt \
+              --prod \
+              --skip-domain \
+              --archive=tgz \
+              --yes \
+              --token "${VERCEL_TOKEN}" \
+              --meta "releaseCommit=${RELEASE_SHA}"
+          )"
+          if [[ ! "${deployment_url}" =~ ^https://[A-Za-z0-9-]+\.vercel\.app/?$ ]]; then
+            echo "::error::Vercel did not return a deployment URL"
+            exit 1
+          fi
+
+          echo "url=${deployment_url}" >> "${GITHUB_OUTPUT}"
+          echo "Staged ${RELEASE_SHA} at ${deployment_url}"
+
+      - name: Verify staged exact revision before pausing
+        id: verify-staged
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          RELEASE_SHA: ${{ steps.revision.outputs.sha }}
+          TARGET_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          bash scripts/verify-vercel-deployment.sh "${TARGET_URL}" "${RELEASE_SHA}"
+          echo "verified=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Arm recovery before pausing
+        id: arm-pause
+        shell: bash
+        run: echo "pause_requested=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Pause production and drain old code
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          bash scripts/vercel-project-state.sh pause
+          echo "Production is paused. Waiting 31 minutes for every old Vercel function and outreach claim to quiesce."
+          sleep 1860
+
+      - name: Arm schema cutover recovery
+        id: arm-schema
+        shell: bash
+        run: echo "schema_started=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Apply expand-compatible production migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -u DATABASE_URL -u DIRECT_URL \
+            -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
+            -u SPREADSHEET_ID \
+            node --env-file=.vercel/.env.production.local \
+            "$(command -v npm)" --silent run db:migrate:deploy
+
+      - name: Backfill Unicode-normalized artist names
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -u DATABASE_URL -u DIRECT_URL \
+            -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
+            -u SPREADSHEET_ID \
+            node --env-file=.vercel/.env.production.local \
+            "$(command -v npm)" --silent run db:backfill:normalized-artists
+
+      - name: Verify requested migration set and exact-target compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -u DATABASE_URL -u DIRECT_URL \
+            node --env-file=.vercel/.env.production.local \
+            "$(command -v npm)" --silent run db:verify-targets -- \
+            --require-all-migrations
+          env -u DATABASE_URL -u DIRECT_URL \
+            node --env-file=.vercel/.env.production.local \
+            "$(command -v npm)" --silent run db:verify-release-compatibility
+
+      - name: Mark exact target schema safe
+        id: schema-ready
+        shell: bash
+        run: echo "schema_ready=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Promote exact deployment
+        id: promote
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          TARGET_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          vercel promote \
+            "${TARGET_URL}" \
+            --yes \
+            --timeout=5m \
+            --token "${VERCEL_TOKEN}"
+          echo "promoted=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify promoted exact deployment
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          RELEASE_SHA: ${{ steps.revision.outputs.sha }}
+          TARGET_URL: ${{ steps.deploy.outputs.url }}
+        run: bash scripts/verify-vercel-deployment.sh "${TARGET_URL}" "${RELEASE_SHA}"
+
+      - name: Adopt and verify configured Sheet contacts with new code
+        shell: bash
+        env:
+          SHEETS_SPREADSHEET_ID: ${{ vars.SHEETS_SPREADSHEET_ID || secrets.SHEETS_SPREADSHEET_ID }}
+          SHEETS_TAB: ${{ vars.SHEETS_TAB || secrets.SHEETS_TAB }}
+          SHEETS_TARGET_CHANGE_CONFIRMATION: ${{ inputs.sheet_target_change_confirmation }}
+        run: |
+          set -euo pipefail
+          env -u DATABASE_URL -u DIRECT_URL \
+            -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
+            -u SPREADSHEET_ID \
+            node --env-file=.vercel/.env.production.local \
+            "$(command -v npm)" --silent run db:adopt-sheet-contacts
+
+      - name: Verify new-code ownership and database compatibility
+        id: ownership-ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -u DATABASE_URL -u DIRECT_URL \
+            node --env-file=.vercel/.env.production.local \
+            "$(command -v npm)" --silent run db:verify-release-compatibility -- \
+            --require-sheet-adoption
+          env -u DATABASE_URL -u DIRECT_URL \
+            node --env-file=.vercel/.env.production.local \
+            "$(command -v npm)" --silent run db:verify-targets -- \
+            --require-all-migrations
+          echo "ownership_ready=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Unpause verified exact target
+        id: resume
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          bash scripts/vercel-project-state.sh unpause
+          echo "resumed=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Catch up production data after resume
+        shell: bash
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          authorization_header="Authorization: Bearer ${CRON_SECRET}"
+
+          printf -v authorization_header '%s: %s %s' \
+            "Authorization" \
+            "Bearer" \
+            "${CRON_SECRET}"
+
+          call_catch_up() {
+            local name="$1"
+            local route="$2"
+            local route_timeout="$3"
+            local budget="$4"
+            local endpoint="${APP_BASE_URL%/}${route}"
+            local deadline=$((SECONDS + budget))
+            local attempt=1
+            local max_attempts=6
+            local delay=15
+            local response marker body http_status curl_status remaining request_timeout retryable
+
+            while (( attempt <= max_attempts && SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS))
+              request_timeout="${route_timeout}"
+              if (( remaining < request_timeout )); then
+                request_timeout="${remaining}"
+              fi
+
+              echo "${name} catch-up attempt ${attempt}/${max_attempts}"
+              response=""
+              if response="$(
+                curl \
+                  --fail-with-body \
+                  --silent \
+                  --show-error \
+                  --connect-timeout 15 \
+                  --max-time "${request_timeout}" \
+                  --write-out $'\n__PHOTO_ADMIN_HTTP_STATUS__:%{http_code}' \
+                  --header "${authorization_header}" \
+                  --header "Accept: application/json" \
+                  "${endpoint}"
+              )"; then
+                curl_status=0
+              else
+                curl_status=$?
+              fi
+
+              marker="${response##*$'\n'}"
+              if [[ "${marker}" == __PHOTO_ADMIN_HTTP_STATUS__:* ]]; then
+                http_status="${marker#*:}"
+                body="${response%$'\n'*}"
+              else
+                http_status="000"
+                body="${response}"
+              fi
+              if [[ -n "${body}" ]]; then
+                printf '%s\n' "${body}"
+              fi
+
+              if (( curl_status == 0 )) && [[ "${http_status}" =~ ^2[0-9]{2}$ ]]; then
+                echo "${name} catch-up succeeded with HTTP ${http_status}"
+                return 0
+              fi
+
+              retryable=false
+              if (( curl_status == 22 )); then
+                case "${http_status}" in
+                  408|409|425|429|500|502|503|504) retryable=true ;;
+                esac
+              else
+                case "${curl_status}" in
+                  6|7|18|28|35|52|55|56|92) retryable=true ;;
+                esac
+              fi
+              if [[ "${retryable}" != "true" ]]; then
+                echo "::error::${name} catch-up failed with non-retryable curl status ${curl_status} and HTTP ${http_status}"
+                return 1
+              fi
+
+              remaining=$((deadline - SECONDS))
+              if (( attempt >= max_attempts || remaining <= delay )); then
+                break
+              fi
+              echo "::warning::${name} catch-up attempt ${attempt} failed with curl status ${curl_status} and HTTP ${http_status}; retrying in ${delay}s"
+              sleep "${delay}"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+              if (( delay > 120 )); then
+                delay=120
+              fi
+            done
+
+            echo "::error::${name} catch-up did not succeed within its bounded retry window"
+            return 1
+          }
+
+          call_catch_up "Show sync" "/api/cron/sync-shows" 330 900
+          call_catch_up "Listen sync" "/api/cron/sync-listens" 330 900
+          call_catch_up "Top-playlist refresh" "/api/cron/refresh-top-playlist" 210 600
+
+      - name: Attempt safe in-job recovery with approved credentials
+        id: recover-in-job
+        if: ${{ always() && steps.arm-pause.outputs.pause_requested == 'true' && steps.resume.outputs.resumed != 'true' }}
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          EXPECTED_PROJECT_FINGERPRINT: ${{ needs.recovery_preflight.outputs.project_fingerprint }}
+          RELEASE_PAUSE_REQUESTED: ${{ steps.arm-pause.outputs.pause_requested || 'false' }}
+          RELEASE_SCHEMA_STARTED: ${{ steps.arm-schema.outputs.schema_started || 'false' }}
+          RELEASE_SCHEMA_READY: ${{ steps.schema-ready.outputs.schema_ready || 'false' }}
+          RELEASE_OWNERSHIP_READY: ${{ steps.ownership-ready.outputs.ownership_ready || 'false' }}
+          RELEASE_STAGED_VERIFIED: ${{ steps.verify-staged.outputs.verified || 'false' }}
+          RELEASE_TARGET_PROMOTED: ${{ steps.promote.outputs.promoted || 'false' }}
+          RELEASE_TARGET_URL: ${{ steps.deploy.outputs.url }}
+          RELEASE_SHA: ${{ steps.revision.outputs.sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/recover-production-release.sh
+          echo "resumed=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Remove pulled production environment
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f .vercel/.env.production.local
+
+  recovery:
+    name: Independent main-only release watchdog
+    needs:
+      - trust
+      - recovery_preflight
+      - release
+    if: >-
+      ${{
+        always() &&
+        needs.trust.result == 'success' &&
+        needs.recovery_preflight.result == 'success' &&
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/main' &&
+        github.repository == 'zspherez/photo-admin' &&
+        github.event.repository.full_name == 'zspherez/photo-admin' &&
+        github.event.repository.fork == false &&
+        github.workflow_ref == 'zspherez/photo-admin/.github/workflows/release-production.yml@refs/heads/main'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: production-recovery
+    steps:
+      - name: Reassert trusted watchdog context
+        id: context_gate
+        shell: bash
+        timeout-minutes: 1
+        env:
+          EVENT_REPOSITORY: ${{ github.event.repository.full_name }}
+          EVENT_REPOSITORY_FORK: ${{ github.event.repository.fork }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          TRUSTED_RELEASE_SHA: ${{ needs.trust.outputs.release_sha }}
+          REPORTED_RELEASE_SHA: ${{ needs.release.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" \
+            || "${GITHUB_REPOSITORY}" != "zspherez/photo-admin" \
+            || "${EVENT_REPOSITORY}" != "zspherez/photo-admin" \
+            || "${EVENT_REPOSITORY_FORK}" != "false" \
+            || "${GITHUB_REF}" != "refs/heads/main" \
+            || "${GITHUB_REF_TYPE}" != "branch" \
+            || "${GITHUB_REF_NAME}" != "main" \
+            || "${WORKFLOW_REF}" != "zspherez/photo-admin/.github/workflows/release-production.yml@refs/heads/main" ]]; then
+            echo "::error::Recovery is permitted only for the trusted main workflow in zspherez/photo-admin."
+            exit 1
+          fi
+          if [[ ! "${TRUSTED_RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The independently validated main release SHA is unavailable."
+            exit 1
+          fi
+          if [[ -n "${REPORTED_RELEASE_SHA}" \
+            && "${REPORTED_RELEASE_SHA}" != "${TRUSTED_RELEASE_SHA}" ]]; then
+            echo "::error::Release output SHA does not match the independently validated main commit."
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        timeout-minutes: 5
+        with:
+          node-version: "22"
+
+      - name: Report unavailable recovery state
+        if: ${{ needs.release.result != 'success' && needs.release.outputs.pause_requested == '' }}
+        shell: bash
+        timeout-minutes: 1
+        run: |
+          echo "::error::GitHub did not preserve release state. Inspect the Vercel project before resuming; never unpause an uncertain schema cutover."
+          exit 1
+
+      - name: Validate dedicated recovery environment
+        if: ${{ steps.context_gate.outcome == 'success' && needs.release.outputs.pause_requested == 'true' && needs.release.outputs.resumed != 'true' }}
+        shell: bash
+        timeout-minutes: 1
+        env:
+          VERCEL_TOKEN: ${{ secrets.RECOVERY_VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.RECOVERY_VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.RECOVERY_VERCEL_PROJECT_ID }}
+          EXPECTED_PROJECT_FINGERPRINT: ${{ needs.recovery_preflight.outputs.project_fingerprint }}
+          TRUSTED_RELEASE_SHA: ${{ needs.trust.outputs.release_sha }}
+          REPORTED_RELEASE_SHA: ${{ needs.release.outputs.release_sha }}
+          RECOVERY_ENVIRONMENT_GUARD: ${{ vars.RECOVERY_ENVIRONMENT_GUARD }}
+        run: |
+          set -euo pipefail
+          if [[ "${RECOVERY_ENVIRONMENT_GUARD}" != "production-recovery-main-only-v1" ]]; then
+            echo "::error::The production-recovery environment guard is missing."
+            exit 1
+          fi
+          if [[ -z "${VERCEL_TOKEN}" \
+            || -z "${VERCEL_ORG_ID}" \
+            || -z "${VERCEL_PROJECT_ID}" ]]; then
+            echo "::error::The production-recovery environment is missing required recovery credentials."
+            exit 1
+          fi
+          if [[ ! "${VERCEL_ORG_ID}" =~ ^[A-Za-z0-9_-]+$ \
+            || ! "${VERCEL_PROJECT_ID}" =~ ^[A-Za-z0-9_-]+$ \
+            || ! "${EXPECTED_PROJECT_FINGERPRINT}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::The production-recovery project identity is invalid."
+            exit 1
+          fi
+          actual_project_fingerprint="$(
+            printf '%s\n%s\n' "${VERCEL_ORG_ID}" "${VERCEL_PROJECT_ID}" |
+              sha256sum |
+              cut -d ' ' -f 1
+          )"
+          if [[ "${actual_project_fingerprint}" != "${EXPECTED_PROJECT_FINGERPRINT}" ]]; then
+            echo "::error::The production-recovery project identity changed after preflight."
+            exit 1
+          fi
+          if [[ "${REPORTED_RELEASE_SHA}" != "${TRUSTED_RELEASE_SHA}" ]]; then
+            echo "::error::Recovery refused a release SHA not independently validated against main."
+            exit 1
+          fi
+
+      - name: Install pinned Vercel CLI for recovery promotion
+        if: ${{ always() && steps.context_gate.outcome == 'success' && needs.release.outputs.pause_requested == 'true' && needs.release.outputs.resumed != 'true' && needs.release.outputs.schema_started == 'true' && needs.release.outputs.schema_ready == 'true' && needs.release.outputs.ownership_ready == 'true' && needs.release.outputs.staged_verified == 'true' }}
+        timeout-minutes: 10
+        run: npm install --global "vercel@${VERCEL_CLI_VERSION}"
+
+      - name: Recover only a provably safe target
+        if: ${{ always() && steps.context_gate.outcome == 'success' && needs.release.outputs.pause_requested == 'true' && needs.release.outputs.resumed != 'true' }}
+        shell: bash
+        timeout-minutes: 30
+        env:
+          VERCEL_TOKEN: ${{ secrets.RECOVERY_VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.RECOVERY_VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.RECOVERY_VERCEL_PROJECT_ID }}
+          EXPECTED_PROJECT_FINGERPRINT: ${{ needs.recovery_preflight.outputs.project_fingerprint }}
+          VERCEL_DEPLOYMENT_VERIFY_MAX_ATTEMPTS: "6"
+          VERCEL_DEPLOYMENT_VERIFY_RETRY_SECONDS: "10"
+          VERCEL_STATE_MAX_ATTEMPTS: "3"
+          VERCEL_STATE_RETRY_DELAY_SECONDS: "5"
+          RELEASE_PAUSE_REQUESTED: ${{ needs.release.outputs.pause_requested || 'false' }}
+          RELEASE_SCHEMA_STARTED: ${{ needs.release.outputs.schema_started || 'false' }}
+          RELEASE_SCHEMA_READY: ${{ needs.release.outputs.schema_ready || 'false' }}
+          RELEASE_OWNERSHIP_READY: ${{ needs.release.outputs.ownership_ready || 'false' }}
+          RELEASE_STAGED_VERIFIED: ${{ needs.release.outputs.staged_verified || 'false' }}
+          RELEASE_TARGET_PROMOTED: ${{ needs.release.outputs.target_promoted || 'false' }}
+          RELEASE_TARGET_URL: ${{ needs.release.outputs.staged_url }}
+          REPORTED_RELEASE_SHA: ${{ needs.release.outputs.release_sha }}
+          TRUSTED_RELEASE_SHA: ${{ needs.trust.outputs.release_sha }}
+          RECOVERY_ENVIRONMENT_GUARD: ${{ vars.RECOVERY_ENVIRONMENT_GUARD }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${RECOVERY_ENVIRONMENT_GUARD}" != "production-recovery-main-only-v1" \
+            || -z "${VERCEL_TOKEN}" \
+            || -z "${VERCEL_ORG_ID}" \
+            || -z "${VERCEL_PROJECT_ID}" \
+            || -z "${EXPECTED_PROJECT_FINGERPRINT}" ]]; then
+            echo "::error::The dedicated production-recovery environment is unavailable or incomplete."
+            exit 1
+          fi
+          if [[ ! "${VERCEL_DEPLOYMENT_VERIFY_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ \
+            || ! "${VERCEL_DEPLOYMENT_VERIFY_RETRY_SECONDS}" =~ ^[0-9]+$ \
+            || ! "${VERCEL_STATE_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ \
+            || ! "${VERCEL_STATE_RETRY_DELAY_SECONDS}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid recovery retry configuration."
+            exit 2
+          fi
+          for value in \
+            "${RELEASE_PAUSE_REQUESTED}" \
+            "${RELEASE_SCHEMA_STARTED}" \
+            "${RELEASE_SCHEMA_READY}" \
+            "${RELEASE_OWNERSHIP_READY}" \
+            "${RELEASE_STAGED_VERIFIED}" \
+            "${RELEASE_TARGET_PROMOTED}"; do
+            if [[ "${value}" != "true" && "${value}" != "false" ]]; then
+              echo "::error::Invalid release recovery state."
+              exit 2
+            fi
+          done
+          if [[ ! "${VERCEL_ORG_ID}" =~ ^[A-Za-z0-9_-]+$ \
+            || ! "${VERCEL_PROJECT_ID}" =~ ^[A-Za-z0-9_-]+$ \
+            || ! "${EXPECTED_PROJECT_FINGERPRINT}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid recovery project identity."
+            exit 2
+          fi
+          if [[ ! "${TRUSTED_RELEASE_SHA}" =~ ^[0-9a-f]{40}$ \
+            || "${REPORTED_RELEASE_SHA}" != "${TRUSTED_RELEASE_SHA}" ]]; then
+            echo "::error::Recovery refused a release SHA not independently validated against main."
+            exit 1
+          fi
+
+          actual_project_fingerprint="$(
+            printf '%s\n%s\n' "${VERCEL_ORG_ID}" "${VERCEL_PROJECT_ID}" |
+              sha256sum |
+              cut -d ' ' -f 1
+          )"
+          if [[ "${actual_project_fingerprint}" != "${EXPECTED_PROJECT_FINGERPRINT}" ]]; then
+            echo "::error::Recovery project fingerprint does not match the sealed production project."
+            exit 1
+          fi
+
+          printf -v authorization_header '%s: %s %s' \
+            "Authorization" \
+            "Bearer" \
+            "${VERCEL_TOKEN}"
+
+          authenticate_project() {
+            local endpoint response marker http_status curl_status
+
+            endpoint="https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?teamId=${VERCEL_ORG_ID}"
+            response=""
+            if response="$(
+              curl \
+                --silent \
+                --show-error \
+                --connect-timeout 15 \
+                --max-time 60 \
+                --request GET \
+                --header "${authorization_header}" \
+                --write-out $'\n__PHOTO_ADMIN_HTTP_STATUS__:%{http_code}' \
+                "${endpoint}"
+            )"; then
+              curl_status=0
+            else
+              curl_status=$?
+            fi
+            marker="${response##*$'\n'}"
+            if [[ "${marker}" == __PHOTO_ADMIN_HTTP_STATUS__:* ]]; then
+              http_status="${marker#*:}"
+            else
+              http_status="000"
+            fi
+            if (( curl_status != 0 )) || [[ ! "${http_status}" =~ ^2[0-9]{2}$ ]]; then
+              echo "::error::Recovery credentials cannot authenticate the sealed production project (curl ${curl_status}, HTTP ${http_status})."
+              return 1
+            fi
+            echo "Authenticated the sealed production project for recovery."
+          }
+
+          verify_deployment() {
+            local deployment_url="$1"
+            local expected_sha="$2"
+            local deployment_host endpoint attempt response marker body
+            local http_status curl_status parse_result parse_status retryable
+
+            deployment_host="${deployment_url#https://}"
+            deployment_host="${deployment_host%/}"
+            endpoint="https://api.vercel.com/v13/deployments/${deployment_host}?teamId=${VERCEL_ORG_ID}"
+            attempt=1
+            while (( attempt <= VERCEL_DEPLOYMENT_VERIFY_MAX_ATTEMPTS )); do
+              response=""
+              if response="$(
+                curl \
+                  --silent \
+                  --show-error \
+                  --connect-timeout 15 \
+                  --max-time 60 \
+                  --request GET \
+                  --header "${authorization_header}" \
+                  --write-out $'\n__PHOTO_ADMIN_HTTP_STATUS__:%{http_code}' \
+                  "${endpoint}"
+              )"; then
+                curl_status=0
+              else
+                curl_status=$?
+              fi
+
+              marker="${response##*$'\n'}"
+              if [[ "${marker}" == __PHOTO_ADMIN_HTTP_STATUS__:* ]]; then
+                http_status="${marker#*:}"
+                body="${response%$'\n'*}"
+              else
+                http_status="000"
+                body="${response}"
+              fi
+
+              if (( curl_status == 0 )) && [[ "${http_status}" =~ ^2[0-9]{2}$ ]]; then
+                if parse_result="$(
+                  printf '%s' "${body}" |
+                    EXPECTED_SHA="${expected_sha}" \
+                    EXPECTED_PROJECT_ID="${VERCEL_PROJECT_ID}" \
+                    node -e '
+                      let input = "";
+                      process.stdin.setEncoding("utf8");
+                      process.stdin.on("data", (chunk) => (input += chunk));
+                      process.stdin.on("end", () => {
+                        let deployment;
+                        try {
+                          deployment = JSON.parse(input);
+                        } catch {
+                          process.exit(12);
+                        }
+                        const releaseCommit = deployment.meta?.releaseCommit;
+                        if (
+                          deployment.projectId !== process.env.EXPECTED_PROJECT_ID ||
+                          deployment.target !== "production" ||
+                          typeof releaseCommit !== "string" ||
+                          releaseCommit.toLowerCase() !== process.env.EXPECTED_SHA
+                        ) {
+                          process.exit(12);
+                        }
+                        if (deployment.readyState === "READY") {
+                          process.stdout.write("ready");
+                          return;
+                        }
+                        if (
+                          ["ERROR", "CANCELED", "DELETED"].includes(
+                            deployment.readyState
+                          )
+                        ) {
+                          process.exit(11);
+                        }
+                        process.exit(10);
+                      });
+                    '
+                )"; then
+                  if [[ "${parse_result}" == "ready" ]]; then
+                    echo "Verified ready production artifact for the exact validated main SHA."
+                    return 0
+                  fi
+                else
+                  parse_status=$?
+                  if (( parse_status == 11 )); then
+                    echo "::error::Vercel deployment reached a terminal non-ready state."
+                    return 1
+                  fi
+                  if (( parse_status == 12 )); then
+                    echo "::error::Vercel deployment identity, target, or release SHA did not match."
+                    return 1
+                  fi
+                fi
+              else
+                retryable=false
+                if (( curl_status != 0 )); then
+                  case "${curl_status}" in
+                    6|7|18|28|35|52|55|56|92) retryable=true ;;
+                  esac
+                else
+                  case "${http_status}" in
+                    408|425|429|500|502|503|504) retryable=true ;;
+                  esac
+                fi
+                if [[ "${retryable}" != "true" ]]; then
+                  echo "::error::Vercel deployment verification failed (curl ${curl_status}, HTTP ${http_status})."
+                  return 1
+                fi
+              fi
+
+              if (( attempt >= VERCEL_DEPLOYMENT_VERIFY_MAX_ATTEMPTS )); then
+                break
+              fi
+              echo "Vercel deployment is not ready yet; retrying."
+              sleep "${VERCEL_DEPLOYMENT_VERIFY_RETRY_SECONDS}"
+              attempt=$((attempt + 1))
+            done
+
+            echo "::error::Vercel deployment did not become ready within the verification window."
+            return 1
+          }
+
+          unpause_project() {
+            local endpoint attempt response marker body http_status curl_status
+            local body_lower retryable
+
+            endpoint="https://api.vercel.com/v1/projects/${VERCEL_PROJECT_ID}/unpause?teamId=${VERCEL_ORG_ID}"
+            attempt=1
+            while (( attempt <= VERCEL_STATE_MAX_ATTEMPTS )); do
+              response=""
+              if response="$(
+                curl \
+                  --silent \
+                  --show-error \
+                  --connect-timeout 15 \
+                  --max-time 60 \
+                  --request POST \
+                  --header "${authorization_header}" \
+                  --header "Content-Type: application/json" \
+                  --write-out $'\n__PHOTO_ADMIN_HTTP_STATUS__:%{http_code}' \
+                  "${endpoint}"
+              )"; then
+                curl_status=0
+              else
+                curl_status=$?
+              fi
+
+              marker="${response##*$'\n'}"
+              if [[ "${marker}" == __PHOTO_ADMIN_HTTP_STATUS__:* ]]; then
+                http_status="${marker#*:}"
+                body="${response%$'\n'*}"
+              else
+                http_status="000"
+                body="${response}"
+              fi
+              if (( curl_status == 0 )) && [[ "${http_status}" =~ ^2[0-9]{2}$ ]]; then
+                echo "Vercel project unpause request succeeded."
+                return 0
+              fi
+
+              body_lower="$(printf '%s' "${body}" | tr '[:upper:]' '[:lower:]')"
+              if [[ "${http_status}" == "400" || "${http_status}" == "409" ]] \
+                && [[ "${body_lower}" =~ not([[:space:]_-]+currently)?[[:space:]_-]*paused|already[[:space:]_-]*(unpaused|running|active) ]]; then
+                echo "Vercel project is already running."
+                return 0
+              fi
+
+              retryable=false
+              if (( curl_status != 0 )); then
+                case "${curl_status}" in
+                  6|7|18|28|35|52|55|56|92) retryable=true ;;
+                esac
+              else
+                case "${http_status}" in
+                  408|425|429|500|502|503|504) retryable=true ;;
+                esac
+              fi
+              if [[ "${retryable}" != "true" ]] \
+                || (( attempt >= VERCEL_STATE_MAX_ATTEMPTS )); then
+                echo "::error::Vercel project unpause request failed (curl ${curl_status}, HTTP ${http_status})."
+                return 1
+              fi
+
+              echo "Vercel project unpause attempt ${attempt} failed transiently; retrying."
+              sleep "${VERCEL_STATE_RETRY_DELAY_SECONDS}"
+              attempt=$((attempt + 1))
+            done
+          }
+
+          authenticate_project
+
+          if [[ "${RELEASE_SCHEMA_STARTED}" != "true" ]]; then
+            echo "Schema cutover did not start; resuming the still-compatible old target."
+            unpause_project
+            exit 0
+          fi
+          if [[ "${RELEASE_SCHEMA_READY}" != "true" ]]; then
+            echo "::error::Schema cutover started but exact-target compatibility was not verified. Production remains paused."
+            exit 1
+          fi
+          if [[ "${RELEASE_STAGED_VERIFIED}" != "true" ]]; then
+            echo "::error::The exact target artifact was not verified before cutover. Production remains paused."
+            exit 1
+          fi
+          if [[ "${RELEASE_OWNERSHIP_READY}" != "true" ]]; then
+            echo "::error::Configured Sheet adoption and spreadsheet-scoped ownership were not verified. Production remains paused."
+            exit 1
+          fi
+          if [[ ! "${RELEASE_TARGET_URL}" =~ ^https://[A-Za-z0-9-]+\.vercel\.app/?$ ]]; then
+            echo "::error::Exact target recovery coordinates are unavailable. Production remains paused."
+            exit 1
+          fi
+
+          verify_deployment "${RELEASE_TARGET_URL}" "${TRUSTED_RELEASE_SHA}"
+          if [[ "${RELEASE_TARGET_PROMOTED}" == "true" ]]; then
+            echo "Reasserting the exact promoted target before recovery resume."
+          else
+            echo "Promoting the already-built exact target before recovery resume."
+          fi
+          vercel promote \
+            "${RELEASE_TARGET_URL}" \
+            --yes \
+            --timeout=5m \
+            --token "${VERCEL_TOKEN}"
+          verify_deployment "${RELEASE_TARGET_URL}" "${TRUSTED_RELEASE_SHA}"
+          unpause_project
+          echo "Exact target promotion and production resume are verified."

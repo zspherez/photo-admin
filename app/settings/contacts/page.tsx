@@ -1,20 +1,31 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { listTabs, syncContactsFromSheet } from "@/lib/sheets";
+import {
+  getConfiguredSheetTarget,
+  listTabs,
+  syncContactsFromSheet,
+} from "@/lib/sheets";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SyncForm } from "@/components/sync-form";
 import { SyncBanner } from "@/components/sync-banner";
+import { requireServerActionAuth } from "@/lib/auth";
+import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Contact sync" };
 
 async function syncContacts(formData: FormData) {
   "use server";
-  const tab = (formData.get("tab") as string) || "Artists";
+  await requireServerActionAuth("/settings/contacts");
+  const rawTab = formData.get("tab");
+  const tab = typeof rawTab === "string" ? rawTab.trim() : "";
   let redirectTo: string;
   try {
+    if (!tab) throw new Error("Google Sheet tab is required");
     const result = await syncContactsFromSheet(tab);
     await db.setting.upsert({
       where: { key: "sheets_last_result" },
@@ -41,27 +52,56 @@ async function syncContacts(formData: FormData) {
 export default async function ContactsSettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ synced?: string; read?: string; upserted?: string; artists?: string; skipped?: string; detail?: string }>;
+  searchParams: Promise<{
+    synced?: SearchParamValue;
+    read?: SearchParamValue;
+    upserted?: SearchParamValue;
+    artists?: SearchParamValue;
+    skipped?: SearchParamValue;
+    detail?: SearchParamValue;
+  }>;
 }) {
-  const sp = await searchParams;
-  const hasCreds = !!process.env.GOOGLE_CREDENTIALS_JSON || !!process.env.GOOGLE_CREDENTIALS_PATH;
-  const hasConfig = hasCreds && !!process.env.SPREADSHEET_ID;
+  const rawSearchParams = await searchParams;
+  const sp = {
+    synced: firstSearchParam(rawSearchParams.synced),
+    read: firstSearchParam(rawSearchParams.read),
+    upserted: firstSearchParam(rawSearchParams.upserted),
+    artists: firstSearchParam(rawSearchParams.artists),
+    skipped: firstSearchParam(rawSearchParams.skipped),
+    detail: firstSearchParam(rawSearchParams.detail),
+  };
+  const hasCreds =
+    !!process.env.GOOGLE_CREDENTIALS_JSON ||
+    !!process.env.GOOGLE_CREDENTIALS_PATH;
+  let configuredTarget: Awaited<
+    ReturnType<typeof getConfiguredSheetTarget>
+  > = null;
+  let targetError: string | null = null;
+  try {
+    configuredTarget = await getConfiguredSheetTarget();
+  } catch (error) {
+    targetError = error instanceof Error ? error.message : String(error);
+  }
+  const sheetId =
+    configuredTarget?.spreadsheetId ?? process.env.SPREADSHEET_ID?.trim();
+  const hasConfig = hasCreds && !!sheetId && !targetError;
 
   let tabs: string[] = [];
   let tabError: string | null = null;
   if (hasConfig) {
     try {
-      tabs = await listTabs();
+      tabs = await listTabs(sheetId!);
     } catch (e) {
       tabError = e instanceof Error ? e.message : String(e);
     }
   }
 
   const [contactCount, lastSync, lastResult, recentContacts] = await Promise.all([
-    db.contact.count(),
+    db.contact.count({ where: { state: "active" } }),
     db.setting.findUnique({ where: { key: "sheets_last_sync" } }),
     db.setting.findUnique({ where: { key: "sheets_last_result" } }),
     db.contact.findMany({
+      where: { state: "active" },
       take: 25,
       orderBy: { updatedAt: "desc" },
       include: { artist: true },
@@ -74,7 +114,10 @@ export default async function ContactsSettingsPage({
     <main className="mx-auto max-w-3xl px-6 py-10">
       <Link href="/settings" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Settings</Link>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">Contacts</h1>
-      <p className="mt-1 text-sm text-zinc-500">Sync from your Google Sheet (read-only).</p>
+      <p className="mt-1 text-sm text-zinc-500">
+        Sync writes stable <code>photo_admin_id</code> values to the Sheet, so
+        the service account needs Editor access.
+      </p>
 
       {sp.synced === "ok" && (
         <SyncBanner
@@ -89,7 +132,12 @@ export default async function ContactsSettingsPage({
 
       {!hasConfig && (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          Missing env: need <code>SPREADSHEET_ID</code> plus one of <code>GOOGLE_CREDENTIALS_JSON</code> (Vercel) or <code>GOOGLE_CREDENTIALS_PATH</code> (local).
+          Google Sheets needs a configured spreadsheet plus one of <code>GOOGLE_CREDENTIALS_JSON</code> (Vercel) or <code>GOOGLE_CREDENTIALS_PATH</code> (local).
+        </div>
+      )}
+      {targetError && (
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+          Sheets target error: {targetError}
         </div>
       )}
       {tabError && (
@@ -110,10 +158,15 @@ export default async function ContactsSettingsPage({
           {tabs.length > 0 && (
             <p className="mt-2 text-xs text-zinc-500">Tabs: {tabs.join(", ")}</p>
           )}
+          {configuredTarget && (
+            <p className="mt-2 text-xs text-zinc-500">
+              Configured tab: {configuredTarget.tabName}
+            </p>
+          )}
           <SyncForm action={syncContacts} label="Sync from Sheet" pendingLabel="Syncing…" disabled={!hasConfig} className="mt-3 flex items-center gap-2">
             <input
               name="tab"
-              defaultValue="Artists"
+              defaultValue={configuredTarget?.tabName ?? ""}
               placeholder="Tab name"
               className="h-9 flex-1 rounded-md border border-zinc-200 bg-white px-3 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950"
             />

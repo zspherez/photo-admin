@@ -1,16 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { rotateStatsfmToken } from "@/lib/statsfm";
+import { isValidCronAuthorization } from "@/lib/cron-auth";
 
 // Receives a freshly-extracted Stats.fm identityToken JWT (from the Playwright
 // GitHub-Actions rotation cron) and installs it via the same path the
 // Settings UI uses. Validates against /me before saving.
 export async function POST(request: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
+  if (!(await isValidCronAuthorization(request.headers.get("authorization")))) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
   let body: { token?: string };
