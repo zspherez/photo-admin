@@ -3,6 +3,7 @@ import test from "node:test";
 import { NextRequest } from "next/server";
 import {
   isServerActionRequest,
+  proxy,
   unauthenticatedResponse,
 } from "./proxy";
 
@@ -52,4 +53,15 @@ test("unauthenticated page GETs keep the standard temporary login redirect", () 
     response.headers.get("location"),
     "https://admin.example/login?next=%2Ffestivals",
   );
+});
+
+test("the fixed release verification route reaches its own fail-closed bearer auth", async () => {
+  const response = await proxy(
+    new NextRequest(
+      "https://admin.example/api/release/runtime-verification"
+    )
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-middleware-next"), "1");
 });

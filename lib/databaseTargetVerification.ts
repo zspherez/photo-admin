@@ -20,7 +20,7 @@ export interface DatabaseTargetConnection {
   readMigrationHistory(): Promise<MigrationHistoryEntry[]>;
   writeVerificationNonce(key: string, value: string): Promise<void>;
   readVerificationNonce(key: string): Promise<string | null>;
-  deleteVerificationNonce(key: string): Promise<boolean>;
+  deleteVerificationNonce(key: string, expectedValue?: string): Promise<boolean>;
 }
 
 export interface DatabaseTargetVerificationOptions {
@@ -194,11 +194,12 @@ export function verifyAppliedMigrationPrefix(
 async function deleteNonceEverywhere(
   runtime: DatabaseTargetConnection,
   direct: DatabaseTargetConnection,
-  key: string
+  key: string,
+  expectedValue: string
 ): Promise<void> {
   await Promise.allSettled([
-    runtime.deleteVerificationNonce(key),
-    direct.deleteVerificationNonce(key),
+    runtime.deleteVerificationNonce(key, expectedValue),
+    direct.deleteVerificationNonce(key, expectedValue),
   ]);
 }
 
@@ -243,7 +244,7 @@ export async function verifyDatabaseTargetConnections(
         "A fresh DATABASE_URL write was not observed through DIRECT_URL"
       );
     }
-    if (!(await direct.deleteVerificationNonce(nonceKey))) {
+    if (!(await direct.deleteVerificationNonce(nonceKey, nonceValue))) {
       throw new DatabaseTargetVerificationError(
         "Fresh database verification nonce could not be cleaned through DIRECT_URL"
       );
@@ -254,7 +255,7 @@ export async function verifyDatabaseTargetConnections(
       );
     }
   } finally {
-    await deleteNonceEverywhere(runtime, direct, nonceKey);
+    await deleteNonceEverywhere(runtime, direct, nonceKey, nonceValue);
   }
 
   const expectedMigrationCount = options.expectedMigrations.length;

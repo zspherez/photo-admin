@@ -39,8 +39,17 @@ class MockDatabaseConnection implements DatabaseTargetConnection {
     return this.state.settings.get(key) ?? null;
   }
 
-  async deleteVerificationNonce(key: string): Promise<boolean> {
+  async deleteVerificationNonce(
+    key: string,
+    expectedValue?: string
+  ): Promise<boolean> {
     this.deletes.push(key);
+    if (
+      expectedValue !== undefined &&
+      this.state.settings.get(key) !== expectedValue
+    ) {
+      return false;
+    }
     return this.state.settings.delete(key);
   }
 }

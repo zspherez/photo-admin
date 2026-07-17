@@ -9,6 +9,7 @@ const PUBLIC_PATHS = new Set([
   "/login",
   "/test",
   "/api/auth/logout",
+  "/api/release/runtime-verification",
   "/api/resend/webhook",
   "/api/spotify/callback",
   "/favicon.ico",

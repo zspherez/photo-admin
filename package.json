@@ -11,6 +11,7 @@
     "db:generate": "prisma generate",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:verify-targets": "tsx scripts/verify-database-targets.ts",
+    "db:release-runtime-verification": "tsx scripts/release-runtime-verification.ts",
     "db:verify-release-compatibility": "tsx scripts/verify-release-compatibility.ts",
     "db:backfill:normalized-artists": "tsx scripts/backfill-normalized-artists.ts",
     "db:adopt-sheet-contacts": "tsx scripts/adopt-sheet-contacts.ts",

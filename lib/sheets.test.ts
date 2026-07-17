@@ -711,6 +711,7 @@ test("protected release stages and verifies the exact target before pausing", ()
     "Build exact production revision before pausing",
     "Deploy exact target as an unpromoted production artifact",
     "Verify staged exact revision before pausing",
+    "Prove staged runtime database and protected settings before pausing",
     "Arm recovery before pausing",
     "Pause production and drain old code",
     "Arm schema cutover recovery",
@@ -741,6 +742,62 @@ test("protected release stages and verifies the exact target before pausing", ()
   assert.match(source, /--meta "releaseCommit=\$\{RELEASE_SHA\}"/);
   assert.match(source, /steps\.deploy\.outputs\.url/);
   assert.ok((source.match(/db:verify-targets/g) ?? []).length >= 3);
+  assert.match(
+    source,
+    /bash scripts\/verify-staged-runtime\.sh "\$\{TARGET_URL\}" "\$\{RELEASE_SHA\}"/
+  );
+  assert.doesNotMatch(source, /vercel env pull/);
+  assert.doesNotMatch(
+    source,
+    /Verify protected settings match Vercel production/
+  );
+  assert.doesNotMatch(
+    source,
+    /node --env-file=\.vercel\/\.env\.production\.local/
+  );
+});
+
+test("release requires explicit protected Google credentials for Sheet preflight and adoption", () => {
+  const source = readFileSync(
+    new URL(
+      "../.github/workflows/release-production.yml",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  const step = (name: string) => {
+    const start = source.indexOf(`      - name: ${name}`);
+    assert.ok(start >= 0, `missing step ${name}`);
+    const end = source.indexOf("\n      - name:", start + 1);
+    return source.slice(start, end < 0 ? source.length : end);
+  };
+
+  const validation = step(
+    "Validate protected environment and recovery target binding"
+  );
+  const preflight = step("Validate Sheet cutover target before staging");
+  const adoption = step(
+    "Adopt and verify configured Sheet contacts with new code"
+  );
+
+  assert.match(
+    validation,
+    /GOOGLE_CREDENTIALS_JSON: \$\{\{ secrets\.GOOGLE_CREDENTIALS_JSON \}\}/
+  );
+  assert.match(validation, /GOOGLE_CREDENTIALS_JSON is required/);
+  assert.match(
+    validation,
+    /JSON\.parse\(process\.env\.GOOGLE_CREDENTIALS_JSON\)/
+  );
+  for (const sheetStep of [preflight, adoption]) {
+    assert.match(
+      sheetStep,
+      /GOOGLE_CREDENTIALS_JSON: \$\{\{ secrets\.GOOGLE_CREDENTIALS_JSON \}\}/
+    );
+    assert.match(sheetStep, /-u GOOGLE_CREDENTIALS_PATH/);
+    assert.doesNotMatch(sheetStep, /-u GOOGLE_CREDENTIALS_JSON/);
+    assert.doesNotMatch(sheetStep, /--env-file/);
+  }
 });
 
 test("release uses one reviewed job and a main-only recovery environment", () => {

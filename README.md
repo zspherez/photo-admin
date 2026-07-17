@@ -86,7 +86,7 @@ The full list is in `.env.example`. Minimum to boot:
 | `EDMTRAIN_API_KEY` | for show sync | Request a key at <https://edmtrain.com/api>. |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | for Spotify | Create an app at <https://developer.spotify.com/dashboard>. Redirect URI is `${APP_BASE_URL}/api/spotify/callback`. Spotify rejects `http://localhost`, so use `http://127.0.0.1:3000` locally. |
 | `STATSFM_TOKEN` | for Stats.fm | No public API — grab a session token from DevTools (Application → Local Storage → `token`) after logging into stats.fm. |
-| `GOOGLE_CREDENTIALS_JSON` / `GOOGLE_CREDENTIALS_PATH` | for Sheet sync and release adoption | Service-account credentials for Google Sheets contact sync. Use `GOOGLE_CREDENTIALS_JSON` in Vercel Production so the protected release runner can load the exact credential. |
+| `GOOGLE_CREDENTIALS_JSON` / `GOOGLE_CREDENTIALS_PATH` | for Sheet sync and release adoption | Service-account credentials for Google Sheets contact sync. Configure `GOOGLE_CREDENTIALS_JSON` independently in Vercel Production and as the protected GitHub release secret. |
 | `SPREADSHEET_ID` | initial Sheet setup | Fallback spreadsheet used until a successful sync stores the configured spreadsheet and tab in the database. |
 | `SHEETS_SPREADSHEET_ID` / `SHEETS_TAB` | first protected Sheet cutover | Explicit target accepted by `db:adopt-sheet-contacts`. Set both as protected GitHub `production` environment variables or secrets when production database settings do not yet exist. These do not override the running app. |
 | `SHEETS_TARGET_CHANGE_CONFIRMATION` | direct adoption-script target replacement only | Set exactly `CONFIRM` for an intentional direct `db:adopt-sheet-contacts` target replacement. The protected workflow uses its one-run `sheet_target_change_confirmation` dispatch input instead of a persistent flag. |
@@ -178,25 +178,40 @@ Configure **`production`** as follows:
   tags** and add only the branch rule `main` (no tag rule).
 - Add environment secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID`,
   `VERCEL_PROJECT_ID`, `DATABASE_URL`, `DIRECT_URL`, `APP_BASE_URL`, and
-  `CRON_SECRET`.
+  `CRON_SECRET`. Also add `GOOGLE_CREDENTIALS_JSON`; the protected release
+  requires the raw service-account JSON explicitly and never relies on a
+  pulled Vercel placeholder.
 - `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` come from the linked Vercel project.
   Scope `VERCEL_TOKEN` to the owning Vercel team/project; it must be able to
-  pull/build/deploy/promote and call the project pause/unpause APIs.
+  pull/build/deploy/promote, access the staged deployment through `vercel curl`
+  (including its automatic deployment-protection bypass), and call the project
+  pause/unpause APIs.
 - The GitHub `DATABASE_URL` and `DIRECT_URL` secrets must identify the same
-  production database used by Vercel. The workflow compares both values with
-  the pulled Vercel Production environment. It then hashes every
-  `migration.sql` in the requested checkout and requires production's
+  production database used by Vercel. Vercel sensitive environment variables
+  are write-only, so the workflow does not compare their pulled placeholder
+  values. It hashes every `migration.sql` in the requested checkout and
+  requires production's
   successfully applied migrations to be the exact ordered checksum-valid
   prefix. Database-only migrations, modified checksums, unresolved migration
   attempts, and a revision older than production all fail before pausing.
-  Finally, every verification writes a fresh random nonce through
+  Each database connection verification writes a fresh random nonce through
   `DATABASE_URL`, observes and deletes it through `DIRECT_URL`, and observes
-  the deletion through `DATABASE_URL`. No persistent/clonable identity marker
-  is trusted, and connection strings or nonce values are never logged.
+  the deletion through `DATABASE_URL`.
+- After exact-SHA staging, the workflow writes a separate unpredictable,
+  ten-minute marker through the protected GitHub database connections. It
+  then uses authenticated `vercel curl` against only the staged deployment's
+  fixed `/api/release/runtime-verification` route. That route performs a
+  constant-time `CRON_SECRET` check, verifies the configured `APP_BASE_URL`,
+  reads only the fixed `Setting` key, rejects malformed/expired/wrong-SHA
+  markers, and returns no database URL or secret. The returned nonce must
+  match and is conditionally deleted before pause. A different staged runtime
+  database, APP base URL, or cron secret therefore stops the release before
+  pause or migration. The Vercel CLI uses the approved project token to handle
+  deployment protection; failure to obtain a protection bypass fails closed.
 - `APP_BASE_URL` must be the production HTTPS origin with no path, query, or
-  fragment. `CRON_SECRET` must authenticate the production cron routes. The
-  workflow compares both protected secrets with the pulled Vercel Production
-  environment before pausing, without printing their values.
+  fragment. `CRON_SECRET` must be a header-safe bearer secret. Their staged
+  runtime values are proved operationally by the authenticated marker request,
+  without printing either value.
 - For the first Sheet cutover, add both `SHEETS_SPREADSHEET_ID` and
   `SHEETS_TAB` as protected `production` environment variables (or secrets).
   If a name is configured as both a variable and secret, their values must
@@ -206,11 +221,12 @@ Configure **`production`** as follows:
   intentionally replace an existing target, enter `CONFIRM` in the workflow's
   `sheet_target_change_confirmation` input for that release. A persistent
   environment flag cannot authorize a switch.
-- In the Vercel **Production** environment, configure
-  `GOOGLE_CREDENTIALS_JSON` and grant that service account Editor access to the
-  configured Sheet. `GOOGLE_CREDENTIALS_PATH` works locally, but the protected
-  release can use it only if the same file is independently present on the
-  GitHub runner.
+- Configure the same service account as `GOOGLE_CREDENTIALS_JSON` in both the
+  Vercel **Production** environment (runtime sync) and the GitHub
+  **`production`** environment secret (release preflight/adoption), then grant
+  it Editor access to the configured Sheet. Vercel's write-only value cannot
+  be pulled back into GitHub. `GOOGLE_CREDENTIALS_PATH` remains local-only for
+  this release path.
 
 Configure **`production-recovery`** separately:
 
@@ -257,9 +273,10 @@ workflow from**, enter the full 40-character target commit SHA, and type
 3. enters the single reviewer-protected `production` job, checks out only the
    previously validated main commit, then generates Prisma Client and runs
    tests, TypeScript checks, and lint;
-4. pulls the Vercel Production settings, compares protected values without
-   logging them, verifies the requested migration checksum prefix, and proves
-   both database URLs with a fresh write/read/delete nonce;
+4. pulls only the Vercel project settings needed by the CLI, validates every
+   required protected GitHub secret without printing it, verifies the
+   requested migration checksum prefix, and proves both GitHub database URLs
+   with a fresh write/read/delete nonce;
 5. authenticates to Google Sheets, reads spreadsheet structure plus the exact
    tab header, and rejects missing access, partial configuration, invalid
    columns, or an override change without the one-run `CONFIRM` input;
@@ -268,7 +285,12 @@ workflow from**, enter the full 40-character target commit SHA, and type
    artifact, not a Preview deployment, but it receives no production alias.
    Its project, Production target, `releaseCommit` metadata, and READY state
    are verified with the protected token; the dedicated recovery preflight has
-   already proved access to the same fingerprinted project;
+   already proved access to the same fingerprinted project. Before recovery is
+   armed, a fresh expiring marker is written through the GitHub runtime/direct
+   connections and must be returned by the authenticated fixed route on this
+   exact staged deployment. This simultaneously proves the staged runtime
+   database, `APP_BASE_URL`, and `CRON_SECRET`; the marker is deleted before
+   continuing;
 7. arms recovery state, pauses the project, and waits 31 minutes—longer than
    Vercel's [currently configurable 1,800-second function maximum](https://vercel.com/docs/functions/configuring-functions/duration#extended-max-duration)—so
    old requests and outreach claims drain before any schema work;

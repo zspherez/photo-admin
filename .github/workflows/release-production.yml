@@ -304,6 +304,7 @@ jobs:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           SHEETS_SPREADSHEET_ID: ${{ vars.SHEETS_SPREADSHEET_ID || secrets.SHEETS_SPREADSHEET_ID }}
           SHEETS_TAB: ${{ vars.SHEETS_TAB || secrets.SHEETS_TAB }}
           SHEETS_SPREADSHEET_ID_VARIABLE: ${{ vars.SHEETS_SPREADSHEET_ID }}
@@ -339,10 +340,70 @@ jobs:
             echo "::error::APP_BASE_URL and CRON_SECRET production environment secrets are required"
             exit 1
           fi
+          if [[ -z "${GOOGLE_CREDENTIALS_JSON}" ]]; then
+            echo "::error::GOOGLE_CREDENTIALS_JSON is required as a production environment secret"
+            exit 1
+          fi
           if [[ ! "${APP_BASE_URL}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]; then
             echo "::error::APP_BASE_URL must be a production HTTPS origin with no path, query, or fragment"
             exit 1
           fi
+          node <<'NODE'
+          const databaseUrls = ["DATABASE_URL", "DIRECT_URL"];
+          for (const name of databaseUrls) {
+            const value = process.env[name];
+            let parsed;
+            try {
+              parsed = new URL(value);
+            } catch {
+              throw new Error(`${name} must be a valid PostgreSQL URL`);
+            }
+            if (
+              value !== value.trim() ||
+              !["postgres:", "postgresql:"].includes(parsed.protocol) ||
+              !parsed.hostname ||
+              !parsed.username ||
+              parsed.pathname === "/"
+            ) {
+              throw new Error(`${name} must be a valid PostgreSQL URL`);
+            }
+          }
+
+          const appBaseUrl = new URL(process.env.APP_BASE_URL);
+          if (
+            appBaseUrl.protocol !== "https:" ||
+            appBaseUrl.username ||
+            appBaseUrl.password ||
+            appBaseUrl.pathname !== "/" ||
+            appBaseUrl.search ||
+            appBaseUrl.hash
+          ) {
+            throw new Error("APP_BASE_URL must be a production HTTPS origin");
+          }
+
+          if (!/^[\x21-\x7e]{1,4096}$/.test(process.env.CRON_SECRET)) {
+            throw new Error("CRON_SECRET must be a header-safe bearer secret");
+          }
+
+          let credentials;
+          try {
+            credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+          } catch {
+            throw new Error("GOOGLE_CREDENTIALS_JSON must be valid JSON");
+          }
+          if (
+            !credentials ||
+            typeof credentials !== "object" ||
+            typeof credentials.client_email !== "string" ||
+            !credentials.client_email ||
+            typeof credentials.private_key !== "string" ||
+            !credentials.private_key
+          ) {
+            throw new Error(
+              "GOOGLE_CREDENTIALS_JSON must contain nonempty client_email and private_key fields",
+            );
+          }
+          NODE
           if [[ -n "${SHEETS_SPREADSHEET_ID_VARIABLE}" \
             && -n "${SHEETS_SPREADSHEET_ID_SECRET}" \
             && "${SHEETS_SPREADSHEET_ID_VARIABLE}" != "${SHEETS_SPREADSHEET_ID_SECRET}" ]]; then
@@ -361,7 +422,7 @@ jobs:
             exit 1
           fi
 
-      - name: Pull exact production project settings and environment
+      - name: Pull exact production project settings
         shell: bash
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -371,77 +432,30 @@ jobs:
           set -euo pipefail
           umask 077
           vercel pull --yes --environment=production --token "${VERCEL_TOKEN}"
-          vercel env pull \
-            .vercel/.env.production.local \
-            --yes \
-            --environment=production \
-            --token "${VERCEL_TOKEN}"
-
-      - name: Verify protected settings match Vercel production
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
-          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-        run: |
-          node <<'NODE'
-          const fs = require("node:fs");
-          const dotenv = require("dotenv");
-
-          const path = ".vercel/.env.production.local";
-          if (!fs.existsSync(path)) {
-            throw new Error(`Vercel production environment file is missing: ${path}`);
-          }
-
-          const pulled = dotenv.parse(fs.readFileSync(path));
-          for (const key of ["DATABASE_URL", "DIRECT_URL"]) {
-            if (!pulled[key] || pulled[key] !== process.env[key]) {
-              throw new Error(
-                `${key} GitHub environment secret does not match Vercel Production`,
-              );
-            }
-          }
-          const normalizeOrigin = (value) => value.replace(/\/$/, "");
-          if (
-            !pulled.APP_BASE_URL ||
-            normalizeOrigin(pulled.APP_BASE_URL) !==
-              normalizeOrigin(process.env.APP_BASE_URL)
-          ) {
-            throw new Error(
-              "APP_BASE_URL GitHub environment secret does not match Vercel Production",
-            );
-          }
-          if (
-            !pulled.CRON_SECRET ||
-            pulled.CRON_SECRET !== process.env.CRON_SECRET
-          ) {
-            throw new Error(
-              "CRON_SECRET GitHub environment secret does not match Vercel Production",
-            );
-          }
-          NODE
 
       - name: Bind requested SHA to production migration history and verify database connections
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
         run: |
           set -euo pipefail
-          env -u DATABASE_URL -u DIRECT_URL \
-            node --env-file=.vercel/.env.production.local \
-            "$(command -v npm)" --silent run db:verify-targets
+          npm --silent run db:verify-targets
 
       - name: Validate Sheet cutover target before staging
         shell: bash
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           SHEETS_SPREADSHEET_ID: ${{ vars.SHEETS_SPREADSHEET_ID || secrets.SHEETS_SPREADSHEET_ID }}
           SHEETS_TAB: ${{ vars.SHEETS_TAB || secrets.SHEETS_TAB }}
           SHEETS_TARGET_CHANGE_CONFIRMATION: ${{ inputs.sheet_target_change_confirmation }}
         run: |
           set -euo pipefail
-          env -u DATABASE_URL -u DIRECT_URL \
-            -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
+          env -u GOOGLE_CREDENTIALS_PATH \
             -u SPREADSHEET_ID \
-            node --env-file=.vercel/.env.production.local \
-            "$(command -v npm)" --silent run db:adopt-sheet-contacts -- \
+            npm --silent run db:adopt-sheet-contacts -- \
             --validate-target-only
 
       - name: Build exact production revision before pausing
@@ -494,6 +508,22 @@ jobs:
           bash scripts/verify-vercel-deployment.sh "${TARGET_URL}" "${RELEASE_SHA}"
           echo "verified=true" >> "${GITHUB_OUTPUT}"
 
+      - name: Prove staged runtime database and protected settings before pausing
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          RELEASE_SHA: ${{ steps.revision.outputs.sha }}
+          TARGET_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          bash scripts/verify-staged-runtime.sh "${TARGET_URL}" "${RELEASE_SHA}"
+
       - name: Arm recovery before pausing
         id: arm-pause
         shell: bash
@@ -518,35 +548,36 @@ jobs:
 
       - name: Apply expand-compatible production migrations
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
         run: |
           set -euo pipefail
-          env -u DATABASE_URL -u DIRECT_URL \
-            -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
+          env -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
             -u SPREADSHEET_ID \
-            node --env-file=.vercel/.env.production.local \
-            "$(command -v npm)" --silent run db:migrate:deploy
+            npm --silent run db:migrate:deploy
 
       - name: Backfill Unicode-normalized artist names
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
         run: |
           set -euo pipefail
-          env -u DATABASE_URL -u DIRECT_URL \
-            -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
+          env -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
             -u SPREADSHEET_ID \
-            node --env-file=.vercel/.env.production.local \
-            "$(command -v npm)" --silent run db:backfill:normalized-artists
+            npm --silent run db:backfill:normalized-artists
 
       - name: Verify requested migration set and exact-target compatibility
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
         run: |
           set -euo pipefail
-          env -u DATABASE_URL -u DIRECT_URL \
-            node --env-file=.vercel/.env.production.local \
-            "$(command -v npm)" --silent run db:verify-targets -- \
+          npm --silent run db:verify-targets -- \
             --require-all-migrations
-          env -u DATABASE_URL -u DIRECT_URL \
-            node --env-file=.vercel/.env.production.local \
-            "$(command -v npm)" --silent run db:verify-release-compatibility
+          npm --silent run db:verify-release-compatibility
 
       - name: Mark exact target schema safe
         id: schema-ready
@@ -583,29 +614,29 @@ jobs:
       - name: Adopt and verify configured Sheet contacts with new code
         shell: bash
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           SHEETS_SPREADSHEET_ID: ${{ vars.SHEETS_SPREADSHEET_ID || secrets.SHEETS_SPREADSHEET_ID }}
           SHEETS_TAB: ${{ vars.SHEETS_TAB || secrets.SHEETS_TAB }}
           SHEETS_TARGET_CHANGE_CONFIRMATION: ${{ inputs.sheet_target_change_confirmation }}
         run: |
           set -euo pipefail
-          env -u DATABASE_URL -u DIRECT_URL \
-            -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
+          env -u GOOGLE_CREDENTIALS_PATH \
             -u SPREADSHEET_ID \
-            node --env-file=.vercel/.env.production.local \
-            "$(command -v npm)" --silent run db:adopt-sheet-contacts
+            npm --silent run db:adopt-sheet-contacts
 
       - name: Verify new-code ownership and database compatibility
         id: ownership-ready
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
         run: |
           set -euo pipefail
-          env -u DATABASE_URL -u DIRECT_URL \
-            node --env-file=.vercel/.env.production.local \
-            "$(command -v npm)" --silent run db:verify-release-compatibility -- \
+          npm --silent run db:verify-release-compatibility -- \
             --require-sheet-adoption
-          env -u DATABASE_URL -u DIRECT_URL \
-            node --env-file=.vercel/.env.production.local \
-            "$(command -v npm)" --silent run db:verify-targets -- \
+          npm --silent run db:verify-targets -- \
             --require-all-migrations
           echo "ownership_ready=true" >> "${GITHUB_OUTPUT}"
 
@@ -748,7 +779,7 @@ jobs:
           bash scripts/recover-production-release.sh
           echo "resumed=true" >> "${GITHUB_OUTPUT}"
 
-      - name: Remove pulled production environment
+      - name: Remove pulled production settings
         if: ${{ always() }}
         shell: bash
         run: rm -f .vercel/.env.production.local
