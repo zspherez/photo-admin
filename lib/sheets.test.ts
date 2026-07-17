@@ -52,6 +52,13 @@ test("Sheet rows distinguish empty, email, direct outreach, and invalid identiti
   assert.match(source, /"missing_artist"/);
 });
 
+test("same canonical artist and email aliases are deduplicated during Sheet planning", () => {
+  const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
+  assert.match(source, /event: "sheet_contact_duplicate_skipped"/);
+  assert.match(source, /reason: "same_artist_email"/);
+  assert.doesNotMatch(source, /Sheet contains duplicate contact/);
+});
+
 test("decorated Sheet emails normalize without loosening duplicate identity", () => {
   assert.deepEqual(
     parseSheetEmails(
@@ -70,7 +77,7 @@ test("decorated Sheet emails normalize without loosening duplicate identity", ()
   const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
   assert.match(
     source,
-    /plannedArtistEmails\.has\(artistEmail\)[\s\S]*Sheet contains duplicate contact/,
+    /plannedArtistEmails\.has\(artistEmail\)[\s\S]*sheet_contact_duplicate_skipped/,
   );
 });
 

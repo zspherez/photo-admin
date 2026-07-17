@@ -1705,9 +1705,16 @@ async function syncContactsAtTarget(
             : null;
           if (artistEmail) {
             if (plannedArtistEmails.has(artistEmail)) {
-              throw new Error(
-                `Sheet contains duplicate contact ${assignment.email} for ${row.artistName}`
+              console.warn(
+                JSON.stringify({
+                  event: "sheet_contact_duplicate_skipped",
+                  tabName: target.tabName,
+                  rowId: row.rowId,
+                  artistId: artist.id,
+                  reason: "same_artist_email",
+                })
               );
+              continue;
             }
             plannedArtistEmails.add(artistEmail);
           }
