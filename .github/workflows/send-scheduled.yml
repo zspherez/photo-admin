@@ -260,6 +260,44 @@ jobs:
             fi
 
             if (( curl_status == 0 )) && [[ "${http_status}" =~ ^2[0-9]{2}$ ]]; then
+              legacy_response=false
+              if jq -e '
+                if type != "object" then false
+                elif .ok != true then false
+                elif has("state") or has("complete") then false
+                elif (
+                  .dispatched |
+                  type != "number" or . < 0 or floor != .
+                ) then false
+                elif (.results | type) != "array" then false
+                else
+                  all(
+                    .results[];
+                    if type != "object" then false
+                    else
+                      .ok == true and
+                      .error? == null and
+                      .terminal? != true and
+                      .terminalFailure? != true and
+                      .disposition? != "terminal" and
+                      .state? != "terminal_failure"
+                    end
+                  )
+                end
+              ' >/dev/null <<<"${body}"; then
+                legacy_response=true
+              fi
+
+              if [[ "${legacy_response}" == "true" ]]; then
+                if (( terminal_failures_seen > 0 )); then
+                  echo "::error::Outreach legacy response cannot clear ${terminal_failures_seen} previously reported terminal row failure(s)"
+                  exit 1
+                fi
+                echo "::warning::Outreach dispatch used legacy scheduler response compatibility"
+                echo "Outreach dispatch succeeded with HTTP ${http_status}"
+                exit 0
+              fi
+
               echo "::error::Outreach dispatch returned invalid scheduler JSON"
               exit 1
             fi
