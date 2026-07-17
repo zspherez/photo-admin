@@ -67,7 +67,7 @@ function markerValue(
     version: 1,
     nonce: NONCE,
     releaseSha: RELEASE_SHA,
-    expiresAt: NOW + 20 * 60 * 1_000,
+    expiresAt: NOW + 25 * 60 * 1_000,
     ...overrides,
   });
 }
@@ -91,7 +91,7 @@ test("release marker is written across both GitHub database connections and cond
     version: 1,
     nonce: NONCE,
     releaseSha: RELEASE_SHA,
-    expiresAt: NOW + 20 * 60 * 1_000,
+    expiresAt: NOW + 25 * 60 * 1_000,
   });
   assert.equal(runtime.writes.length, 1);
   assert.equal(
