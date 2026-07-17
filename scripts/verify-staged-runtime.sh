@@ -25,6 +25,7 @@ fi
 
 npm_bin="${NPM_BIN:-npm}"
 vercel_bin="${VERCEL_BIN:-vercel}"
+sleep_bin="${SLEEP_BIN:-sleep}"
 release_sha_lower="$(printf '%s' "${release_sha}" | tr '[:upper:]' '[:lower:]')"
 release_nonce=""
 cleanup_required=false
@@ -77,39 +78,75 @@ printf -v authorization_header '%s: %s %s' \
   "${CRON_SECRET}"
 
 response=""
-if response="$(
-  trap - EXIT
-  "${vercel_bin}" curl \
-    "/api/release/runtime-verification" \
-    --deployment "${deployment_url}" \
-    --yes \
-    -- \
-    --fail-with-body \
-    --silent \
-    --show-error \
-    --connect-timeout 15 \
-    --max-time 60 \
-    --request GET \
-    --header "${authorization_header}" \
-    --header "Accept: application/json" \
-    --header "X-Photo-Admin-Release-App-Base-URL: ${APP_BASE_URL}" \
-    --header "X-Photo-Admin-Release-SHA: ${release_sha}" \
-    --write-out $'\n__PHOTO_ADMIN_HTTP_STATUS__:%{http_code}'
-)"; then
-  curl_status=0
-else
-  curl_status=$?
-fi
+curl_status=0
+http_status="000"
+body=""
+request_attempt=1
+max_request_attempts=8
+request_delay=5
+while (( request_attempt <= max_request_attempts )); do
+  response=""
+  if response="$(
+    trap - EXIT
+    "${vercel_bin}" curl \
+      "/api/release/runtime-verification" \
+      --deployment "${deployment_url}" \
+      --yes \
+      -- \
+      --fail-with-body \
+      --silent \
+      --show-error \
+      --connect-timeout 15 \
+      --max-time 60 \
+      --request GET \
+      --header "${authorization_header}" \
+      --header "Accept: application/json" \
+      --header "X-Photo-Admin-Release-App-Base-URL: ${APP_BASE_URL}" \
+      --header "X-Photo-Admin-Release-SHA: ${release_sha}" \
+      --write-out $'\n__PHOTO_ADMIN_HTTP_STATUS__:%{http_code}'
+  )"; then
+    curl_status=0
+  else
+    curl_status=$?
+  fi
 
-marker="${response##*$'\n'}"
-if [[ "${marker}" == __PHOTO_ADMIN_HTTP_STATUS__:* ]]; then
-  http_status="${marker#*:}"
-  body="${response%$'\n'*}"
-  body="${body##*$'\n'}"
-else
-  http_status="000"
-  body=""
-fi
+  marker="${response##*$'\n'}"
+  if [[ "${marker}" == __PHOTO_ADMIN_HTTP_STATUS__:* ]]; then
+    http_status="${marker#*:}"
+    body="${response%$'\n'*}"
+    body="${body##*$'\n'}"
+  else
+    http_status="000"
+    body=""
+  fi
+
+  if (( curl_status == 0 )) && [[ "${http_status}" == "200" ]]; then
+    break
+  fi
+
+  retryable=false
+  if (( curl_status == 22 )); then
+    case "${http_status}" in
+      404|408|425|429|500|502|503|504) retryable=true ;;
+    esac
+  else
+    case "${curl_status}" in
+      6|7|18|28|35|52|55|56|92) retryable=true ;;
+    esac
+  fi
+  if [[ "${retryable}" != "true" ]] ||
+    (( request_attempt >= max_request_attempts )); then
+    break
+  fi
+
+  echo "::warning::Staged runtime verification is not ready (curl ${curl_status}, HTTP ${http_status}); retrying in ${request_delay}s." >&2
+  "${sleep_bin}" "${request_delay}"
+  request_attempt=$((request_attempt + 1))
+  request_delay=$((request_delay * 2))
+  if (( request_delay > 20 )); then
+    request_delay=20
+  fi
+done
 
 if (( curl_status != 0 )) || [[ "${http_status}" != "200" ]]; then
   echo "::error::Staged runtime verification request failed (curl ${curl_status}, HTTP ${http_status})." >&2

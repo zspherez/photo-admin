@@ -40,6 +40,7 @@ function runVerification(
       import.meta.url
     )
   );
+  const runtimeStateFile = `${stateFile}.runtime`;
   try {
     const result = spawnSync("bash", [script, deployment, releaseSha], {
       encoding: "utf8",
@@ -52,8 +53,10 @@ function runVerification(
         VERCEL_TOKEN: vercelToken,
         NPM_BIN: mockNpm,
         VERCEL_BIN: mockVercel,
+        SLEEP_BIN: "/usr/bin/true",
         MOCK_RELEASE_NONCE: nonce,
         MOCK_RELEASE_STATE_FILE: stateFile,
+        MOCK_RUNTIME_STATE_FILE: runtimeStateFile,
         MOCK_RUNTIME_BODY: runtimeBody(),
         MOCK_EXPECT_AUTHORIZATION_HEADER: `Authorization: Bearer ${cronSecret}`,
         MOCK_EXPECT_APP_BASE_URL_HEADER:
@@ -71,9 +74,11 @@ function runVerification(
     } catch {}
     return { ...result, state };
   } finally {
-    try {
-      unlinkSync(stateFile);
-    } catch {}
+    for (const path of [stateFile, runtimeStateFile]) {
+      try {
+        unlinkSync(path);
+      } catch {}
+    }
   }
 }
 
@@ -138,6 +143,17 @@ test("authentication or deployment protection failure cleans the marker", () => 
   assert.equal(result.status, 1);
   assert.equal(result.state, "create\ncleanup\n");
   assert.match(result.stderr, /curl 22, HTTP 401/);
+});
+
+test("staged route propagation retries transient 404 responses", () => {
+  const result = runVerification("propagation", {
+    MOCK_RUNTIME_HTTP_SEQUENCE: "404,404,200",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.state, "create\ncleanup\n");
+  assert.match(result.stderr, /HTTP 404.*retrying in 5s/);
+  assert.match(result.stderr, /HTTP 404.*retrying in 10s/);
 });
 
 test("cleanup failure prevents pausing even after a valid staged response", () => {

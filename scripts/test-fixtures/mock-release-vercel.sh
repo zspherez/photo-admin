@@ -7,6 +7,14 @@ release_sha_header=""
 deployment=""
 token=""
 previous_argument=""
+state_file="${MOCK_RUNTIME_STATE_FILE:-}"
+request_number=1
+if [[ -n "${state_file}" && -f "${state_file}" ]]; then
+  request_number="$(( $(cat "${state_file}") + 1 ))"
+fi
+if [[ -n "${state_file}" ]]; then
+  printf '%s' "${request_number}" > "${state_file}"
+fi
 for argument in "$@"; do
   if [[ "${previous_argument}" == "--header" ]]; then
     case "${argument}" in
@@ -33,7 +41,21 @@ if [[ "${authorization_header}" != "${MOCK_EXPECT_AUTHORIZATION_HEADER:-}" \
   exit 0
 fi
 
+http_status="${MOCK_RUNTIME_HTTP_STATUS:-200}"
+curl_status="${MOCK_RUNTIME_CURL_STATUS:-0}"
+if [[ -n "${MOCK_RUNTIME_HTTP_SEQUENCE:-}" ]]; then
+  IFS=',' read -r -a statuses <<<"${MOCK_RUNTIME_HTTP_SEQUENCE}"
+  index=$((request_number - 1))
+  if (( index >= ${#statuses[@]} )); then
+    index=$((${#statuses[@]} - 1))
+  fi
+  http_status="${statuses[${index}]}"
+  if [[ "${http_status}" != "200" ]]; then
+    curl_status=22
+  fi
+fi
+
 printf '%s\n__PHOTO_ADMIN_HTTP_STATUS__:%s' \
   "${MOCK_RUNTIME_BODY:-}" \
-  "${MOCK_RUNTIME_HTTP_STATUS:-200}"
-exit "${MOCK_RUNTIME_CURL_STATUS:-0}"
+  "${http_status}"
+exit "${curl_status}"
