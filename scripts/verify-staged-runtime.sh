@@ -79,7 +79,7 @@ printf -v authorization_header '%s: %s %s' \
 response=""
 if response="$(
   trap - EXIT
-  "${vercel_bin}" --token "${VERCEL_TOKEN}" curl \
+  "${vercel_bin}" curl \
     "/api/release/runtime-verification" \
     --deployment "${deployment_url}" \
     --yes \

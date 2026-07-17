@@ -92,15 +92,12 @@ test("staged runtime proof verifies the marker and cleans it before success", ()
   );
 });
 
-test("Vercel authentication is passed as a global option before curl", () => {
+test("Vercel authentication stays in the environment instead of reaching curl", () => {
   const source = readFileSync(script, "utf8");
-  assert.match(
-    source,
-    /"\$\{vercel_bin\}" --token "\$\{VERCEL_TOKEN\}" curl/,
-  );
+  assert.match(source, /"\$\{vercel_bin\}" curl/);
   assert.doesNotMatch(
     source,
-    /curl[\s\S]*--token "\$\{VERCEL_TOKEN\}"[\s\S]*-- \\\n/,
+    /"\$\{vercel_bin\}"[\s\S]*--token "\$\{VERCEL_TOKEN\}"/,
   );
 });
 
