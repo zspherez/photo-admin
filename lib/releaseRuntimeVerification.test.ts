@@ -67,7 +67,7 @@ function markerValue(
     version: 1,
     nonce: NONCE,
     releaseSha: RELEASE_SHA,
-    expiresAt: NOW + 10 * 60 * 1_000,
+    expiresAt: NOW + 20 * 60 * 1_000,
     ...overrides,
   });
 }
@@ -91,7 +91,7 @@ test("release marker is written across both GitHub database connections and cond
     version: 1,
     nonce: NONCE,
     releaseSha: RELEASE_SHA,
-    expiresAt: NOW + 10 * 60 * 1_000,
+    expiresAt: NOW + 20 * 60 * 1_000,
   });
   assert.equal(runtime.writes.length, 1);
   assert.equal(
@@ -128,7 +128,7 @@ test("stale and malformed abandoned markers are replaced, while an active marker
     ["malformed", '{"version":1,"nonce":"broken"}'],
     [
       "far-future",
-      markerValue({ expiresAt: NOW + 16 * 60 * 1_000 }),
+      markerValue({ expiresAt: NOW + 31 * 60 * 1_000 }),
     ],
   ] as const) {
     await t.test(name, async () => {
@@ -293,7 +293,7 @@ test("runtime verification fails closed for APP_BASE_URL, SHA, database, malform
     },
     {
       name: "far-future-marker",
-      value: markerValue({ expiresAt: NOW + 16 * 60 * 1_000 }),
+      value: markerValue({ expiresAt: NOW + 31 * 60 * 1_000 }),
       status: 404,
       expectedReads: 1,
     },

@@ -8,8 +8,8 @@ export const RELEASE_RUNTIME_VERIFICATION_SETTING_KEY =
 export const RELEASE_RUNTIME_APP_BASE_URL_HEADER =
   "x-photo-admin-release-app-base-url";
 export const RELEASE_RUNTIME_SHA_HEADER = "x-photo-admin-release-sha";
-export const RELEASE_RUNTIME_VERIFICATION_TTL_MS = 10 * 60 * 1_000;
-export const RELEASE_RUNTIME_VERIFICATION_MAX_TTL_MS = 15 * 60 * 1_000;
+export const RELEASE_RUNTIME_VERIFICATION_TTL_MS = 20 * 60 * 1_000;
+export const RELEASE_RUNTIME_VERIFICATION_MAX_TTL_MS = 30 * 60 * 1_000;
 
 const RELEASE_NONCE_BYTES = 32;
 const RELEASE_NONCE_LENGTH = 43;

@@ -82,7 +82,7 @@ curl_status=0
 http_status="000"
 body=""
 request_attempt=1
-max_request_attempts=8
+max_request_attempts=38
 request_delay=5
 while (( request_attempt <= max_request_attempts )); do
   response=""
@@ -178,7 +178,7 @@ if ! printf '%s' "${body}" |
           result.releaseSha !== process.env.EXPECTED_RELEASE_SHA ||
           !Number.isSafeInteger(result.expiresAt) ||
           result.expiresAt <= Date.now() ||
-          result.expiresAt > Date.now() + 15 * 60 * 1000
+          result.expiresAt > Date.now() + 30 * 60 * 1000
         ) {
           process.exit(1);
         }

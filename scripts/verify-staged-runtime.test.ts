@@ -25,7 +25,7 @@ function runtimeBody(overrides: Record<string, unknown> = {}): string {
     version: 1,
     nonce,
     releaseSha,
-    expiresAt: Date.now() + 10 * 60 * 1_000,
+    expiresAt: Date.now() + 20 * 60 * 1_000,
     ...overrides,
   });
 }
