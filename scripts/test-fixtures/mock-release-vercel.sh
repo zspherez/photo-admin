@@ -4,6 +4,7 @@ set -euo pipefail
 authorization_header=""
 app_base_url_header=""
 release_sha_header=""
+bypass_header=""
 deployment=""
 token=""
 previous_argument=""
@@ -21,8 +22,9 @@ for argument in "$@"; do
       Authorization:*) authorization_header="${argument}" ;;
       X-Photo-Admin-Release-App-Base-URL:*) app_base_url_header="${argument}" ;;
       X-Photo-Admin-Release-SHA:*) release_sha_header="${argument}" ;;
+      x-vercel-protection-bypass:*) bypass_header="${argument}" ;;
     esac
-  elif [[ "${previous_argument}" == "--deployment" ]]; then
+  elif [[ "${argument}" =~ ^https://[A-Za-z0-9-]+\.vercel\.app/api/release/runtime-verification$ ]]; then
     deployment="${argument}"
   elif [[ "${previous_argument}" == "--token" ]]; then
     token="${argument}"
@@ -33,9 +35,10 @@ done
 if [[ "${authorization_header}" != "${MOCK_EXPECT_AUTHORIZATION_HEADER:-}" \
   || "${app_base_url_header}" != "${MOCK_EXPECT_APP_BASE_URL_HEADER:-}" \
   || "${release_sha_header}" != "${MOCK_EXPECT_RELEASE_SHA_HEADER:-}" \
-  || "${deployment}" != "${MOCK_EXPECT_DEPLOYMENT:-}" \
+  || "${bypass_header}" != "${MOCK_EXPECT_BYPASS_HEADER:-}" \
+  || "${deployment}" != "${MOCK_EXPECT_DEPLOYMENT:-}/api/release/runtime-verification" \
   || -n "${token}" \
-  || "${VERCEL_TOKEN:-}" != "${MOCK_EXPECT_VERCEL_TOKEN:-}" ]]; then
+  || "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" != "${MOCK_EXPECT_BYPASS_SECRET:-}" ]]; then
   printf '%s\n__PHOTO_ADMIN_HTTP_STATUS__:403' \
     '{"error":"invalid mock staged request"}'
   exit 0

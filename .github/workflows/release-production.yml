@@ -515,9 +515,7 @@ jobs:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           RELEASE_SHA: ${{ steps.revision.outputs.sha }}
           TARGET_URL: ${{ steps.deploy.outputs.url }}
         run: |
