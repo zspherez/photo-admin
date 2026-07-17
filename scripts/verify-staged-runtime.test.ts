@@ -92,6 +92,18 @@ test("staged runtime proof verifies the marker and cleans it before success", ()
   );
 });
 
+test("Vercel authentication is passed as a global option before curl", () => {
+  const source = readFileSync(script, "utf8");
+  assert.match(
+    source,
+    /"\$\{vercel_bin\}" --token "\$\{VERCEL_TOKEN\}" curl/,
+  );
+  assert.doesNotMatch(
+    source,
+    /curl[\s\S]*--token "\$\{VERCEL_TOKEN\}"[\s\S]*-- \\\n/,
+  );
+});
+
 test("wrong staged database marker fails before pause and still cleans the candidate marker", () => {
   const result = runVerification("wrong-database", {
     MOCK_RUNTIME_BODY: runtimeBody({ nonce: Buffer.alloc(32, 10).toString("base64url") }),
