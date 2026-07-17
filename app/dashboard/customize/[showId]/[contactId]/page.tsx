@@ -28,6 +28,11 @@ import { formatShowDate } from "@/lib/formatDate";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
+import {
+  contactDisplayValue,
+  hasDirectOutreachNote,
+  isDirectOutreachOnly,
+} from "@/lib/contactDisplay";
 
 export const dynamic = "force-dynamic";
 
@@ -151,11 +156,18 @@ export default async function CustomizePage({
             ? contact.name
               ? `${contact.name} <${contact.email}>`
               : contact.email
-            : contact.name ?? "contact without email"}
+            : contact.name
+              ? `${contact.name} · ${contactDisplayValue(contact)}`
+              : contactDisplayValue(contact)}
         </b>{" "}
         · {contact.artist.name} at {show.venueName},{" "}
         {formatShowDate(show.date, {})}
       </p>
+      {hasDirectOutreachNote(contact) && (
+        <p className="mt-2 whitespace-pre-wrap rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+          <b>Direct outreach:</b> {contact.directOutreachNote}
+        </p>
+      )}
       {!canSend && (
         <div
           role="alert"
@@ -164,7 +176,9 @@ export default async function CustomizePage({
           {show.syncStatus !== "active"
             ? "This show is inactive. Email outreach is disabled."
             : !contact.email?.trim()
-              ? "This contact has no email address. Add one before sending."
+              ? isDirectOutreachOnly(contact)
+                ? "This is a direct-outreach contact with no email action."
+                : "This contact has no email action."
               : sendability?.reason ?? "Email outreach is unavailable."}
         </div>
       )}

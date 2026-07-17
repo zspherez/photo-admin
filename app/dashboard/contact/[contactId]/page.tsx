@@ -22,6 +22,10 @@ import { refreshWorkflowViews } from "@/lib/workflowRefresh";
 import { getFollowUpEligibilityBatch } from "@/lib/sendOutreach";
 import { isWeekendET } from "@/lib/schedule";
 import {
+  directOutreachNoteValue,
+  hasDirectOutreachNote,
+} from "@/lib/contactDisplay";
+import {
   cancelScheduledAction,
   sendFollowUpAction,
 } from "@/app/dashboard/actions";
@@ -38,6 +42,7 @@ const getEditableContact = cache(async (contactId: string) =>
       id: true,
       email: true,
       phone: true,
+      directOutreachNote: true,
       name: true,
       role: true,
       customPrice: true,
@@ -100,15 +105,24 @@ async function saveContact(formData: FormData) {
   const historyPage = parseHistoryPage(formData.get("historyPage") ?? undefined);
   const email = ((formData.get("email") as string) ?? "").trim().toLowerCase() || null;
   const phone = ((formData.get("phone") as string) ?? "").trim() || null;
+  const directOutreachNote =
+    ((formData.get("directOutreachNote") as string) ?? "").trim() || null;
   const name = ((formData.get("name") as string) ?? "").trim() || null;
   const role = ((formData.get("role") as string) ?? "").trim() || null;
   const customPrice = ((formData.get("customPrice") as string) ?? "").trim() || null;
   const notes = ((formData.get("notes") as string) ?? "").trim() || null;
 
-  if (!contactId || (!email && !phone)) {
+  if (
+    !contactId ||
+    (!email && !phone && !directOutreachNote) ||
+    (email && directOutreachNote)
+  ) {
     redirect(
       contactPageHref(contactId, returnTo, {
-        error: "missing_fields",
+        error:
+          email && directOutreachNote
+            ? "conflicting_targets"
+            : "missing_fields",
         historyPage,
       })
     );
@@ -127,10 +141,14 @@ async function saveContact(formData: FormData) {
     );
   }
 
-  if (prior.source === "sheet" && (!email || !prior.email)) {
+  if (
+    prior.source === "sheet" &&
+    ((!email && !directOutreachNote) ||
+      (!prior.email && !prior.directOutreachNote))
+  ) {
     redirect(
       contactPageHref(contactId, returnTo, {
-        error: "sheet_email_required",
+        error: "sheet_target_required",
         historyPage,
       })
     );
@@ -157,12 +175,14 @@ async function saveContact(formData: FormData) {
   let sheetUpdate: Awaited<ReturnType<typeof updateContactInSheet>> | null =
     null;
   let sheetError: string | null = null;
-  if (prior.source === "sheet" && email && prior.email) {
+  if (prior.source === "sheet") {
     try {
       sheetUpdate = await updateContactInSheet({
         artistName: prior.artist.name,
         oldEmail: prior.email,
         newEmail: email,
+        oldDirectOutreachNote: prior.directOutreachNote,
+        newDirectOutreachNote: directOutreachNote,
         sourceKey: prior.sourceKey,
         managerName: name,
         role,
@@ -191,6 +211,7 @@ async function saveContact(formData: FormData) {
       data: {
         email,
         phone,
+        directOutreachNote,
         name,
         role,
         customPrice,
@@ -206,12 +227,14 @@ async function saveContact(formData: FormData) {
     });
   } catch (error) {
     databaseError = error instanceof Error ? error.message : String(error);
-    if (sheetUpdate && email && prior.email) {
+    if (sheetUpdate && prior.source === "sheet") {
       try {
         await updateContactInSheet({
           artistName: prior.artist.name,
           oldEmail: email,
           newEmail: prior.email,
+          oldDirectOutreachNote: directOutreachNote,
+          newDirectOutreachNote: prior.directOutreachNote,
           sourceKey: sheetUpdate.sourceKey,
           managerName: prior.name,
           role: prior.role,
@@ -366,9 +389,11 @@ export default async function ContactEditPage({
       {error && (
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
           {error === "missing_fields"
-            ? "Provide an email or a phone number."
-            : error === "sheet_email_required"
-              ? "Sheet-owned contacts must keep an email address."
+            ? "Provide an email, phone number, or direct outreach details."
+            : error === "conflicting_targets"
+              ? "Use either an email or direct outreach details, not both."
+            : error === "sheet_target_required"
+              ? "Sheet-owned contacts must keep an email or direct outreach details."
               : error === "duplicate_email"
                 ? "That artist already has this email address."
                 : error === "sheet_sync"
@@ -392,6 +417,17 @@ export default async function ContactEditPage({
         </div>
       )}
 
+      {hasDirectOutreachNote(contact) && (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300">
+            Direct outreach
+          </p>
+          <p className="mt-1 whitespace-pre-wrap">
+            {directOutreachNoteValue(contact)}
+          </p>
+        </div>
+      )}
+
       <Card className="mt-6">
         <CardBody>
           <form action={saveContact} className="space-y-4">
@@ -404,7 +440,16 @@ export default async function ContactEditPage({
             />
             <Field name="email" label="Email" type="email" defaultValue={contact.email ?? ""} />
             <Field name="phone" label="Phone (for texting)" type="tel" defaultValue={contact.phone ?? ""} placeholder="+1 555 123 4567" />
-            <p className="text-xs text-zinc-500">Provide at least one of email or phone.</p>
+            <TextArea
+              name="directOutreachNote"
+              label="Direct outreach details"
+              description="Use instead of email for a personal relationship, DM path, or other direct contact instructions."
+              rows={3}
+              defaultValue={contact.directOutreachNote ?? ""}
+            />
+            <p className="text-xs text-zinc-500">
+              Provide an email, phone, or direct outreach details. Email and direct outreach details cannot be combined on one contact.
+            </p>
             <Field name="name" label="Manager name" defaultValue={contact.name ?? ""} />
             <Field name="role" label="Role" defaultValue={contact.role ?? ""} placeholder="management / booking / artist" />
             <Field name="customPrice" label="Custom rate" defaultValue={contact.customPrice ?? ""} placeholder="$400" />
@@ -476,7 +521,7 @@ export default async function ContactEditPage({
                           {o.error ? ` · error: ${o.error}` : ""}
                         </p>
                       </div>
-                      {eligibility && (
+                      {contact.email && eligibility && (
                         <FollowUpButton
                           eligibility={eligibility}
                           returnTo={currentReturnTo}

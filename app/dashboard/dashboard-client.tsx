@@ -23,9 +23,15 @@ import { SendButton } from "@/components/send-button";
 import { FollowUpButton } from "@/components/follow-up-button";
 import { cn } from "@/lib/cn";
 import {
+  pickDirectOutreachContact,
   pickEmailContact,
   pickPhoneContact,
 } from "@/lib/contactSelection";
+import {
+  contactDisplayValue,
+  hasDirectOutreachNote,
+  isDirectOutreachOnly,
+} from "@/lib/contactDisplay";
 import { formatShowDate } from "@/lib/formatDate";
 import { formatRankLabel } from "@/lib/listenSignal";
 import type {
@@ -422,8 +428,14 @@ export function DashboardClient({
                     artist.contacts,
                     emailContact
                   );
+                  const directOutreachContact =
+                    pickDirectOutreachContact(artist.contacts);
                   const contact =
-                    emailContact ?? phoneContact ?? artist.contacts[0] ?? null;
+                    emailContact ??
+                    phoneContact ??
+                    directOutreachContact ??
+                    artist.contacts[0] ??
+                    null;
                   const artistOutreaches = show.outreach.filter(
                     (outreach) =>
                       outreach.artistId === artist.id &&
@@ -610,22 +622,33 @@ export function DashboardClient({
                                       returnTo
                                     )
                               }
-                              className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                              className="inline-flex max-w-64 items-center truncate rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                               title={artist.contacts
                                 .map((row) =>
                                   `${row.name ?? ""} ${
-                                    row.email
-                                      ? `<${row.email}>`
-                                      : row.phone ?? ""
+                                    row.email ? `<${row.email}>` : contactDisplayValue(row, "")
                                   }`.trim()
                                 )
                                 .join("\n")}
                             >
-                              {contact.customPrice ??
-                                (artist.contacts.length > 1
-                                  ? `${artist.contacts.length} contacts`
-                                  : "edit")}
+                              {hasDirectOutreachNote(contact)
+                                ? contact.directOutreachNote
+                                : contact.customPrice ??
+                                  (artist.contacts.length > 1
+                                    ? `${artist.contacts.length} contacts`
+                                    : "edit")}
                             </Link>
+                            {hasDirectOutreachNote(contact) && (
+                              <Badge tone="warning" size="xs">
+                                Direct outreach
+                              </Badge>
+                            )}
+                            {hasDirectOutreachNote(contact) &&
+                              contact.customPrice && (
+                                <Badge tone="default" size="xs">
+                                  {contact.customPrice}
+                                </Badge>
+                              )}
                             {emailContact?.isFullTeam && (
                               <Badge
                                 tone="accent"
@@ -690,12 +713,15 @@ export function DashboardClient({
                             )}
                           </div>
                         )}
-                        {contact && !emailContact && !phoneContact && (
+                        {contact &&
+                          !emailContact &&
+                          !phoneContact &&
+                          !isDirectOutreachOnly(contact) && (
                           <span className="text-[10px] text-amber-700 dark:text-amber-400">
                             No email or phone
                           </span>
                         )}
-                        {followUpEligibility && (
+                        {emailContact && followUpEligibility && (
                           <FollowUpButton
                             eligibility={followUpEligibility}
                             returnTo={returnTo}

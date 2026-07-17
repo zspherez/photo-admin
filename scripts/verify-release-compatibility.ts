@@ -26,6 +26,7 @@ async function main(): Promise<void> {
     settings,
     activeUnownedSheetContacts,
     contactProbe,
+    directOutreachNoteProbe,
     festivalGeographyProbe,
     outreachKindProbe,
     outreachAttemptProbe,
@@ -46,6 +47,10 @@ async function main(): Promise<void> {
       },
     }),
     db.contact.count({ where: { state: "active" }, take: 1 }),
+    db.contact.count({
+      where: { directOutreachNote: { not: null } },
+      take: 1,
+    }),
     db.show.count({
       where: {
         OR: [{ countryCode: "US" }, { countryName: { not: null } }],
@@ -66,6 +71,7 @@ async function main(): Promise<void> {
     {
       databaseProbeSucceeded: [
         contactProbe,
+        directOutreachNoteProbe,
         festivalGeographyProbe,
         outreachKindProbe,
         outreachAttemptProbe,

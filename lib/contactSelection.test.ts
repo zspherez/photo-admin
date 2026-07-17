@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  pickDirectOutreachContact,
   pickEmailContact,
   pickPhoneContact,
 } from "./contactSelection";
@@ -10,6 +11,7 @@ const contacts = [
     id: "phone-only",
     email: null,
     phone: "+15550000001",
+    directOutreachNote: null,
     isFullTeam: false,
     state: "active" as const,
   },
@@ -17,6 +19,7 @@ const contacts = [
     id: "manager",
     email: "manager@example.com",
     phone: "+15550000002",
+    directOutreachNote: null,
     isFullTeam: false,
     state: "active" as const,
   },
@@ -24,6 +27,7 @@ const contacts = [
     id: "full-team",
     email: "team@example.com",
     phone: null,
+    directOutreachNote: null,
     isFullTeam: true,
     state: "active" as const,
   },
@@ -56,6 +60,7 @@ test("quarantined contacts are never selectable", () => {
       id: "quarantined-full-team",
       email: "legacy@example.com",
       phone: "+15550000003",
+      directOutreachNote: null,
       isFullTeam: true,
       state: "quarantined" as const,
     },
@@ -66,4 +71,19 @@ test("quarantined contacts are never selectable", () => {
     pickEmailContact([...quarantined, contacts[1]])?.id,
     "manager",
   );
+});
+
+test("direct outreach contacts never become email or SMS targets", () => {
+  const direct = {
+    id: "direct",
+    email: null,
+    phone: null,
+    directOutreachNote: "Reach out through a personal introduction",
+    isFullTeam: true,
+    state: "active" as const,
+  };
+
+  assert.equal(pickEmailContact([direct]), null);
+  assert.equal(pickPhoneContact([direct]), null);
+  assert.equal(pickDirectOutreachContact([direct])?.id, "direct");
 });

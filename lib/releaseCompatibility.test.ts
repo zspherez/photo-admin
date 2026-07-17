@@ -91,6 +91,7 @@ test("release probe exercises new festival and outreach schema surfaces", () => 
   );
   assert.match(
     source,
-    /contactProbe,\s*festivalGeographyProbe,\s*outreachKindProbe,\s*outreachAttemptProbe/,
+    /contactProbe,\s*directOutreachNoteProbe,\s*festivalGeographyProbe,\s*outreachKindProbe,\s*outreachAttemptProbe/,
   );
+  assert.match(source, /directOutreachNote: \{ not: null \}/);
 });

@@ -21,6 +21,7 @@ import {
   type OperationDeadline,
   withIntegrationSyncLease,
 } from "@/lib/integrationUtils";
+import { normalizeEmail } from "@/lib/resend";
 
 const SHEET_SOURCE_ID_HEADER = "photo_admin_id";
 const SHEET_SYNC_LEASE_WAIT_MS = 2 * 60 * 1_000;
@@ -731,16 +732,39 @@ export function parseSheetEmails(value: string): {
   isFullTeam: boolean;
 } {
   const isFullTeam = /full\s*teams?/i.test(value);
-  const emails = Array.from(
-    new Set(
-      value
-        .replace(/full\s*teams?/gi, "")
-        .split(/[\s,;]+/)
-        .map((email) => email.trim().toLowerCase())
-        .filter((email) => email.length >= 5 && email.includes("@"))
-    )
-  );
+  const emails: string[] = [];
+  const seen = new Set<string>();
+  const candidates = value
+    .replace(/full\s*teams?/gi, "")
+    .matchAll(/<([^<>]+)>|([^\s,;<>]+@[^\s,;<>]+)/g);
+  for (const candidate of candidates) {
+    const email = normalizeEmail(candidate[1] ?? candidate[2] ?? "");
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    emails.push(email);
+  }
   return { emails, isFullTeam };
+}
+
+export type ContactSheetRowDisposition =
+  | "empty"
+  | "email"
+  | "direct_outreach"
+  | "invalid_missing_artist"
+  | "invalid_missing_contact";
+
+export function contactSheetRowDisposition(
+  artistName: string,
+  emailValue: string
+): ContactSheetRowDisposition {
+  const artist = artistName.trim();
+  const contactCell = emailValue.trim();
+  if (!artist && !contactCell) return "empty";
+  if (!artist) return "invalid_missing_artist";
+  if (!contactCell) return "invalid_missing_contact";
+  return parseSheetEmails(contactCell).emails.length > 0
+    ? "email"
+    : "direct_outreach";
 }
 
 function composeSheetEmails(emails: readonly string[], isFullTeam: boolean): string {
@@ -788,7 +812,9 @@ export function makeSheetSourceKey(
     throw new Error("Invalid Sheet spreadsheet identity");
   }
   if (!rowId || rowId.includes(":")) throw new Error("Invalid Sheet row identity");
-  if (!Number.isInteger(slot) || slot < 0) throw new Error("Invalid Sheet email slot");
+  if (!Number.isInteger(slot) || slot < 0) {
+    throw new Error("Invalid Sheet contact slot");
+  }
   return `${sourcePrefix(target)}${rowId}:${slot}`;
 }
 
@@ -879,36 +905,69 @@ async function targetForSheetMutation(
   );
 }
 
-export interface ExistingEmailSlot {
+export interface ExistingSheetContactSlot {
   sourceKey: string;
   slot: number;
-  email: string;
+  email: string | null;
 }
 
-export interface SheetEmailAssignment {
+export interface SheetContactAssignment {
   sourceKey: string;
   priorSourceKey: string | null;
   slot: number;
-  email: string;
+  email: string | null;
   priorEmail: string | null;
+  directOutreachNote: string | null;
 }
 
-export function reconcileSheetEmailSlots(
+export function reconcileSheetContactSlots(
   target: SheetTarget,
   rowId: string,
-  existing: readonly ExistingEmailSlot[],
-  incomingEmails: readonly string[]
-): { assignments: SheetEmailAssignment[]; removedSourceKeys: string[] } {
-  const incoming = Array.from(
-    new Set(incomingEmails.map((email) => email.trim().toLowerCase()).filter(Boolean))
+  existing: readonly ExistingSheetContactSlot[],
+  incomingRow: {
+    emails: readonly string[];
+    directOutreachNote: string | null;
+  }
+): { assignments: SheetContactAssignment[]; removedSourceKeys: string[] } {
+  const incomingEmails = Array.from(
+    new Set(
+      incomingRow.emails
+        .map((email) => normalizeEmail(email))
+        .filter((email): email is string => email !== null)
+    )
   );
+  const directOutreachNote = incomingRow.directOutreachNote?.trim() || null;
+  if (incomingEmails.length > 0 && directOutreachNote) {
+    throw new Error("A Sheet row cannot mix email and direct outreach targets");
+  }
   const unused = new Map(existing.map((slot) => [slot.sourceKey, slot]));
-  const assignments: SheetEmailAssignment[] = [];
+  if (directOutreachNote) {
+    const prior =
+      existing.find((slot) => slot.slot === 0) ??
+      [...existing].sort((left, right) => left.slot - right.slot)[0] ??
+      null;
+    if (prior) unused.delete(prior.sourceKey);
+    return {
+      assignments: [
+        {
+          sourceKey: makeSheetSourceKey(target, rowId, 0),
+          priorSourceKey: prior?.sourceKey ?? null,
+          slot: 0,
+          email: null,
+          priorEmail: prior?.email ?? null,
+          directOutreachNote,
+        },
+      ],
+      removedSourceKeys: Array.from(unused.keys()),
+    };
+  }
+
+  const assignments: SheetContactAssignment[] = [];
   const pending: string[] = [];
 
-  for (const email of incoming) {
+  for (const email of incomingEmails) {
     const exact = Array.from(unused.values()).find(
-      (slot) => slot.email.toLowerCase() === email
+      (slot) => normalizeEmail(slot.email ?? "") === email
     );
     if (!exact) {
       pending.push(email);
@@ -921,6 +980,7 @@ export function reconcileSheetEmailSlots(
       slot: exact.slot,
       email,
       priorEmail: exact.email,
+      directOutreachNote: null,
     });
   }
 
@@ -943,6 +1003,7 @@ export function reconcileSheetEmailSlots(
         slot: prior.slot,
         email,
         priorEmail: prior.email,
+        directOutreachNote: null,
       });
     } else {
       const slot = allocateSlot();
@@ -952,17 +1013,59 @@ export function reconcileSheetEmailSlots(
         slot,
         email,
         priorEmail: null,
+        directOutreachNote: null,
       });
     }
   }
 
   assignments.sort(
     (left, right) =>
-      incoming.indexOf(left.email) - incoming.indexOf(right.email)
+      incomingEmails.indexOf(left.email!) - incomingEmails.indexOf(right.email!)
   );
   return {
     assignments,
     removedSourceKeys: Array.from(unused.keys()),
+  };
+}
+
+export interface ExistingEmailSlot {
+  sourceKey: string;
+  slot: number;
+  email: string;
+}
+
+export interface SheetEmailAssignment {
+  sourceKey: string;
+  priorSourceKey: string | null;
+  slot: number;
+  email: string;
+  priorEmail: string | null;
+}
+
+export function reconcileSheetEmailSlots(
+  target: SheetTarget,
+  rowId: string,
+  existing: readonly ExistingEmailSlot[],
+  incomingEmails: readonly string[]
+): { assignments: SheetEmailAssignment[]; removedSourceKeys: string[] } {
+  const result = reconcileSheetContactSlots(target, rowId, existing, {
+    emails: incomingEmails,
+    directOutreachNote: null,
+  });
+  return {
+    assignments: result.assignments.map((assignment) => {
+      if (!assignment.email) {
+        throw new Error("Email reconciliation produced a non-email contact");
+      }
+      return {
+        sourceKey: assignment.sourceKey,
+        priorSourceKey: assignment.priorSourceKey,
+        slot: assignment.slot,
+        email: assignment.email,
+        priorEmail: assignment.priorEmail,
+      };
+    }),
+    removedSourceKeys: result.removedSourceKeys,
   };
 }
 
@@ -1081,6 +1184,7 @@ interface ContactSheetRow {
   rowId: string;
   artistName: string;
   emails: string[];
+  directOutreachNote: string | null;
   isFullTeam: boolean;
   name: string | null;
   role: string | null;
@@ -1099,21 +1203,33 @@ function contactRows(sheet: IdentifiedSheet): {
   const priceColumn = findColumn(sheet.header, ["price", "rate"]);
   const notesColumn = sheet.header.indexOf("notes");
   const rows: ContactSheetRow[] = [];
-  const skipped = 0;
+  let skipped = 0;
 
   for (const [index, row] of sheet.rows.entries()) {
     const artistName = (row[artistColumn] ?? "").trim();
     const emailValue = (row[emailColumn] ?? "").trim();
-    const parsed = parseSheetEmails(emailValue);
-    const rowId = (row[sheet.sourceIdColumn] ?? "").trim();
-    if (!artistName && !emailValue) {
+    const disposition = contactSheetRowDisposition(artistName, emailValue);
+    if (disposition === "empty") continue;
+    if (
+      disposition === "invalid_missing_artist" ||
+      disposition === "invalid_missing_contact"
+    ) {
+      skipped++;
+      console.warn(
+        JSON.stringify({
+          event: "sheet_contact_row_skipped",
+          tabName: sheet.tabName,
+          row: index + 2,
+          reason:
+            disposition === "invalid_missing_artist"
+              ? "missing_artist"
+              : "missing_contact",
+        })
+      );
       continue;
     }
-    if (!artistName || parsed.emails.length === 0) {
-      throw new Error(
-        `Sheet tab "${sheet.tabName}" row ${index + 2} has an incomplete contact`
-      );
-    }
+    const parsed = parseSheetEmails(emailValue);
+    const rowId = (row[sheet.sourceIdColumn] ?? "").trim();
     if (!rowId) {
       throw new Error("Sheet contact row is missing its stable identity");
     }
@@ -1121,7 +1237,9 @@ function contactRows(sheet: IdentifiedSheet): {
       rowId,
       artistName,
       emails: parsed.emails,
-      isFullTeam: parsed.isFullTeam,
+      directOutreachNote:
+        disposition === "direct_outreach" ? emailValue : null,
+      isFullTeam: disposition === "email" && parsed.isFullTeam,
       name: nameColumn >= 0 ? (row[nameColumn] ?? "").trim() || null : null,
       role: roleColumn >= 0 ? (row[roleColumn] ?? "").trim() || null : null,
       customPrice:
@@ -1523,15 +1641,15 @@ async function syncContactsAtTarget(
           .filter((contact) => contact.sourceKey)
           .map((contact) => [contact.sourceKey!, contact])
       );
-      const byArtistEmail = new Map(
-        contacts
-          .filter((contact) => contact.email)
-          .map((contact) => [
-            `${contact.artistId}\u0000${contact.email!.toLowerCase()}`,
-            contact,
-          ])
+      const byArtistEmail = new Map<string, (typeof contacts)[number]>(
+        contacts.flatMap((contact) => {
+          const email = normalizeEmail(contact.email ?? "");
+          return email
+            ? [[`${contact.artistId}\u0000${email}`, contact] as const]
+            : [];
+        })
       );
-      const existingByRow = new Map<string, ExistingEmailSlot[]>();
+      const existingByRow = new Map<string, ExistingSheetContactSlot[]>();
       for (const contact of contacts) {
         if (!contact.sourceKey) continue;
         const parsedKey = parseSheetSourceKey(contact.sourceKey);
@@ -1541,8 +1659,7 @@ async function syncContactsAtTarget(
             contact.sourceKey,
             target,
             allowLegacyOwnership
-          ) ||
-          !contact.email
+          )
         ) {
           continue;
         }
@@ -1559,7 +1676,8 @@ async function syncContactsAtTarget(
         sourceKey: string;
         existingId: string | null;
         artistId: string;
-        email: string;
+        email: string | null;
+        directOutreachNote: string | null;
         row: ContactSheetRow;
       }> = [];
       const seenSourceKeys = new Set<string>();
@@ -1568,29 +1686,38 @@ async function syncContactsAtTarget(
       for (const row of parsed.rows) {
         const artist = artistByRow.get(row.rowId);
         if (!artist) throw new Error(`Sheet artist was not resolved: ${row.artistName}`);
-        const reconciled = reconcileSheetEmailSlots(
+        const reconciled = reconcileSheetContactSlots(
           target,
           row.rowId,
           existingByRow.get(row.rowId) ?? [],
-          row.emails
+          {
+            emails: row.emails,
+            directOutreachNote: row.directOutreachNote,
+          }
         );
         for (const assignment of reconciled.assignments) {
           if (seenSourceKeys.has(assignment.sourceKey)) {
             throw new Error(`Duplicate Sheet source identity: ${assignment.sourceKey}`);
           }
           seenSourceKeys.add(assignment.sourceKey);
-          const artistEmail = `${artist.id}\u0000${assignment.email}`;
-          if (plannedArtistEmails.has(artistEmail)) {
-            throw new Error(
-              `Sheet contains duplicate contact ${assignment.email} for ${row.artistName}`
-            );
+          const artistEmail = assignment.email
+            ? `${artist.id}\u0000${assignment.email}`
+            : null;
+          if (artistEmail) {
+            if (plannedArtistEmails.has(artistEmail)) {
+              throw new Error(
+                `Sheet contains duplicate contact ${assignment.email} for ${row.artistName}`
+              );
+            }
+            plannedArtistEmails.add(artistEmail);
           }
-          plannedArtistEmails.add(artistEmail);
 
           const sourceContact = bySourceKey.get(
             assignment.priorSourceKey ?? assignment.sourceKey
           );
-          const exactContact = byArtistEmail.get(artistEmail);
+          const exactContact = artistEmail
+            ? byArtistEmail.get(artistEmail)
+            : undefined;
           if (
             exactContact?.source === "sheet" &&
             exactContact.sourceKey === null &&
@@ -1631,7 +1758,9 @@ async function syncContactsAtTarget(
               );
             if (!migratesCurrentOwnership && !transfersPreviousOwnership) {
               throw new Error(
-                `Sheet address ${assignment.email} is owned by another row or spreadsheet`
+                `Sheet contact ${
+                  assignment.email ?? assignment.directOutreachNote
+                } is owned by another row or spreadsheet`
               );
             }
           }
@@ -1641,6 +1770,7 @@ async function syncContactsAtTarget(
             existingId: existingContact?.id ?? null,
             artistId: artist.id,
             email: assignment.email,
+            directOutreachNote: assignment.directOutreachNote,
             row,
           });
         }
@@ -1663,6 +1793,7 @@ async function syncContactsAtTarget(
         .map((plan) => ({
           artistId: plan.artistId,
           email: plan.email,
+          directOutreachNote: plan.directOutreachNote,
           name: plan.row.name,
           role: plan.row.role,
           customPrice: plan.row.customPrice,
@@ -1687,6 +1818,7 @@ async function syncContactsAtTarget(
               data: {
                 artistId: plan.artistId,
                 email: plan.email,
+                directOutreachNote: plan.directOutreachNote,
                 name: plan.row.name,
                 role: plan.row.role,
                 customPrice: plan.row.customPrice,
@@ -1853,13 +1985,13 @@ function setColumn(
 async function appendContactRow(
   sheet: IdentifiedSheet,
   data: AppendContactInput,
-  email: string
+  contactCellValue: string
 ): Promise<string> {
   const rowId = randomUUID();
   const row = new Array<string>(sheet.header.length).fill("");
   setColumn(row, sheet.header, ["artist", "artist name"], data.artistName);
   setColumn(row, sheet.header, ["manager_name", "manager name"], data.managerName);
-  setColumn(row, sheet.header, ["email"], email);
+  setColumn(row, sheet.header, ["email"], contactCellValue);
   setColumn(row, sheet.header, ["price", "rate"], data.customPrice);
   setColumn(row, sheet.header, ["role"], data.role);
   setColumn(row, sheet.header, ["notes"], data.notes);
@@ -1907,8 +2039,10 @@ export async function appendContactToSheet(
 
 export interface UpdateContactInput {
   artistName: string;
-  oldEmail: string;
-  newEmail: string;
+  oldEmail?: string | null;
+  newEmail?: string | null;
+  oldDirectOutreachNote?: string | null;
+  newDirectOutreachNote?: string | null;
   sourceKey?: string | null;
   managerName?: string | null;
   role?: string | null;
@@ -1928,7 +2062,7 @@ export interface ContactSheetCellUpdatePlanInput {
   sheetRow: number;
   header: readonly string[];
   existing: readonly string[];
-  emailValue: string | null;
+  contactCellValue: string | null;
   managerName: string;
   role: string;
   customPrice: string;
@@ -1966,12 +2100,51 @@ export function planContactSheetCellUpdates(
     }
   };
 
-  schedule(["email"], input.emailValue);
+  schedule(["email"], input.contactCellValue);
   schedule(["manager_name", "manager name"], input.managerName);
   schedule(["price", "rate"], input.customPrice);
   schedule(["role"], input.role);
   schedule(["notes"], input.notes);
   return updates.sort((left, right) => left.columnIndex - right.columnIndex);
+}
+
+type SheetManagedContactTarget =
+  | { kind: "email"; email: string; cellValue: string }
+  | {
+      kind: "direct_outreach";
+      directOutreachNote: string;
+      cellValue: string;
+    };
+
+function sheetManagedContactTarget(
+  emailValue: string | null | undefined,
+  directOutreachNote: string | null | undefined,
+  label: "existing" | "updated"
+): SheetManagedContactTarget {
+  const rawEmail = emailValue?.trim() ?? "";
+  const note = directOutreachNote?.trim() ?? "";
+  const parsed = rawEmail ? parseSheetEmails(rawEmail).emails : [];
+  if (rawEmail && parsed.length !== 1) {
+    throw new Error(`The ${label} Sheet contact must have exactly one email`);
+  }
+  if (parsed.length === 1 && note) {
+    throw new Error(
+      "A Sheet contact cannot mix email and direct outreach details"
+    );
+  }
+  if (parsed.length === 1) {
+    return { kind: "email", email: parsed[0], cellValue: parsed[0] };
+  }
+  if (note) {
+    return {
+      kind: "direct_outreach",
+      directOutreachNote: note,
+      cellValue: note,
+    };
+  }
+  throw new Error(
+    `The ${label} Sheet contact must have an email or direct outreach details`
+  );
 }
 
 export async function updateContactInSheet(
@@ -1982,10 +2155,16 @@ export async function updateContactInSheet(
   sourceKey: string;
 }> {
   const normalizedArtist = normalizeArtistName(data.artistName);
-  const oldEmail = data.oldEmail.trim().toLowerCase();
-  const newEmails = parseSheetEmails(data.newEmail).emails;
-  if (newEmails.length !== 1) throw new Error("A contact must have exactly one email");
-  const newEmail = newEmails[0];
+  const oldTarget = sheetManagedContactTarget(
+    data.oldEmail,
+    data.oldDirectOutreachNote,
+    "existing"
+  );
+  const newTarget = sheetManagedContactTarget(
+    data.newEmail,
+    data.newDirectOutreachNote,
+    "updated"
+  );
   const target = await targetForSheetMutation(data.sourceKey);
 
   return withSheetSyncLease(
@@ -2025,8 +2204,21 @@ export async function updateContactInSheet(
           ) {
             return false;
           }
-          const emails = parseSheetEmails(row[emailColumn] ?? "").emails;
-          return emails.includes(oldEmail) || emails.includes(newEmail);
+          const contactCell = (row[emailColumn] ?? "").trim();
+          const emails = parseSheetEmails(contactCell).emails;
+          if (oldTarget.kind === "email") {
+            return (
+              emails.includes(oldTarget.email) ||
+              (newTarget.kind === "email" &&
+                emails.includes(newTarget.email))
+            );
+          }
+          return (
+            emails.length === 0 &&
+            (contactCell === oldTarget.directOutreachNote ||
+              (newTarget.kind === "direct_outreach" &&
+                contactCell === newTarget.directOutreachNote))
+          );
         });
       if (candidates.length > 1) {
         throw new Error("Multiple Sheet rows match this contact");
@@ -2039,13 +2231,13 @@ export async function updateContactInSheet(
         sheet,
         {
           artistName: data.artistName,
-          email: newEmail,
+          email: newTarget.kind === "email" ? newTarget.email : "",
           managerName: data.managerName,
           role: data.role,
           customPrice: data.customPrice,
           notes: data.notes,
         },
-        newEmail
+        newTarget.cellValue
       );
       await lease.assertOwned();
       const finalSheet = requireStableRowIds(await readRawSheet(target));
@@ -2066,32 +2258,71 @@ export async function updateContactInSheet(
     }
 
     const existing = sheet.rows[matchIndex];
-    const parsedCell = parseSheetEmails(existing[emailColumn] ?? "");
-    const emailIndex = parsedCell.emails.indexOf(oldEmail);
-    const identitySlot =
-      matchedSourceSlot ??
-      (emailIndex >= 0 ? emailIndex : parsedCell.emails.indexOf(newEmail));
+    const existingCell = (existing[emailColumn] ?? "").trim();
+    const parsedCell = parseSheetEmails(existingCell);
     const rowId = (existing[sheet.sourceIdColumn] ?? "").trim();
-    if (!rowId || identitySlot < 0) {
+    if (!rowId) {
+      throw new Error("The source Sheet row has no stable contact identity");
+    }
+    let identitySlot = matchedSourceSlot;
+    let contactCellValue: string | null = null;
+
+    if (oldTarget.kind === "email") {
+      const oldEmailIndex = parsedCell.emails.indexOf(oldTarget.email);
+      if (newTarget.kind === "email") {
+        const newEmailIndex = parsedCell.emails.indexOf(newTarget.email);
+        if (oldEmailIndex < 0 && newEmailIndex < 0) {
+          throw new Error("The source Sheet row no longer contains the old email");
+        }
+        identitySlot ??=
+          oldEmailIndex >= 0 ? oldEmailIndex : newEmailIndex;
+        if (
+          oldEmailIndex >= 0 &&
+          newTarget.email !== oldTarget.email
+        ) {
+          if (newEmailIndex >= 0) {
+            parsedCell.emails.splice(oldEmailIndex, 1);
+          } else {
+            parsedCell.emails[oldEmailIndex] = newTarget.email;
+          }
+          contactCellValue = composeSheetEmails(
+            parsedCell.emails,
+            parsedCell.isFullTeam
+          );
+        }
+      } else {
+        if (oldEmailIndex < 0) {
+          throw new Error("The source Sheet row no longer contains the old email");
+        }
+        if (parsedCell.emails.length !== 1) {
+          throw new Error(
+            "A shared multi-email Sheet row cannot be converted to direct outreach"
+          );
+        }
+        identitySlot = 0;
+        if (existingCell !== newTarget.directOutreachNote) {
+          contactCellValue = newTarget.directOutreachNote;
+        }
+      }
+    } else {
+      if (
+        parsedCell.emails.length > 0 ||
+        existingCell !== oldTarget.directOutreachNote
+      ) {
+        throw new Error(
+          "The source Sheet row no longer contains the direct outreach details"
+        );
+      }
+      identitySlot = 0;
+      if (existingCell !== newTarget.cellValue) {
+        contactCellValue = newTarget.cellValue;
+      }
+    }
+
+    if (identitySlot === null || identitySlot < 0) {
       throw new Error("The source Sheet row has no stable contact identity");
     }
     matchedSourceKey = makeSheetSourceKey(target, rowId, identitySlot);
-    let emailValue: string | null = null;
-    if (emailIndex >= 0) {
-      if (newEmail !== oldEmail) {
-        if (parsedCell.emails.includes(newEmail)) {
-          parsedCell.emails.splice(emailIndex, 1);
-        } else {
-          parsedCell.emails[emailIndex] = newEmail;
-        }
-        emailValue = composeSheetEmails(
-          parsedCell.emails,
-          parsedCell.isFullTeam
-        );
-      }
-    } else if (!parsedCell.emails.includes(newEmail)) {
-      throw new Error("The source Sheet row no longer contains the old email");
-    }
 
     const sheetRow = matchIndex + 2;
     const updates = planContactSheetCellUpdates({
@@ -2099,7 +2330,7 @@ export async function updateContactInSheet(
       sheetRow,
       header: sheet.header,
       existing,
-      emailValue,
+      contactCellValue,
       managerName: data.managerName ?? "",
       role: data.role ?? "",
       customPrice: data.customPrice ?? "",
@@ -2119,16 +2350,29 @@ export async function updateContactInSheet(
     const finalRow = finalSheet.rows.find(
       (row) => (row[finalSheet.sourceIdColumn] ?? "").trim() === rowId
     );
+    const finalContactCell = finalRow
+      ? (finalRow[emailColumn] ?? "").trim()
+      : "";
     const persistedEmails = finalRow
-      ? parseSheetEmails(finalRow[emailColumn] ?? "").emails
+      ? parseSheetEmails(finalContactCell).emails
       : [];
+    const updatedTargetPersisted =
+      newTarget.kind === "email"
+        ? persistedEmails.includes(newTarget.email)
+        : persistedEmails.length === 0 &&
+          finalContactCell === newTarget.directOutreachNote;
+    const oldEmailRemoved =
+      oldTarget.kind !== "email" ||
+      (newTarget.kind === "email" &&
+        newTarget.email === oldTarget.email) ||
+      !persistedEmails.includes(oldTarget.email);
     if (
       !finalRow ||
       updates.some(
         (update) => (finalRow[update.columnIndex] ?? "") !== update.value
       ) ||
-      !persistedEmails.includes(newEmail) ||
-      (newEmail !== oldEmail && persistedEmails.includes(oldEmail))
+      !updatedTargetPersisted ||
+      !oldEmailRemoved
     ) {
       throw new Error("The Sheet contact update could not be verified");
     }

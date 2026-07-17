@@ -9,6 +9,12 @@ import { withWorkflowReturnTo } from "@/lib/workflowLinks";
 import { formatShowDate } from "@/lib/formatDate";
 import { formatRankLabel } from "@/lib/listenSignal";
 import { artistModalLoginPath } from "@/components/artist-modal-utils";
+import {
+  contactDisplayValue,
+  directOutreachNoteValue,
+  hasDirectOutreachNote,
+  isDirectOutreachOnly,
+} from "@/lib/contactDisplay";
 
 interface ArtistData {
   id: string;
@@ -26,6 +32,7 @@ interface ArtistData {
     name: string | null;
     email: string | null;
     phone: string | null;
+    directOutreachNote: string | null;
     role: string | null;
     customPrice: string | null;
     isFullTeam: boolean;
@@ -255,13 +262,25 @@ function ArtistModal({
                             }
                             className="text-zinc-700 hover:underline dark:text-zinc-300"
                           >
-                            {c.email ?? c.phone ?? "(no contact info)"}
+                            {contactDisplayValue(c)}
                           </Link>
+                          {hasDirectOutreachNote(c) &&
+                            !isDirectOutreachOnly(c) && (
+                              <span className="text-zinc-500">
+                                {" "}
+                                · {directOutreachNoteValue(c)}
+                              </span>
+                            )}
                           {c.role && <span className="text-zinc-500"> · {c.role}</span>}
                         </p>
                       </div>
                       <div className="flex shrink-0 gap-1">
                         {c.customPrice && <Badge tone="default" size="xs">{c.customPrice}</Badge>}
+                        {hasDirectOutreachNote(c) && (
+                          <Badge tone="warning" size="xs">
+                            Direct outreach
+                          </Badge>
+                        )}
                         {c.isFullTeam && <Badge tone="accent" size="xs">Full team</Badge>}
                       </div>
                     </li>

@@ -20,7 +20,17 @@ import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { FollowUpButton } from "@/components/follow-up-button";
 import { cn } from "@/lib/cn";
 import { easternTodayStoredDate } from "@/lib/calendarDate";
-import { pickEmailContact } from "@/lib/contactSelection";
+import {
+  pickDirectOutreachContact,
+  pickEmailContact,
+  pickPhoneContact,
+} from "@/lib/contactSelection";
+import {
+  contactDisplayValue,
+  directOutreachNoteValue,
+  hasDirectOutreachNote,
+  isDirectOutreachOnly,
+} from "@/lib/contactDisplay";
 import { countryLabel } from "@/lib/country";
 import { formatShowDate } from "@/lib/formatDate";
 import { mapWithConcurrency } from "@/lib/integrationUtils";
@@ -105,6 +115,7 @@ const getFestivalDetails = cache(async (showId: string) =>
                   id: true,
                   email: true,
                   phone: true,
+                  directOutreachNote: true,
                   name: true,
                   customPrice: true,
                   state: true,
@@ -470,6 +481,14 @@ export default async function FestivalDetailPage({
     const topSignal = pickTopListenSignal(a.listenSignals, now);
     const matched = topSignal !== null;
     const contact = pickEmailContact(a.contacts);
+    const phoneContact = pickPhoneContact(a.contacts, contact);
+    const directOutreachContact = pickDirectOutreachContact(a.contacts);
+    const displayContact =
+      contact ??
+      phoneContact ??
+      directOutreachContact ??
+      a.contacts[0] ??
+      null;
     const genres: string[] = (() => {
       try {
         return a.genres ? (JSON.parse(a.genres) as string[]).filter((g) => typeof g === "string") : [];
@@ -500,6 +519,7 @@ export default async function FestivalDetailPage({
       topSignal,
       matched,
       contact,
+      displayContact,
       hasAnyContact: a.contacts.length > 0,
       genres,
       manualMarker,
@@ -910,16 +930,34 @@ export default async function FestivalDetailPage({
                         <Badge key={g} tone="muted" size="xs">{g}</Badge>
                       ))}
                       {r.contact?.isFullTeam && <Badge tone="accent">Full team</Badge>}
+                      {r.displayContact &&
+                        hasDirectOutreachNote(r.displayContact) && (
+                          <Badge tone="warning">Direct outreach</Badge>
+                        )}
                     </div>
-                    {r.contact ? (
+                    {r.displayContact ? (
                       <p
                         id={!canSend ? reasonId : undefined}
                         className="mt-0.5 truncate text-xs text-zinc-500"
                         title={!canSend ? disabledReason : undefined}
                       >
-                        {r.contact.name ? `${r.contact.name} · ` : ""}{r.contact.email}
-                        {r.contact.customPrice ? ` · ${r.contact.customPrice}` : ""}
-                        {displayStatus && ` · original: ${displayStatus}`}
+                        {r.displayContact.name
+                          ? `${r.displayContact.name} · `
+                          : ""}
+                        {contactDisplayValue(r.displayContact)}
+                        {hasDirectOutreachNote(r.displayContact) &&
+                        !isDirectOutreachOnly(r.displayContact)
+                          ? ` · ${directOutreachNoteValue(r.displayContact)}`
+                          : ""}
+                        {r.displayContact.customPrice
+                          ? ` · ${r.displayContact.customPrice}`
+                          : ""}
+                        {displayStatus &&
+                          ` · ${
+                            r.contact
+                              ? `original: ${displayStatus}`
+                              : displayStatus
+                          }`}
                       </p>
                     ) : (
                       <p
@@ -987,7 +1025,7 @@ export default async function FestivalDetailPage({
                         </PendingSubmitButton>
                       </form>
                     )}
-                  {outreachEnabled && r.followUpEligibility && (
+                  {outreachEnabled && r.contact && r.followUpEligibility && (
                     <FollowUpButton
                       eligibility={r.followUpEligibility}
                       returnTo={returnTo}
@@ -1020,11 +1058,11 @@ export default async function FestivalDetailPage({
                   {outreachEnabled && r.canMarkManually && (
                     <form action={markSentAction}>
                       <input type="hidden" name="showId" value={showId} />
-                      {r.contact ? (
+                      {r.displayContact ? (
                         <input
                           type="hidden"
                           name="contactId"
-                          value={r.contact.id}
+                          value={r.displayContact.id}
                         />
                       ) : (
                         <input

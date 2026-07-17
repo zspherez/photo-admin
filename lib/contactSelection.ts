@@ -1,6 +1,7 @@
 export interface ContactChannels {
   email: string | null;
   phone: string | null;
+  directOutreachNote?: string | null;
   isFullTeam: boolean;
   state: "active" | "quarantined";
 }
@@ -37,6 +38,20 @@ export function pickPhoneContact<T extends ContactChannels>(
   return (
     contacts.find(
       (contact) => contact.state === "active" && hasValue(contact.phone)
+    ) ?? null
+  );
+}
+
+export function pickDirectOutreachContact<T extends ContactChannels>(
+  contacts: readonly T[]
+): T | null {
+  return (
+    contacts.find(
+      (contact) =>
+        contact.state === "active" &&
+        !hasValue(contact.email) &&
+        !hasValue(contact.phone) &&
+        hasValue(contact.directOutreachNote ?? null)
     ) ?? null
   );
 }

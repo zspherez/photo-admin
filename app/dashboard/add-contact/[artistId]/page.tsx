@@ -18,6 +18,12 @@ import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
+import {
+  contactDisplayValue,
+  directOutreachNoteValue,
+  hasDirectOutreachNote,
+  isDirectOutreachOnly,
+} from "@/lib/contactDisplay";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +67,8 @@ async function createContacts(formData: FormData) {
   const returnTo = workflowReturnPath(formData.get("returnTo"));
   const emailsRaw = ((formData.get("emails") as string) ?? "").trim();
   const phone = ((formData.get("phone") as string) ?? "").trim() || null;
+  const directOutreachNote =
+    ((formData.get("directOutreachNote") as string) ?? "").trim() || null;
   const name = ((formData.get("name") as string) ?? "").trim() || null;
   const role = ((formData.get("role") as string) ?? "").trim() || null;
   const customPrice = ((formData.get("customPrice") as string) ?? "").trim() || null;
@@ -76,12 +84,19 @@ async function createContacts(formData: FormData) {
   }
 
   const emails = parseEmails(emailsRaw);
-  if (emails.length === 0 && !phone) {
+  if (
+    (emails.length === 0 && !phone && !directOutreachNote) ||
+    (emails.length > 0 && directOutreachNote)
+  ) {
     redirect(
       `${withWorkflowReturnTo(
         `/dashboard/add-contact/${encodeURIComponent(artistId)}`,
         returnTo
-      )}&error=missing_target`
+      )}&error=${
+        emails.length > 0 && directOutreachNote
+          ? "conflicting_targets"
+          : "missing_target"
+      }`
     );
   }
 
@@ -90,9 +105,18 @@ async function createContacts(formData: FormData) {
   const sheetErrors: string[] = [];
 
   if (emails.length === 0) {
-    // Phone-only contact. No sheet sync since the sheet is keyed by email.
+    // Direct/phone contacts stay manual unless they originated in the Sheet.
     await db.contact.create({
-      data: { artistId, phone, name, role, customPrice, notes, source: "manual" },
+      data: {
+        artistId,
+        phone,
+        directOutreachNote,
+        name,
+        role,
+        customPrice,
+        notes,
+        source: "manual",
+      },
     });
     createdCount++;
   } else {
@@ -111,6 +135,8 @@ async function createContacts(formData: FormData) {
             artistName: existing.artist.name,
             oldEmail: existing.email ?? email,
             newEmail: email,
+            oldDirectOutreachNote: existing.directOutreachNote,
+            newDirectOutreachNote: null,
             sourceKey: existing.sourceKey,
             managerName: name,
             role,
@@ -146,6 +172,8 @@ async function createContacts(formData: FormData) {
               artistName: existing.artist.name,
               oldEmail: email,
               newEmail: existing.email ?? email,
+              oldDirectOutreachNote: null,
+              newDirectOutreachNote: existing.directOutreachNote,
               sourceKey: sheetUpdate.sourceKey,
               managerName: existing.name,
               role: existing.role,
@@ -273,7 +301,12 @@ export default async function AddContactPage({
               {artist.contacts.map((c) => (
                 <li key={c.id}>
                   {c.name ? `${c.name} · ` : ""}
-                  {c.email ?? c.phone ?? "(no contact info)"}
+                  {contactDisplayValue(c)}
+                  {hasDirectOutreachNote(c) &&
+                  !isDirectOutreachOnly(c)
+                    ? ` · ${directOutreachNoteValue(c)}`
+                    : ""}
+                  {hasDirectOutreachNote(c) ? " · direct outreach" : ""}
                   {c.role ? ` · ${c.role}` : ""}
                 </li>
               ))}
@@ -287,7 +320,9 @@ export default async function AddContactPage({
           {error === "missing_fields"
             ? "Artist is required."
             : error === "missing_target"
-            ? "Add at least one email or a phone number."
+            ? "Add at least one email, a phone number, or direct outreach details."
+            : error === "conflicting_targets"
+            ? "Use either emails or direct outreach details, not both."
             : error}
         </div>
       )}
@@ -299,20 +334,27 @@ export default async function AddContactPage({
             <input type="hidden" name="returnTo" value={safeReturnTo} />
             <TextArea
               name="emails"
-              label="Emails (optional if phone given)"
-              description="One per line. Commas, semicolons, and spaces also separate. Each becomes a contact with the shared metadata below. Duplicates are deduped. Leave empty to create a single phone-only contact."
+              label="Emails (optional if phone or direct outreach details given)"
+              description="One per line. Commas, semicolons, and spaces also separate. Each becomes a contact with the shared metadata below. Duplicates are deduped. Leave empty to create one direct/phone contact."
               rows={4}
               placeholder={"manager@example.com\nbooking@example.com\nlabel@example.com"}
               mono
             />
             <Field name="phone" label="Phone (shared, for texting)" type="tel" placeholder="+1 555 123 4567" />
+            <TextArea
+              name="directOutreachNote"
+              label="Direct outreach details"
+              description="For a personal relationship, DM path, or other non-email instructions. Use only when the email list is empty."
+              rows={3}
+              placeholder="Reach out directly through…"
+            />
             <Field name="name" label="Manager name (shared)" placeholder="Thierry" />
             <Field name="role" label="Role (shared)" placeholder="management / booking / label" />
             <Field name="customPrice" label="Custom rate (shared)" placeholder="$400" />
             <TextArea name="notes" label="Notes (shared)" rows={3} />
             <p className="text-xs text-zinc-500">
-              Shared fields apply to every email above. If different contacts need different
-              names/roles/rates, save them, then edit each via the dashboard.
+              Shared fields apply to every email above. With no emails, phone
+              and/or direct outreach details create one manual contact.
             </p>
             <div className="flex gap-2">
               <PendingSubmitButton

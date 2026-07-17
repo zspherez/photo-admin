@@ -69,6 +69,7 @@ export interface MatchedShow {
       id: string;
       email: string | null;
       phone: string | null;
+      directOutreachNote: string | null;
       name: string | null;
       customPrice: string | null;
       state: "active" | "quarantined";
@@ -296,6 +297,7 @@ const CONTACT_SELECT = {
   id: true,
   email: true,
   phone: true,
+  directOutreachNote: true,
   name: true,
   customPrice: true,
   state: true,
@@ -435,6 +437,7 @@ export async function getDashboardData(
       id: contact.id,
       email: contact.email,
       phone: contact.phone,
+      directOutreachNote: contact.directOutreachNote,
       name: contact.name,
       customPrice: contact.customPrice,
       state: contact.state,

@@ -22,6 +22,12 @@ import {
   cancelScheduledAction,
   sendFollowUpAction,
 } from "@/app/dashboard/actions";
+import {
+  contactDisplayValue,
+  directOutreachNoteValue,
+  hasDirectOutreachNote,
+  isDirectOutreachOnly,
+} from "@/lib/contactDisplay";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Outreach log" };
@@ -210,6 +216,7 @@ export default async function OutreachLogPage({
           name: true,
           email: true,
           phone: true,
+          directOutreachNote: true,
           state: true,
         },
       },
@@ -372,14 +379,23 @@ export default async function OutreachLogPage({
                         {activeContact ? (
                           <Link href={`/dashboard/contact/${activeContact.id}`} className="hover:underline">
                             {activeContact.name
-                              ? `${activeContact.name} <${
-                                  activeContact.email ??
-                                  activeContact.phone ??
-                                  "no address"
-                                }>`
-                              : activeContact.email ??
-                                activeContact.phone ??
-                                "no contact address"}
+                              ? `${activeContact.name} · ${contactDisplayValue(
+                                  activeContact,
+                                  "no contact address",
+                                )}`
+                              : contactDisplayValue(
+                                  activeContact,
+                                  "no contact address",
+                                )}
+                            {isDirectOutreachOnly(activeContact)
+                              ? " · direct outreach"
+                              : ""}
+                            {hasDirectOutreachNote(activeContact) &&
+                            !isDirectOutreachOnly(activeContact)
+                              ? ` · ${directOutreachNoteValue(
+                                  activeContact,
+                                )} · direct outreach`
+                              : ""}
                           </Link>
                         ) : (
                           <span className="italic text-zinc-400">
@@ -411,7 +427,7 @@ export default async function OutreachLogPage({
                       <p className="text-xs text-zinc-400">
                         {sentDate.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                       </p>
-                      {followUpEligibility && (
+                      {activeContact?.email && followUpEligibility && (
                         <FollowUpButton
                           eligibility={followUpEligibility}
                           returnTo={returnTo}

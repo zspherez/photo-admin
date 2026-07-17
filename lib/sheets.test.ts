@@ -3,13 +3,16 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   assertExpectedPreviousSheetTarget,
+  contactSheetRowDisposition,
   configuredSheetTargetFromValues,
   isSheetSyncLeaseExpired,
   makeSheetConfigurationLeaseKey,
   makeSheetSourceKey,
   makeSheetSyncLeaseKey,
+  parseSheetEmails,
   parseSheetSourceKey,
   planContactSheetCellUpdates,
+  reconcileSheetContactSlots,
   remainingLegacySheetAdoptions,
   resolveSheetBootstrapTargetFromValues,
   resolveSheetMutationTarget,
@@ -25,6 +28,51 @@ import {
   createOperationDeadline,
   OperationDeadlineExceededError,
 } from "./integrationUtils";
+
+test("Sheet rows distinguish empty, email, direct outreach, and invalid identities", () => {
+  assert.equal(contactSheetRowDisposition("", ""), "empty");
+  assert.equal(
+    contactSheetRowDisposition("Artist", "contact pending"),
+    "direct_outreach"
+  );
+  assert.equal(
+    contactSheetRowDisposition("", "manager@example.com"),
+    "invalid_missing_artist"
+  );
+  assert.equal(
+    contactSheetRowDisposition("Artist", ""),
+    "invalid_missing_contact"
+  );
+  assert.equal(
+    contactSheetRowDisposition("Artist", "manager@example.com"),
+    "email"
+  );
+  const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
+  assert.match(source, /event: "sheet_contact_row_skipped"/);
+  assert.match(source, /"missing_artist"/);
+});
+
+test("decorated Sheet emails normalize without loosening duplicate identity", () => {
+  assert.deepEqual(
+    parseSheetEmails(
+      "Booking <BOOKING@example.com>, booking@example.com; team@example.com full teams"
+    ),
+    {
+      emails: ["booking@example.com", "team@example.com"],
+      isFullTeam: true,
+    }
+  );
+  assert.deepEqual(parseSheetEmails("DM the artist directly"), {
+    emails: [],
+    isFullTeam: false,
+  });
+
+  const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /plannedArtistEmails\.has\(artistEmail\)[\s\S]*Sheet contains duplicate contact/,
+  );
+});
 
 test("Sheet lease keys uniquely encode spreadsheet and tab identity", () => {
   const first = makeSheetSyncLeaseKey("sheet:a", "b");
@@ -281,6 +329,68 @@ test("deadline exhaustion is deferred before writes and partial after writes", (
   assert.equal(partial.details.destructiveWorkStarted, false);
 });
 
+test("direct outreach adoption plans one stable row contact and reconciles channel changes", () => {
+  const target = { spreadsheetId: "sheet-a", tabName: "Artists" };
+  const direct = reconcileSheetContactSlots(target, "row-1", [], {
+    emails: [],
+    directOutreachNote: "  Reach out through Chase directly  ",
+  });
+  assert.deepEqual(direct, {
+    assignments: [
+      {
+        sourceKey: makeSheetSourceKey(target, "row-1", 0),
+        priorSourceKey: null,
+        slot: 0,
+        email: null,
+        priorEmail: null,
+        directOutreachNote: "Reach out through Chase directly",
+      },
+    ],
+    removedSourceKeys: [],
+  });
+
+  const first = makeSheetSourceKey(target, "row-1", 0);
+  const second = makeSheetSourceKey(target, "row-1", 1);
+  const converted = reconcileSheetContactSlots(
+    target,
+    "row-1",
+    [
+      { sourceKey: first, slot: 0, email: "first@example.com" },
+      { sourceKey: second, slot: 1, email: "second@example.com" },
+    ],
+    {
+      emails: [],
+      directOutreachNote: "Personal introduction",
+    }
+  );
+  assert.deepEqual(converted, {
+    assignments: [
+      {
+        sourceKey: first,
+        priorSourceKey: first,
+        slot: 0,
+        email: null,
+        priorEmail: "first@example.com",
+        directOutreachNote: "Personal introduction",
+      },
+    ],
+    removedSourceKeys: [second],
+  });
+
+  const backToEmail = reconcileSheetContactSlots(
+    target,
+    "row-1",
+    [{ sourceKey: first, slot: 0, email: null }],
+    {
+      emails: ["Booking <BOOKING@example.com>"],
+      directOutreachNote: null,
+    }
+  );
+  assert.equal(backToEmail.assignments[0]?.priorSourceKey, first);
+  assert.equal(backToEmail.assignments[0]?.email, "booking@example.com");
+  assert.equal(backToEmail.assignments[0]?.directOutreachNote, null);
+});
+
 test("contact edits plan only changed managed cells and preserve formulas", () => {
   const updates = planContactSheetCellUpdates({
     tabName: "VIP Artists '26",
@@ -303,7 +413,7 @@ test("contact edits plan only changed managed cells and preserve formulas", () =
       "Keep this",
       "row-123",
     ],
-    emailValue: "new@example.com, team@example.com",
+    contactCellValue: "new@example.com, team@example.com",
     managerName: "Manager",
     role: "",
     customPrice: "$500",
@@ -330,6 +440,29 @@ test("contact edits plan only changed managed cells and preserve formulas", () =
     ]
   );
   assert.ok(updates.every((update) => update.columnIndex !== 3));
+});
+
+test("direct outreach edits target only the managed cell and stay formula-safe", () => {
+  const updates = planContactSheetCellUpdates({
+    tabName: "Artists",
+    sheetRow: 4,
+    header: ["artist", "email", "status formula", "photo_admin_id"],
+    existing: ["Artist", "Old note", "=B4", "row-1"],
+    contactCellValue: "=Reach out personally",
+    managerName: "",
+    role: "",
+    customPrice: "",
+    notes: "",
+  });
+
+  assert.deepEqual(updates, [
+    {
+      columnIndex: 1,
+      value: "=Reach out personally",
+      range: "'Artists'!B4",
+      values: [["=Reach out personally"]],
+    },
+  ]);
 });
 
 test("Sheet edits batch precise RAW ranges and read source ids unformatted", () => {
@@ -499,6 +632,22 @@ test("contact migration is expand-safe and defers quarantine to target reconcili
   assert.doesNotMatch(migration, /DELETE FROM "Contact"/);
 });
 
+test("direct outreach migration is nullable and leaves existing contacts untouched", () => {
+  const migration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260717160000_contact_direct_outreach_note/migration.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+
+  assert.match(
+    migration,
+    /ALTER TABLE "Contact"[\s\S]*ADD COLUMN "directOutreachNote" TEXT/
+  );
+  assert.doesNotMatch(migration, /NOT NULL|DEFAULT|UPDATE "Contact"/);
+});
+
 test("Sheet-owned add and edit flows update the Sheet before the database", () => {
   const addSource = readFileSync(
     new URL(
@@ -539,6 +688,7 @@ test("Sheet-owned add and edit flows update the Sheet before the database", () =
   assert.ok(editSheetUpdate >= 0);
   assert.ok(editDatabaseUpdate > editSheetUpdate);
   assert.match(editSource, /error: "sheet_sync"/);
+  assert.match(editSource, /newDirectOutreachNote: directOutreachNote/);
 });
 
 test("stale cleanup scopes ownership to one spreadsheet and tab", () => {

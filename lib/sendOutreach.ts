@@ -311,6 +311,7 @@ export function getOutreachRetryDelayMs(completedAttempts: number): number {
 export function activeContactRecipientEmails(
   contacts: readonly {
     email: string | null;
+    directOutreachNote?: string | null;
     state: "active" | "quarantined";
   }[],
 ): string[] {
@@ -998,6 +999,13 @@ export function evaluateOutreachDeliveryPolicy({
       ok: false,
       state: "cancelled",
       error: "Selected contact no longer belongs to the outreach artist",
+    };
+  }
+  if (!normalizeEmails(contact.email ? [contact.email] : []).length) {
+    return {
+      ok: false,
+      state: "cancelled",
+      error: "Selected contact has no valid active recipient address",
     };
   }
 

@@ -84,25 +84,26 @@ enum ContactState {
 }
 
 model Contact {
-  id             String       @id @default(cuid())
-  artistId       String
-  artist         Artist       @relation(fields: [artistId], references: [id], onDelete: Cascade)
-  email          String?
-  phone          String?
-  name           String?
-  role           String?
-  customPrice    String?
-  notes          String?
-  source         String?
+  id                 String       @id @default(cuid())
+  artistId           String
+  artist             Artist       @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  email              String?
+  phone              String?
+  directOutreachNote String?
+  name               String?
+  role               String?
+  customPrice        String?
+  notes              String?
+  source             String?
   /// Stable provider-owned identity. Sheet contacts use spreadsheet/tab/row/slot identity.
-  sourceKey      String?      @unique
-  sourceSyncedAt DateTime?
+  sourceKey          String?      @unique
+  sourceSyncedAt     DateTime?
   /// Only active contacts are eligible for normal selection; quarantined preserves unresolved legacy history.
-  state          ContactState @default(active)
-  isFullTeam     Boolean      @default(false)
-  outreaches     Outreach[]
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  state              ContactState @default(active)
+  isFullTeam         Boolean      @default(false)
+  outreaches         Outreach[]
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
 
   @@unique([artistId, email])
   @@index([artistId])

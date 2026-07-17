@@ -32,6 +32,12 @@ import { workflowReturnPath } from "@/lib/dashboardReturnUrl";
 import { withWorkflowReturnTo } from "@/lib/workflowLinks";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 import { isCancellableOutreachStatus } from "@/lib/outreachStatus";
+import {
+  contactDisplayValue,
+  directOutreachNoteValue,
+  hasDirectOutreachNote,
+  isDirectOutreachOnly,
+} from "@/lib/contactDisplay";
 
 export const dynamic = "force-dynamic";
 
@@ -325,13 +331,25 @@ export default async function ArtistPage({
                           )}
                           className="text-zinc-700 hover:underline dark:text-zinc-300"
                         >
-                          {c.email ?? c.phone ?? "(no contact info)"}
+                          {contactDisplayValue(c)}
                         </Link>
+                        {hasDirectOutreachNote(c) &&
+                          !isDirectOutreachOnly(c) && (
+                            <span className="text-zinc-500">
+                              {" "}
+                              · {directOutreachNoteValue(c)}
+                            </span>
+                          )}
                         {c.role && <span className="text-zinc-500"> · {c.role}</span>}
                       </p>
                     </div>
                     <div className="flex shrink-0 gap-1.5">
                       {c.customPrice && <Badge tone="default" size="xs">{c.customPrice}</Badge>}
+                      {hasDirectOutreachNote(c) && (
+                        <Badge tone="warning" size="xs">
+                          Direct outreach
+                        </Badge>
+                      )}
                       {c.isFullTeam && <Badge tone="accent" size="xs">Full team</Badge>}
                     </div>
                   </div>
@@ -445,7 +463,7 @@ export default async function ArtistPage({
                           cancelAction={cancelScheduledAction}
                         />
                       )}
-                      {followUpEligibility && (
+                      {emailContact && followUpEligibility && (
                         <FollowUpButton
                           eligibility={followUpEligibility}
                           returnTo={currentReturnTo}

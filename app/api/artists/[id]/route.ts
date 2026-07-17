@@ -67,6 +67,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       name: c.name,
       email: c.email,
       phone: c.phone,
+      directOutreachNote: c.directOutreachNote,
       role: c.role,
       customPrice: c.customPrice,
       isFullTeam: c.isFullTeam,

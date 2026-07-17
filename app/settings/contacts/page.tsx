@@ -14,6 +14,12 @@ import { SyncForm } from "@/components/sync-form";
 import { SyncBanner } from "@/components/sync-banner";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
+import {
+  contactDisplayValue,
+  directOutreachNoteValue,
+  hasDirectOutreachNote,
+  isDirectOutreachOnly,
+} from "@/lib/contactDisplay";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact sync" };
@@ -188,6 +194,7 @@ export default async function ContactsSettingsPage({
                 id: string;
                 email: string | null;
                 phone: string | null;
+                directOutreachNote: string | null;
                 name: string | null;
                 role: string | null;
                 customPrice: string | null;
@@ -198,7 +205,14 @@ export default async function ContactsSettingsPage({
                     <div className="min-w-0">
                       <p className="truncate font-medium">{c.artist.name}</p>
                       <p className="truncate text-xs text-zinc-500">
-                        {c.name ? `${c.name} · ` : ""}{c.email ?? c.phone ?? "—"}{c.role ? ` · ${c.role}` : ""}
+                        {c.name ? `${c.name} · ` : ""}
+                        {contactDisplayValue(c, "—")}
+                        {hasDirectOutreachNote(c) &&
+                        !isDirectOutreachOnly(c)
+                          ? ` · ${directOutreachNoteValue(c)}`
+                          : ""}
+                        {hasDirectOutreachNote(c) ? " · direct outreach" : ""}
+                        {c.role ? ` · ${c.role}` : ""}
                       </p>
                     </div>
                     {c.customPrice && (

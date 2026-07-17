@@ -1011,15 +1011,53 @@ test("only definitively unsent cancellations can rotate to a fresh key", () => {
   );
 });
 
-test("full-team recipient snapshots exclude quarantined contacts", () => {
+test("full-team recipient snapshots exclude quarantined and direct-only contacts", () => {
   assert.deepEqual(
     activeContactRecipientEmails([
       { email: "active@example.com", state: "active" },
       { email: "legacy@example.com", state: "quarantined" },
       { email: "ACTIVE@example.com", state: "active" },
-      { email: null, state: "active" },
+      {
+        email: null,
+        state: "active",
+        directOutreachNote: "Personal introduction",
+      },
     ]),
     ["active@example.com"],
+  );
+});
+
+test("a direct-only contact cannot trigger full-team email fanout", () => {
+  const directContact = {
+    id: "contact-1",
+    artistId: "artist-1",
+    email: null,
+    state: "active" as const,
+    isFullTeam: true,
+  };
+  assert.deepEqual(
+    evaluateOutreachDeliveryPolicy(
+      deliveryPolicyFixture({
+        contact: directContact,
+        artistContacts: [
+          directContact,
+          {
+            id: "contact-2",
+            artistId: "artist-1",
+            email: "manager@example.com",
+            state: "active",
+            isFullTeam: false,
+          },
+        ],
+        stored: null,
+        attempt: null,
+      }),
+    ),
+    {
+      ok: false,
+      state: "cancelled",
+      error: "Selected contact has no valid active recipient address",
+    },
   );
 });
 
