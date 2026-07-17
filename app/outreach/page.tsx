@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { Card } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { ArtistLink } from "@/components/artist-modal";
+import { FollowUpButton } from "@/components/follow-up-button";
 import { cn } from "@/lib/cn";
 import { formatShowDate } from "@/lib/formatDate";
 import { getPagination } from "@/lib/match";
@@ -15,6 +16,12 @@ import {
   validatedTrimmedSearchParam,
   type SearchParamValue,
 } from "@/lib/searchParams";
+import { getFollowUpEligibilityBatch } from "@/lib/sendOutreach";
+import { isWeekendET } from "@/lib/schedule";
+import {
+  cancelScheduledAction,
+  sendFollowUpAction,
+} from "@/app/dashboard/actions";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Outreach log" };
@@ -124,6 +131,10 @@ export default async function OutreachLogPage({
     status?: SearchParamValue;
     search?: SearchParamValue;
     page?: SearchParamValue;
+    followup_sent?: SearchParamValue;
+    followup_scheduled?: SearchParamValue;
+    cancelled?: SearchParamValue;
+    error?: SearchParamValue;
   }>;
 }) {
   const sp = await searchParams;
@@ -133,6 +144,10 @@ export default async function OutreachLogPage({
   const search =
     validatedTrimmedSearchParam(sp.search, { maxLength: 200 }) ?? "";
   const requestedPage = positiveIntegerSearchParam(sp.page);
+  const followUpSent = firstSearchParam(sp.followup_sent);
+  const followUpScheduled = firstSearchParam(sp.followup_scheduled);
+  const cancelled = firstSearchParam(sp.cancelled);
+  const actionError = firstSearchParam(sp.error);
 
   const where = buildWhere(status, search);
 
@@ -168,6 +183,8 @@ export default async function OutreachLogPage({
     take: OUTREACH_PAGE_SIZE,
     select: {
       id: true,
+      kind: true,
+      parentOutreachId: true,
       artistId: true,
       status: true,
       sentAt: true,
@@ -198,6 +215,14 @@ export default async function OutreachLogPage({
       },
     },
   });
+  const followUpEligibility = await getFollowUpEligibilityBatch(
+    outreach.flatMap((row) => (row.kind === "original" ? [row.id] : [])),
+  );
+  const followUpByParent = new Map(
+    followUpEligibility.map((row) => [row.parentOutreachId, row]),
+  );
+  const returnTo = outreachHref(status, search, pagination.page);
+  const weekend = isWeekendET();
 
   const stats = [
     { label: "Total", value: totalAll },
@@ -212,6 +237,24 @@ export default async function OutreachLogPage({
     <main className="mx-auto max-w-5xl px-6 py-10">
       <h1 className="text-2xl font-semibold tracking-tight">Outreach log</h1>
       <p className="mt-1 text-sm text-zinc-500">Every send, in order, with delivery + engagement status.</p>
+
+      {(followUpSent || followUpScheduled || cancelled || actionError) && (
+        <div
+          className={`mt-4 rounded-lg border px-4 py-2 text-sm ${
+            actionError
+              ? "border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+              : "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+          }`}
+        >
+          {actionError
+            ? `Action failed: ${actionError}`
+            : followUpSent
+              ? "Follow-up sent."
+              : followUpScheduled
+                ? "Follow-up scheduled for Monday morning."
+                : "Scheduled follow-up or retry cancelled."}
+        </div>
+      )}
 
       <div className="mt-5 grid grid-cols-3 gap-3 sm:grid-cols-6">
         {stats.map((s) => (
@@ -293,6 +336,10 @@ export default async function OutreachLogPage({
                   })}
                 </>
               );
+              const followUpEligibility =
+                o.kind === "original"
+                  ? followUpByParent.get(o.id)
+                  : undefined;
               return (
                 <li key={o.id} className="px-4 py-3">
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -302,6 +349,12 @@ export default async function OutreachLogPage({
                           {o.artist.name}
                         </ArtistLink>
                         <Badge tone={statusTone(o)}>{statusLabels(o).join(" · ")}</Badge>
+                        <Badge
+                          tone={o.kind === "follow_up" ? "accent" : "muted"}
+                          size="xs"
+                        >
+                          {o.kind === "follow_up" ? "Follow-up" : "Original"}
+                        </Badge>
                         {o.show.isFestival && <Badge tone="accent" size="xs">Festival</Badge>}
                       </div>
                       <p className="mt-0.5 truncate text-xs text-zinc-500">
@@ -354,9 +407,20 @@ export default async function OutreachLogPage({
                         </p>
                       )}
                     </div>
-                    <p className="shrink-0 text-xs text-zinc-400">
-                      {sentDate.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                    </p>
+                    <div className="flex shrink-0 flex-col items-end gap-1.5">
+                      <p className="text-xs text-zinc-400">
+                        {sentDate.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                      </p>
+                      {followUpEligibility && (
+                        <FollowUpButton
+                          eligibility={followUpEligibility}
+                          returnTo={returnTo}
+                          isWeekend={weekend}
+                          action={sendFollowUpAction}
+                          cancelAction={cancelScheduledAction}
+                        />
+                      )}
+                    </div>
                   </div>
                 </li>
               );

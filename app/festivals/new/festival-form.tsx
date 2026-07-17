@@ -27,7 +27,7 @@ function candidateLabel(candidate: {
   }`;
 }
 
-export function FestivalForm() {
+export function FestivalForm({ returnTo = "/festivals" }: { returnTo?: string }) {
   const [state, formAction] = useActionState(
     createFestival,
     INITIAL_FESTIVAL_FORM_STATE
@@ -48,6 +48,7 @@ export function FestivalForm() {
       <Card className="mt-6">
         <CardBody>
           <form action={formAction} className="space-y-4">
+            <input type="hidden" name="returnTo" value={returnTo} />
             <Field
               name="name"
               label="Festival name"
@@ -70,6 +71,14 @@ export function FestivalForm() {
                 defaultValue={state.values.state}
               />
             </div>
+            <Field
+              name="countryCode"
+              label="Country code"
+              placeholder="US"
+              description="Two-letter ISO code, such as US, CA, MX, or GB. Defaults to United States."
+              defaultValue={state.values.countryCode}
+              required
+            />
             <Field
               name="venueName"
               label="Venue"
@@ -133,7 +142,7 @@ export function FestivalForm() {
               >
                 Create festival
               </PendingSubmitButton>
-              <LinkButton href="/festivals" variant="secondary">
+              <LinkButton href={returnTo} variant="secondary">
                 Cancel
               </LinkButton>
             </div>

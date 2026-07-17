@@ -67,3 +67,9 @@ test("fresh queued claims remain visible until their claim expiry", () => {
   assert.match(source, /scheduledRetries,/);
   assert.match(source, /complete: state === "complete"/);
 });
+
+test("scheduled dispatch remains kind-agnostic so follow-up children reuse it", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(source, /dispatchScheduledOutreach\(row\.id\)/);
+  assert.doesNotMatch(source, /kind:\s*"original"/);
+});

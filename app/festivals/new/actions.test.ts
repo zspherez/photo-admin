@@ -42,6 +42,10 @@ test("festival show, artists, and lineup links are created transactionally", () 
     "await tx.show.create(",
     transactionStart
   );
+  const countryPersisted = source.indexOf(
+    "countryCode,",
+    showCreate
+  );
   const lineupCreate = source.indexOf(
     "await tx.showArtist.createMany(",
     transactionStart
@@ -55,6 +59,7 @@ test("festival show, artists, and lineup links are created transactionally", () 
   assert.ok(transactionStart > persistenceStart);
   assert.ok(artistCreate > transactionStart);
   assert.ok(showCreate > artistCreate);
+  assert.ok(countryPersisted > showCreate);
   assert.ok(lineupCreate > showCreate);
   assert.ok(transactionEnd > lineupCreate);
 });

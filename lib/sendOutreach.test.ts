@@ -13,6 +13,8 @@ import {
   canRecoverPreparationFailureWithoutAttempt,
   evaluateAttemptRetryEligibility,
   evaluateOutreachDeliveryPolicy,
+  festivalOutreachBlockingReason,
+  followUpParentBlockingReason,
   getAcceptedDeliveryFailureOutreachState,
   getResendCredentialScopeConflict,
   getOutreachConfigurationAttemptRecoveryData,
@@ -24,6 +26,7 @@ import {
   hasProtectedCurrentSendState,
   isDefinitiveConfigurationRejection,
   isDefinitivelyUnsentOutreachAttempt,
+  isConclusiveRealOutreachAcceptance,
   isNonBlockingLegacyUnknownAttempt,
   isProviderAcceptanceUnresolvedAttempt,
   recipientSnapshotConflict,
@@ -139,6 +142,87 @@ test("retry scheduling uses bounded exponential backoff", () => {
   assert.equal(getOutreachRetryDelayMs(2), 120_000);
   assert.equal(getOutreachRetryDelayMs(3), 240_000);
   assert.equal(getOutreachRetryDelayMs(20), OUTREACH_RETRY_MAX_DELAY_MS);
+});
+
+test("only the current conclusively accepted real original qualifies for follow-up", () => {
+  const parent = {
+    id: "original-1",
+    kind: "original" as const,
+    parentOutreachId: null,
+    idempotencyKey: "outreach/original-1/attempt-1",
+    providerMessageId: "message-1",
+  };
+  const attempt = {
+    outreachId: parent.id,
+    status: "accepted",
+    idempotencyKey: parent.idempotencyKey,
+    testSend: false,
+    providerMessageId: parent.providerMessageId,
+    acceptedAt: NOW,
+  };
+
+  assert.equal(followUpParentBlockingReason(parent, attempt), null);
+  assert.equal(isConclusiveRealOutreachAcceptance(parent, attempt), true);
+  assert.equal(
+    followUpParentBlockingReason(parent, {
+      ...attempt,
+      status: "delivery_failed",
+    }),
+    null,
+  );
+
+  const blockedCases = [
+    [{ ...parent, kind: "follow_up" as const }, attempt],
+    [{ ...parent, parentOutreachId: "older" }, attempt],
+    [parent, null],
+    [parent, { ...attempt, outreachId: "other" }],
+    [parent, { ...attempt, idempotencyKey: "stale-key" }],
+    [parent, { ...attempt, testSend: true }],
+    [parent, { ...attempt, testSend: null }],
+    [parent, { ...attempt, providerMessageId: null }],
+    [parent, { ...attempt, providerMessageId: "different" }],
+    [parent, { ...attempt, acceptedAt: null }],
+    [parent, { ...attempt, status: "sending" }],
+    [parent, { ...attempt, status: "request_failed" }],
+    [parent, { ...attempt, status: "manual_review" }],
+    [parent, { ...attempt, status: "legacy_unknown" }],
+  ] as const;
+  for (const [candidateParent, candidateAttempt] of blockedCases) {
+    assert.notEqual(
+      followUpParentBlockingReason(candidateParent, candidateAttempt),
+      null,
+    );
+  }
+});
+
+test("dismissed festivals block original and follow-up delivery", () => {
+  const dismissedFestival = {
+    isFestival: true,
+    dismissedAt: NOW,
+  };
+
+  assert.equal(
+    festivalOutreachBlockingReason(dismissedFestival, "original"),
+    "Restore this festival before sending outreach",
+  );
+  assert.equal(
+    festivalOutreachBlockingReason(dismissedFestival, "follow_up"),
+    "Restore this festival before sending follow-up",
+  );
+  assert.equal(
+    festivalOutreachBlockingReason(
+      { isFestival: false, dismissedAt: NOW },
+      "original",
+    ),
+    null,
+  );
+  assert.equal(
+    festivalOutreachBlockingReason(
+      { isFestival: true, dismissedAt: null },
+      "original",
+    ),
+    null,
+  );
 });
 
 test("Resend configuration outages requeue scheduled work without consuming attempts", () => {
@@ -1341,6 +1425,170 @@ test("only the current immutable attempt protects a clean reusable outreach row"
     ),
     false,
   );
+});
+
+test("follow-up migration preserves original identity and enforces one child", () => {
+  const migration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260716210000_follow_up_outreach/migration.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const schema = readFileSync(
+    new URL("../prisma/schema.prisma", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    migration,
+    /CREATE TYPE "OutreachKind" AS ENUM \('original', 'follow_up'\)/,
+  );
+  assert.match(
+    migration,
+    /"kind" "OutreachKind" NOT NULL DEFAULT 'original'/,
+  );
+  assert.match(migration, /UPDATE "Outreach" SET "kind" = 'original'/);
+  assert.match(migration, /DROP INDEX "Outreach_showId_contactId_key"/);
+  assert.match(
+    migration,
+    /CREATE UNIQUE INDEX "Outreach_showId_contactId_kind_key"[\s\S]*"showId", "contactId", "kind"/,
+  );
+  assert.match(
+    migration,
+    /CREATE UNIQUE INDEX "Outreach_parentOutreachId_key"/,
+  );
+  assert.match(
+    migration,
+    /"kind" = 'original'[\s\S]*"parentOutreachId" IS NULL[\s\S]*"kind" = 'follow_up'[\s\S]*"parentOutreachId" IS NOT NULL/,
+  );
+  assert.match(
+    migration,
+    /Follow-up parent must be an original outreach/,
+  );
+  assert.match(
+    migration,
+    /related\."contactId" IS DISTINCT FROM NEW\."contactId"/,
+  );
+  assert.match(migration, /Outreach kind and parent identity are immutable/);
+  assert.match(migration, /DEFERRABLE INITIALLY IMMEDIATE/);
+  assert.doesNotMatch(
+    migration,
+    /WHERE "contactId" IS NULL[\s\S]*CREATE UNIQUE INDEX/,
+  );
+
+  assert.match(schema, /enum OutreachKind \{\s*original\s*follow_up\s*\}/);
+  assert.match(schema, /parentOutreachId\s+String\?\s+@unique/);
+  assert.match(schema, /followUp\s+Outreach\?\s+@relation\("OutreachFollowUp"\)/);
+  assert.match(schema, /@@unique\(\[showId, contactId, kind\]\)/);
+});
+
+test("follow-up send and schedule reuse the immutable child machinery", () => {
+  const source = readFileSync(new URL("./sendOutreach.ts", import.meta.url), "utf8");
+  const actions = readFileSync(
+    new URL("../app/dashboard/actions.ts", import.meta.url),
+    "utf8",
+  );
+  const festival = readFileSync(
+    new URL("../app/festivals/[showId]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const webhook = readFileSync(
+    new URL("../app/api/resend/webhook/route.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    source,
+    /export async function sendFollowUp[\s\S]*prepareFollowUpOutreach[\s\S]*claimImmediateOutreach\(prep\)[\s\S]*executeClaimedSend/,
+  );
+  assert.match(
+    source,
+    /export async function scheduleFollowUp[\s\S]*prepareFollowUpOutreach[\s\S]*schedulePreparedOutreach/,
+  );
+  assert.match(
+    source,
+    /kind: prep\.kind,\s*parentOutreachId: prep\.parentOutreachId/,
+  );
+  assert.match(
+    source,
+    /preparedFollowUpBlockingReason[\s\S]*evaluateLockedOutreachDeliveryPolicy/,
+  );
+  assert.match(
+    source,
+    /where: \{\s*kind: "original",\s*showId: \{ in: showIds \}/,
+  );
+  assert.match(
+    source,
+    /isConclusiveRealOutreachAcceptance\(child, childAttempt\)/,
+  );
+  assert.match(
+    source,
+    /getFollowUpEligibilityBatch[\s\S]*getResendDeliverySettingsSnapshot[\s\S]*emailSuppression\.findMany[\s\S]*evaluateOutreachDeliveryPolicy/,
+  );
+  assert.match(
+    source,
+    /preparedDeliveryPolicyBlockingReason[\s\S]*acquireOutreachRecipientPolicyLocks[\s\S]*testOverride: deliverySettings\.testOverride[\s\S]*bccEmails: deliverySettings\.bccEmails/,
+  );
+  assert.match(source, /Restore this festival before sending follow-up/);
+  assert.match(
+    source,
+    /getOutreachSendabilityBatch[\s\S]*festivalOutreachBlockingReason\(show, "original"\)/,
+  );
+  assert.match(
+    source,
+    /claimScheduledOutreach[\s\S]*festivalOutreachBlockingReason\(\s*outreach\.show,\s*outreach\.kind/,
+  );
+  assert.match(
+    source,
+    /evaluateAttemptRetryEligibility\(\s*childAttempt,\s*now,\s*deliverySettings\.credentialScope/,
+  );
+
+  assert.match(
+    actions,
+    /export async function sendFollowUpAction[\s\S]*parentOutreachId[\s\S]*scheduleFollowUp[\s\S]*sendFollowUp/,
+  );
+  assert.match(
+    source,
+    /export async function cancelScheduledOutreach\(\s*outreachId: string/,
+  );
+  assert.match(
+    source,
+    /child\.status === "manual_review"[\s\S]*Follow-up requires manual review/,
+  );
+  assert.match(
+    source,
+    /child\.status === "cancelled"[\s\S]*isDefinitivelyUnsentOutreachAttempt\(childAttempt\)/,
+  );
+  assert.doesNotMatch(
+    actions.slice(
+      actions.indexOf("export async function sendFollowUpAction"),
+      actions.indexOf("export async function cancelScheduledAction"),
+    ),
+    /formData\.get\("(showId|contactId)"\)/,
+  );
+  assert.match(
+    actions,
+    /result\.scheduled \? "followup_scheduled" : "followup_sent"/,
+  );
+
+  assert.match(
+    festival,
+    /kind: "original"[\s\S]*status: "test"/,
+  );
+  assert.doesNotMatch(
+    festival.slice(
+      festival.indexOf("async function bulkSend"),
+      festival.indexOf("export default async function FestivalDetailPage"),
+    ),
+    /sendFollowUp|scheduleFollowUp/,
+  );
+
+  assert.match(
+    webhook,
+    /const outreach = await tx\.outreach\.findUnique\(\{\s*where: \{ id: attempt\.outreachId \}/,
+  );
+  assert.doesNotMatch(webhook, /parentOutreachId|parentOutreach/);
 });
 
 test("remediation migrations preserve unknown legacy recipients and quarantine attempts", () => {

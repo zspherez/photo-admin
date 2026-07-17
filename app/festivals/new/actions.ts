@@ -11,6 +11,12 @@ import {
   type FestivalLineupDecision,
 } from "@/lib/festivalLineup";
 import { requireServerActionAuth } from "@/lib/auth";
+import { DEFAULT_COUNTRY_CODE } from "@/lib/country";
+import {
+  festivalReturnPath,
+  workflowReturnPath,
+} from "@/lib/dashboardReturnUrl";
+import { parseFestivalListView } from "@/lib/festivalView";
 import type {
   FestivalArtistAmbiguity,
   FestivalFormState,
@@ -36,6 +42,8 @@ function readValues(formData: FormData): FestivalFormValues {
     venueName: formValue(formData, "venueName"),
     city: formValue(formData, "city"),
     state: formValue(formData, "state"),
+    countryCode:
+      formValue(formData, "countryCode") || DEFAULT_COUNTRY_CODE,
     lineup: String(formData.get("lineup") ?? "").trim(),
   };
 }
@@ -51,6 +59,8 @@ function errorState(
 async function persistFestival(
   values: FestivalFormValues,
   date: Date,
+  countryCode: string,
+  countryName: string,
   entries: FestivalLineupEntry[],
   selections: Map<string, string>
 ): Promise<string> {
@@ -154,6 +164,8 @@ async function persistFestival(
               venueName: values.venueName,
               city: values.city,
               state: values.state || null,
+              countryCode,
+              countryName,
               isFestival: true,
               eventName: values.name,
               source: "manual",
@@ -192,7 +204,10 @@ export async function createFestival(
   previousState: FestivalFormState,
   formData: FormData
 ): Promise<FestivalFormState> {
-  await requireServerActionAuth("/festivals/new");
+  await requireServerActionAuth(
+    formData.get("returnTo") ?? "/festivals/new"
+  );
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
   void previousState;
   const values = readValues(formData);
   const validation = validateFestivalCreation(values);
@@ -211,6 +226,8 @@ export async function createFestival(
     festivalId = await persistFestival(
       values,
       validation.date,
+      validation.countryCode,
+      validation.countryName,
       validation.entries,
       selections
     );
@@ -229,5 +246,18 @@ export async function createFestival(
     );
   }
 
-  redirect(`/festivals/${festivalId}`);
+  const returnUrl = new URL(returnTo, "https://festivals.local");
+  redirect(
+    festivalReturnPath(
+      festivalId,
+      "all",
+      "all",
+      parseFestivalListView({
+        includeInternational: returnUrl.searchParams.get(
+          "includeInternational"
+        ),
+        dismissed: returnUrl.searchParams.get("dismissed"),
+      })
+    )
+  );
 }

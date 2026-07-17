@@ -6,6 +6,10 @@ import {
   parseFestivalLineupEntries,
   type FestivalLineupEntry,
 } from "@/lib/festivalLineup";
+import {
+  countryNameForCode,
+  normalizeCountryCode,
+} from "@/lib/country";
 import type { FestivalFormValues } from "./form-state";
 
 export type FestivalCreationValidation =
@@ -13,6 +17,8 @@ export type FestivalCreationValidation =
       ok: true;
       date: Date;
       entries: FestivalLineupEntry[];
+      countryCode: string;
+      countryName: string;
     }
   | {
       ok: false;
@@ -27,6 +33,15 @@ export function validateFestivalCreation(
     return {
       ok: false,
       message: "Name, date, venue, and city are required.",
+    };
+  }
+
+  const countryCode = normalizeCountryCode(values.countryCode);
+  const countryName = countryNameForCode(countryCode);
+  if (!countryCode || !countryName) {
+    return {
+      ok: false,
+      message: "Country must be a valid two-letter ISO country code.",
     };
   }
 
@@ -60,5 +75,11 @@ export function validateFestivalCreation(
     };
   }
 
-  return { ok: true, date, entries: lineup.entries };
+  return {
+    ok: true,
+    date,
+    entries: lineup.entries,
+    countryCode,
+    countryName,
+  };
 }

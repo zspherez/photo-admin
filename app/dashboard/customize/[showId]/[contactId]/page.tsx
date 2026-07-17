@@ -5,6 +5,7 @@ import { cache } from "react";
 import { db } from "@/lib/db";
 import {
   dashboardResultHref,
+  festivalReturnPath,
   workflowReturnPath,
 } from "@/lib/dashboardReturnUrl";
 import {
@@ -26,6 +27,7 @@ import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { formatShowDate } from "@/lib/formatDate";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
+import { refreshWorkflowViews } from "@/lib/workflowRefresh";
 
 export const dynamic = "force-dynamic";
 
@@ -60,11 +62,11 @@ export async function generateMetadata({
 async function sendCustom(formData: FormData) {
   "use server";
   await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
   const showId = formData.get("showId") as string;
   const contactId = formData.get("contactId") as string;
   const subjectOverride = (formData.get("subject") as string) ?? "";
   const htmlOverride = (formData.get("html") as string) ?? "";
-  const returnTo = formData.get("returnTo");
   const [show, contact] = await Promise.all([
     db.show.findUnique({
       where: { id: showId },
@@ -86,6 +88,7 @@ async function sendCustom(formData: FormData) {
 
   if (isWeekendET()) {
     const result = await scheduleOutreach({ showId, contactId, subjectOverride, htmlOverride }, getNextMondaySlot());
+    refreshWorkflowViews(returnTo, ["/outreach", festivalReturnPath(showId)]);
     if (result.ok) {
       redirect(dashboardResultHref(returnTo, "scheduled"));
     } else {
@@ -96,6 +99,7 @@ async function sendCustom(formData: FormData) {
   }
 
   const result = await sendOutreach({ showId, contactId, subjectOverride, htmlOverride });
+  refreshWorkflowViews(returnTo, ["/outreach", festivalReturnPath(showId)]);
   if (result.ok) {
     redirect(dashboardResultHref(returnTo, "sent"));
   } else {

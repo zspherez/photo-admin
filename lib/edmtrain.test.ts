@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   createSerializedEdmtrainReconciliationScheduler,
+  edmtrainEventGeography,
   fetchEdmtrainEvents,
   isValidEdmtrainSnapshotEvent,
   runLeasedEdmtrainSnapshotSync,
@@ -10,6 +11,7 @@ import {
   runIndependentEdmtrainSyncs,
   syncEdmtrainFestivals,
   syncEdmtrainShows,
+  type EdmtrainEvent,
   type EdmtrainScopeLeaseAcquirer,
   type SyncResult,
 } from "./edmtrain";
@@ -30,6 +32,48 @@ const syncResult = (fetched: number): SyncResult => ({
   missing: 0,
   cancelled: 0,
   identityConflicts: [],
+});
+
+function eventWithCountry(country: string): EdmtrainEvent {
+  return {
+    id: 1,
+    date: "2026-07-16",
+    ages: null,
+    electronicGenreInd: true,
+    festivalInd: true,
+    livestreamInd: false,
+    name: "Test Festival",
+    link: null,
+    startTime: null,
+    endTime: null,
+    createdDate: "2026-01-01",
+    artistList: [],
+    venue: {
+      id: 1,
+      name: "Test Venue",
+      location: "Toronto, ON",
+      state: "ON",
+      address: "",
+      country,
+      latitude: 0,
+      longitude: 0,
+    },
+  };
+}
+
+test("EDMTrain geography persists provider countries without assuming US", () => {
+  assert.deepEqual(edmtrainEventGeography(eventWithCountry("Canada")), {
+    city: "Toronto",
+    state: "ON",
+    countryCode: "CA",
+    countryName: "Canada",
+  });
+  assert.deepEqual(edmtrainEventGeography(eventWithCountry("Atlantis")), {
+    city: "Toronto",
+    state: "ON",
+    countryCode: null,
+    countryName: "Atlantis",
+  });
 });
 
 test("festival reconciliation succeeds when the NYC snapshot fails", async () => {

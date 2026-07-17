@@ -14,7 +14,7 @@ import {
 } from "@/lib/listenSignal";
 import {
   canMarkOutreachManually,
-  MANUAL_OUTREACH_MARKER_WHERE,
+  isActiveManualOutreachMarker,
 } from "@/lib/manualOutreach";
 import {
   DASHBOARD_PAGE_SIZE,
@@ -78,6 +78,8 @@ export interface MatchedShow {
   otherArtists: { id: string; name: string }[];
   outreach: {
     id: string;
+    kind: "original" | "follow_up";
+    parentOutreachId: string | null;
     artistId: string;
     contactId: string | null;
     sentAt: Date | null;
@@ -209,19 +211,25 @@ function showWhere(
   if (filters.status === "sent") {
     where.outreaches = {
       some: {
+        kind: "original",
         status: { in: ["sent", "scheduled", "retry_scheduled"] },
       },
     };
   } else if (filters.status === "unsent") {
     where.outreaches = {
       none: {
+        kind: "original",
         status: { in: ["sent", "scheduled", "retry_scheduled"] },
       },
     };
   } else if (filters.status === "opened") {
-    where.outreaches = { some: { openCount: { gt: 0 } } };
+    where.outreaches = {
+      some: { kind: "original", openCount: { gt: 0 } },
+    };
   } else if (filters.status === "clicked") {
-    where.outreaches = { some: { clickCount: { gt: 0 } } };
+    where.outreaches = {
+      some: { kind: "original", clickCount: { gt: 0 } },
+    };
   }
   return where;
 }
@@ -262,6 +270,8 @@ function dashboardShowSelect(
       orderBy: [{ createdAt: "desc" }, { id: "asc" }],
       select: {
         id: true,
+        kind: true,
+        parentOutreachId: true,
         artistId: true,
         contactId: true,
         sentAt: true,
@@ -273,6 +283,8 @@ function dashboardShowSelect(
         openCount: true,
         providerMessageId: true,
         attemptCount: true,
+        finalSubject: true,
+        finalHtml: true,
         _count: { select: { sendAttempts: true } },
       },
     },
@@ -392,10 +404,6 @@ export async function getDashboardData(
     }
   }
   const artistIds = [...featuredArtistIds];
-  const outreachIds = showRows.flatMap((show) =>
-    show.outreaches.map((outreach) => outreach.id)
-  );
-
   const contactsPromise: Promise<DashboardContactRow[]> =
     artistIds.length === 0
       ? Promise.resolve([])
@@ -412,22 +420,10 @@ export async function getDashboardData(
           orderBy: [{ artistId: "asc" }, { playlist: { name: "asc" } }],
           select: PLAYLIST_SELECT,
         });
-  const manualMarkersPromise =
-    outreachIds.length === 0
-      ? Promise.resolve([])
-      : db.outreach.findMany({
-          where: {
-            id: { in: outreachIds },
-            ...MANUAL_OUTREACH_MARKER_WHERE,
-          },
-          select: { id: true },
-        });
-  const [contacts, playlistRows, manualMarkers] = await Promise.all([
+  const [contacts, playlistRows] = await Promise.all([
     contactsPromise,
     playlistsPromise,
-    manualMarkersPromise,
   ]);
-  const manualMarkerIds = new Set(manualMarkers.map((row) => row.id));
 
   const contactsByArtist = new Map<
     string,
@@ -488,7 +484,8 @@ export async function getDashboardData(
       );
       const playlists = playlistsByArtist.get(artist.id) ?? [];
       const artistOutreaches = show.outreaches.filter(
-        (outreach) => outreach.artistId === artist.id
+        (outreach) =>
+          outreach.artistId === artist.id && outreach.kind === "original"
       );
       matchedArtists.push({
         id: artist.id,
@@ -524,6 +521,8 @@ export async function getDashboardData(
       otherArtists,
       outreach: show.outreaches.map((outreach) => ({
         id: outreach.id,
+        kind: outreach.kind,
+        parentOutreachId: outreach.parentOutreachId,
         artistId: outreach.artistId,
         contactId: outreach.contactId,
         sentAt: outreach.sentAt,
@@ -533,7 +532,18 @@ export async function getDashboardData(
         nextAttemptAt: outreach.nextAttemptAt,
         clickCount: outreach.clickCount,
         openCount: outreach.openCount,
-        isManualMarker: manualMarkerIds.has(outreach.id),
+        isManualMarker: isActiveManualOutreachMarker({
+          id: outreach.id,
+          kind: outreach.kind,
+          showId: show.id,
+          artistId: outreach.artistId,
+          status: outreach.status,
+          providerMessageId: outreach.providerMessageId,
+          attemptCount: outreach.attemptCount,
+          sendAttemptCount: outreach._count.sendAttempts,
+          finalSubject: outreach.finalSubject,
+          finalHtml: outreach.finalHtml,
+        }),
       })),
     };
   });

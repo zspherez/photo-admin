@@ -12,6 +12,7 @@ import {
   type ArtistIdentityConflict,
   type ArtistIdentityInput,
 } from "@/lib/artistIdentity";
+import { normalizeCountry } from "@/lib/country";
 import {
   asOperationDeadlineDeferredResult,
   assertOperationTimeRemaining,
@@ -82,6 +83,22 @@ export interface EdmtrainEvent {
     country: string;
     latitude: number;
     longitude: number;
+  };
+}
+
+export function edmtrainEventGeography(event: EdmtrainEvent): {
+  city: string;
+  state: string | null;
+  countryCode: string | null;
+  countryName: string | null;
+} {
+  const locationParts = (event.venue.location ?? "")
+    .split(",")
+    .map((part) => part.trim());
+  return {
+    city: locationParts[0] || "Unknown",
+    state: locationParts[1] || event.venue.state || null,
+    ...normalizeCountry(event.venue.country),
   };
 }
 
@@ -391,16 +408,12 @@ async function reconcileEdmtrainSnapshots(
 
       for (const snapshot of snapshots) {
         const rows = snapshot.events.map((event) => {
-          const locationParts = (event.venue.location ?? "")
-            .split(",")
-            .map((part) => part.trim());
           const blocked = isBlocked(event.venue.name, snapshot.blocklist);
           return {
             id: randomUUID(),
             event,
             date: parseDateOnly(event.date),
-            city: locationParts[0] || "Unknown",
-            state: locationParts[1] || event.venue.state || null,
+            ...edmtrainEventGeography(event),
             status: edmtrainEventStatus(event, blocked),
           };
         });
@@ -408,7 +421,16 @@ async function reconcileEdmtrainSnapshots(
         for (const rowChunk of chunkItems(rows, 400)) {
           const values = Prisma.join(
             rowChunk.map(
-              ({ id, event, date, city, state, status }) =>
+              ({
+                id,
+                event,
+                date,
+                city,
+                state,
+                countryCode,
+                countryName,
+                status,
+              }) =>
                 Prisma.sql`(
                     ${id},
                     ${event.id},
@@ -416,6 +438,8 @@ async function reconcileEdmtrainSnapshots(
                     ${event.venue.name},
                     ${city},
                     ${state},
+                    ${countryCode},
+                    ${countryName},
                     ${event.link},
                     ${event.ages},
                     ${event.electronicGenreInd ? "electronic" : "other"},
@@ -435,9 +459,10 @@ async function reconcileEdmtrainSnapshots(
             Prisma.sql`
                 INSERT INTO "Show" (
                   "id", "edmtrainId", "date", "venueName", "city", "state",
-                  "ticketUrl", "ages", "electronicGenre", "isFestival",
-                  "eventName", "source", "syncStatus", "sourceLastSeenAt",
-                  "sourceGeneration", "raw", "createdAt", "updatedAt"
+                  "countryCode", "countryName", "ticketUrl", "ages",
+                  "electronicGenre", "isFestival", "eventName", "source",
+                  "syncStatus", "sourceLastSeenAt", "sourceGeneration", "raw",
+                  "createdAt", "updatedAt"
                 )
                 VALUES ${values}
                 ON CONFLICT ("edmtrainId") DO UPDATE SET
@@ -445,6 +470,8 @@ async function reconcileEdmtrainSnapshots(
                   "venueName" = EXCLUDED."venueName",
                   "city" = EXCLUDED."city",
                   "state" = EXCLUDED."state",
+                  "countryCode" = EXCLUDED."countryCode",
+                  "countryName" = EXCLUDED."countryName",
                   "ticketUrl" = EXCLUDED."ticketUrl",
                   "ages" = EXCLUDED."ages",
                   "electronicGenre" = EXCLUDED."electronicGenre",

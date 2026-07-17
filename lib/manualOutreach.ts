@@ -3,7 +3,8 @@ import type { Prisma } from "@prisma/client";
 export const MANUAL_OUTREACH_SUBJECT = "(manual outreach)";
 export const MANUAL_OUTREACH_HTML = "(manual outreach)";
 
-export const MANUAL_OUTREACH_MARKER_WHERE = {
+export const REUSABLE_MANUAL_OUTREACH_MARKER_WHERE = {
+  kind: "original",
   providerMessageId: null,
   attemptCount: 0,
   finalSubject: MANUAL_OUTREACH_SUBJECT,
@@ -11,11 +12,53 @@ export const MANUAL_OUTREACH_MARKER_WHERE = {
   sendAttempts: { none: {} },
 } satisfies Prisma.OutreachWhereInput;
 
+export const MANUAL_OUTREACH_MARKER_WHERE = {
+  status: "sent",
+  ...REUSABLE_MANUAL_OUTREACH_MARKER_WHERE,
+} satisfies Prisma.OutreachWhereInput;
+
 export interface ManualOutreachState {
   status: string;
   providerMessageId: string | null;
   attemptCount: number;
   sendAttemptCount: number;
+}
+
+export interface ManualOutreachMarkerRecord extends ManualOutreachState {
+  id: string;
+  kind: "original" | "follow_up";
+  showId: string;
+  artistId: string;
+  finalSubject: string;
+  finalHtml: string;
+}
+
+export function isActiveManualOutreachMarker(
+  row: ManualOutreachMarkerRecord
+): boolean {
+  return (
+    row.kind === "original" &&
+    row.status === "sent" &&
+    row.providerMessageId === null &&
+    row.attemptCount === 0 &&
+    row.sendAttemptCount === 0 &&
+    row.finalSubject === MANUAL_OUTREACH_SUBJECT &&
+    row.finalHtml === MANUAL_OUTREACH_HTML
+  );
+}
+
+export interface ManualOutreachMarkerStore {
+  findById(id: string): Promise<ManualOutreachMarkerRecord | null>;
+  deleteActiveMarker(id: string): Promise<boolean>;
+}
+
+export async function removeManualOutreachMarker(
+  store: ManualOutreachMarkerStore,
+  outreachId: string
+): Promise<ManualOutreachMarkerRecord | null> {
+  const marker = await store.findById(outreachId);
+  if (!marker || !isActiveManualOutreachMarker(marker)) return null;
+  return (await store.deleteActiveMarker(marker.id)) ? marker : null;
 }
 
 export function manualMarkBlockingReason(

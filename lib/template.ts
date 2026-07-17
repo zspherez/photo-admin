@@ -46,6 +46,7 @@ export function extractVars(template: string): string[] {
 }
 
 export const DEFAULT_TEMPLATE_NAME = "default";
+export const FOLLOW_UP_TEMPLATE_NAME = "follow_up";
 
 export const DEFAULT_TEMPLATE_SUBJECT = "{{artist}} {{sender_city}} Photo/Video";
 
@@ -79,6 +80,20 @@ export const DEFAULT_TEMPLATE_HTML = `<html>
   </body>
 </html>`;
 
+export interface TemplateContent {
+  subject: string;
+  htmlBody: string;
+}
+
+export function cloneTemplateContent(
+  template: TemplateContent
+): TemplateContent {
+  return {
+    subject: template.subject,
+    htmlBody: template.htmlBody,
+  };
+}
+
 export async function ensureDefaultTemplate() {
   const existing = await db.emailTemplate.findFirst({ where: { isDefault: true } });
   if (existing) {
@@ -91,6 +106,7 @@ export async function ensureDefaultTemplate() {
         data: { htmlBody: DEFAULT_TEMPLATE_HTML },
       });
     }
+
     return existing;
   }
   return db.emailTemplate.upsert({
@@ -101,6 +117,25 @@ export async function ensureDefaultTemplate() {
       subject: DEFAULT_TEMPLATE_SUBJECT,
       htmlBody: DEFAULT_TEMPLATE_HTML,
       isDefault: true,
+    },
+  });
+}
+
+export async function ensureFollowUpTemplate() {
+  const existing = await db.emailTemplate.findUnique({
+    where: { name: FOLLOW_UP_TEMPLATE_NAME },
+  });
+  if (existing) return existing;
+
+  const original = await ensureDefaultTemplate();
+  const content = cloneTemplateContent(original);
+  return db.emailTemplate.upsert({
+    where: { name: FOLLOW_UP_TEMPLATE_NAME },
+    update: {},
+    create: {
+      name: FOLLOW_UP_TEMPLATE_NAME,
+      ...content,
+      isDefault: false,
     },
   });
 }

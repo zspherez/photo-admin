@@ -20,6 +20,7 @@ import { LinkButton } from "@/components/ui/button";
 import { ArtistLink } from "@/components/artist-modal";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { SendButton } from "@/components/send-button";
+import { FollowUpButton } from "@/components/follow-up-button";
 import { cn } from "@/lib/cn";
 import {
   pickEmailContact,
@@ -27,7 +28,10 @@ import {
 } from "@/lib/contactSelection";
 import { formatShowDate } from "@/lib/formatDate";
 import { formatRankLabel } from "@/lib/listenSignal";
-import type { OutreachSendability } from "@/lib/sendOutreach";
+import type {
+  FollowUpEligibility,
+  OutreachSendability,
+} from "@/lib/sendOutreach";
 import { isCancellableOutreachStatus } from "@/lib/outreachStatus";
 import { withWorkflowReturnTo } from "@/lib/workflowLinks";
 import {
@@ -38,6 +42,7 @@ import {
   markSentAction,
   unmarkSentAction,
   cancelScheduledAction,
+  sendFollowUpAction,
 } from "./actions";
 
 interface Props {
@@ -45,6 +50,7 @@ interface Props {
   query: DashboardQuery;
   isWeekend: boolean;
   sendabilityRows: OutreachSendability[];
+  followUpEligibilityRows: FollowUpEligibility[];
 }
 
 interface OutreachState {
@@ -121,6 +127,7 @@ export function DashboardClient({
   query,
   isWeekend,
   sendabilityRows,
+  followUpEligibilityRows,
 }: Props) {
   const { shows, modeCounts, pagination } = data;
   const filters = query.filters;
@@ -130,6 +137,9 @@ export function DashboardClient({
       `${row.showId}\u0000${row.contactId}`,
       row,
     ])
+  );
+  const followUpByParent = new Map(
+    followUpEligibilityRows.map((row) => [row.parentOutreachId, row]),
   );
   const tabs: { key: DashboardMode; label: string; tone?: "amber" }[] = [
     { key: "matched", label: "Matched" },
@@ -356,6 +366,7 @@ export function DashboardClient({
                 </p>
                 <div className="flex shrink-0 items-center gap-1">
                   <form action={setInterestedAction}>
+                    <input type="hidden" name="returnTo" value={returnTo} />
                     <input type="hidden" name="showId" value={show.id} />
                     <input
                       type="hidden"
@@ -391,6 +402,7 @@ export function DashboardClient({
                       show.dismissedAt ? restoreShowAction : dismissShowAction
                     }
                   >
+                    <input type="hidden" name="returnTo" value={returnTo} />
                     <input type="hidden" name="showId" value={show.id} />
                     <button
                       type="submit"
@@ -413,7 +425,14 @@ export function DashboardClient({
                   const contact =
                     emailContact ?? phoneContact ?? artist.contacts[0] ?? null;
                   const artistOutreaches = show.outreach.filter(
-                    (outreach) => outreach.artistId === artist.id
+                    (outreach) =>
+                      outreach.artistId === artist.id &&
+                      outreach.kind === "original"
+                  );
+                  const manualMarker = artistOutreaches.find(
+                    (outreach) =>
+                      outreach.status === "sent" &&
+                      outreach.isManualMarker
                   );
                   const sendability = emailContact
                     ? sendabilityByTarget.get(
@@ -446,9 +465,25 @@ export function DashboardClient({
                     artistOutreach ??
                     (contact
                       ? show.outreach.find(
-                          (row) => row.contactId === contact.id
+                          (row) =>
+                            row.kind === "original" &&
+                            row.contactId === contact.id
                         )
                       : undefined);
+                  const followUpEligibility =
+                    artistOutreaches
+                      .map((row) => followUpByParent.get(row.id))
+                      .find(
+                        (row) =>
+                          row &&
+                          (row.state === "eligible" ||
+                            row.state === "pending" ||
+                            row.state === "sent"),
+                      ) ??
+                    artistOutreaches
+                      .filter((row) => row.status === "sent")
+                      .map((row) => followUpByParent.get(row.id))
+                      .find((row) => row !== undefined);
                   const alreadySent =
                     sendability?.blockingStatus === "sent" ||
                     artistOutreach?.status === "sent";
@@ -614,7 +649,7 @@ export function DashboardClient({
                         )}
                         {outreach && (
                           <Badge tone={statusTone(outreach)}>
-                            {statusLabels(outreach).join(" · ")}
+                            Original · {statusLabels(outreach).join(" · ")}
                           </Badge>
                         )}
                       </div>
@@ -660,6 +695,15 @@ export function DashboardClient({
                             No email or phone
                           </span>
                         )}
+                        {followUpEligibility && (
+                          <FollowUpButton
+                            eligibility={followUpEligibility}
+                            returnTo={returnTo}
+                            isWeekend={isWeekend}
+                            action={sendFollowUpAction}
+                            cancelAction={cancelScheduledAction}
+                          />
+                        )}
                         {artist.canMarkManually && (
                           <form action={markSentAction}>
                             <input
@@ -696,7 +740,7 @@ export function DashboardClient({
                             </PendingSubmitButton>
                           </form>
                         )}
-                        {alreadySent && artistOutreach?.isManualMarker && (
+                        {manualMarker && (
                           <form action={unmarkSentAction}>
                             <input
                               type="hidden"
@@ -706,7 +750,7 @@ export function DashboardClient({
                             <input
                               type="hidden"
                               name="outreachId"
-                              value={artistOutreach.id}
+                              value={manualMarker.id}
                             />
                             <PendingSubmitButton
                               variant="ghost"

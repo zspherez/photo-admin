@@ -26,6 +26,8 @@ async function main(): Promise<void> {
     settings,
     activeUnownedSheetContacts,
     contactProbe,
+    festivalGeographyProbe,
+    outreachKindProbe,
     outreachAttemptProbe,
     syncLeaseProbe,
     artistClaimProbe,
@@ -44,6 +46,16 @@ async function main(): Promise<void> {
       },
     }),
     db.contact.count({ where: { state: "active" }, take: 1 }),
+    db.show.count({
+      where: {
+        OR: [{ countryCode: "US" }, { countryName: { not: null } }],
+      },
+      take: 1,
+    }),
+    db.outreach.count({
+      where: { kind: "original", parentOutreachId: null },
+      take: 1,
+    }),
     db.outreachSendAttempt.count({ take: 1 }),
     db.integrationSyncLease.count({ take: 1 }),
     db.artistIdentityNameClaim.count({ take: 1 }),
@@ -54,6 +66,8 @@ async function main(): Promise<void> {
     {
       databaseProbeSucceeded: [
         contactProbe,
+        festivalGeographyProbe,
+        outreachKindProbe,
         outreachAttemptProbe,
         syncLeaseProbe,
         artistClaimProbe,

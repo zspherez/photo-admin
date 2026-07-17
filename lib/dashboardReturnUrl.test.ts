@@ -43,12 +43,18 @@ test("dashboard returns reject external and non-dashboard paths", () => {
   );
 });
 
-test("workflow returns allow exact dashboard and festival detail routes", () => {
+test("workflow returns allow exact workflow routes and preserve their filters", () => {
   assert.equal(
     workflowReturnPath(
       "/festivals/show_123?filter=unsent&genre=house&page=9&sent=old"
     ),
     "/festivals/show_123?filter=unsent&genre=house"
+  );
+  assert.equal(
+    workflowReturnPath(
+      "/festivals?includeInternational=1&dismissed=1&sent=old"
+    ),
+    "/festivals?includeInternational=1&dismissed=1"
   );
   assert.equal(
     festivalReturnPath("show_123", "matched_with_contact", "drum & bass"),
@@ -67,6 +73,24 @@ test("workflow returns allow exact dashboard and festival detail routes", () => 
     ),
     "/dashboard/add-contact/artist_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dneeds_contact"
   );
+  assert.equal(
+    workflowReturnPath(
+      "/outreach?status=manual_review&search=Four%20Tet&page=3&sent=old",
+    ),
+    "/outreach?status=manual_review&search=Four+Tet&page=3",
+  );
+  assert.equal(
+    workflowReturnPath(
+      "/artists/artist_123?returnTo=%2Foutreach%3Fstatus%3Dsent%26page%3D2&error=old",
+    ),
+    "/artists/artist_123?returnTo=%2Foutreach%3Fstatus%3Dsent%26page%3D2",
+  );
+  assert.equal(
+    workflowReturnPath(
+      "/dashboard/contact/contact_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dunsent&historyPage=4&deleted=old",
+    ),
+    "/dashboard/contact/contact_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dunsent&historyPage=4",
+  );
 });
 
 test("festival search parameters normalize repeated values safely", () => {
@@ -78,14 +102,15 @@ test("festival search parameters normalize repeated values safely", () => {
       "show_123",
       parseFestivalFilter(["matched", "all"]),
       ["House", "techno"],
+      { includeInternational: true, dismissed: true },
     ),
-    "/festivals/show_123?filter=matched&genre=house",
+    "/festivals/show_123?filter=matched&genre=house&includeInternational=1&dismissed=1",
   );
   assert.equal(
     workflowReturnPath(
-      "/festivals/show_123?filter=unsent&filter=all&genre=House&genre=techno",
+      "/festivals/show_123?filter=unsent&filter=all&genre=House&genre=techno&includeInternational=1",
     ),
-    "/festivals/show_123?filter=unsent&genre=house",
+    "/festivals/show_123?filter=unsent&genre=house&includeInternational=1",
   );
 });
 
@@ -93,14 +118,20 @@ test("workflow returns reject nested, reserved, and external routes", () => {
   for (const value of [
     "https://example.com/festivals/show_123",
     "//example.com/festivals/show_123",
-    "/festivals",
     "/festivals/new",
     "/festivals/show_123/edit",
     "/festivals/show_123/../other",
     "/festivals/show_123/%2e%2e/other",
-    "/dashboard/contact/contact_123",
+    "/artists/artist_123/edit",
+    "/dashboard/contact/contact_123/edit",
     "/festivals/%2f%2fevil",
   ]) {
     assert.equal(workflowReturnPath(value), "/dashboard", value);
   }
+  assert.equal(
+    workflowReturnPath(
+      "/artists/artist_123?returnTo=%2Fartists%2Fother",
+    ),
+    "/artists/artist_123",
+  );
 });

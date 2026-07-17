@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   assertReleaseCompatibility,
@@ -72,5 +73,24 @@ test("required schema probes fail closed", () => {
         false
       ),
     /required schema surface/
+  );
+});
+
+test("release probe exercises new festival and outreach schema surfaces", () => {
+  const source = readFileSync(
+    new URL("../scripts/verify-release-compatibility.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /db\.show\.count\(\{[\s\S]*countryCode: "US"[\s\S]*countryName: \{ not: null \}/,
+  );
+  assert.match(
+    source,
+    /db\.outreach\.count\(\{\s*where: \{ kind: "original", parentOutreachId: null \}/,
+  );
+  assert.match(
+    source,
+    /contactProbe,\s*festivalGeographyProbe,\s*outreachKindProbe,\s*outreachAttemptProbe/,
   );
 });

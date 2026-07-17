@@ -11,7 +11,10 @@ import { isWeekendET } from "@/lib/schedule";
 import { cn } from "@/lib/cn";
 import { appendWorkflowResult } from "@/lib/dashboardReturnUrl";
 import { pickEmailContact } from "@/lib/contactSelection";
-import { getOutreachSendabilityBatch } from "@/lib/sendOutreach";
+import {
+  getFollowUpEligibilityBatch,
+  getOutreachSendabilityBatch,
+} from "@/lib/sendOutreach";
 import { DashboardClient } from "./dashboard-client";
 
 export const dynamic = "force-dynamic";
@@ -57,6 +60,8 @@ export default async function DashboardPage({
   const unmarked = firstSearchParam(params.unmarked);
   const scheduled = firstSearchParam(params.scheduled);
   const cancelled = firstSearchParam(params.cancelled);
+  const followUpSent = firstSearchParam(params.followup_sent);
+  const followUpScheduled = firstSearchParam(params.followup_scheduled);
   const now = new Date();
   const [testOverride, dashboard] = await Promise.all([
     getTestOverride(),
@@ -76,6 +81,8 @@ export default async function DashboardPage({
         unmarked,
         scheduled,
         cancelled,
+        followup_sent: followUpSent,
+        followup_scheduled: followUpScheduled,
       }).filter((entry): entry is [string, string] => entry[1] !== undefined)
     );
     redirect(
@@ -89,15 +96,25 @@ export default async function DashboardPage({
     );
   }
 
-  const sendability = await getOutreachSendabilityBatch(
-    dashboard.shows.flatMap((show) =>
-      show.matchedArtists.flatMap((artist) => {
-        const contact = pickEmailContact(artist.contacts);
-        return contact ? [{ showId: show.id, contactId: contact.id }] : [];
-      })
+  const [sendability, followUpEligibility] = await Promise.all([
+    getOutreachSendabilityBatch(
+      dashboard.shows.flatMap((show) =>
+        show.matchedArtists.flatMap((artist) => {
+          const contact = pickEmailContact(artist.contacts);
+          return contact ? [{ showId: show.id, contactId: contact.id }] : [];
+        }),
+      ),
+      now,
     ),
-    now
-  );
+    getFollowUpEligibilityBatch(
+      dashboard.shows.flatMap((show) =>
+        show.outreach.flatMap((outreach) =>
+          outreach.kind === "original" ? [outreach.id] : [],
+        ),
+      ),
+      now,
+    ),
+  ]);
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -118,7 +135,15 @@ export default async function DashboardPage({
           </Banner>
         )}
         {cancelled && (
-          <Banner tone="success">Scheduled send or retry cancelled.</Banner>
+          <Banner tone="success">
+            Scheduled send, follow-up, or retry cancelled.
+          </Banner>
+        )}
+        {followUpSent && <Banner tone="success">Follow-up sent.</Banner>}
+        {followUpScheduled && (
+          <Banner tone="success">
+            Follow-up scheduled for Monday morning.
+          </Banner>
         )}
         {marked && <Banner tone="success">Marked as sent.</Banner>}
         {unmarked && <Banner tone="success">Manual mark removed.</Banner>}
@@ -145,6 +170,7 @@ export default async function DashboardPage({
         query={query}
         isWeekend={isWeekendET(now)}
         sendabilityRows={sendability}
+        followUpEligibilityRows={followUpEligibility}
       />
     </main>
   );

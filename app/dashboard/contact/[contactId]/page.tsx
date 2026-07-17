@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
-import { revalidatePath } from "next/cache";
 import { cache } from "react";
 import { db } from "@/lib/db";
 import { updateContactInSheet } from "@/lib/sheets";
@@ -16,8 +15,16 @@ import {
 import { withWorkflowReturnTo } from "@/lib/workflowLinks";
 import { getPagination } from "@/lib/match";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { FollowUpButton } from "@/components/follow-up-button";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
+import { refreshWorkflowViews } from "@/lib/workflowRefresh";
+import { getFollowUpEligibilityBatch } from "@/lib/sendOutreach";
+import { isWeekendET } from "@/lib/schedule";
+import {
+  cancelScheduledAction,
+  sendFollowUpAction,
+} from "@/app/dashboard/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -239,7 +246,7 @@ async function saveContact(formData: FormData) {
     );
   }
 
-  revalidatePath("/dashboard");
+  refreshWorkflowViews(returnTo, ["/settings/contacts"]);
   redirect(appendWorkflowResult(returnTo, { added: "0", updated: "1" }));
 }
 
@@ -262,7 +269,7 @@ async function deleteContact(formData: FormData) {
     );
   }
   await db.contact.delete({ where: { id: contactId } });
-  revalidatePath("/dashboard");
+  refreshWorkflowViews(returnTo, ["/settings/contacts"]);
   redirect(appendWorkflowResult(returnTo, { deleted: "1" }));
 }
 
@@ -276,12 +283,18 @@ export default async function ContactEditPage({
     detail?: SearchParamValue;
     returnTo?: SearchParamValue;
     historyPage?: SearchParamValue;
+    followup_sent?: SearchParamValue;
+    followup_scheduled?: SearchParamValue;
+    cancelled?: SearchParamValue;
   }>;
 }) {
   const { contactId } = await params;
   const search = await searchParams;
   const error = firstSearchParam(search.error);
   const detail = firstSearchParam(search.detail);
+  const followUpSent = firstSearchParam(search.followup_sent);
+  const followUpScheduled = firstSearchParam(search.followup_scheduled);
+  const cancelled = firstSearchParam(search.cancelled);
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
   const requestedHistoryPage = parseHistoryPage(
     firstSearchParam(search.historyPage),
@@ -312,6 +325,8 @@ export default async function ContactEditPage({
     take: CONTACT_HISTORY_PAGE_SIZE,
     select: {
       id: true,
+      kind: true,
+      parentOutreachId: true,
       status: true,
       sentAt: true,
       openCount: true,
@@ -319,12 +334,25 @@ export default async function ContactEditPage({
       error: true,
       show: {
         select: {
+          id: true,
           venueName: true,
           date: true,
         },
       },
     },
   });
+  const followUpEligibility = await getFollowUpEligibilityBatch(
+    history.flatMap((outreach) =>
+      outreach.kind === "original" ? [outreach.id] : [],
+    ),
+  );
+  const followUpByParent = new Map(
+    followUpEligibility.map((row) => [row.parentOutreachId, row]),
+  );
+  const currentReturnTo = contactPageHref(contactId, safeReturnTo, {
+    historyPage: historyPagination.page,
+  });
+  const weekend = isWeekendET();
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
@@ -352,6 +380,15 @@ export default async function ContactEditPage({
                       : error === "delete_from_sheet"
                         ? "Delete Sheet-owned contacts in Google Sheets, then run a complete contact sync."
                         : error}
+        </div>
+      )}
+      {(followUpSent || followUpScheduled || cancelled) && (
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+          {followUpSent
+            ? "Follow-up sent."
+            : followUpScheduled
+              ? "Follow-up scheduled for Monday morning."
+              : "Scheduled follow-up or retry cancelled."}
         </div>
       )}
 
@@ -411,17 +448,47 @@ export default async function ContactEditPage({
           </div>
           <Card className="mt-3">
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
-              {history.map((o) => (
-                <li key={o.id} className="px-4 py-3 text-sm">
-                  <p className="font-medium">{o.show.venueName} · {formatShowDate(o.show.date, {})}</p>
-                  <p className="mt-0.5 text-xs text-zinc-500">
-                    {o.status}{o.sentAt ? ` · sent ${o.sentAt.toLocaleString()}` : ""}
-                    {o.openCount > 0 ? ` · opened ${o.openCount}x` : ""}
-                    {o.clickCount > 0 ? ` · clicked ${o.clickCount}x` : ""}
-                    {o.error ? ` · error: ${o.error}` : ""}
-                  </p>
-                </li>
-              ))}
+              {history.map((o) => {
+                const eligibility =
+                  o.kind === "original"
+                    ? followUpByParent.get(o.id)
+                    : undefined;
+                return (
+                  <li key={o.id} className="px-4 py-3 text-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium">
+                          {o.show.venueName} · {formatShowDate(o.show.date, {})}
+                        </p>
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          {o.kind === "follow_up" ? "Follow-up" : "Original"}
+                          {" · "}
+                          {o.status}
+                          {o.sentAt
+                            ? ` · sent ${o.sentAt.toLocaleString()}`
+                            : ""}
+                          {o.openCount > 0
+                            ? ` · opened ${o.openCount}x`
+                            : ""}
+                          {o.clickCount > 0
+                            ? ` · clicked ${o.clickCount}x`
+                            : ""}
+                          {o.error ? ` · error: ${o.error}` : ""}
+                        </p>
+                      </div>
+                      {eligibility && (
+                        <FollowUpButton
+                          eligibility={eligibility}
+                          returnTo={currentReturnTo}
+                          isWeekend={weekend}
+                          action={sendFollowUpAction}
+                          cancelAction={cancelScheduledAction}
+                        />
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           </Card>
           {historyPagination.pageCount > 1 && (

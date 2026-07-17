@@ -4,6 +4,7 @@ export interface FestivalFormValues {
   venueName: string;
   city: string;
   state: string;
+  countryCode: string;
   lineup: string;
 }
 
@@ -35,6 +36,7 @@ export const INITIAL_FESTIVAL_FORM_STATE: FestivalFormState = {
     venueName: "",
     city: "",
     state: "",
+    countryCode: "US",
     lineup: "",
   },
   message: null,

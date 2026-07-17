@@ -2,22 +2,30 @@
 
 import { Prisma } from "@prisma/client";
 import { redirect } from "next/navigation";
-import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { dashboardResultHref } from "@/lib/dashboardReturnUrl";
+import {
+  dashboardResultHref,
+  festivalReturnPath,
+  workflowReturnPath,
+} from "@/lib/dashboardReturnUrl";
 import {
   MANUAL_OUTREACH_HTML,
   MANUAL_OUTREACH_MARKER_WHERE,
   MANUAL_OUTREACH_SUBJECT,
+  REUSABLE_MANUAL_OUTREACH_MARKER_WHERE,
   manualMarkBlockingReason,
+  removeManualOutreachMarker,
 } from "@/lib/manualOutreach";
 import {
   cancelScheduledOutreach,
-  sendOutreach,
   scheduleOutreach,
+  scheduleFollowUp,
+  sendFollowUp,
+  sendOutreach,
 } from "@/lib/sendOutreach";
 import { isWeekendET, getNextMondaySlot } from "@/lib/schedule";
 import { requireServerActionAuth } from "@/lib/auth";
+import { refreshWorkflowViews } from "@/lib/workflowRefresh";
 
 async function withSerializableRetry<T>(
   work: (tx: Prisma.TransactionClient) => Promise<T>
@@ -41,9 +49,9 @@ async function withSerializableRetry<T>(
 
 export async function sendNowAction(formData: FormData) {
   await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
   const showId = String(formData.get("showId") ?? "").trim();
   const contactId = String(formData.get("contactId") ?? "").trim();
-  const returnTo = formData.get("returnTo");
   if (!showId || !contactId) {
     redirect(
       dashboardResultHref(returnTo, "error", "Missing show or email contact")
@@ -62,8 +70,10 @@ export async function sendNowAction(formData: FormData) {
   if (isWeekendET()) {
     const scheduledFor = getNextMondaySlot();
     const result = await scheduleOutreach({ showId, contactId }, scheduledFor);
-    revalidatePath("/dashboard");
-    revalidatePath(`/festivals/${showId}`);
+    refreshWorkflowViews(returnTo, [
+      "/outreach",
+      festivalReturnPath(showId),
+    ]);
     if (result.ok) {
       redirect(dashboardResultHref(returnTo, "scheduled"));
     } else {
@@ -72,10 +82,8 @@ export async function sendNowAction(formData: FormData) {
       );
     }
   }
-
   const result = await sendOutreach({ showId, contactId });
-  revalidatePath("/dashboard");
-  revalidatePath(`/festivals/${showId}`);
+  refreshWorkflowViews(returnTo, ["/outreach", festivalReturnPath(showId)]);
   if (result.ok) {
     redirect(dashboardResultHref(returnTo, "sent"));
   } else {
@@ -85,18 +93,65 @@ export async function sendNowAction(formData: FormData) {
   }
 }
 
+export async function sendFollowUpAction(formData: FormData) {
+  await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
+  const parentOutreachId = String(
+    formData.get("parentOutreachId") ?? "",
+  ).trim();
+  if (!parentOutreachId) {
+    redirect(
+      dashboardResultHref(returnTo, "error", "Missing original outreach"),
+    );
+  }
+
+  const parent = await db.outreach.findUnique({
+    where: { id: parentOutreachId, kind: "original" },
+    select: { showId: true },
+  });
+  if (!parent) {
+    redirect(
+      dashboardResultHref(returnTo, "error", "Original outreach not found"),
+    );
+  }
+
+  const result = isWeekendET()
+    ? await scheduleFollowUp(parentOutreachId, getNextMondaySlot())
+    : await sendFollowUp(parentOutreachId);
+  refreshWorkflowViews(returnTo, [
+    "/outreach",
+    festivalReturnPath(parent.showId),
+  ]);
+  if (result.ok) {
+    redirect(
+      dashboardResultHref(
+        returnTo,
+        result.scheduled ? "followup_scheduled" : "followup_sent",
+      ),
+    );
+  }
+  redirect(
+    dashboardResultHref(
+      returnTo,
+      "error",
+      result.error ?? "Follow-up failed",
+    ),
+  );
+}
+
 export async function cancelScheduledAction(formData: FormData) {
   await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
   const outreachId = String(formData.get("outreachId") ?? "").trim();
-  const returnTo = formData.get("returnTo");
   if (!outreachId) {
     redirect(dashboardResultHref(returnTo, "error", "Missing outreach"));
   }
 
   const result = await cancelScheduledOutreach(outreachId);
-  revalidatePath("/dashboard");
-  revalidatePath("/outreach");
-  if (result.showId) revalidatePath(`/festivals/${result.showId}`);
+  refreshWorkflowViews(returnTo, [
+    "/outreach",
+    ...(result.showId ? [festivalReturnPath(result.showId)] : []),
+  ]);
   if (result.cancelled) {
     redirect(dashboardResultHref(returnTo, "cancelled"));
   }
@@ -110,23 +165,46 @@ export async function cancelScheduledAction(formData: FormData) {
 }
 
 export async function dismissShowAction(formData: FormData) {
-  await requireServerActionAuth("/dashboard");
-  const showId = String(formData.get("showId") ?? "").trim();
-  if (!showId) throw new Error("Missing show");
-  await db.show.update({ where: { id: showId }, data: { dismissedAt: new Date() } });
-  revalidatePath("/dashboard");
+  await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
+  const showIds = Array.from(
+    new Set(
+      formData
+        .getAll("showId")
+        .map((value) => String(value).trim())
+        .filter(Boolean)
+    )
+  );
+  if (showIds.length === 0) throw new Error("Missing show");
+  await db.show.updateMany({
+    where: { id: { in: showIds } },
+    data: { dismissedAt: new Date() },
+  });
+  refreshWorkflowViews(returnTo, ["/festivals"]);
 }
 
 export async function restoreShowAction(formData: FormData) {
-  await requireServerActionAuth("/dashboard");
-  const showId = String(formData.get("showId") ?? "").trim();
-  if (!showId) throw new Error("Missing show");
-  await db.show.update({ where: { id: showId }, data: { dismissedAt: null } });
-  revalidatePath("/dashboard");
+  await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
+  const showIds = Array.from(
+    new Set(
+      formData
+        .getAll("showId")
+        .map((value) => String(value).trim())
+        .filter(Boolean)
+    )
+  );
+  if (showIds.length === 0) throw new Error("Missing show");
+  await db.show.updateMany({
+    where: { id: { in: showIds } },
+    data: { dismissedAt: null },
+  });
+  refreshWorkflowViews(returnTo, ["/festivals"]);
 }
 
 export async function setInterestedAction(formData: FormData) {
-  await requireServerActionAuth("/dashboard");
+  await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
   const showId = String(formData.get("showId") ?? "").trim();
   const desired = String(formData.get("interested") ?? "");
   if (!showId || (desired !== "true" && desired !== "false")) {
@@ -136,7 +214,7 @@ export async function setInterestedAction(formData: FormData) {
     where: { id: showId },
     data: { interestedAt: desired === "true" ? new Date() : null },
   });
-  revalidatePath("/dashboard");
+  refreshWorkflowViews(returnTo);
 }
 
 // Record a send that happened outside the app (personal email, DM, etc.) so
@@ -147,10 +225,10 @@ export async function setInterestedAction(formData: FormData) {
 export async function markSentAction(formData: FormData) {
   "use server";
   await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
   const showId = String(formData.get("showId") ?? "").trim();
   const contactId = String(formData.get("contactId") ?? "").trim() || null;
   let artistId = String(formData.get("artistId") ?? "").trim() || null;
-  const returnTo = formData.get("returnTo");
 
   if (!showId) {
     redirect(dashboardResultHref(returnTo, "error", "Missing show"));
@@ -171,14 +249,22 @@ export async function markSentAction(formData: FormData) {
 
   const result = await withSerializableRetry(async (tx) => {
     const [show, artist, association, rows, manualMarker] = await Promise.all([
-      tx.show.findUnique({ where: { id: showId }, select: { id: true } }),
+      tx.show.findUnique({
+        where: { id: showId },
+        select: {
+          id: true,
+          isFestival: true,
+          syncStatus: true,
+          dismissedAt: true,
+        },
+      }),
       tx.artist.findUnique({ where: { id: artistId }, select: { id: true } }),
       tx.showArtist.findUnique({
         where: { showId_artistId: { showId, artistId } },
         select: { showId: true },
       }),
       tx.outreach.findMany({
-        where: { showId, artistId },
+        where: { showId, artistId, kind: "original" },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         select: {
           id: true,
@@ -193,13 +279,22 @@ export async function markSentAction(formData: FormData) {
         where: {
           showId,
           artistId,
-          ...MANUAL_OUTREACH_MARKER_WHERE,
+          ...REUSABLE_MANUAL_OUTREACH_MARKER_WHERE,
         },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         select: { id: true },
       }),
     ]);
     if (!show) return { ok: false, error: "Show not found" };
+    if (show.syncStatus !== "active") {
+      return { ok: false, error: "Show is inactive" };
+    }
+    if (show.isFestival && show.dismissedAt) {
+      return {
+        ok: false,
+        error: "Restore this festival before marking outreach",
+      };
+    }
     if (!artist) return { ok: false, error: "Artist not found" };
     if (!association) {
       return { ok: false, error: "Artist is not on this show" };
@@ -234,6 +329,7 @@ export async function markSentAction(formData: FormData) {
       contactId !== null && !rows.some((row) => row.contactId === contactId);
     await tx.outreach.create({
       data: {
+        kind: "original",
         showId,
         artistId,
         contactId: contactSlotAvailable ? contactId : null,
@@ -256,9 +352,7 @@ export async function markSentAction(formData: FormData) {
     );
   }
 
-  revalidatePath("/dashboard");
-  revalidatePath("/outreach");
-  revalidatePath(`/festivals/${showId}`);
+  refreshWorkflowViews(returnTo, ["/outreach", festivalReturnPath(showId)]);
   redirect(dashboardResultHref(returnTo, "marked"));
 }
 
@@ -267,28 +361,71 @@ export async function markSentAction(formData: FormData) {
 export async function unmarkSentAction(formData: FormData) {
   "use server";
   await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
   const outreachId = String(formData.get("outreachId") ?? "").trim();
-  const returnTo = formData.get("returnTo");
   if (!outreachId) {
     redirect(dashboardResultHref(returnTo, "error", "Missing outreach"));
   }
 
-  const result = await db.outreach.deleteMany({
-    where: {
-      id: outreachId,
-      ...MANUAL_OUTREACH_MARKER_WHERE,
-    },
-  });
-  revalidatePath("/dashboard");
-  revalidatePath("/outreach");
-  if (result.count === 1) {
-    redirect(dashboardResultHref(returnTo, "unmarked"));
-  }
-  redirect(
-    dashboardResultHref(
-      returnTo,
-      "error",
-      "Only manual outreach marks can be removed"
+  const marker = await withSerializableRetry((tx) =>
+    removeManualOutreachMarker(
+      {
+        async findById(id) {
+          const row = await tx.outreach.findUnique({
+            where: { id },
+            select: {
+              id: true,
+              kind: true,
+              showId: true,
+              artistId: true,
+              status: true,
+              providerMessageId: true,
+              attemptCount: true,
+              finalSubject: true,
+              finalHtml: true,
+              _count: { select: { sendAttempts: true } },
+            },
+          });
+          return row
+            ? {
+                id: row.id,
+                kind: row.kind,
+                showId: row.showId,
+                artistId: row.artistId,
+                status: row.status,
+                providerMessageId: row.providerMessageId,
+                attemptCount: row.attemptCount,
+                sendAttemptCount: row._count.sendAttempts,
+                finalSubject: row.finalSubject,
+                finalHtml: row.finalHtml,
+              }
+            : null;
+        },
+        async deleteActiveMarker(id) {
+          const deleted = await tx.outreach.deleteMany({
+            where: {
+              id,
+              ...MANUAL_OUTREACH_MARKER_WHERE,
+            },
+          });
+          return deleted.count === 1;
+        },
+      },
+      outreachId
     )
   );
+  if (!marker) {
+    redirect(
+      dashboardResultHref(
+        returnTo,
+        "error",
+        "Only manual outreach marks can be removed"
+      )
+    );
+  }
+  refreshWorkflowViews(returnTo, [
+    "/outreach",
+    festivalReturnPath(marker.showId),
+  ]);
+  redirect(dashboardResultHref(returnTo, "unmarked"));
 }

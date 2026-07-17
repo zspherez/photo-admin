@@ -12,6 +12,7 @@ function values(
     venueName: "Test Venue",
     city: "New York",
     state: "NY",
+    countryCode: "US",
     lineup: "Artist One",
     ...overrides,
   };
@@ -100,6 +101,7 @@ test("invalid submissions return feedback without a persistable payload", () => 
     values({ name: "" }),
     values({ date: "2026-02-30" }),
     values({ date: "2026-07-15" }),
+    values({ countryCode: "Atlantis" }),
     values({ lineup: "" }),
   ];
 
@@ -110,5 +112,17 @@ test("invalid submissions return feedback without a persistable payload", () => 
     );
     assert.equal(result.ok, false);
     if (!result.ok) assert.ok(result.message.length > 0);
+  }
+});
+
+test("manual festivals normalize explicit international country codes", () => {
+  const canada = validateFestivalCreation(
+    values({ countryCode: "ca" }),
+    new Date("2026-07-16T16:00:00.000Z")
+  );
+  assert.equal(canada.ok, true);
+  if (canada.ok) {
+    assert.equal(canada.countryCode, "CA");
+    assert.equal(canada.countryName, "Canada");
   }
 });

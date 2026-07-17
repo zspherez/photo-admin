@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   applyHtmlTemplate,
   applyTemplate,
   buildVarsForShow,
+  cloneTemplateContent,
   DEFAULT_TEMPLATE_HTML,
+  FOLLOW_UP_TEMPLATE_NAME,
 } from "./template";
 
 test("plain substitutions remain unescaped", () => {
@@ -80,4 +83,49 @@ test("a nonblank custom price wins over the default rate", async () => {
   );
 
   assert.equal(vars.rate, "$650");
+});
+
+test("follow-up template cloning is a one-time independent snapshot", () => {
+  const original = {
+    subject: "Current original",
+    htmlBody: "<p>Current original</p>",
+  };
+  const followUp = cloneTemplateContent(original);
+  original.subject = "Later original edit";
+  original.htmlBody = "<p>Later original edit</p>";
+
+  assert.deepEqual(followUp, {
+    subject: "Current original",
+    htmlBody: "<p>Current original</p>",
+  });
+  assert.equal(FOLLOW_UP_TEMPLATE_NAME, "follow_up");
+
+  const source = readFileSync(new URL("./template.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /findUnique\(\{\s*where: \{ name: FOLLOW_UP_TEMPLATE_NAME \}/,
+  );
+  assert.match(
+    source,
+    /if \(existing\) return existing;[\s\S]*const original = await ensureDefaultTemplate\(\)/,
+  );
+  assert.match(
+    source,
+    /where: \{ name: FOLLOW_UP_TEMPLATE_NAME \},\s*update: \{\},\s*create:/,
+  );
+});
+
+test("follow-up reset clones the current original template", () => {
+  const source = readFileSync(
+    new URL("../app/settings/template/page.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /kind === "follow_up"[\s\S]*cloneTemplateContent\(await ensureDefaultTemplate\(\)\)/,
+  );
+  assert.match(source, /searchParams: Promise<\{ kind\?: SearchParamValue \}>/);
+  assert.match(source, /aria-label="Email template type"/);
+  assert.match(source, /\? "Original" : "Follow-up"/);
+  assert.match(source, /key=\{`\$\{template\.name\}:\$\{template\.updatedAt/);
 });

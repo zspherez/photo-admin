@@ -5,11 +5,32 @@ import {
 } from "@/lib/dashboardQuery";
 import {
   firstSearchParam,
+  positiveIntegerSearchParam,
   validatedTrimmedSearchParam,
 } from "@/lib/searchParams";
+import {
+  DEFAULT_FESTIVAL_LIST_VIEW,
+  festivalListPath,
+  parseFestivalListView,
+  type FestivalListView,
+} from "@/lib/festivalView";
 
 const DASHBOARD_ORIGIN = "https://dashboard.local";
 const FESTIVAL_PATH = /^\/festivals\/([A-Za-z0-9_-]+)$/;
+const ARTIST_PATH = /^\/artists\/([A-Za-z0-9_-]+)$/;
+const CONTACT_PATH = /^\/dashboard\/contact\/([A-Za-z0-9_-]+)$/;
+const OUTREACH_STATUSES = new Set([
+  "all",
+  "sent",
+  "delivered",
+  "opened",
+  "clicked",
+  "test",
+  "failed",
+  "manual_review",
+  "retry_scheduled",
+  "scheduled",
+]);
 
 export const FESTIVAL_FILTERS = [
   "all",
@@ -26,6 +47,8 @@ export type DashboardResultKey =
   | "cancelled"
   | "deleted"
   | "error"
+  | "followup_scheduled"
+  | "followup_sent"
   | "marked"
   | "scheduled"
   | "sent"
@@ -51,7 +74,8 @@ export function parseFestivalGenre(value: unknown): string {
 export function festivalReturnPath(
   showId: string,
   filter: FestivalFilter = "all",
-  genre: unknown = "all"
+  genre: unknown = "all",
+  listView: FestivalListView = DEFAULT_FESTIVAL_LIST_VIEW
 ): string {
   const params = new URLSearchParams();
   if (filter !== "all") params.set("filter", filter);
@@ -59,6 +83,10 @@ export function festivalReturnPath(
   if (normalizedGenre !== "all") {
     params.set("genre", normalizedGenre);
   }
+  if (listView.includeInternational) {
+    params.set("includeInternational", "1");
+  }
+  if (listView.dismissed) params.set("dismissed", "1");
   const query = params.toString();
   const path = `/festivals/${encodeURIComponent(showId)}`;
   return query ? `${path}?${query}` : path;
@@ -91,10 +119,75 @@ export function dashboardReturnPath(value: unknown): string {
   return buildDashboardHref(parseDashboardQuery(searchParams));
 }
 
+function outreachReturnPath(url: URL): string {
+  const params = new URLSearchParams();
+  const status = url.searchParams.get("status");
+  if (status && OUTREACH_STATUSES.has(status) && status !== "all") {
+    params.set("status", status);
+  }
+  const search = validatedTrimmedSearchParam(url.searchParams.get("search"), {
+    maxLength: 200,
+  });
+  if (search) params.set("search", search);
+  const page = positiveIntegerSearchParam(url.searchParams.get("page"));
+  if (page > 1) params.set("page", String(page));
+  const query = params.toString();
+  return query ? `/outreach?${query}` : "/outreach";
+}
+
+function nestedWorkflowReturnPath(value: unknown): string {
+  const nested = parsedLocalUrl(value);
+  if (
+    !nested ||
+    ARTIST_PATH.test(nested.pathname) ||
+    CONTACT_PATH.test(nested.pathname)
+  ) {
+    return "/dashboard";
+  }
+  return workflowReturnPath(value);
+}
+
 export function workflowReturnPath(value: unknown): string {
   const url = parsedLocalUrl(value);
   if (!url) return "/dashboard";
   if (url.pathname === "/dashboard") return dashboardReturnPath(value);
+  if (url.pathname === "/outreach") return outreachReturnPath(url);
+  if (url.pathname === "/festivals") {
+    return festivalListPath(
+      parseFestivalListView({
+        includeInternational: url.searchParams.get("includeInternational"),
+        dismissed: url.searchParams.get("dismissed"),
+      })
+    );
+  }
+
+  const artistMatch = ARTIST_PATH.exec(url.pathname);
+  if (artistMatch) {
+    const params = new URLSearchParams();
+    const returnTo = nestedWorkflowReturnPath(
+      url.searchParams.get("returnTo"),
+    );
+    if (returnTo !== "/dashboard") params.set("returnTo", returnTo);
+    const query = params.toString();
+    const path = `/artists/${encodeURIComponent(artistMatch[1])}`;
+    return query ? `${path}?${query}` : path;
+  }
+
+  const contactMatch = CONTACT_PATH.exec(url.pathname);
+  if (contactMatch) {
+    const params = new URLSearchParams();
+    const returnTo = nestedWorkflowReturnPath(
+      url.searchParams.get("returnTo"),
+    );
+    if (returnTo !== "/dashboard") params.set("returnTo", returnTo);
+    const historyPage = positiveIntegerSearchParam(
+      url.searchParams.get("historyPage"),
+    );
+    if (historyPage > 1) params.set("historyPage", String(historyPage));
+    const query = params.toString();
+    const path = `/dashboard/contact/${encodeURIComponent(contactMatch[1])}`;
+    return query ? `${path}?${query}` : path;
+  }
 
   const match = FESTIVAL_PATH.exec(url.pathname);
   if (!match || match[1] === "new") return "/dashboard";
@@ -102,7 +195,11 @@ export function workflowReturnPath(value: unknown): string {
   return festivalReturnPath(
     match[1],
     parseFestivalFilter(url.searchParams.get("filter")),
-    genre
+    genre,
+    parseFestivalListView({
+      includeInternational: url.searchParams.get("includeInternational"),
+      dismissed: url.searchParams.get("dismissed"),
+    })
   );
 }
 

@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
-import { revalidatePath } from "next/cache";
 import { cache } from "react";
 import { db } from "@/lib/db";
 import { appendContactToSheet, updateContactInSheet } from "@/lib/sheets";
@@ -18,6 +17,7 @@ import { withWorkflowReturnTo } from "@/lib/workflowLinks";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
+import { refreshWorkflowViews } from "@/lib/workflowRefresh";
 
 export const dynamic = "force-dynamic";
 
@@ -215,9 +215,7 @@ async function createContacts(formData: FormData) {
     }
   }
 
-  revalidatePath("/dashboard");
-  revalidatePath("/settings/contacts");
-  revalidatePath("/");
+  refreshWorkflowViews(returnTo, ["/settings/contacts", "/"]);
 
   const results: Record<string, string> = {
     added: String(createdCount),

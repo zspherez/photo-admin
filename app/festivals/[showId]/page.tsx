@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
-import { revalidatePath } from "next/cache";
 import { cache } from "react";
 import { db } from "@/lib/db";
 import {
   getOutreachSendabilityBatch,
+  getFollowUpEligibilityBatch,
   sendOutreach,
   scheduleOutreach,
   type OutreachSendability,
@@ -17,8 +17,11 @@ import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/button";
 import { ArtistLink } from "@/components/artist-modal";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { FollowUpButton } from "@/components/follow-up-button";
 import { cn } from "@/lib/cn";
+import { easternTodayStoredDate } from "@/lib/calendarDate";
 import { pickEmailContact } from "@/lib/contactSelection";
+import { countryLabel } from "@/lib/country";
 import { formatShowDate } from "@/lib/formatDate";
 import { mapWithConcurrency } from "@/lib/integrationUtils";
 import {
@@ -27,7 +30,14 @@ import {
   parseFestivalFilter,
   parseFestivalGenre,
   type FestivalFilter,
+  workflowReturnPath,
 } from "@/lib/dashboardReturnUrl";
+import {
+  festivalListPath,
+  festivalGroupKey,
+  parseFestivalListView,
+  type FestivalListView,
+} from "@/lib/festivalView";
 import { withWorkflowReturnTo } from "@/lib/workflowLinks";
 import {
   firstSearchParam,
@@ -38,8 +48,20 @@ import {
   formatRankLabel,
   pickTopListenSignal,
 } from "@/lib/listenSignal";
-import { cancelScheduledAction } from "@/app/dashboard/actions";
+import {
+  cancelScheduledAction,
+  dismissShowAction,
+  markSentAction,
+  restoreShowAction,
+  sendFollowUpAction,
+  unmarkSentAction,
+} from "@/app/dashboard/actions";
 import { requireServerActionAuth } from "@/lib/auth";
+import { refreshWorkflowViews } from "@/lib/workflowRefresh";
+import {
+  canMarkOutreachManually,
+  isActiveManualOutreachMarker,
+} from "@/lib/manualOutreach";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -53,11 +75,15 @@ const getFestivalDetails = cache(async (showId: string) =>
       id: true,
       date: true,
       venueName: true,
+      city: true,
       state: true,
+      countryCode: true,
+      countryName: true,
       ticketUrl: true,
       isFestival: true,
       eventName: true,
       syncStatus: true,
+      dismissedAt: true,
       artists: {
         select: {
           artist: {
@@ -89,6 +115,21 @@ const getFestivalDetails = cache(async (showId: string) =>
           },
         },
       },
+      outreaches: {
+        orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+        select: {
+          id: true,
+          kind: true,
+          parentOutreachId: true,
+          artistId: true,
+          status: true,
+          providerMessageId: true,
+          attemptCount: true,
+          finalSubject: true,
+          finalHtml: true,
+          _count: { select: { sendAttempts: true } },
+        },
+      },
     },
   }),
 );
@@ -105,6 +146,12 @@ export async function generateMetadata({
       festival?.isFestival
         ? festival.eventName || festival.venueName
         : "Festival",
+    description:
+      festival?.isFestival
+        ? `${festival.eventName || festival.venueName} in ${festival.city}, ${countryLabel(
+            festival
+          )}`
+        : undefined,
   };
 }
 
@@ -112,10 +159,11 @@ function bulkResultHref(
   showId: string,
   filter: FestivalFilter,
   genre: string,
+  listView: FestivalListView,
   results: Record<string, string>
 ): string {
   return appendWorkflowResult(
-    festivalReturnPath(showId, filter, genre),
+    festivalReturnPath(showId, filter, genre, listView),
     results
   );
 }
@@ -161,6 +209,7 @@ async function festivalBulkCandidates(
     select: {
       isFestival: true,
       syncStatus: true,
+      dismissedAt: true,
       artists: {
         select: {
           artist: {
@@ -188,7 +237,10 @@ async function festivalBulkCandidates(
   if (!festival?.isFestival) return null;
 
   const contactIds = new Set<string>();
-  if (festival.syncStatus === "active") {
+  if (
+    festival.syncStatus === "active" &&
+    festival.dismissedAt === null
+  ) {
     for (const { artist } of festival.artists) {
       if (!pickTopListenSignal(artist.listenSignals, now)) continue;
       const contact = pickEmailContact(artist.contacts);
@@ -196,7 +248,9 @@ async function festivalBulkCandidates(
     }
   }
   return {
-    active: festival.syncStatus === "active",
+    active:
+      festival.syncStatus === "active" &&
+      festival.dismissedAt === null,
     contactIds,
   };
 }
@@ -204,11 +258,16 @@ async function festivalBulkCandidates(
 async function bulkSend(formData: FormData) {
   "use server";
   await requireServerActionAuth(formData.get("returnTo") ?? "/festivals");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
   const showId = String(formData.get("showId") ?? "").trim();
   const filter = parseFestivalFilter(formData.get("filter"));
   const genre = parseFestivalGenre(formData.get("genre"));
+  const listView = parseFestivalListView({
+    includeInternational: formData.get("includeInternational"),
+    dismissed: formData.get("dismissed"),
+  });
   if (!showId) {
-    redirect("/festivals");
+    redirect(festivalListPath(listView));
   }
 
   const requestedContactIds = Array.from(
@@ -222,11 +281,13 @@ async function bulkSend(formData: FormData) {
   const now = new Date();
   const candidates = await festivalBulkCandidates(showId, now);
   if (!candidates) {
-    redirect("/festivals");
+    redirect(festivalListPath(listView));
   }
   if (!candidates.active) {
     redirect(
-      bulkResultHref(showId, filter, genre, { error: "inactive_show" })
+      bulkResultHref(showId, filter, genre, listView, {
+        error: "inactive_show",
+      })
     );
   }
 
@@ -294,7 +355,7 @@ async function bulkSend(formData: FormData) {
       errors.push(`${contactId.slice(-6)}: ${result.error ?? "Unknown send failure"}`);
     }
   }
-  revalidatePath(`/festivals/${showId}`);
+  refreshWorkflowViews(returnTo, ["/outreach"]);
   const resultParams: Record<string, string> = {
     bulk: "1",
     sent: String(sent),
@@ -308,7 +369,7 @@ async function bulkSend(formData: FormData) {
       resultParams.moreErrors = String(errors.length - 5);
     }
   }
-  redirect(bulkResultHref(showId, filter, genre, resultParams));
+  redirect(bulkResultHref(showId, filter, genre, listView, resultParams));
 }
 
 export default async function FestivalDetailPage({
@@ -332,12 +393,19 @@ export default async function FestivalDetailPage({
     bulk?: SearchParamValue;
     filter?: SearchParamValue;
     genre?: SearchParamValue;
+    marked?: SearchParamValue;
+    unmarked?: SearchParamValue;
+    followup_sent?: SearchParamValue;
+    followup_scheduled?: SearchParamValue;
+    includeInternational?: SearchParamValue;
+    dismissed?: SearchParamValue;
   }>;
 }) {
   const { showId } = await params;
   const sp = await searchParams;
   const filter = parseFestivalFilter(sp.filter);
   const genreFilter = parseFestivalGenre(sp.genre);
+  const listView = parseFestivalListView(sp);
   const notices = {
     sent: firstSearchParam(sp.sent),
     scheduled: firstSearchParam(sp.scheduled),
@@ -352,16 +420,50 @@ export default async function FestivalDetailPage({
     sheetErrors: firstSearchParam(sp.sheet_errors),
     cancelled: firstSearchParam(sp.cancelled),
     bulk: firstSearchParam(sp.bulk),
+    marked: firstSearchParam(sp.marked),
+    unmarked: firstSearchParam(sp.unmarked),
+    followUpSent: firstSearchParam(sp.followup_sent),
+    followUpScheduled: firstSearchParam(sp.followup_scheduled),
   };
   const now = new Date();
   const weekend = isWeekendET();
-  const returnTo = festivalReturnPath(showId, filter, genreFilter);
+  const returnTo = festivalReturnPath(
+    showId,
+    filter,
+    genreFilter,
+    listView
+  );
   const [testOverride, festival] = await Promise.all([
     getTestOverride(),
     getFestivalDetails(showId),
   ]);
   if (!festival || !festival.isFestival) return notFound();
+  const festivalGroup = festivalGroupKey(festival);
+  const groupedShowIds = (
+    await db.show.findMany({
+      where: {
+        isFestival: true,
+        syncStatus: "active",
+        date: { gte: easternTodayStoredDate(now) },
+      },
+      orderBy: { date: "asc" },
+      select: {
+        id: true,
+        eventName: true,
+        venueName: true,
+        city: true,
+        countryCode: true,
+        countryName: true,
+      },
+      take: 800,
+    })
+  )
+    .filter((candidate) => festivalGroupKey(candidate) === festivalGroup)
+    .map((candidate) => candidate.id);
+  if (!groupedShowIds.includes(showId)) groupedShowIds.push(showId);
   const festivalActive = festival.syncStatus === "active";
+  const outreachEnabled =
+    festivalActive && festival.dismissedAt === null;
 
   const baseRows = festival.artists.map((sa) => {
     const a = sa.artist;
@@ -375,6 +477,24 @@ export default async function FestivalDetailPage({
         return [];
       }
     })();
+    const outreachHistory = festival.outreaches.filter(
+      (outreach) =>
+        outreach.artistId === a.id && outreach.kind === "original"
+    );
+    const manualMarker = outreachHistory.find((outreach) =>
+      isActiveManualOutreachMarker({
+        id: outreach.id,
+        kind: outreach.kind,
+        showId,
+        artistId: outreach.artistId,
+        status: outreach.status,
+        providerMessageId: outreach.providerMessageId,
+        attemptCount: outreach.attemptCount,
+        sendAttemptCount: outreach._count.sendAttempts,
+        finalSubject: outreach.finalSubject,
+        finalHtml: outreach.finalHtml,
+      })
+    );
     return {
       artist: a,
       topSignal,
@@ -382,12 +502,23 @@ export default async function FestivalDetailPage({
       contact,
       hasAnyContact: a.contacts.length > 0,
       genres,
+      manualMarker,
+      canMarkManually: canMarkOutreachManually(
+        outreachHistory.map((outreach) => ({
+          status: outreach.status,
+          providerMessageId: outreach.providerMessageId,
+          attemptCount: outreach.attemptCount,
+          sendAttemptCount: outreach._count.sendAttempts,
+        }))
+      ),
+      originalOutreachIds: outreachHistory.map((outreach) => outreach.id),
     };
   });
   const contactIds = baseRows.flatMap((row) =>
     row.contact ? [row.contact.id] : []
   );
-  const [sendabilityResults, testOutreaches] = await Promise.all([
+  const [sendabilityResults, testOutreaches, followUpEligibilityRows] =
+    await Promise.all([
     getOutreachSendabilityBatch(
       contactIds.map((contactId) => ({ showId, contactId })),
       now
@@ -396,12 +527,17 @@ export default async function FestivalDetailPage({
       ? Promise.resolve([])
       : db.outreach.findMany({
           where: {
+            kind: "original",
             showId,
             contactId: { in: contactIds },
             status: "test",
           },
           select: { contactId: true },
         }),
+    getFollowUpEligibilityBatch(
+      baseRows.flatMap((row) => row.originalOutreachIds),
+      now,
+    ),
   ]);
   const sendabilityByContact = new Map(
     sendabilityResults.map((result) => [result.contactId, result])
@@ -411,12 +547,32 @@ export default async function FestivalDetailPage({
       outreach.contactId ? [outreach.contactId] : []
     )
   );
+  const followUpByParent = new Map(
+    followUpEligibilityRows.map((result) => [
+      result.parentOutreachId,
+      result,
+    ]),
+  );
   const rows = baseRows.map((row) => ({
     ...row,
     sendability: row.contact
       ? (sendabilityByContact.get(row.contact.id) ?? null)
       : null,
     hasTestSend: row.contact ? testContactIds.has(row.contact.id) : false,
+    followUpEligibility:
+      row.originalOutreachIds
+        .map((outreachId) => followUpByParent.get(outreachId))
+        .find(
+          (result) =>
+            result &&
+            (result.state === "eligible" ||
+              result.state === "pending" ||
+              result.state === "sent"),
+        ) ??
+      row.originalOutreachIds
+        .map((outreachId) => followUpByParent.get(outreachId))
+        .find((result) => result !== undefined) ??
+      null,
   }));
 
   const allGenres = Array.from(
@@ -437,11 +593,13 @@ export default async function FestivalDetailPage({
     return true;
   });
 
-  const eligibleSendCount = filtered.filter(
-    (r) =>
-      r.matched &&
-      r.sendability?.sendable
-  ).length;
+  const eligibleSendCount = outreachEnabled
+    ? filtered.filter(
+        (r) =>
+          r.matched &&
+          r.sendability?.sendable
+      ).length
+    : 0;
   const bulkFormId = "festival-bulk-outreach";
 
   const filterOptions: { key: FestivalFilter; label: string }[] = [
@@ -454,18 +612,43 @@ export default async function FestivalDetailPage({
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
-      <Link href="/festivals" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← All festivals</Link>
+      <Link href={festivalListPath(listView)} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← All festivals</Link>
       <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{festival.eventName || festival.venueName}</h1>
           <p className="mt-1 text-sm text-zinc-500">
             {formatShowDate(festival.date, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
-            {" · "}{festival.venueName}{festival.state ? `, ${festival.state}` : ""}
+            {" · "}{festival.venueName}
+            {festival.city ? ` · ${festival.city}` : ""}
+            {festival.state ? `, ${festival.state}` : ""}
+            {` · ${countryLabel(festival)}`}
             {festival.ticketUrl && (
               <> · <a href={festival.ticketUrl} target="_blank" rel="noopener noreferrer" className="text-zinc-700 hover:underline dark:text-zinc-300">EDMTrain ↗</a></>
             )}
           </p>
         </div>
+        <form
+          action={
+            festival.dismissedAt ? restoreShowAction : dismissShowAction
+          }
+        >
+          <input type="hidden" name="returnTo" value={returnTo} />
+          {groupedShowIds.map((groupedShowId) => (
+            <input
+              key={groupedShowId}
+              type="hidden"
+              name="showId"
+              value={groupedShowId}
+            />
+          ))}
+          <PendingSubmitButton
+            variant={festival.dismissedAt ? "secondary" : "ghost"}
+            size="sm"
+            pendingLabel="…"
+          >
+            {festival.dismissedAt ? "Restore festival" : "Dismiss festival"}
+          </PendingSubmitButton>
+        </form>
       </div>
 
       <div className="mt-4 space-y-2">
@@ -477,13 +660,21 @@ export default async function FestivalDetailPage({
             This festival is inactive. Outreach controls are disabled.
           </div>
         )}
+        {festival.dismissedAt && (
+          <div
+            role="alert"
+            className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+          >
+            This festival is dismissed. Restore it to use outreach controls.
+          </div>
+        )}
         {notices.error === "inactive_show" && (
           <div
             role="alert"
             className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
           >
-            This festival became inactive before outreach started. Nothing was
-            sent.
+            This festival became inactive or dismissed before outreach
+            started. Nothing was sent.
           </div>
         )}
         {notices.error && notices.error !== "inactive_show" && (
@@ -518,6 +709,26 @@ export default async function FestivalDetailPage({
             Email scheduled for Monday morning.
           </div>
         )}
+        {notices.followUpSent && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Follow-up sent.
+          </div>
+        )}
+        {notices.followUpScheduled && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Follow-up scheduled for Monday morning.
+          </div>
+        )}
+        {notices.marked && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Marked as sent.
+          </div>
+        )}
+        {notices.unmarked && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Manual mark removed.
+          </div>
+        )}
         {notices.errors && (
           <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
             {notices.errors}
@@ -542,7 +753,7 @@ export default async function FestivalDetailPage({
         )}
         {notices.cancelled && (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
-            Scheduled send or retry cancelled.
+            Scheduled send, follow-up, or retry cancelled.
           </div>
         )}
       </div>
@@ -554,7 +765,12 @@ export default async function FestivalDetailPage({
             return (
               <Link
                 key={opt.key}
-                href={festivalReturnPath(showId, opt.key, genreFilter)}
+                href={festivalReturnPath(
+                  showId,
+                  opt.key,
+                  genreFilter,
+                  listView
+                )}
                 className={cn(
                   "rounded-full px-2.5 py-0.5 text-xs font-medium transition",
                   filter === opt.key
@@ -574,7 +790,12 @@ export default async function FestivalDetailPage({
               return (
                 <Link
                   key={g}
-                  href={festivalReturnPath(showId, filter, g)}
+                  href={festivalReturnPath(
+                    showId,
+                    filter,
+                    g,
+                    listView
+                  )}
                   className={cn(
                     "rounded-full px-2.5 py-0.5 text-xs font-medium transition",
                     genreFilter === g
@@ -590,22 +811,32 @@ export default async function FestivalDetailPage({
         )}
       </Card>
 
-      <form
-        id={bulkFormId}
-        action={bulkSend}
-        className="mt-6"
-        aria-label="Bulk festival outreach"
-      >
-        <input type="hidden" name="showId" value={showId} />
-        <input type="hidden" name="filter" value={filter} />
-        <input type="hidden" name="genre" value={genreFilter} />
-        <input type="hidden" name="returnTo" value={returnTo} />
+      {outreachEnabled && (
+        <form
+          id={bulkFormId}
+          action={bulkSend}
+          className="mt-6"
+          aria-label="Bulk festival outreach"
+        >
+          <input type="hidden" name="showId" value={showId} />
+          <input type="hidden" name="filter" value={filter} />
+          <input type="hidden" name="genre" value={genreFilter} />
+          <input
+            type="hidden"
+            name="includeInternational"
+            value={listView.includeInternational ? "1" : "0"}
+          />
+          <input
+            type="hidden"
+            name="dismissed"
+            value={listView.dismissed ? "1" : "0"}
+          />
+          <input type="hidden" name="returnTo" value={returnTo} />
 
-        <div className="z-20 -mx-1 mb-3 flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white/95 px-4 py-2 shadow-sm backdrop-blur sm:sticky sm:top-12 dark:border-zinc-800 dark:bg-zinc-950/95">
-          <span className="text-sm text-zinc-600 dark:text-zinc-400">
-            {filtered.length} shown · <b>{eligibleSendCount}</b> sendable
-          </span>
-          {festivalActive ? (
+          <div className="z-20 -mx-1 mb-3 flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white/95 px-4 py-2 shadow-sm backdrop-blur sm:sticky sm:top-12 dark:border-zinc-800 dark:bg-zinc-950/95">
+            <span className="text-sm text-zinc-600 dark:text-zinc-400">
+              {filtered.length} shown · <b>{eligibleSendCount}</b> sendable
+            </span>
             <PendingSubmitButton
               variant="primary"
               size="md"
@@ -614,18 +845,15 @@ export default async function FestivalDetailPage({
             >
               Send to selected
             </PendingSubmitButton>
-          ) : (
-            <span className="text-xs font-medium text-amber-700 dark:text-amber-300">
-              Outreach disabled
-            </span>
-          )}
-        </div>
-      </form>
+          </div>
+        </form>
+      )}
 
-      <Card>
+      <Card className={outreachEnabled ? undefined : "mt-6"}>
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
           {filtered.map((r) => {
               const canSend =
+                outreachEnabled &&
                 r.matched &&
                 r.sendability?.sendable === true;
               const checkboxId = `festival-outreach-${r.artist.id}`;
@@ -643,20 +871,24 @@ export default async function FestivalDetailPage({
                 statusLabel ?? (!canSend ? disabledReason : null);
               return (
                 <li key={r.artist.id} className="flex items-center gap-3 px-4 py-3">
-                  <input
-                    id={checkboxId}
-                    type="checkbox"
-                    name="contactIds"
-                    form={bulkFormId}
-                    value={r.contact?.id ?? ""}
-                    disabled={!canSend}
-                    defaultChecked={canSend && filter === "unsent"}
-                    aria-describedby={!canSend ? reasonId : undefined}
-                    className="h-4 w-4 accent-zinc-900 disabled:cursor-not-allowed disabled:opacity-30 dark:accent-zinc-100"
-                  />
-                  <label htmlFor={checkboxId} className="sr-only">
-                    Select {r.artist.name} for outreach
-                  </label>
+                  {outreachEnabled && (
+                    <>
+                      <input
+                        id={checkboxId}
+                        type="checkbox"
+                        name="contactIds"
+                        form={bulkFormId}
+                        value={r.contact?.id ?? ""}
+                        disabled={!canSend}
+                        defaultChecked={canSend && filter === "unsent"}
+                        aria-describedby={!canSend ? reasonId : undefined}
+                        className="h-4 w-4 accent-zinc-900 disabled:cursor-not-allowed disabled:opacity-30 dark:accent-zinc-100"
+                      />
+                      <label htmlFor={checkboxId} className="sr-only">
+                        Select {r.artist.name} for outreach
+                      </label>
+                    </>
+                  )}
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <ArtistLink
@@ -687,7 +919,7 @@ export default async function FestivalDetailPage({
                       >
                         {r.contact.name ? `${r.contact.name} · ` : ""}{r.contact.email}
                         {r.contact.customPrice ? ` · ${r.contact.customPrice}` : ""}
-                        {displayStatus && ` · ${displayStatus}`}
+                        {displayStatus && ` · original: ${displayStatus}`}
                       </p>
                     ) : (
                       <p
@@ -714,7 +946,8 @@ export default async function FestivalDetailPage({
                       </p>
                     )}
                   </div>
-                  {canSend &&
+                  {outreachEnabled &&
+                    canSend &&
                     r.contact &&
                     r.sendability?.mode !== "retry" && (
                     <LinkButton
@@ -728,9 +961,10 @@ export default async function FestivalDetailPage({
                       Customize
                     </LinkButton>
                   )}
-                  {isCancellableOutreachStatus(
-                    r.sendability?.blockingStatus
-                  ) &&
+                  {outreachEnabled &&
+                    isCancellableOutreachStatus(
+                      r.sendability?.blockingStatus
+                    ) &&
                     r.sendability.blockingOutreachId && (
                       <form action={cancelScheduledAction}>
                         <input
@@ -753,6 +987,66 @@ export default async function FestivalDetailPage({
                         </PendingSubmitButton>
                       </form>
                     )}
+                  {outreachEnabled && r.followUpEligibility && (
+                    <FollowUpButton
+                      eligibility={r.followUpEligibility}
+                      returnTo={returnTo}
+                      isWeekend={weekend}
+                      action={sendFollowUpAction}
+                      cancelAction={cancelScheduledAction}
+                    />
+                  )}
+                  {outreachEnabled && r.manualMarker && (
+                    <form action={unmarkSentAction}>
+                      <input
+                        type="hidden"
+                        name="outreachId"
+                        value={r.manualMarker.id}
+                      />
+                      <input
+                        type="hidden"
+                        name="returnTo"
+                        value={returnTo}
+                      />
+                      <PendingSubmitButton
+                        variant="ghost"
+                        size="sm"
+                        pendingLabel="Unmarking…"
+                      >
+                        Unmark sent
+                      </PendingSubmitButton>
+                    </form>
+                  )}
+                  {outreachEnabled && r.canMarkManually && (
+                    <form action={markSentAction}>
+                      <input type="hidden" name="showId" value={showId} />
+                      {r.contact ? (
+                        <input
+                          type="hidden"
+                          name="contactId"
+                          value={r.contact.id}
+                        />
+                      ) : (
+                        <input
+                          type="hidden"
+                          name="artistId"
+                          value={r.artist.id}
+                        />
+                      )}
+                      <input
+                        type="hidden"
+                        name="returnTo"
+                        value={returnTo}
+                      />
+                      <PendingSubmitButton
+                        variant="ghost"
+                        size="sm"
+                        pendingLabel="Marking…"
+                      >
+                        Mark sent
+                      </PendingSubmitButton>
+                    </form>
+                  )}
                 </li>
               );
             })}

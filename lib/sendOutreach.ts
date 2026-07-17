@@ -6,6 +6,7 @@ import {
   applyTemplate,
   buildVarsForShow,
   ensureDefaultTemplate,
+  ensureFollowUpTemplate,
 } from "@/lib/template";
 import {
   RESEND_CONFIGURATION_ERROR,
@@ -49,6 +50,8 @@ export interface SendOutreachInput {
   htmlOverride?: string;
 }
 
+export type OutreachKindValue = "original" | "follow_up";
+
 export interface SendOutreachOutput {
   ok: boolean;
   outreachId?: string;
@@ -62,7 +65,100 @@ export interface SendOutreachOutput {
   rateCardAttachmentOmitted?: boolean;
 }
 
+export interface FollowUpParentOutreachProof {
+  id: string;
+  kind: OutreachKindValue;
+  parentOutreachId: string | null;
+  idempotencyKey: string;
+  providerMessageId: string | null;
+}
+
+export interface FollowUpParentAttemptProof {
+  outreachId: string;
+  status: string;
+  idempotencyKey: string;
+  testSend: boolean | null;
+  providerMessageId: string | null;
+  acceptedAt: Date | null;
+}
+
+export function isConclusiveRealOutreachAcceptance(
+  outreach: Pick<
+    FollowUpParentOutreachProof,
+    "id" | "idempotencyKey" | "providerMessageId"
+  >,
+  attempt: FollowUpParentAttemptProof | null | undefined,
+): boolean {
+  return (
+    !!attempt &&
+    attempt.outreachId === outreach.id &&
+    attempt.idempotencyKey === outreach.idempotencyKey &&
+    attempt.testSend === false &&
+    outreach.providerMessageId !== null &&
+    attempt.providerMessageId !== null &&
+    outreach.providerMessageId === attempt.providerMessageId &&
+    attempt.acceptedAt !== null &&
+    ["accepted", "delivery_failed"].includes(attempt.status)
+  );
+}
+
+export function followUpParentBlockingReason(
+  parent: FollowUpParentOutreachProof | null | undefined,
+  attempt: FollowUpParentAttemptProof | null | undefined,
+): string | null {
+  if (!parent) return "Original outreach not found";
+  if (parent.kind !== "original" || parent.parentOutreachId !== null) {
+    return "Follow-ups can only be sent from an original outreach";
+  }
+  if (!attempt) {
+    return "Original outreach has no matching immutable provider attempt";
+  }
+  if (
+    attempt.outreachId !== parent.id ||
+    attempt.idempotencyKey !== parent.idempotencyKey
+  ) {
+    return "Original outreach current provider attempt does not match";
+  }
+  if (attempt.testSend !== false) {
+    return attempt.testSend === true
+      ? "Test sends do not qualify for follow-up"
+      : "Original outreach has no verified real/test classification";
+  }
+  if (
+    !parent.providerMessageId ||
+    !attempt.providerMessageId ||
+    parent.providerMessageId !== attempt.providerMessageId
+  ) {
+    return "Original outreach has no matching provider acceptance";
+  }
+  if (!attempt.acceptedAt) {
+    return "Original outreach provider acceptance is not conclusive";
+  }
+  if (!["accepted", "delivery_failed"].includes(attempt.status)) {
+    return "Original outreach provider attempt is not conclusively accepted";
+  }
+  if (!isConclusiveRealOutreachAcceptance(parent, attempt)) {
+    return "Original outreach provider acceptance is not conclusive";
+  }
+  return null;
+}
+
+export interface FollowUpEligibility {
+  parentOutreachId: string;
+  eligible: boolean;
+  state: "eligible" | "pending" | "sent" | "blocked";
+  mode: "new" | "retry" | null;
+  reason: string | null;
+  recipients: string[];
+  fullTeamSend: boolean;
+  followUpOutreachId?: string;
+  followUpStatus?: string;
+  nextAttemptAt?: Date;
+}
+
 interface PreparedOutreach {
+  kind: OutreachKindValue;
+  parentOutreachId: string | null;
   showId: string;
   artistId: string;
   contactId: string;
@@ -114,6 +210,9 @@ export interface OutreachClaimRecoveryState {
 
 interface ClaimedOutreach {
   id: string;
+  kind: OutreachKindValue;
+  parentOutreachId: string | null;
+  showId: string;
   artistId: string;
   contactId: string | null;
   claimToken: string;
@@ -1022,6 +1121,22 @@ function showInactiveError(syncStatus: string): string {
   return `Show is not active (${syncStatus})`;
 }
 
+export function festivalOutreachBlockingReason(
+  show:
+    | {
+        isFestival: boolean;
+        dismissedAt: Date | null;
+      }
+    | null
+    | undefined,
+  kind: OutreachKindValue,
+): string | null {
+  if (!show?.isFestival || show.dismissedAt === null) return null;
+  return kind === "follow_up"
+    ? "Restore this festival before sending follow-up"
+    : "Restore this festival before sending outreach";
+}
+
 function artistNotOnShowError(): string {
   return "The selected contact's artist is not on this show";
 }
@@ -1143,6 +1258,8 @@ function requestIdentityMatches(
 }
 
 interface LockedPolicyOutreach extends DeliveryPolicySnapshot {
+  kind: OutreachKindValue;
+  parentOutreachId: string | null;
   showId: string;
   artistId: string;
   contactId: string | null;
@@ -1159,14 +1276,55 @@ async function evaluateLockedOutreachDeliveryPolicy(
   outreach: LockedPolicyOutreach,
   attempt: StoredAttempt,
 ): Promise<LockedOutreachDeliveryPolicy> {
-  const [show] = await tx.$queryRaw<Array<{ syncStatus: string }>>(
+  if (outreach.kind === "follow_up") {
+    await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`
+        SELECT "id"
+        FROM "Outreach"
+        WHERE "id" = ${outreach.parentOutreachId}
+        FOR UPDATE
+      `,
+    );
+    const followUpBlocked = await preparedFollowUpBlockingReason(
+      tx,
+      outreach,
+    );
+    if (followUpBlocked) {
+      return {
+        decision: {
+          ok: false,
+          state: "cancelled",
+          error: followUpBlocked,
+        },
+        submissionCredential: null,
+      };
+    }
+  }
+  const [show] = await tx.$queryRaw<
+    Array<{
+      syncStatus: string;
+      isFestival: boolean;
+      dismissedAt: Date | null;
+    }>
+  >(
     Prisma.sql`
-      SELECT "syncStatus"
+      SELECT "syncStatus", "isFestival", "dismissedAt"
       FROM "Show"
       WHERE "id" = ${outreach.showId}
       FOR UPDATE
     `,
   );
+  const festivalBlocked = festivalOutreachBlockingReason(show, outreach.kind);
+  if (festivalBlocked) {
+    return {
+      decision: {
+        ok: false,
+        state: "cancelled",
+        error: festivalBlocked,
+      },
+      submissionCredential: null,
+    };
+  }
   await tx.$queryRaw<Array<{ id: string }>>(
     Prisma.sql`
       SELECT "id"
@@ -1299,6 +1457,8 @@ export async function getOutreachSendabilityBatch(
       select: {
         id: true,
         syncStatus: true,
+        isFestival: true,
+        dismissedAt: true,
         artists: { select: { artistId: true } },
       },
     }),
@@ -1370,6 +1530,7 @@ export async function getOutreachSendabilityBatch(
       ? []
       : await db.outreach.findMany({
           where: {
+            kind: "original",
             showId: { in: showIds },
             artistId: { in: artistIds },
             status: {
@@ -1409,6 +1570,10 @@ export async function getOutreachSendabilityBatch(
     if (!show) return blockedSendability(input, "Show not found");
     if (show.syncStatus !== "active") {
       return blockedSendability(input, showInactiveError(show.syncStatus));
+    }
+    const festivalBlocked = festivalOutreachBlockingReason(show, "original");
+    if (festivalBlocked) {
+      return blockedSendability(input, festivalBlocked);
     }
 
     const contact = targetById.get(input.contactId);
@@ -1703,7 +1868,352 @@ export async function getOutreachSendabilityBatch(
   });
 }
 
-async function prepareOutreach(
+function followUpResult(
+  parentOutreachId: string,
+  state: FollowUpEligibility["state"],
+  reason: string | null,
+  details: {
+    mode?: FollowUpEligibility["mode"];
+    followUpOutreachId?: string;
+    followUpStatus?: string;
+    nextAttemptAt?: Date | null;
+    recipients?: string[];
+    fullTeamSend?: boolean;
+  } = {},
+): FollowUpEligibility {
+  return {
+    parentOutreachId,
+    eligible: state === "eligible",
+    state,
+    mode: state === "eligible" ? (details.mode ?? "new") : null,
+    reason,
+    recipients: details.recipients ?? [],
+    fullTeamSend: details.fullTeamSend ?? false,
+    ...(details.followUpOutreachId
+      ? { followUpOutreachId: details.followUpOutreachId }
+      : {}),
+    ...(details.followUpStatus
+      ? { followUpStatus: details.followUpStatus }
+      : {}),
+    ...(details.nextAttemptAt
+      ? { nextAttemptAt: details.nextAttemptAt }
+      : {}),
+  };
+}
+
+export async function getFollowUpEligibilityBatch(
+  parentOutreachIds: readonly string[],
+  now: Date = new Date(),
+): Promise<FollowUpEligibility[]> {
+  if (parentOutreachIds.length === 0) return [];
+  const ids = Array.from(new Set(parentOutreachIds));
+  const [parents, deliverySettings] = await Promise.all([
+    db.outreach.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        kind: true,
+        parentOutreachId: true,
+        idempotencyKey: true,
+        providerMessageId: true,
+        showId: true,
+        artistId: true,
+        contactId: true,
+        followUp: {
+          select: {
+            id: true,
+            kind: true,
+            parentOutreachId: true,
+            idempotencyKey: true,
+            providerMessageId: true,
+            showId: true,
+            artistId: true,
+            contactId: true,
+            finalSubject: true,
+            finalHtml: true,
+            recipientEmails: true,
+            recipientSnapshotState: true,
+            fullTeamSend: true,
+            status: true,
+            error: true,
+            scheduledFor: true,
+            nextAttemptAt: true,
+            claimedAt: true,
+            attemptCount: true,
+          },
+        },
+      },
+    }),
+    getResendDeliverySettingsSnapshot(),
+  ]);
+  const parentById = new Map(parents.map((parent) => [parent.id, parent]));
+  const allOutreaches = parents.flatMap((parent) =>
+    parent.followUp ? [parent, parent.followUp] : [parent],
+  );
+  const attempts =
+    allOutreaches.length === 0
+      ? []
+      : await db.outreachSendAttempt.findMany({
+          where: {
+            idempotencyKey: {
+              in: allOutreaches.map((outreach) => outreach.idempotencyKey),
+            },
+          },
+        });
+  const attemptByKey = new Map(
+    attempts.map((attempt) => [attempt.idempotencyKey, attempt]),
+  );
+  const artistIds = Array.from(
+    new Set(parents.map((parent) => parent.artistId)),
+  );
+  const showIds = Array.from(new Set(parents.map((parent) => parent.showId)));
+  const [shows, contacts] = await Promise.all([
+    db.show.findMany({
+      where: { id: { in: showIds } },
+      select: {
+        id: true,
+        syncStatus: true,
+        isFestival: true,
+        dismissedAt: true,
+        artists: { select: { artistId: true } },
+      },
+    }),
+    db.contact.findMany({
+      where: { artistId: { in: artistIds } },
+      select: {
+        id: true,
+        artistId: true,
+        email: true,
+        state: true,
+        isFullTeam: true,
+      },
+    }),
+  ]);
+  const showById = new Map(shows.map((show) => [show.id, show]));
+  const contactsByArtist = new Map<string, DeliveryPolicyContact[]>();
+  for (const contact of contacts) {
+    const rows = contactsByArtist.get(contact.artistId) ?? [];
+    rows.push(contact);
+    contactsByArtist.set(contact.artistId, rows);
+  }
+  const suppressionCandidates = normalizeEmails([
+    ...contacts.flatMap((contact) =>
+      contact.state === "active" && contact.email ? [contact.email] : [],
+    ),
+    ...deliverySettings.bccEmails,
+    ...(deliverySettings.testOverride
+      ? [deliverySettings.testOverride]
+      : []),
+  ]);
+  const suppressions =
+    suppressionCandidates.length === 0
+      ? []
+      : await db.emailSuppression.findMany({
+          where: { normalizedEmail: { in: suppressionCandidates } },
+          select: { normalizedEmail: true },
+        });
+  const suppressedEmails = suppressions.map(
+    (suppression) => suppression.normalizedEmail,
+  );
+
+  return parentOutreachIds.map((parentOutreachId) => {
+    const parent = parentById.get(parentOutreachId);
+    const parentAttempt = parent
+      ? attemptByKey.get(parent.idempotencyKey)
+      : null;
+    const parentBlocked = followUpParentBlockingReason(parent, parentAttempt);
+    if (parentBlocked) {
+      return followUpResult(parentOutreachId, "blocked", parentBlocked);
+    }
+    if (!parent) {
+      return followUpResult(
+        parentOutreachId,
+        "blocked",
+        "Original outreach not found",
+      );
+    }
+
+    const child = parent.followUp;
+    const childAttempt = child
+      ? attemptByKey.get(child.idempotencyKey)
+      : null;
+    if (
+      child &&
+      (child.kind !== "follow_up" ||
+        child.parentOutreachId !== parent.id ||
+        child.showId !== parent.showId ||
+        child.artistId !== parent.artistId ||
+        child.contactId !== parent.contactId)
+    ) {
+      return followUpResult(
+        parent.id,
+        "blocked",
+        "Stored follow-up identity conflicts with its original outreach",
+        {
+          followUpOutreachId: child.id,
+          followUpStatus: child.status,
+        },
+      );
+    }
+    if (
+      child &&
+      isConclusiveRealOutreachAcceptance(child, childAttempt)
+    ) {
+      return followUpResult(parent.id, "sent", "Follow-up already sent", {
+        followUpOutreachId: child.id,
+        followUpStatus: child.status,
+      });
+    }
+    if (child?.status === "sent") {
+      return followUpResult(
+        parent.id,
+        "blocked",
+        "Follow-up is marked sent without conclusive current provider proof",
+        {
+          followUpOutreachId: child.id,
+          followUpStatus: child.status,
+        },
+      );
+    }
+    if (
+      child &&
+      (child.status === "scheduled" ||
+        child.status === "retry_scheduled" ||
+        (child.status === "queued" &&
+          !isStaleOutreachClaim(child.claimedAt, now)))
+    ) {
+      return followUpResult(
+        parent.id,
+        "pending",
+        child.status === "queued"
+          ? "Follow-up send is in progress"
+          : child.status === "retry_scheduled"
+            ? "Follow-up retry is scheduled"
+            : "Follow-up is scheduled",
+        {
+          followUpOutreachId: child.id,
+          followUpStatus: child.status,
+          nextAttemptAt: child.nextAttemptAt ?? child.scheduledFor,
+        },
+      );
+    }
+
+    let mode: FollowUpEligibility["mode"] = "new";
+    if (child) {
+      if (
+        childAttempt &&
+        childAttempt.providerMessageId &&
+        childAttempt.testSend !== true
+      ) {
+        return followUpResult(
+          parent.id,
+          "blocked",
+          "Follow-up provider acceptance requires review",
+          {
+            followUpOutreachId: child.id,
+            followUpStatus: child.status,
+          },
+        );
+      }
+      if (
+        child.status === "manual_review" &&
+        !isNonBlockingLegacyUnknownAttempt(childAttempt) &&
+        !isDefinitiveConfigurationRejection(childAttempt)
+      ) {
+        return followUpResult(
+          parent.id,
+          "blocked",
+          child.error ?? "Follow-up requires manual review",
+          {
+            followUpOutreachId: child.id,
+            followUpStatus: child.status,
+          },
+        );
+      }
+      if (
+        isDefinitiveConfigurationRejection(childAttempt) ||
+        isNonBlockingLegacyUnknownAttempt(childAttempt) ||
+        (child.status === "cancelled" &&
+          !!childAttempt &&
+          isDefinitivelyUnsentOutreachAttempt(childAttempt)) ||
+        (childAttempt?.providerMessageId &&
+          childAttempt.testSend === true &&
+          ["accepted", "delivery_failed"].includes(childAttempt.status))
+      ) {
+        mode = "new";
+      } else if (childAttempt) {
+        const retry = evaluateAttemptRetryEligibility(
+          childAttempt,
+          now,
+          deliverySettings.credentialScope,
+        );
+        if (!retry.ok) {
+          return followUpResult(parent.id, "blocked", retry.error, {
+            followUpOutreachId: child.id,
+            followUpStatus: child.status,
+          });
+        }
+        mode = "retry";
+      } else if (!canReplaceUnattemptedOutreachSnapshot(child, false)) {
+        return followUpResult(parent.id, "blocked", MANUAL_REVIEW_LEGACY, {
+          followUpOutreachId: child.id,
+          followUpStatus: child.status,
+        });
+      }
+    }
+
+    const show = showById.get(parent.showId);
+    if (show?.isFestival && show.dismissedAt) {
+      return followUpResult(
+        parent.id,
+        "blocked",
+        "Restore this festival before sending follow-up",
+        {
+          followUpOutreachId: child?.id,
+          followUpStatus: child?.status,
+        },
+      );
+    }
+    const artistContacts = contactsByArtist.get(parent.artistId) ?? [];
+    const contact =
+      artistContacts.find((candidate) => candidate.id === parent.contactId) ??
+      null;
+    const policy = evaluateOutreachDeliveryPolicy({
+      showSyncStatus: show?.syncStatus ?? null,
+      associationExists:
+        show?.artists.some(
+          (association) => association.artistId === parent.artistId,
+        ) ?? false,
+      artistId: parent.artistId,
+      contactId: parent.contactId,
+      subject: mode === "retry" && child ? child.finalSubject : "",
+      contact,
+      artistContacts,
+      stored: mode === "retry" && child ? child : null,
+      attempt: mode === "retry" && childAttempt ? childAttempt : null,
+      from: deliverySettings.from,
+      testOverride: deliverySettings.testOverride,
+      bccEmails: deliverySettings.bccEmails,
+      suppressedEmails,
+      allowMissingFrom: mode === "new",
+    });
+    if (!policy.ok) {
+      return followUpResult(parent.id, "blocked", policy.error, {
+        followUpOutreachId: child?.id,
+        followUpStatus: child?.status,
+      });
+    }
+    return followUpResult(parent.id, "eligible", null, {
+      mode,
+      recipients: policy.currentRecipients,
+      fullTeamSend: policy.fullTeamSend,
+      followUpOutreachId: child?.id,
+      followUpStatus: child?.status,
+    });
+  });
+}
+
+async function prepareOriginalOutreach(
   input: SendOutreachInput,
 ): Promise<PreparedOutreach | { error: string }> {
   const { showId, contactId, subjectOverride, htmlOverride } = input;
@@ -1726,6 +2236,8 @@ async function prepareOutreach(
   if (show.syncStatus !== "active") {
     return { error: showInactiveError(show.syncStatus) };
   }
+  const festivalBlocked = festivalOutreachBlockingReason(show, "original");
+  if (festivalBlocked) return { error: festivalBlocked };
   if (!contact) return { error: "Contact not found" };
   const association = await db.showArtist.findUnique({
     where: {
@@ -1744,6 +2256,8 @@ async function prepareOutreach(
   });
 
   return {
+    kind: "original",
+    parentOutreachId: null,
     showId,
     artistId: contact.artistId,
     contactId,
@@ -1752,6 +2266,106 @@ async function prepareOutreach(
     fullTeamSend: contact.isFullTeam,
     subject: subjectOverride?.trim() || applyTemplate(template.subject, vars),
     html: htmlOverride?.trim() || applyHtmlTemplate(template.htmlBody, vars),
+  };
+}
+
+async function prepareFollowUpOutreach(
+  parentOutreachId: string,
+): Promise<PreparedOutreach | { error: string }> {
+  const [eligibility] = await getFollowUpEligibilityBatch([
+    parentOutreachId,
+  ]);
+  if (!eligibility?.eligible) {
+    return {
+      error:
+        eligibility?.reason ?? "Original outreach is not eligible for follow-up",
+    };
+  }
+
+  const [parent, template] = await Promise.all([
+    db.outreach.findUnique({
+      where: { id: parentOutreachId },
+      select: {
+        id: true,
+        kind: true,
+        parentOutreachId: true,
+        showId: true,
+        artistId: true,
+        contactId: true,
+        show: {
+          select: {
+            venueName: true,
+            date: true,
+            syncStatus: true,
+            isFestival: true,
+            dismissedAt: true,
+          },
+        },
+        contact: {
+          select: {
+            id: true,
+            artistId: true,
+            name: true,
+            customPrice: true,
+            state: true,
+            artist: { select: { name: true } },
+          },
+        },
+      },
+    }),
+    ensureFollowUpTemplate(),
+  ]);
+  if (!parent || parent.kind !== "original") {
+    return { error: "Original outreach not found" };
+  }
+  if (parent.show.syncStatus !== "active") {
+    return { error: showInactiveError(parent.show.syncStatus) };
+  }
+  if (parent.show.isFestival && parent.show.dismissedAt) {
+    return { error: "Restore this festival before sending follow-up" };
+  }
+  if (
+    !parent.contactId ||
+    !parent.contact ||
+    parent.contact.id !== parent.contactId ||
+    parent.contact.state !== "active"
+  ) {
+    return { error: "Selected contact is no longer available" };
+  }
+  if (parent.contact.artistId !== parent.artistId) {
+    return {
+      error: "Selected contact no longer belongs to the outreach artist",
+    };
+  }
+  const association = await db.showArtist.findUnique({
+    where: {
+      showId_artistId: {
+        showId: parent.showId,
+        artistId: parent.artistId,
+      },
+    },
+    select: { showId: true },
+  });
+  if (!association) return { error: artistNotOnShowError() };
+
+  const vars = await buildVarsForShow({
+    artistName: parent.contact.artist.name,
+    venueName: parent.show.venueName,
+    showDate: parent.show.date,
+    customPrice: parent.contact.customPrice,
+    managerName: parent.contact.name,
+  });
+  return {
+    kind: "follow_up",
+    parentOutreachId: parent.id,
+    showId: parent.showId,
+    artistId: parent.artistId,
+    contactId: parent.contactId,
+    templateId: template.id,
+    recipients: eligibility.recipients,
+    fullTeamSend: eligibility.fullTeamSend,
+    subject: applyTemplate(template.subject, vars),
+    html: applyHtmlTemplate(template.htmlBody, vars),
   };
 }
 
@@ -1765,6 +2379,9 @@ async function currentAttempt(
 function claimedOutreach(
   row: {
     id: string;
+    kind: OutreachKindValue;
+    parentOutreachId: string | null;
+    showId: string;
     artistId: string;
     contactId: string | null;
     claimToken: string | null;
@@ -1793,6 +2410,9 @@ function claimedOutreach(
   if (!row.claimToken) throw new Error("Claim token was not persisted");
   return {
     id: row.id,
+    kind: row.kind,
+    parentOutreachId: row.parentOutreachId,
+    showId: row.showId,
     artistId: row.artistId,
     contactId: row.contactId,
     claimToken: row.claimToken,
@@ -2141,13 +2761,192 @@ async function finishAlreadyAccepted(
   };
 }
 
+function preparedOutreachScopeWhere(
+  prep: PreparedOutreach,
+): Prisma.OutreachWhereInput {
+  return prep.kind === "follow_up"
+    ? {
+        kind: "follow_up",
+        parentOutreachId: prep.parentOutreachId,
+      }
+    : {
+        kind: "original",
+        showId: prep.showId,
+        artistId: prep.artistId,
+      };
+}
+
+function preparedOutreachUniqueWhere(
+  prep: PreparedOutreach,
+): Prisma.OutreachWhereUniqueInput {
+  if (prep.kind === "follow_up") {
+    if (!prep.parentOutreachId) {
+      throw new Error("Follow-up preparation is missing its original outreach");
+    }
+    return { parentOutreachId: prep.parentOutreachId };
+  }
+  return {
+    showId_contactId_kind: {
+      showId: prep.showId,
+      contactId: prep.contactId,
+      kind: "original",
+    },
+  };
+}
+
+function preparedOutreachName(kind: OutreachKindValue): string {
+  return kind === "follow_up" ? "Follow-up" : "Outreach";
+}
+
+async function preparedFollowUpBlockingReason(
+  tx: Prisma.TransactionClient,
+  prep: {
+    kind: OutreachKindValue;
+    parentOutreachId: string | null;
+    showId: string;
+    artistId: string;
+    contactId: string | null;
+  },
+): Promise<string | null> {
+  if (prep.kind !== "follow_up") return null;
+  if (!prep.parentOutreachId) {
+    return "Follow-up preparation is missing its original outreach";
+  }
+  const parent = await tx.outreach.findUnique({
+    where: { id: prep.parentOutreachId },
+    select: {
+      id: true,
+      kind: true,
+      parentOutreachId: true,
+      idempotencyKey: true,
+      providerMessageId: true,
+      showId: true,
+      artistId: true,
+      contactId: true,
+      show: {
+        select: {
+          isFestival: true,
+          dismissedAt: true,
+        },
+      },
+    },
+  });
+  const attempt = parent
+    ? await currentAttempt(tx, parent.idempotencyKey)
+    : null;
+  const proofError = followUpParentBlockingReason(parent, attempt);
+  if (proofError) return proofError;
+  if (parent?.show.isFestival && parent.show.dismissedAt) {
+    return "Restore this festival before sending follow-up";
+  }
+  if (
+    !parent ||
+    parent.showId !== prep.showId ||
+    parent.artistId !== prep.artistId ||
+    parent.contactId !== prep.contactId
+  ) {
+    return "Follow-up identity no longer matches its original outreach";
+  }
+  return null;
+}
+
+async function preparedDeliveryPolicyBlockingReason(
+  tx: Prisma.TransactionClient,
+  prep: PreparedOutreach,
+): Promise<string | null> {
+  const [show, association, artistContacts, deliverySettings] =
+    await Promise.all([
+      tx.show.findUnique({
+        where: { id: prep.showId },
+        select: {
+          syncStatus: true,
+          isFestival: true,
+          dismissedAt: true,
+        },
+      }),
+      tx.showArtist.findUnique({
+        where: {
+          showId_artistId: {
+            showId: prep.showId,
+            artistId: prep.artistId,
+          },
+        },
+        select: { showId: true },
+      }),
+      tx.contact.findMany({
+        where: { artistId: prep.artistId },
+        select: {
+          id: true,
+          artistId: true,
+          email: true,
+          state: true,
+          isFullTeam: true,
+        },
+      }),
+      getResendDeliverySettingsSnapshot(tx),
+    ]);
+  const festivalBlocked = festivalOutreachBlockingReason(show, prep.kind);
+  if (festivalBlocked) return festivalBlocked;
+  const contact =
+    artistContacts.find((candidate) => candidate.id === prep.contactId) ?? null;
+  const policyEmails = normalizeEmails([
+    ...artistContacts.flatMap((candidate) =>
+      candidate.state === "active" && candidate.email
+        ? [candidate.email]
+        : [],
+    ),
+    ...deliverySettings.bccEmails,
+    ...(deliverySettings.testOverride
+      ? [deliverySettings.testOverride]
+      : []),
+  ]);
+  await acquireOutreachRecipientPolicyLocks(tx, policyEmails);
+  const suppressions =
+    policyEmails.length === 0
+      ? []
+      : await tx.emailSuppression.findMany({
+          where: { normalizedEmail: { in: policyEmails } },
+          select: { normalizedEmail: true },
+        });
+  const decision = evaluateOutreachDeliveryPolicy({
+    showSyncStatus: show?.syncStatus ?? null,
+    associationExists: association !== null,
+    artistId: prep.artistId,
+    contactId: prep.contactId,
+    subject: prep.subject,
+    contact,
+    artistContacts,
+    stored: null,
+    attempt: null,
+    from: deliverySettings.from,
+    testOverride: deliverySettings.testOverride,
+    bccEmails: deliverySettings.bccEmails,
+    suppressedEmails: suppressions.map(
+      (suppression) => suppression.normalizedEmail,
+    ),
+    allowMissingFrom: true,
+  });
+  if (!decision.ok) return decision.error;
+  if (
+    decision.fullTeamSend !== prep.fullTeamSend ||
+    !sameEmails(decision.currentRecipients, prep.recipients)
+  ) {
+    return MANUAL_REVIEW_SNAPSHOT;
+  }
+  return null;
+}
+
 async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResult> {
   const now = new Date();
   return withSerializableRetry(async (tx) => {
     const [show, association] = await Promise.all([
       tx.show.findUnique({
         where: { id: prep.showId },
-        select: { syncStatus: true },
+        select: {
+          syncStatus: true,
+          isFestival: true,
+          dismissedAt: true,
+        },
       }),
       tx.showArtist.findUnique({
         where: {
@@ -2168,17 +2967,37 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         result: { ok: false, error: showInactiveError(show.syncStatus) },
       };
     }
+    const festivalBlocked = festivalOutreachBlockingReason(show, prep.kind);
+    if (festivalBlocked) {
+      return {
+        kind: "complete",
+        result: { ok: false, error: festivalBlocked },
+      };
+    }
     if (!association) {
       return {
         kind: "complete",
         result: { ok: false, error: artistNotOnShowError() },
       };
     }
+    const followUpBlocked = await preparedFollowUpBlockingReason(tx, prep);
+    if (followUpBlocked) {
+      return {
+        kind: "complete",
+        result: { ok: false, error: followUpBlocked },
+      };
+    }
+    const policyBlocked = await preparedDeliveryPolicyBlockingReason(tx, prep);
+    if (policyBlocked) {
+      return {
+        kind: "complete",
+        result: { ok: false, error: policyBlocked },
+      };
+    }
 
     const active = await tx.outreach.findMany({
       where: {
-        showId: prep.showId,
-        artistId: prep.artistId,
+        ...preparedOutreachScopeWhere(prep),
         status: {
           in: [
             "sent",
@@ -2209,7 +3028,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         kind: "complete",
         result: {
           ok: false,
-          error: "Already sent for this artist on this show",
+          error: `${preparedOutreachName(prep.kind)} already sent`,
           outreachId: sent.id,
         },
       };
@@ -2220,7 +3039,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         kind: "complete",
         result: {
           ok: false,
-          error: "Already scheduled for this artist on this show",
+          error: `${preparedOutreachName(prep.kind)} already scheduled`,
           outreachId: scheduled.id,
         },
       };
@@ -2384,14 +3203,19 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
     }
 
     const existing = await tx.outreach.findUnique({
-      where: {
-        showId_contactId: { showId: prep.showId, contactId: prep.contactId },
-      },
+      where: preparedOutreachUniqueWhere(prep),
     });
     const claimToken = randomUUID();
     const existingAttempt = existing
       ? await currentAttempt(tx, existing.idempotencyKey)
       : null;
+    if (
+      existing &&
+      existingAttempt?.providerMessageId &&
+      existingAttempt.testSend !== true
+    ) {
+      return finishAlreadyAccepted(tx, existing, existingAttempt);
+    }
 
     if (
       existing &&
@@ -2647,6 +3471,8 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
     const created = await tx.outreach.create({
       data: {
         id,
+        kind: prep.kind,
+        parentOutreachId: prep.parentOutreachId,
         showId: prep.showId,
         artistId: prep.artistId,
         contactId: prep.contactId,
@@ -3935,26 +4761,44 @@ export async function sendOutreach(
   );
   if (configurationError) return { ok: false, error: configurationError };
 
-  const prep = await prepareOutreach(input);
+  const prep = await prepareOriginalOutreach(input);
   if ("error" in prep) return { ok: false, error: prep.error };
   const claim = await claimImmediateOutreach(prep);
   if (claim.kind === "complete") return claim.result;
   return executeClaimedSend(claim.outreach);
 }
 
-export async function scheduleOutreach(
-  input: SendOutreachInput,
+export async function sendFollowUp(
+  parentOutreachId: string,
+): Promise<SendOutreachOutput> {
+  const configurationError = getResendConfigurationError(
+    process.env.RESEND_API_KEY,
+    process.env.RESEND_FROM_EMAIL,
+  );
+  if (configurationError) return { ok: false, error: configurationError };
+
+  const prep = await prepareFollowUpOutreach(parentOutreachId);
+  if ("error" in prep) return { ok: false, error: prep.error };
+  const claim = await claimImmediateOutreach(prep);
+  if (claim.kind === "complete") return claim.result;
+  return executeClaimedSend(claim.outreach);
+}
+
+async function schedulePreparedOutreach(
+  prep: PreparedOutreach,
   scheduledFor: Date,
 ): Promise<SendOutreachOutput> {
-  const prep = await prepareOutreach(input);
-  if ("error" in prep) return { ok: false, error: prep.error };
   const now = new Date();
 
   return withSerializableRetry(async (tx): Promise<SendOutreachOutput> => {
     const [show, association] = await Promise.all([
       tx.show.findUnique({
         where: { id: prep.showId },
-        select: { syncStatus: true },
+        select: {
+          syncStatus: true,
+          isFestival: true,
+          dismissedAt: true,
+        },
       }),
       tx.showArtist.findUnique({
         where: {
@@ -3970,12 +4814,17 @@ export async function scheduleOutreach(
     if (show.syncStatus !== "active") {
       return { ok: false, error: showInactiveError(show.syncStatus) };
     }
+    const festivalBlocked = festivalOutreachBlockingReason(show, prep.kind);
+    if (festivalBlocked) return { ok: false, error: festivalBlocked };
     if (!association) return { ok: false, error: artistNotOnShowError() };
+    const followUpBlocked = await preparedFollowUpBlockingReason(tx, prep);
+    if (followUpBlocked) return { ok: false, error: followUpBlocked };
+    const policyBlocked = await preparedDeliveryPolicyBlockingReason(tx, prep);
+    if (policyBlocked) return { ok: false, error: policyBlocked };
 
     const active = await tx.outreach.findMany({
       where: {
-        showId: prep.showId,
-        artistId: prep.artistId,
+        ...preparedOutreachScopeWhere(prep),
         status: {
           in: [
             "sent",
@@ -4004,7 +4853,7 @@ export async function scheduleOutreach(
     if (sent) {
       return {
         ok: false,
-        error: "Already sent for this artist on this show",
+        error: `${preparedOutreachName(prep.kind)} already sent`,
         outreachId: sent.id,
       };
     }
@@ -4012,7 +4861,7 @@ export async function scheduleOutreach(
     if (scheduled) {
       return {
         ok: false,
-        error: "Already scheduled for this artist on this show",
+        error: `${preparedOutreachName(prep.kind)} already scheduled`,
         outreachId: scheduled.id,
       };
     }
@@ -4152,13 +5001,18 @@ export async function scheduleOutreach(
     }
 
     const existing = await tx.outreach.findUnique({
-      where: {
-        showId_contactId: { showId: prep.showId, contactId: prep.contactId },
-      },
+      where: preparedOutreachUniqueWhere(prep),
     });
     const existingAttempt = existing
       ? await currentAttempt(tx, existing.idempotencyKey)
       : null;
+    if (
+      existing &&
+      existingAttempt?.providerMessageId &&
+      existingAttempt.testSend !== true
+    ) {
+      return (await finishAlreadyAccepted(tx, existing, existingAttempt)).result;
+    }
     if (
       existing &&
       existingAttempt &&
@@ -4393,6 +5247,8 @@ export async function scheduleOutreach(
     const outreach = await tx.outreach.create({
       data: {
         id,
+        kind: prep.kind,
+        parentOutreachId: prep.parentOutreachId,
         showId: prep.showId,
         artistId: prep.artistId,
         contactId: prep.contactId,
@@ -4415,6 +5271,24 @@ export async function scheduleOutreach(
       scheduledFor,
     };
   });
+}
+
+export async function scheduleOutreach(
+  input: SendOutreachInput,
+  scheduledFor: Date,
+): Promise<SendOutreachOutput> {
+  const prep = await prepareOriginalOutreach(input);
+  if ("error" in prep) return { ok: false, error: prep.error };
+  return schedulePreparedOutreach(prep, scheduledFor);
+}
+
+export async function scheduleFollowUp(
+  parentOutreachId: string,
+  scheduledFor: Date,
+): Promise<SendOutreachOutput> {
+  const prep = await prepareFollowUpOutreach(parentOutreachId);
+  if ("error" in prep) return { ok: false, error: prep.error };
+  return schedulePreparedOutreach(prep, scheduledFor);
 }
 
 export interface CancelScheduledOutreachResult {
@@ -4505,7 +5379,13 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
     const outreach = await tx.outreach.findUnique({
       where: { id: outreachId },
       include: {
-        show: { select: { syncStatus: true } },
+        show: {
+          select: {
+            syncStatus: true,
+            isFestival: true,
+            dismissedAt: true,
+          },
+        },
         contact: {
           select: {
             id: true,
@@ -4574,6 +5454,44 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
         result: { ok: false, outreachId: outreach.id, error },
       };
     }
+    const festivalBlocked = festivalOutreachBlockingReason(
+      outreach.show,
+      outreach.kind,
+    );
+    if (festivalBlocked) {
+      if (attempt) {
+        return applyDeliveryPolicyDecision(
+          tx,
+          {
+            id: outreach.id,
+            attemptCount: outreach.attemptCount,
+            automaticRetry: true,
+          },
+          attempt,
+          { ok: false, state: "cancelled", error: festivalBlocked },
+          now,
+        );
+      }
+      await tx.outreach.update({
+        where: { id: outreach.id },
+        data: {
+          status: "cancelled",
+          error: festivalBlocked,
+          scheduledFor: null,
+          nextAttemptAt: null,
+          claimedAt: null,
+          claimToken: null,
+        },
+      });
+      return {
+        kind: "complete",
+        result: {
+          ok: false,
+          outreachId: outreach.id,
+          error: festivalBlocked,
+        },
+      };
+    }
     const association = await tx.showArtist.findUnique({
       where: {
         showId_artistId: {
@@ -4612,6 +5530,44 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
       return {
         kind: "complete",
         result: { ok: false, outreachId: outreach.id, error },
+      };
+    }
+    const followUpBlocked = await preparedFollowUpBlockingReason(
+      tx,
+      outreach,
+    );
+    if (followUpBlocked) {
+      if (attempt) {
+        return applyDeliveryPolicyDecision(
+          tx,
+          {
+            id: outreach.id,
+            attemptCount: outreach.attemptCount,
+            automaticRetry: true,
+          },
+          attempt,
+          { ok: false, state: "cancelled", error: followUpBlocked },
+          now,
+        );
+      }
+      await tx.outreach.update({
+        where: { id: outreach.id },
+        data: {
+          status: "cancelled",
+          error: followUpBlocked,
+          scheduledFor: null,
+          nextAttemptAt: null,
+          claimedAt: null,
+          claimToken: null,
+        },
+      });
+      return {
+        kind: "complete",
+        result: {
+          ok: false,
+          outreachId: outreach.id,
+          error: followUpBlocked,
+        },
       };
     }
     if (outreach.recipientSnapshotState !== "verified") {

@@ -9,9 +9,11 @@ import { Badge } from "@/components/ui/badge";
 import { formatShowDate } from "@/lib/formatDate";
 import {
   cancelScheduledAction,
+  sendFollowUpAction,
   sendNowAction,
 } from "@/app/dashboard/actions";
 import { SendButton } from "@/components/send-button";
+import { FollowUpButton } from "@/components/follow-up-button";
 import {
   pickEmailContact,
   pickPhoneContact,
@@ -22,7 +24,10 @@ import {
   activeListenSignalWhere,
   formatRankLabel,
 } from "@/lib/listenSignal";
-import { getOutreachSendabilityBatch } from "@/lib/sendOutreach";
+import {
+  getFollowUpEligibilityBatch,
+  getOutreachSendabilityBatch,
+} from "@/lib/sendOutreach";
 import { workflowReturnPath } from "@/lib/dashboardReturnUrl";
 import { withWorkflowReturnTo } from "@/lib/workflowLinks";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
@@ -99,17 +104,9 @@ const getArtistPageData = cache(async (id: string) => {
     db.outreach.findMany({
       where: {
         artistId: id,
-        status: {
-          in: [
-            "sent",
-            "scheduled",
-            "retry_scheduled",
-            "queued",
-            "manual_review",
-          ],
-        },
+        kind: "original",
       },
-      select: { showId: true, status: true },
+      select: { id: true, showId: true, status: true },
       orderBy: [{ createdAt: "desc" }, { id: "asc" }],
     }),
   ]);
@@ -131,11 +128,22 @@ export default async function ArtistPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ returnTo?: SearchParamValue }>;
+  searchParams: Promise<{
+    returnTo?: SearchParamValue;
+    followup_sent?: SearchParamValue;
+    followup_scheduled?: SearchParamValue;
+    cancelled?: SearchParamValue;
+    error?: SearchParamValue;
+  }>;
 }) {
   const { id } = await params;
   const search = await searchParams;
+  const followUpSent = firstSearchParam(search.followup_sent);
+  const followUpScheduled = firstSearchParam(search.followup_scheduled);
+  const actionError = firstSearchParam(search.error);
+  const cancelled = firstSearchParam(search.cancelled);
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
+  const currentReturnTo = withWorkflowReturnTo(`/artists/${id}`, safeReturnTo);
   const { artist, outreaches, now } = await getArtistPageData(id);
   const today = easternTodayStoredDate(now);
   if (!artist) return notFound();
@@ -154,34 +162,71 @@ export default async function ArtistPage({
     .filter((s) => s.date >= today && s.syncStatus === "active")
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
-  const outreachByShow = new Map<
+  const outreachesByShow = new Map<
     string,
-    (typeof outreaches)[number]
+    (typeof outreaches)[number][]
   >();
   for (const outreach of outreaches) {
-    if (!outreachByShow.has(outreach.showId)) {
-      outreachByShow.set(outreach.showId, outreach);
-    }
+    const rows = outreachesByShow.get(outreach.showId) ?? [];
+    rows.push(outreach);
+    outreachesByShow.set(outreach.showId, rows);
   }
   const emailContact = pickEmailContact(artist.contacts);
   const phoneContact = pickPhoneContact(artist.contacts, emailContact);
   const weekend = isWeekendET();
-  const sendabilityRows = emailContact
-    ? await getOutreachSendabilityBatch(
-        upcomingShows.map((show) => ({
-          showId: show.id,
-          contactId: emailContact.id,
-        })),
-        now
-      )
-    : [];
+  const [sendabilityRows, followUpEligibilityRows] = await Promise.all([
+    emailContact
+      ? getOutreachSendabilityBatch(
+          upcomingShows.map((show) => ({
+            showId: show.id,
+            contactId: emailContact.id,
+          })),
+          now,
+        )
+      : Promise.resolve([]),
+    getFollowUpEligibilityBatch(
+      outreaches.map((outreach) => outreach.id),
+      now,
+    ),
+  ]);
   const sendabilityByShow = new Map(
     sendabilityRows.map((result) => [result.showId, result])
+  );
+  const followUpByParent = new Map(
+    followUpEligibilityRows.map((result) => [
+      result.parentOutreachId,
+      result,
+    ]),
   );
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
       <Link href={safeReturnTo} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Back</Link>
+
+      {(followUpSent || followUpScheduled || cancelled || actionError) && (
+        <div className="mt-4 space-y-2">
+          {followUpSent && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+              Follow-up sent.
+            </div>
+          )}
+          {followUpScheduled && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+              Follow-up scheduled for Monday morning.
+            </div>
+          )}
+          {cancelled && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+              Scheduled follow-up or retry cancelled.
+            </div>
+          )}
+          {actionError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+              Action failed: {actionError}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mt-2 flex items-start gap-4">
         {artist.imageUrl && (
@@ -303,7 +348,28 @@ export default async function ArtistPage({
           <Card className="mt-2">
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
               {upcomingShows.map((s) => {
-                const outreach = outreachByShow.get(s.id);
+                const showOutreaches = outreachesByShow.get(s.id) ?? [];
+                const outreach =
+                  showOutreaches.find((row) => row.status === "scheduled") ??
+                  showOutreaches.find(
+                    (row) => row.status === "retry_scheduled",
+                  ) ??
+                  showOutreaches.find((row) => row.status === "sent") ??
+                  showOutreaches[0];
+                const followUpEligibility =
+                  showOutreaches
+                    .map((row) => followUpByParent.get(row.id))
+                    .find(
+                      (row) =>
+                        row &&
+                        (row.state === "eligible" ||
+                          row.state === "pending" ||
+                          row.state === "sent"),
+                    ) ??
+                  showOutreaches
+                    .filter((row) => row.status === "sent")
+                    .map((row) => followUpByParent.get(row.id))
+                    .find((row) => row !== undefined);
                 const sendability = sendabilityByShow.get(s.id);
                 const alreadySent =
                   sendability?.blockingStatus === "sent" ||
@@ -374,8 +440,17 @@ export default async function ArtistPage({
                           isRetry={sendability?.mode === "retry"}
                           isWeekend={weekend}
                           scheduledInfo={scheduledInfo}
-                          returnTo={safeReturnTo}
+                          returnTo={currentReturnTo}
                           action={sendNowAction}
+                          cancelAction={cancelScheduledAction}
+                        />
+                      )}
+                      {followUpEligibility && (
+                        <FollowUpButton
+                          eligibility={followUpEligibility}
+                          returnTo={currentReturnTo}
+                          isWeekend={weekend}
+                          action={sendFollowUpAction}
                           cancelAction={cancelScheduledAction}
                         />
                       )}

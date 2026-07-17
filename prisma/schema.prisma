@@ -117,6 +117,10 @@ model Show {
   venueName        String
   city             String
   state            String?
+  /// ISO 3166-1 alpha-2 when known. Null is explicitly unknown, never assumed US.
+  countryCode      String?
+  /// Provider/manual display value retained when an ISO code cannot be resolved.
+  countryName      String?
   ticketUrl        String?
   ages             String?
   electronicGenre  String?
@@ -137,6 +141,7 @@ model Show {
 
   @@index([date])
   @@index([isFestival, date])
+  @@index([isFestival, countryCode, dismissedAt, date])
   @@index([source, syncStatus, date])
   @@index([dismissedAt])
   @@index([interestedAt])
@@ -184,8 +189,17 @@ model EmailTemplate {
   updatedAt  DateTime   @updatedAt
 }
 
+enum OutreachKind {
+  original
+  follow_up
+}
+
 model Outreach {
   id                     String                @id @default(cuid())
+  kind                   OutreachKind          @default(original)
+  parentOutreachId       String?               @unique
+  parentOutreach         Outreach?             @relation("OutreachFollowUp", fields: [parentOutreachId], references: [id], onDelete: Cascade)
+  followUp               Outreach?             @relation("OutreachFollowUp")
   showId                 String
   show                   Show                  @relation(fields: [showId], references: [id], onDelete: Cascade)
   artistId               String
@@ -223,10 +237,11 @@ model Outreach {
   webhookEvents          ResendWebhookEvent[]
   createdAt              DateTime              @default(now())
 
-  @@unique([showId, contactId])
+  @@unique([showId, contactId, kind])
   @@index([showId])
   @@index([contactId])
   @@index([artistId])
+  @@index([kind, status, scheduledFor])
   @@index([status, scheduledFor])
   @@index([status, nextAttemptAt])
   @@index([status, claimedAt])
