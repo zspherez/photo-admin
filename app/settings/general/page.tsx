@@ -64,9 +64,17 @@ export default async function GeneralSettingsPage({
                 label={k.label}
                 placeholder={k.placeholder}
                 description={k.description}
-                defaultValue={valueByKey[k.key] ?? ""}
+                defaultValue={
+                  valueByKey[k.key] ??
+                  ("defaultValue" in k ? k.defaultValue : "")
+                }
               />
             ))}
+            <p className="text-xs text-zinc-500">
+              Email links also receive an automatic{" "}
+              <code>utm_content</code> derived from the outreach artist.
+              Existing UTM parameters are preserved.
+            </p>
             <Button type="submit" variant="primary">Save</Button>
           </form>
         </CardBody>

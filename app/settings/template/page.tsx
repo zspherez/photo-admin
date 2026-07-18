@@ -5,7 +5,6 @@ import { db } from "@/lib/db";
 import {
   DEFAULT_TEMPLATE_HTML,
   DEFAULT_TEMPLATE_SUBJECT,
-  applyHtmlTemplate,
   applyTemplate,
   buildVarsForShow,
   cloneTemplateContent,
@@ -13,6 +12,8 @@ import {
   ensureFollowUpTemplate,
   extractVars,
 } from "@/lib/template";
+import { renderTrackedEmailHtml } from "@/lib/emailUtm";
+import { readEmailUtmSettingsSnapshot } from "@/lib/generalSettings";
 import { TemplateEditor } from "@/components/template-editor";
 import { Card, CardBody } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -107,7 +108,7 @@ export default async function TemplateSettingsPage({
 }) {
   const kind = parseTemplateKind((await searchParams).kind);
   const now = new Date();
-  const [template, sample] = await Promise.all([
+  const [template, sample, utmSettings] = await Promise.all([
     ensureTemplate(kind),
     db.show.findFirst({
       where: {
@@ -144,6 +145,7 @@ export default async function TemplateSettingsPage({
       },
       orderBy: { date: "asc" },
     }),
+    readEmailUtmSettingsSnapshot(),
   ]);
   const usedVars = extractVars(template.subject + " " + template.htmlBody);
   const allVars = Array.from(new Set([...KNOWN_VARS, ...usedVars])).sort();
@@ -151,6 +153,7 @@ export default async function TemplateSettingsPage({
   let previewSubject = template.subject;
   let previewHtml = template.htmlBody;
   let sampleLabel = "No sample available";
+  let previewArtist: string | null = null;
   if (sample) {
     const matched = sample.artists.find(
       (showArtist) =>
@@ -168,8 +171,15 @@ export default async function TemplateSettingsPage({
         managerName: contact.name,
       });
       previewSubject = applyTemplate(template.subject, sampleVars);
-      previewHtml = applyHtmlTemplate(template.htmlBody, sampleVars);
+      previewHtml = renderTrackedEmailHtml(
+        template.htmlBody,
+        sampleVars,
+        kind,
+        matched.artist.name,
+        utmSettings,
+      );
       sampleLabel = `Preview: ${matched.artist.name} at ${sample.venueName}`;
+      previewArtist = matched.artist.name;
     }
   }
 
@@ -235,6 +245,11 @@ export default async function TemplateSettingsPage({
 
       <section className="mt-8">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">{sampleLabel}</h2>
+        <p className="mt-1 text-xs text-zinc-500">
+          {previewArtist
+            ? `Web links use the ${kind === "original" ? "original" : "follow-up"} UTM campaign; utm_content is automatically derived from preview artist ${previewArtist}.`
+            : "When a sample is available, its web links include the selected message type's UTM campaign and automatic artist utm_content."}
+        </p>
         <Card className="mt-3">
           <CardBody>
             <p className="text-xs font-medium text-zinc-500">Subject</p>

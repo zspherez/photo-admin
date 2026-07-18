@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import {
   GENERAL_SETTING_KEYS,
   generalSettingsValuesFromFormData,
+  readEmailUtmSettingsSnapshot,
   readGeneralDeliverySettingsSnapshot,
   saveGeneralSettingsAtomically,
   type GeneralSettingsTransactionRunner,
@@ -134,15 +135,46 @@ test("general settings normalize form values and preserve explicit delivery blan
     bcc_emails: "audit@example.com",
     unrelated: "keep",
   });
+
   await saveGeneralSettingsAtomically(values, store.runTransaction);
 
   assert.deepEqual(store.values(), {
     sender_name: "New Sender",
     test_override_email: "",
     bcc_emails: "",
+    utm_source: "",
+    utm_medium: "",
+    utm_campaign_original: "",
+    utm_campaign_follow_up: "",
     unrelated: "keep",
   });
   assert.deepEqual(store.lockModes, ["write"]);
+});
+
+test("UTM settings default when missing and preserve intentional blanks", async () => {
+  const store = new MemorySettingStore({});
+  assert.deepEqual(await readEmailUtmSettingsSnapshot(store.runTransaction), {
+    utm_source: "photo_admin",
+    utm_medium: "email",
+    utm_campaign_original: "outreach",
+    utm_campaign_follow_up: "follow_up",
+  });
+
+  await saveGeneralSettingsAtomically(
+    settingsValues({
+      utm_source: "",
+      utm_medium: "",
+      utm_campaign_original: "",
+      utm_campaign_follow_up: "",
+    }),
+    store.runTransaction,
+  );
+  assert.deepEqual(await readEmailUtmSettingsSnapshot(store.runTransaction), {
+    utm_source: "",
+    utm_medium: "",
+    utm_campaign_original: "",
+    utm_campaign_follow_up: "",
+  });
 });
 
 test("general settings roll back every key when any write fails", async () => {
@@ -250,5 +282,9 @@ test("delivery policy readers observe the complete old or new settings snapshot"
   assert.deepEqual(readerFirstStore.values(), {
     test_override_email: "new-test@example.com",
     bcc_emails: "new-bcc@example.com",
+    utm_source: "",
+    utm_medium: "",
+    utm_campaign_original: "",
+    utm_campaign_follow_up: "",
   });
 });

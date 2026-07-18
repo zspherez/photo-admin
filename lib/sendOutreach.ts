@@ -2,12 +2,16 @@ import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
-  applyHtmlTemplate,
   applyTemplate,
   buildVarsForShow,
   ensureDefaultTemplate,
   ensureFollowUpTemplate,
 } from "@/lib/template";
+import {
+  appendEmailUtmToHtml,
+  renderTrackedEmailHtml,
+} from "@/lib/emailUtm";
+import { readEmailUtmSettingsSnapshot } from "@/lib/generalSettings";
 import {
   RESEND_CONFIGURATION_ERROR,
   buildResendDeliveryPolicy,
@@ -2232,13 +2236,14 @@ async function prepareOriginalOutreach(
     return { error: sendability.reason ?? "Outreach is not sendable" };
   }
 
-  const [show, contact, template] = await Promise.all([
+  const [show, contact, template, utmSettings] = await Promise.all([
     db.show.findUnique({ where: { id: showId } }),
     db.contact.findFirst({
       where: { id: contactId, state: "active" },
       include: { artist: true },
     }),
     ensureDefaultTemplate(),
+    readEmailUtmSettingsSnapshot(),
   ]);
   if (!show) return { error: "Show not found" };
   if (show.syncStatus !== "active") {
@@ -2273,7 +2278,20 @@ async function prepareOriginalOutreach(
     recipients: sendability.recipients,
     fullTeamSend: contact.isFullTeam,
     subject: subjectOverride?.trim() || applyTemplate(template.subject, vars),
-    html: htmlOverride?.trim() || applyHtmlTemplate(template.htmlBody, vars),
+    html: htmlOverride?.trim()
+      ? appendEmailUtmToHtml(
+          htmlOverride.trim(),
+          "original",
+          contact.artist.name,
+          utmSettings,
+        )
+      : renderTrackedEmailHtml(
+          template.htmlBody,
+          vars,
+          "original",
+          contact.artist.name,
+          utmSettings,
+        ),
   };
 }
 
@@ -2290,7 +2308,7 @@ async function prepareFollowUpOutreach(
     };
   }
 
-  const [parent, template] = await Promise.all([
+  const [parent, template, utmSettings] = await Promise.all([
     db.outreach.findUnique({
       where: { id: parentOutreachId },
       select: {
@@ -2322,6 +2340,7 @@ async function prepareFollowUpOutreach(
       },
     }),
     ensureFollowUpTemplate(),
+    readEmailUtmSettingsSnapshot(),
   ]);
   if (!parent || parent.kind !== "original") {
     return { error: "Original outreach not found" };
@@ -2373,7 +2392,13 @@ async function prepareFollowUpOutreach(
     recipients: eligibility.recipients,
     fullTeamSend: eligibility.fullTeamSend,
     subject: applyTemplate(template.subject, vars),
-    html: applyHtmlTemplate(template.htmlBody, vars),
+    html: renderTrackedEmailHtml(
+      template.htmlBody,
+      vars,
+      "follow_up",
+      parent.contact.artist.name,
+      utmSettings,
+    ),
   };
 }
 

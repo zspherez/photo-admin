@@ -1,5 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import {
+  EMAIL_UTM_DEFAULTS,
+  EMAIL_UTM_SETTING_KEYS,
+  resolveEmailUtmSettings,
+  type EmailUtmSettings,
+} from "@/lib/emailUtm";
 
 export const GENERAL_SETTING_FIELDS = [
   {
@@ -61,6 +67,38 @@ export const GENERAL_SETTING_FIELDS = [
     description:
       "Comma-separated. Added as BCC on every real send (skipped when test mode is on, to avoid CC-ing yourself on tests).",
   },
+  {
+    key: "utm_source",
+    label: "Email UTM source",
+    placeholder: EMAIL_UTM_DEFAULTS.utm_source,
+    description:
+      "Added as utm_source to web links in new outbound emails. Leave blank to omit it.",
+    defaultValue: EMAIL_UTM_DEFAULTS.utm_source,
+  },
+  {
+    key: "utm_medium",
+    label: "Email UTM medium",
+    placeholder: EMAIL_UTM_DEFAULTS.utm_medium,
+    description:
+      "Added as utm_medium to web links in new outbound emails. Leave blank to omit it.",
+    defaultValue: EMAIL_UTM_DEFAULTS.utm_medium,
+  },
+  {
+    key: "utm_campaign_original",
+    label: "Original email UTM campaign",
+    placeholder: EMAIL_UTM_DEFAULTS.utm_campaign_original,
+    description:
+      "Added as utm_campaign to original outreach links. Leave blank to omit it.",
+    defaultValue: EMAIL_UTM_DEFAULTS.utm_campaign_original,
+  },
+  {
+    key: "utm_campaign_follow_up",
+    label: "Follow-up email UTM campaign",
+    placeholder: EMAIL_UTM_DEFAULTS.utm_campaign_follow_up,
+    description:
+      "Added as utm_campaign to follow-up links. Leave blank to omit it.",
+    defaultValue: EMAIL_UTM_DEFAULTS.utm_campaign_follow_up,
+  },
 ] as const;
 
 export type GeneralSettingKey = (typeof GENERAL_SETTING_FIELDS)[number]["key"];
@@ -75,7 +113,7 @@ export const GENERAL_DELIVERY_SETTING_KEYS = [
 ] as const satisfies readonly GeneralSettingKey[];
 
 const PRESERVE_EMPTY_SETTING_KEYS = new Set<GeneralSettingKey>(
-  GENERAL_DELIVERY_SETTING_KEYS,
+  [...GENERAL_DELIVERY_SETTING_KEYS, ...EMAIL_UTM_SETTING_KEYS],
 );
 
 export interface GeneralDeliverySettingsSnapshot {
@@ -101,13 +139,13 @@ export function generalSettingsValuesFromFormData(
   ) as GeneralSettingsValues;
 }
 
-export async function acquireGeneralDeliverySettingsReadLock(
+export async function acquireGeneralSettingsReadLock(
   tx: Prisma.TransactionClient,
 ): Promise<void> {
   await tx.$executeRaw(Prisma.sql`LOCK TABLE "Setting" IN SHARE MODE`);
 }
 
-export async function acquireGeneralDeliverySettingsWriteLock(
+export async function acquireGeneralSettingsWriteLock(
   tx: Prisma.TransactionClient,
 ): Promise<void> {
   await tx.$executeRaw(
@@ -118,7 +156,7 @@ export async function acquireGeneralDeliverySettingsWriteLock(
 export async function readGeneralDeliverySettingsInTransaction(
   tx: Prisma.TransactionClient,
 ): Promise<GeneralDeliverySettingsSnapshot> {
-  await acquireGeneralDeliverySettingsReadLock(tx);
+  await acquireGeneralSettingsReadLock(tx);
   const rows = await tx.setting.findMany({
     where: { key: { in: [...GENERAL_DELIVERY_SETTING_KEYS] } },
     select: { key: true, value: true },
@@ -136,12 +174,31 @@ export async function readGeneralDeliverySettingsSnapshot(
   return runTransaction(readGeneralDeliverySettingsInTransaction);
 }
 
+export async function readEmailUtmSettingsInTransaction(
+  tx: Prisma.TransactionClient,
+): Promise<EmailUtmSettings> {
+  await acquireGeneralSettingsReadLock(tx);
+  const rows = await tx.setting.findMany({
+    where: { key: { in: [...EMAIL_UTM_SETTING_KEYS] } },
+    select: { key: true, value: true },
+  });
+  return resolveEmailUtmSettings(
+    Object.fromEntries(rows.map((row) => [row.key, row.value])),
+  );
+}
+
+export async function readEmailUtmSettingsSnapshot(
+  runTransaction: GeneralSettingsTransactionRunner = runDefaultTransaction,
+): Promise<EmailUtmSettings> {
+  return runTransaction(readEmailUtmSettingsInTransaction);
+}
+
 export async function saveGeneralSettingsAtomically(
   values: GeneralSettingsValues,
   runTransaction: GeneralSettingsTransactionRunner = runDefaultTransaction,
 ): Promise<void> {
   await runTransaction(async (tx) => {
-    await acquireGeneralDeliverySettingsWriteLock(tx);
+    await acquireGeneralSettingsWriteLock(tx);
     for (const key of GENERAL_SETTING_KEYS) {
       const value = values[key];
       if (value || PRESERVE_EMPTY_SETTING_KEYS.has(key)) {
