@@ -434,13 +434,31 @@ jobs:
           vercel pull --yes --environment=production --token "${VERCEL_TOKEN}"
 
       - name: Bind requested SHA to production migration history and verify database connections
+        id: database-targets
         shell: bash
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
         run: |
           set -euo pipefail
-          npm --silent run db:verify-targets
+          verification="$(npm --silent run db:verify-targets)"
+          printf '%s\n' "${verification}"
+          pending_migrations="$(
+            jq -er '
+              select(.event == "database_targets_verified") |
+              .pendingMigrationCount |
+              if type == "number" and . >= 0 and floor == .
+              then .
+              else error("invalid pending migration count")
+              end
+            ' <<<"${verification}"
+          )"
+          if (( pending_migrations > 0 )); then
+            echo "schema_change_required=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "schema_change_required=false" >> "${GITHUB_OUTPUT}"
+          fi
+          echo "pending_migrations=${pending_migrations}" >> "${GITHUB_OUTPUT}"
 
       - name: Validate Sheet cutover target before staging
         shell: bash
@@ -523,11 +541,13 @@ jobs:
           bash scripts/verify-staged-runtime.sh "${TARGET_URL}" "${RELEASE_SHA}"
 
       - name: Arm recovery before pausing
+        if: steps.database-targets.outputs.schema_change_required == 'true'
         id: arm-pause
         shell: bash
         run: echo "pause_requested=true" >> "${GITHUB_OUTPUT}"
 
       - name: Pause production and drain old code
+        if: steps.database-targets.outputs.schema_change_required == 'true'
         shell: bash
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -540,11 +560,13 @@ jobs:
           sleep 360
 
       - name: Arm schema cutover recovery
+        if: steps.database-targets.outputs.schema_change_required == 'true'
         id: arm-schema
         shell: bash
         run: echo "schema_started=true" >> "${GITHUB_OUTPUT}"
 
       - name: Apply expand-compatible production migrations
+        if: steps.database-targets.outputs.schema_change_required == 'true'
         shell: bash
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -556,6 +578,7 @@ jobs:
             npm --silent run db:migrate:deploy
 
       - name: Backfill Unicode-normalized artist names
+        if: steps.database-targets.outputs.schema_change_required == 'true'
         shell: bash
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -639,6 +662,7 @@ jobs:
           echo "ownership_ready=true" >> "${GITHUB_OUTPUT}"
 
       - name: Unpause verified exact target
+        if: steps.database-targets.outputs.schema_change_required == 'true'
         id: resume
         shell: bash
         env:

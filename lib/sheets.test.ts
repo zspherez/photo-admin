@@ -907,6 +907,27 @@ test("protected release stages and verifies the exact target before pausing", ()
   assert.doesNotMatch(source, /sleep 1860/);
   assert.match(
     source,
+    /id: database-targets[\s\S]*pendingMigrationCount[\s\S]*schema_change_required=true/
+  );
+  for (const step of [
+    "Arm recovery before pausing",
+    "Pause production and drain old code",
+    "Arm schema cutover recovery",
+    "Apply expand-compatible production migrations",
+    "Backfill Unicode-normalized artist names",
+    "Unpause verified exact target",
+  ]) {
+    const start = source.indexOf(`      - name: ${step}`);
+    assert.ok(start >= 0, `missing conditional migration step ${step}`);
+    const end = source.indexOf("\n      - name:", start + 1);
+    const body = source.slice(start, end < 0 ? source.length : end);
+    assert.match(
+      body,
+      /if: steps\.database-targets\.outputs\.schema_change_required == 'true'/
+    );
+  }
+  assert.match(
+    source,
     /if ! call_catch_up "Show sync"[\s\S]*if ! call_catch_up "Listen sync"[\s\S]*if ! call_catch_up "Contact research queue"[\s\S]*if ! call_catch_up "Top-playlist refresh"/
   );
   assert.match(

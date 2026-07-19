@@ -337,11 +337,13 @@ workflow from**, enter the full 40-character target commit SHA, and type
    exact staged deployment. This simultaneously proves the staged runtime
    database, `APP_BASE_URL`, and `CRON_SECRET`; the marker is deleted before
    continuing;
-7. arms recovery state, pauses the project, and waits six minutes—longer than
-   this app's reviewed five-minute route ceiling—so old requests and outreach
-   claims drain before any schema work;
-8. marks schema cutover started, applies the reviewed expand/bridge migrations,
-   and runs the exact revision's idempotent normalized-name backfill;
+7. reads the verified pending-migration count. Code-only releases skip the
+   maintenance window entirely; schema releases arm recovery, pause the
+   project, and wait six minutes—longer than this app's reviewed five-minute
+   route ceiling—so old requests and outreach claims drain;
+8. for schema releases only, marks schema cutover started, applies the reviewed
+   expand/bridge migrations, and runs the exact revision's idempotent
+   normalized-name backfill;
 9. requires all requested migrations to be applied with their original
    checksums, repeats the fresh cross-connection nonce proof, and executes
    exact-target Prisma queries across every new schema surface;
