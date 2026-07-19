@@ -101,7 +101,8 @@ test("staged proof uses authenticated Vercel curl instead of raw protection head
   const source = readFileSync(script, "utf8");
   assert.match(source, /"\$\{vercel_bin\}" curl/);
   assert.match(source, /--deployment "\$\{deployment_url%\/\}"/);
-  assert.match(source, /--token "\$\{VERCEL_TOKEN\}"/);
+  assert.doesNotMatch(source, /--token "\$\{VERCEL_TOKEN\}"/);
+  assert.match(source, /: "\$\{VERCEL_TOKEN:\?VERCEL_TOKEN is required\}"/);
   assert.doesNotMatch(source, /x-vercel-protection-bypass/);
 });
 

@@ -5,7 +5,6 @@ authorization_header=""
 app_base_url_header=""
 release_sha_header=""
 deployment=""
-token=""
 path=""
 previous_argument=""
 after_separator=false
@@ -29,7 +28,9 @@ for argument in "$@"; do
   elif [[ "${previous_argument}" == "--deployment" ]]; then
     deployment="${argument}"
   elif [[ "${previous_argument}" == "--token" ]]; then
-    token="${argument}"
+    printf '%s\n__PHOTO_ADMIN_HTTP_STATUS__:403' \
+      '{"error":"token flag must not be forwarded to curl"}'
+    exit 0
   elif [[ "${previous_argument}" == "curl" ]]; then
     path="${argument}"
   fi
@@ -41,7 +42,7 @@ if [[ "${authorization_header}" != "${MOCK_EXPECT_AUTHORIZATION_HEADER:-}" \
   || "${release_sha_header}" != "${MOCK_EXPECT_RELEASE_SHA_HEADER:-}" \
   || "${path}" != "/api/release/runtime-verification" \
   || "${deployment}" != "${MOCK_EXPECT_DEPLOYMENT:-}" \
-  || "${token}" != "${MOCK_EXPECT_VERCEL_TOKEN:-}" \
+  || "${VERCEL_TOKEN:-}" != "${MOCK_EXPECT_VERCEL_TOKEN:-}" \
   || "${after_separator}" != "true" ]]; then
   printf '%s\n__PHOTO_ADMIN_HTTP_STATUS__:403' \
     '{"error":"invalid mock staged request"}'
