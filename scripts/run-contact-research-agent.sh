@@ -9,9 +9,9 @@ if [[ -z "${CONTACT_RESEARCH_AGENT_TOKEN:-}" ]] &&
   exit 2
 fi
 
-limit="${CONTACT_RESEARCH_LIMIT:-3}"
-if [[ ! "${limit}" =~ ^[1-9][0-9]*$ ]] || (( limit > 20 )); then
-  echo "CONTACT_RESEARCH_LIMIT must be an integer from 1 to 20" >&2
+workers="${CONTACT_RESEARCH_WORKERS:-4}"
+if [[ ! "${workers}" =~ ^[1-9][0-9]*$ ]] || (( workers > 10 )); then
+  echo "CONTACT_RESEARCH_WORKERS must be an integer from 1 to 10" >&2
   exit 2
 fi
 
@@ -28,8 +28,7 @@ cleanup() {
     kill "${broker_pid}" 2>/dev/null || true
     wait "${broker_pid}" 2>/dev/null || true
   fi
-  rm -f "${broker_socket}" "${broker_log}" "${broker_metrics}"
-  rmdir "${broker_dir}" 2>/dev/null || true
+  rm -rf "${broker_dir}"
 }
 trap cleanup EXIT
 
@@ -55,66 +54,89 @@ if [[ ! -S "${broker_socket}" ]]; then
   exit 1
 fi
 
-read_metrics() {
-  if [[ ! -s "${broker_metrics}" ]]; then
-    echo "0 0 0"
-    return
-  fi
+session_state() {
   node -e '
     const fs = require("node:fs");
-    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const metrics = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const state = metrics.sessions?.[process.argv[2]] ?? {};
     process.stdout.write([
-      value.claimCalls,
-      value.claimedJobs,
-      value.submissions,
+      state.claimed === true ? 1 : 0,
+      state.completed === true ? 1 : 0,
+      state.empty === true ? 1 : 0,
     ].join(" "));
-  ' "${broker_metrics}"
+  ' "${broker_metrics}" "$1"
 }
 
-completed=0
-for (( index = 1; index <= limit; index += 1 )); do
-  read -r before_claims before_jobs before_submissions <<<"$(read_metrics)"
-  export CONTACT_RESEARCH_AGENT_SESSION="job-${index}-$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
-
-  set +e
-  copilot \
-    --agent contact-research \
-    --available-tools=bash \
-    --allow-tool='shell(contact-research-agent-tool)' \
-    --secret-env-vars=GITHUB_TOKEN,ACTIONS_ID_TOKEN_REQUEST_URL,ACTIONS_ID_TOKEN_REQUEST_TOKEN,CONTACT_RESEARCH_AGENT_TOKEN \
-    --no-ask-user \
-    --no-auto-update \
-    --no-remote \
-    --prompt \
-    "Claim exactly one contact research job and complete it. Use the top-level jobId, never an artist ID. Do not call claim more than once."
-  copilot_status="$?"
-  set -e
-
-  if (( copilot_status != 0 )); then
-    echo "Copilot research agent exited with status ${copilot_status}" >&2
-    exit "${copilot_status}"
+worker_loop() {
+  local worker_id="$1"
+  local completed=0
+  local usage_dir="${CONTACT_RESEARCH_USAGE_DIR:-}"
+  if [[ -n "${usage_dir}" ]]; then
+    mkdir -p "${usage_dir}"
+    local lane="${CONTACT_RESEARCH_LANE:-local}"
+    export CONTACT_RESEARCH_USAGE_FILE="${usage_dir}/lane-${lane}-worker-${worker_id}.jsonl"
   fi
 
-  read -r after_claims after_jobs after_submissions <<<"$(read_metrics)"
-  claim_delta=$((after_claims - before_claims))
-  job_delta=$((after_jobs - before_jobs))
-  submission_delta=$((after_submissions - before_submissions))
-  if (( claim_delta != 1 )); then
-    echo "research session made ${claim_delta} successful claim calls instead of 1" >&2
-    exit 1
-  fi
-  if (( job_delta == 0 )); then
-    if (( submission_delta != 0 )); then
-      echo "empty research session unexpectedly submitted a result" >&2
-      exit 1
+  while true; do
+    export CONTACT_RESEARCH_AGENT_SESSION="worker-${worker_id}-$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
+    local claim_json
+    claim_json="$(contact-research-agent-tool claim 1)"
+    local job_json
+    job_json="$(
+      CLAIM_JSON="${claim_json}" node -e '
+        const value = JSON.parse(process.env.CLAIM_JSON);
+        if (!Array.isArray(value.jobs) || value.jobs.length === 0) {
+          process.exit(10);
+        }
+        process.stdout.write(JSON.stringify(value.jobs[0]));
+      '
+    )" || {
+      local parse_status="$?"
+      if (( parse_status == 10 )); then
+        printf '%s\n' "${completed}" >"${broker_dir}/worker-${worker_id}.count"
+        return 0
+      fi
+      return "${parse_status}"
+    }
+
+    set +e
+    node scripts/run-contact-research-copilot.mjs \
+      "Complete this already-claimed contact research job: ${job_json}. Use the top-level jobId, never an artist ID. Do not call claim."
+    local copilot_status="$?"
+    set -e
+
+    read -r claimed submitted empty <<<"$(session_state "${CONTACT_RESEARCH_AGENT_SESSION}")"
+    if (( copilot_status != 0 )); then
+      echo "Worker ${worker_id} Copilot session exited with status ${copilot_status}" >&2
+      return "${copilot_status}"
     fi
-    break
-  fi
-  if (( job_delta != 1 || submission_delta != 1 )); then
-    echo "research session completed ${submission_delta} of ${job_delta} claimed job(s)" >&2
-    exit 1
-  fi
-  completed=$((completed + 1))
+    if (( empty != 0 || claimed != 1 || submitted != 1 )); then
+      echo "Worker ${worker_id} did not complete its claimed artist" >&2
+      return 1
+    fi
+    completed=$((completed + 1))
+  done
+}
+
+pids=()
+for (( worker = 1; worker <= workers; worker += 1 )); do
+  worker_loop "${worker}" &
+  pids+=("$!")
 done
 
-echo "Research agent completed ${completed} job(s)"
+failed=0
+for pid in "${pids[@]}"; do
+  if ! wait "${pid}"; then
+    failed=1
+  fi
+done
+if (( failed != 0 )); then
+  exit 1
+fi
+
+completed=0
+for count_file in "${broker_dir}"/worker-*.count; do
+  [[ -f "${count_file}" ]] || continue
+  completed=$((completed + $(<"${count_file}")))
+done
+echo "Research agent pool completed ${completed} job(s)"

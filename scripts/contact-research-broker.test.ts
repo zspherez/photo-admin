@@ -166,5 +166,16 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
     claimCalls: 1,
     claimedJobs: 1,
     submissions: 1,
+    artistBySession: {
+      "session-1": "Example Artist",
+    },
+    sessions: {
+      "session-1": {
+        artist: "Example Artist",
+        claimed: true,
+        completed: true,
+        empty: false,
+      },
+    },
   });
 });

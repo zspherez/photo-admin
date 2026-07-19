@@ -79,22 +79,27 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
     new URL("./run-contact-research-agent.sh", import.meta.url),
     "utf8"
   );
+  const copilotRunner = readFileSync(
+    new URL("./run-contact-research-copilot.mjs", import.meta.url),
+    "utf8"
+  );
   assert.match(agent, /tools: \["bash"\]/);
   assert.doesNotMatch(agent, /mcp-servers:/);
   assert.match(runner, /contact-research-broker\.mjs/);
-  assert.match(runner, /--available-tools=bash/);
-  assert.match(
-    runner,
-    /--allow-tool='shell\(contact-research-agent-tool\)'/
-  );
-  assert.match(runner, /--secret-env-vars=GITHUB_TOKEN/);
+  assert.match(runner, /run-contact-research-copilot\.mjs/);
   assert.doesNotMatch(runner, /sudo/);
-  assert.match(runner, /for \(\( index = 1; index <= limit/);
-  assert.match(runner, /claim_delta != 1/);
-  assert.match(runner, /job_delta != 1 \|\| submission_delta != 1/);
+  assert.match(runner, /CONTACT_RESEARCH_WORKERS/);
+  assert.match(runner, /worker_loop/);
+  assert.match(runner, /did not complete its claimed artist/);
+  assert.match(copilotRunner, /--available-tools=bash/);
+  assert.match(
+    copilotRunner,
+    /--allow-tool=shell\(contact-research-agent-tool\)/
+  );
+  assert.match(copilotRunner, /--no-ask-user/);
+  assert.match(copilotRunner, /parseUsageEvent/);
   assert.doesNotMatch(runner, /--additional-mcp-config/);
   assert.doesNotMatch(runner, /--allow-all/);
-  assert.match(runner, /--no-ask-user/);
   assert.doesNotMatch(runner, /--max-ai-credits/);
 });
 

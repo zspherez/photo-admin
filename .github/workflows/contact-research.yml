@@ -2,18 +2,11 @@ name: Research artist managers
 
 on:
   schedule:
-    # Refresh the full upcoming-show queue hourly and drain it in bounded waves.
+    # Refresh the full upcoming-show queue hourly. Active runs self-drain.
     - cron: "23 * * * *"
-  workflow_dispatch:
-    inputs:
-      continuation_depth:
-        description: Internal queue-drain continuation counter
-        required: false
-        default: "0"
-        type: string
+  workflow_dispatch: {}
 
 permissions:
-  actions: write
   contents: read
   copilot-requests: write
   id-token: write
@@ -27,7 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       claimable: ${{ steps.queue.outputs.claimable }}
-      per_worker_limit: ${{ steps.queue.outputs.per_worker_limit }}
       workers: ${{ steps.queue.outputs.workers }}
     steps:
       - name: Prepare manager research queue
@@ -35,7 +27,6 @@ jobs:
         shell: bash
         env:
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
-          CONTACT_RESEARCH_BATCH_SIZE: "200"
         run: |
           set -euo pipefail
 
@@ -61,113 +52,6 @@ jobs:
           )"
           echo "::add-mask::${oidc_token}"
 
-          response_file="$(mktemp)"
-          trap 'rm -f "${response_file}"' EXIT
-          curl \
-            --fail-with-body \
-            --silent \
-            --show-error \
-            --connect-timeout 15 \
-            --max-time 120 \
-            --request POST \
-            --header "Authorization: Bearer ${oidc_token}" \
-            --header "Accept: application/json" \
-            --output "${response_file}" \
-            "${APP_BASE_URL%/}/api/contact-research/prepare"
-
-          claimable="$(
-            jq -er '
-              .claimable |
-              if type == "number" and . >= 0 and floor == .
-              then .
-              else error("invalid claimable count")
-              end
-            ' "${response_file}"
-          )"
-          worker_count="${claimable}"
-          if (( worker_count > 10 )); then
-            worker_count=10
-          fi
-          batch_size="${claimable}"
-          if (( batch_size > CONTACT_RESEARCH_BATCH_SIZE )); then
-            batch_size="${CONTACT_RESEARCH_BATCH_SIZE}"
-          fi
-          per_worker_limit=0
-          if (( worker_count > 0 )); then
-            per_worker_limit=$(((batch_size + worker_count - 1) / worker_count))
-          fi
-          workers="$(
-            jq -cn --argjson count "${worker_count}" \
-              '[range(0; $count)]'
-          )"
-          echo "claimable=${claimable}" >> "${GITHUB_OUTPUT}"
-          echo "per_worker_limit=${per_worker_limit}" >> "${GITHUB_OUTPUT}"
-          echo "workers=${workers}" >> "${GITHUB_OUTPUT}"
-          echo "Manager research queue has ${claimable} claimable job(s); starting ${worker_count} lane(s) with up to ${per_worker_limit} artist(s) each"
-
-  research:
-    name: Research artist manager ${{ matrix.worker }}
-    needs: prepare
-    if: ${{ needs.prepare.outputs.claimable != '0' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    strategy:
-      fail-fast: false
-      matrix:
-        worker: ${{ fromJSON(needs.prepare.outputs.workers) }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install worker dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
-      - name: Install Copilot CLI
-        run: npm install --global @github/copilot@latest --no-audit --no-fund
-
-      - name: Research one queued manager
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
-          CONTACT_RESEARCH_LIMIT: ${{ needs.prepare.outputs.per_worker_limit }}
-        run: npm run contact-research:agent
-
-  continue:
-    name: Continue manager research queue
-    needs: [prepare, research]
-    if: ${{ always() && needs.prepare.result == 'success' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check remaining manager research
-        id: queue
-        shell: bash
-        env:
-          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
-        run: |
-          set -euo pipefail
-
-          oidc_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
-          separator="?"
-          if [[ "${oidc_url}" == *"?"* ]]; then
-            separator="&"
-          fi
-          oidc_token="$(
-            curl \
-              --fail-with-body \
-              --silent \
-              --show-error \
-              --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              --header "Accept: application/json" \
-              "${oidc_url}${separator}audience=photo-admin-contact-research" |
-              jq -er '.value | select(type == "string" and length > 0)'
-          )"
-          echo "::add-mask::${oidc_token}"
           claimable="$(
             curl \
               --fail-with-body \
@@ -187,27 +71,77 @@ jobs:
                 end
               '
           )"
+          lane_count="${claimable}"
+          if (( lane_count > 10 )); then
+            lane_count=10
+          fi
+          lanes="$(jq -cn --argjson count "${lane_count}" '[range(0; $count)]')"
           echo "claimable=${claimable}" >> "${GITHUB_OUTPUT}"
-          echo "${claimable} manager research job(s) remain claimable"
+          echo "workers=${lanes}" >> "${GITHUB_OUTPUT}"
+          echo "Manager research queue has ${claimable} claimable job(s); starting ${lane_count} lane(s)"
 
-      - name: Dispatch next queue wave
-        if: ${{ steps.queue.outputs.claimable != '0' }}
-        shell: bash
+  research:
+    name: Research artist managers ${{ matrix.lane }}
+    needs: prepare
+    if: ${{ needs.prepare.outputs.claimable != '0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJSON(needs.prepare.outputs.workers) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install worker dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install Copilot CLI
+        run: npm install --global @github/copilot@latest --no-audit --no-fund
+
+      - name: Drain manager research queue
         env:
-          GH_TOKEN: ${{ github.token }}
-          CONTINUATION_DEPTH: ${{ github.event.inputs.continuation_depth || '0' }}
-        run: |
-          set -euo pipefail
+          GITHUB_TOKEN: ${{ github.token }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CONTACT_RESEARCH_WORKERS: "4"
+          CONTACT_RESEARCH_LANE: ${{ matrix.lane }}
+          CONTACT_RESEARCH_USAGE_DIR: ${{ runner.temp }}/contact-research-usage-${{ matrix.lane }}
+        run: npm run contact-research:agent
 
-          if [[ ! "${CONTINUATION_DEPTH}" =~ ^[0-9]+$ ]]; then
-            echo "::error::Invalid continuation depth"
-            exit 1
-          fi
-          if (( CONTINUATION_DEPTH >= 19 )); then
-            echo "::warning::Queue drain reached the 20-wave safety limit; the hourly schedule will resume it"
-            exit 0
-          fi
-          gh workflow run contact-research.yml \
-            --repo "${GITHUB_REPOSITORY}" \
-            --ref main \
-            -f continuation_depth="$((CONTINUATION_DEPTH + 1))"
+      - name: Upload AI-credit usage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: contact-research-usage-${{ github.run_id }}-${{ matrix.lane }}
+          path: ${{ runner.temp }}/contact-research-usage-${{ matrix.lane }}/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  usage:
+    name: Summarize manager research AI credits
+    needs: [prepare, research]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.prepare.outputs.claimable != '0' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create AI-credit directory
+        run: mkdir -p "${RUNNER_TEMP}/contact-research-usage"
+
+      - name: Download AI-credit usage
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: contact-research-usage-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/contact-research-usage
+
+      - name: Print AI-credit summary
+        run: node scripts/summarize-contact-research-usage.mjs "${RUNNER_TEMP}/contact-research-usage"

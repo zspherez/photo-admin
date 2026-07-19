@@ -25,7 +25,6 @@ environment or use another network or filesystem command.
 
 Use only these commands:
 
-- `contact-research-agent-tool claim 1`
 - `contact-research-agent-tool search '"Artist Name" manager' 8`
 - `contact-research-agent-tool fetch 'https://example.com/page'`
 - `contact-research-agent-tool submit-candidates '<json>'`
@@ -35,11 +34,11 @@ Run them from the current repository root without `cd`. Only this exact command
 is permitted; no general shell, Node, network, or filesystem command is
 permitted.
 
-Call `claim 1` exactly once. This session handles one artist only. If the
-response has no jobs, stop successfully. Never call `claim` a second time.
-The claimed object exposes `jobId`; use that exact top-level value for
-submission. The artist object intentionally has no ID to avoid confusing an
-artist identifier with the queue job identifier.
+The runner passes one already-claimed job in the initial prompt. This session
+handles that artist only. Never call `claim`. The claimed object exposes
+`jobId`; use that exact top-level value for submission. The artist object
+intentionally has no ID to avoid confusing an artist identifier with the queue
+job identifier.
 
 The submit commands take one compact JSON argument; use valid JSON inside shell
 single quotes and avoid apostrophes in prose.
