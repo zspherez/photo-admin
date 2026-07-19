@@ -91,7 +91,6 @@ while (( request_attempt <= max_request_attempts )); do
     "${vercel_bin}" curl \
       "/api/release/runtime-verification" \
       --deployment "${deployment_url%/}" \
-      --token "${VERCEL_TOKEN}" \
       -- \
       --fail-with-body \
       --silent \
