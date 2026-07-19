@@ -125,6 +125,7 @@ model ContactResearchJob {
   claimedAt       DateTime?
   claimExpiresAt  DateTime?
   claimToken      String?                    @unique
+  userNotes       String?
   agentNotes      String?
   completedAt     DateTime?
   candidates      ContactResearchCandidate[]

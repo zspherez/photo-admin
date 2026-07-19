@@ -159,6 +159,382 @@ export function normalizeResearchSourceUrl(value: unknown): string {
   return url.toString();
 }
 
+export function normalizeContactResearchUserNotes(
+  value: unknown
+): string | null {
+  return optionalString(value, 4_000, "research notes");
+}
+
+export function normalizeContactResearchDomain(value: unknown): string {
+  const raw = requiredString(value, 320, "company domain").toLowerCase();
+  let domain = raw;
+  if (raw.includes("@")) domain = raw.slice(raw.lastIndexOf("@") + 1);
+  if (raw.includes("://")) {
+    try {
+      domain = new URL(raw).hostname.toLowerCase();
+    } catch {
+      throw new Error("company domain is invalid");
+    }
+  }
+  domain = domain.replace(/^www\./, "").replace(/\.$/, "");
+  if (
+    domain.length > 253 ||
+    !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(
+      domain
+    )
+  ) {
+    throw new Error("company domain is invalid");
+  }
+  return domain;
+}
+
+function normalizedLookupWords(value: string | null): string[] {
+  return (value ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 2);
+}
+
+function compactLookupValue(value: string | null): string {
+  return normalizedLookupWords(value).join("");
+}
+
+export interface KnownContactLookupInput {
+  managerName: string | null;
+  company: string | null;
+  domain: string | null;
+}
+
+export function parseKnownContactLookup(
+  value: unknown
+): KnownContactLookupInput {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("known contact lookup must be an object");
+  }
+  const input = value as Record<string, unknown>;
+  const managerName = optionalString(
+    input.managerName,
+    200,
+    "manager name"
+  );
+  const company = optionalString(input.company, 200, "company");
+  const domain =
+    input.domain == null || input.domain === ""
+      ? null
+      : normalizeContactResearchDomain(input.domain);
+  if (!managerName && !domain) {
+    throw new Error("manager name or company domain is required");
+  }
+  if (managerName && managerName.length < 2) {
+    throw new Error("manager name must be at least 2 characters");
+  }
+  if (company && company.length < 3) {
+    throw new Error("company must be at least 3 characters");
+  }
+  return { managerName, company, domain };
+}
+
+export interface KnownContactLookupRow {
+  email: string;
+  name: string | null;
+  evidence: string | null;
+  source: "active_contact" | "research_candidate";
+  status: "active" | "pending" | "approved";
+  artists: string[];
+  sourceUrls: string[];
+}
+
+function knownContactMatchScore(
+  row: KnownContactLookupRow,
+  input: KnownContactLookupInput
+): { score: number; reasons: string[] } {
+  const email = row.email.toLowerCase();
+  const [localPart, emailDomain = ""] = email.split("@");
+  const managerWords = normalizedLookupWords(input.managerName);
+  const managerCompact = managerWords.join("");
+  const firstName = managerWords[0] ?? "";
+  const lastName = managerWords.at(-1) ?? "";
+  const localCompact = compactLookupValue(localPart);
+  const searchable = [
+    row.name,
+    row.evidence,
+    row.artists.join(" "),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const searchableCompact = compactLookupValue(searchable);
+  const companyCompact = compactLookupValue(input.company);
+  const genericLocalParts = new Set([
+    "admin",
+    "artists",
+    "contact",
+    "hello",
+    "info",
+    "management",
+    "manager",
+    "mgmt",
+    "office",
+    "team",
+  ]);
+  const reasons: string[] = [];
+  let score = 0;
+
+  if (input.domain && emailDomain === input.domain) {
+    score += 20;
+    reasons.push("same company domain");
+  }
+  if (managerCompact && searchableCompact.includes(managerCompact)) {
+    score += 100;
+    reasons.push("manager name appears in stored contact evidence");
+  }
+  if (firstName && localCompact === firstName) {
+    score += 90;
+    reasons.push("email local-part matches manager first name");
+  }
+  if (lastName && localCompact === lastName) {
+    score += 80;
+    reasons.push("email local-part matches manager last name");
+  }
+  if (
+    firstName &&
+    lastName &&
+    (localCompact === `${firstName}${lastName}` ||
+      localCompact === `${firstName[0]}${lastName}`)
+  ) {
+    score += 110;
+    reasons.push("email local-part matches manager name pattern");
+  }
+  if (companyCompact && searchableCompact.includes(companyCompact)) {
+    score += 35;
+    reasons.push("company appears in stored contact evidence");
+  }
+  if (row.source === "active_contact") {
+    score += 15;
+    reasons.push("already present in active contact list");
+  } else if (row.status === "approved") {
+    score += 10;
+    reasons.push("previously approved research candidate");
+  } else {
+    reasons.push("non-rejected prior research candidate");
+  }
+  if (genericLocalParts.has(localCompact)) {
+    score -= 35;
+    reasons.push("generic inbox");
+  }
+
+  return { score, reasons };
+}
+
+export function rankKnownContactEmails(
+  rows: KnownContactLookupRow[],
+  input: KnownContactLookupInput
+) {
+  const byEmail = new Map<
+    string,
+    KnownContactLookupRow & {
+      score: number;
+      matchReasons: string[];
+      sources: KnownContactLookupRow["source"][];
+    }
+  >();
+  for (const row of rows) {
+    const match = knownContactMatchScore(row, input);
+    const existing = byEmail.get(row.email);
+    if (existing) {
+      existing.score = Math.max(existing.score, match.score);
+      existing.matchReasons = Array.from(
+        new Set([...existing.matchReasons, ...match.reasons])
+      );
+      existing.sources = Array.from(
+        new Set([...existing.sources, row.source])
+      );
+      existing.artists = Array.from(
+        new Set([...existing.artists, ...row.artists])
+      );
+      existing.sourceUrls = Array.from(
+        new Set([...existing.sourceUrls, ...row.sourceUrls])
+      );
+      if (!existing.name && row.name) existing.name = row.name;
+      if (!existing.evidence && row.evidence) {
+        existing.evidence = row.evidence;
+      }
+      continue;
+    }
+    byEmail.set(row.email, {
+      ...row,
+      score: match.score,
+      matchReasons: match.reasons,
+      sources: [row.source],
+    });
+  }
+  return [...byEmail.values()].sort(
+    (left, right) => right.score - left.score
+  );
+}
+
+export async function findKnownContactEmails(value: unknown) {
+  const { managerName, company, domain } =
+    parseKnownContactLookup(value);
+
+  const managerWords = normalizedLookupWords(managerName);
+  const firstName = managerWords[0] ?? null;
+  const lastName = managerWords.at(-1) ?? null;
+  const emailLocalCandidates = Array.from(
+    new Set(
+      [
+        firstName,
+        lastName,
+        firstName && lastName ? `${firstName}.${lastName}` : null,
+        firstName && lastName ? `${firstName}${lastName}` : null,
+        firstName && lastName ? `${firstName[0]}${lastName}` : null,
+      ].filter((candidate): candidate is string => Boolean(candidate))
+    )
+  );
+  const contactFilters: Prisma.ContactWhereInput[] = [];
+  if (domain) {
+    contactFilters.push({
+      email: {
+        endsWith: `@${domain}`,
+        mode: "insensitive",
+      },
+    });
+  }
+  for (const localPart of emailLocalCandidates) {
+    contactFilters.push({
+      email: {
+        startsWith: `${localPart}@`,
+        mode: "insensitive",
+      },
+    });
+  }
+  if (managerName) {
+    contactFilters.push({
+      name: { contains: managerName, mode: "insensitive" },
+    });
+  }
+  if (company) {
+    contactFilters.push(
+      { name: { contains: company, mode: "insensitive" } },
+      { notes: { contains: company, mode: "insensitive" } }
+    );
+  }
+  const candidateFilters: Prisma.ContactResearchCandidateWhereInput[] =
+    [];
+  if (domain) {
+    candidateFilters.push({
+      email: {
+        endsWith: `@${domain}`,
+        mode: "insensitive",
+      },
+    });
+  }
+  for (const localPart of emailLocalCandidates) {
+    candidateFilters.push({
+      email: {
+        startsWith: `${localPart}@`,
+        mode: "insensitive",
+      },
+    });
+  }
+  if (managerName) {
+    candidateFilters.push(
+      { name: { contains: managerName, mode: "insensitive" } },
+      {
+        evidence: {
+          contains: managerName,
+          mode: "insensitive",
+        },
+      }
+    );
+  }
+  if (company) {
+    candidateFilters.push(
+      { name: { contains: company, mode: "insensitive" } },
+      {
+        evidence: {
+          contains: company,
+          mode: "insensitive",
+        },
+      }
+    );
+  }
+
+  const [contacts, candidates] = await Promise.all([
+    db.contact.findMany({
+      where: {
+        state: "active",
+        email: { not: null },
+        ...(contactFilters.length > 0
+          ? { OR: contactFilters }
+          : {}),
+      },
+      distinct: ["email"],
+      orderBy: [{ updatedAt: "desc" }],
+      take: 100,
+      select: {
+        email: true,
+        name: true,
+        notes: true,
+        artist: { select: { name: true } },
+      },
+    }),
+    db.contactResearchCandidate.findMany({
+      where: {
+        status: { in: ["pending", "approved"] },
+        OR: candidateFilters,
+      },
+      distinct: ["normalizedEmail"],
+      orderBy: [{ updatedAt: "desc" }],
+      take: 100,
+      select: {
+        email: true,
+        name: true,
+        evidence: true,
+        status: true,
+        sourceUrls: true,
+        job: { select: { artist: { select: { name: true } } } },
+      },
+    }),
+  ]);
+
+  const rows: KnownContactLookupRow[] = [
+    ...contacts.flatMap((contact) =>
+      contact.email
+        ? [
+            {
+              email: contact.email.trim().toLowerCase(),
+              name: contact.name,
+              evidence: contact.notes,
+              source: "active_contact" as const,
+              status: "active" as const,
+              artists: [contact.artist.name],
+              sourceUrls: [],
+            },
+          ]
+        : []
+    ),
+    ...candidates.map((candidate) => ({
+      email: candidate.email.trim().toLowerCase(),
+      name: candidate.name,
+      evidence: candidate.evidence,
+      source: "research_candidate" as const,
+      status: candidate.status as "pending" | "approved",
+      artists: [candidate.job.artist.name],
+      sourceUrls: candidate.sourceUrls,
+    })),
+  ];
+  return {
+    query: { managerName, company, domain },
+    matches: rankKnownContactEmails(rows, {
+      managerName,
+      company,
+      domain,
+    }).slice(0, 25),
+  };
+}
+
 export function parseContactResearchClaimLimit(value: unknown): number {
   if (value == null) return CONTACT_RESEARCH_DEFAULT_CLAIM_LIMIT;
   if (
@@ -838,6 +1214,7 @@ export async function claimContactResearchJobs(
             claimExpiresAt,
             attemptCount: job.attemptCount,
             priority: job.priority,
+            researchInstructions: job.userNotes,
             artist: {
               id: job.artist.id,
               name: job.artist.name,
@@ -1119,6 +1496,35 @@ export async function rejectContactResearchCandidate(
       });
     }
     return { ok: true, exhausted: remaining === 0 };
+  });
+}
+
+export async function updateContactResearchJobUserNotes(
+  jobId: string,
+  value: unknown
+): Promise<boolean> {
+  const userNotes = normalizeContactResearchUserNotes(value);
+  return withSerializableRetry(async (tx) => {
+    const job = await tx.contactResearchJob.findUnique({
+      where: { id: jobId },
+      select: { id: true, status: true },
+    });
+    if (!job) return false;
+    await tx.contactResearchJob.update({
+      where: { id: job.id },
+      data: {
+        userNotes,
+        ...(job.status === "claimed"
+          ? {
+              status: "pending",
+              claimToken: null,
+              claimedAt: null,
+              claimExpiresAt: null,
+            }
+          : {}),
+      },
+    });
+    return true;
   });
 }
 

@@ -92,6 +92,13 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
   );
   assert.match(agent, /Do not stop at a generic, company-wide, or artist-named inbox/);
   assert.match(agent, /do not rate the fallback above `medium`/);
+  assert.match(agent, /Always call `known-contacts`/);
+  assert.match(agent, /Treat active contacts as trusted evidence/);
+  assert.match(agent, /Evaluate the ranked matches intelligently/);
+  assert.match(agent, /using that\s+manager email is acceptable/);
+  assert.match(agent, /Do not add disclaimers/);
+  assert.match(agent, /`researchInstructions` contains trusted notes/);
+  assert.match(agent, /call\s+`submit-exhausted` immediately/);
   assert.doesNotMatch(agent, /mcp-servers:/);
   assert.match(runner, /contact-research-broker\.mjs/);
   assert.match(runner, /run-contact-research-copilot\.mjs/);

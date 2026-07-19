@@ -188,6 +188,13 @@ artist with `FOR UPDATE SKIP LOCKED`, writes the result immediately, then claims
 another until the queue is empty. Each artist log ends with its AI-credit usage,
 and the workflow summary reports total and average AIC per researched artist.
 
+Each `/research` card also has persistent owner instructions. Explicit skip or
+do-not-research notes cause the next worker to close the job without browsing.
+When a manager/company is identified, the agent ranks matching emails from both
+the active contact list and non-rejected prior research candidates by manager
+name, email local-part, company, domain, and stored evidence before falling back
+to a generic inbox.
+
 ## Email template
 
 The default outreach template is defined in `lib/template.ts` and seeded into

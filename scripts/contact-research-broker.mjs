@@ -57,6 +57,17 @@ const schemas = {
   fetch: z.object({
     url: z.string().url(),
   }).strict(),
+  "known-contacts": z.object({
+    managerName: z.string().min(1).max(200).nullable().optional(),
+    company: z.string().min(1).max(200).nullable().optional(),
+    domain: z.string().min(1).max(320).nullable().optional(),
+  })
+    .strict()
+    .refine(
+      (value) =>
+        Boolean(value.managerName || value.domain),
+      "managerName or domain is required"
+    ),
   "submit-candidates": z.object({
     jobId: z.string().min(1),
     claimToken: z.string().min(1),
@@ -71,6 +82,14 @@ const schemas = {
 };
 
 class BrokerConflictError extends Error {}
+class PhotoAdminRequestError extends Error {
+  status;
+
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
 
 async function authorizationToken() {
   if (oidcRequestUrl && oidcRequestToken) {
@@ -119,7 +138,8 @@ async function photoAdminRequest(path, body) {
     data = { error: text.slice(0, 500) || "invalid response" };
   }
   if (!response.ok) {
-    throw new Error(
+    throw new PhotoAdminRequestError(
+      response.status,
       `photo-admin returned ${response.status}: ${
         typeof data.error === "string" ? data.error : "request failed"
       }`
@@ -175,13 +195,19 @@ function recordSuccessfulTool(name, value) {
 function sessionState(sessionId) {
   const existing = sessions.get(sessionId);
   if (existing) return existing;
-  const created = { sessionId, claim: null, completed: false };
+  const created = {
+    sessionId,
+    claim: null,
+    completed: false,
+    knownContactLookups: 0,
+  };
   sessions.set(sessionId, created);
   metrics.sessions[sessionId] = {
     artist: null,
     claimed: false,
     completed: false,
     empty: false,
+    stale: false,
   };
   return created;
 }
@@ -218,6 +244,7 @@ function publicClaimResponse(value, state) {
     claimed: true,
     completed: false,
     empty: false,
+    stale: false,
   };
   state.claim = { jobId: id, claimToken: job.claimToken };
   return {
@@ -274,34 +301,78 @@ async function runTool(name, input, sessionId) {
         );
       }
       return fetchReadablePage(input.url);
+    case "known-contacts":
+      if (!state.claim || state.completed) {
+        throw new BrokerConflictError(
+          "known contact lookup requires one active claimed job"
+        );
+      }
+      if (state.knownContactLookups >= 3) {
+        throw new BrokerConflictError(
+          "known contact lookup limit reached for this artist"
+        );
+      }
+      state.knownContactLookups += 1;
+      return photoAdminRequest(
+        "/api/contact-research/known-contacts",
+        input
+      );
     case "submit-candidates": {
       requireSessionClaim(state, input);
-      const result = await photoAdminRequest(
-        `/api/contact-research/${encodeURIComponent(input.jobId)}/result`,
-        {
-          outcome: "candidates",
-          claimToken: input.claimToken,
-          notes: input.notes ?? null,
-          candidates: input.candidates.map((candidate) => ({
-            ...candidate,
-            role: "management",
-          })),
+      let result;
+      try {
+        result = await photoAdminRequest(
+          `/api/contact-research/${encodeURIComponent(input.jobId)}/result`,
+          {
+            outcome: "candidates",
+            claimToken: input.claimToken,
+            notes: input.notes ?? null,
+            candidates: input.candidates.map((candidate) => ({
+              ...candidate,
+              role: "management",
+            })),
+          }
+        );
+      } catch (error) {
+        if (
+          error instanceof PhotoAdminRequestError &&
+          error.status === 409
+        ) {
+          state.completed = true;
+          metrics.sessions[sessionId].completed = true;
+          metrics.sessions[sessionId].stale = true;
+          persistMetrics();
         }
-      );
+        throw error;
+      }
       state.completed = true;
       metrics.sessions[sessionId].completed = true;
       return result;
     }
     case "submit-exhausted": {
       requireSessionClaim(state, input);
-      const result = await photoAdminRequest(
-        `/api/contact-research/${encodeURIComponent(input.jobId)}/result`,
-        {
-          outcome: "exhausted",
-          claimToken: input.claimToken,
-          notes: input.notes,
+      let result;
+      try {
+        result = await photoAdminRequest(
+          `/api/contact-research/${encodeURIComponent(input.jobId)}/result`,
+          {
+            outcome: "exhausted",
+            claimToken: input.claimToken,
+            notes: input.notes,
+          }
+        );
+      } catch (error) {
+        if (
+          error instanceof PhotoAdminRequestError &&
+          error.status === 409
+        ) {
+          state.completed = true;
+          metrics.sessions[sessionId].completed = true;
+          metrics.sessions[sessionId].stale = true;
+          persistMetrics();
         }
-      );
+        throw error;
+      }
       state.completed = true;
       metrics.sessions[sessionId].completed = true;
       return result;

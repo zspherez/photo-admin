@@ -8,6 +8,7 @@ import {
   refreshContactResearchQueue,
   rejectContactResearchCandidate,
   retryContactResearchJob,
+  updateContactResearchJobUserNotes,
 } from "@/lib/contactResearch";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
@@ -15,6 +16,7 @@ import { formatShowDate } from "@/lib/formatDate";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { TextArea } from "@/components/ui/field";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact research" };
@@ -69,9 +71,9 @@ async function approveCandidateAction(formData: FormData) {
       })
     );
   }
-  const values: Record<string, string> = { approved: "1" };
-  if (result.sheetError) values.sheet_error = result.sheetError;
-  redirect(researchHref(values));
+  if (result.sheetError) {
+    redirect(researchHref({ sheet_error: result.sheetError }));
+  }
 }
 
 async function rejectCandidateAction(formData: FormData) {
@@ -84,11 +86,7 @@ async function rejectCandidateAction(formData: FormData) {
   const result = await rejectContactResearchCandidate(candidateId);
   revalidatePath("/research");
   revalidatePath("/settings");
-  redirect(
-    result.ok
-      ? researchHref({ rejected: "1" })
-      : researchHref({ error: "reject_failed" })
-  );
+  if (!result.ok) redirect(researchHref({ error: "reject_failed" }));
 }
 
 async function retryJobAction(formData: FormData) {
@@ -99,11 +97,33 @@ async function retryJobAction(formData: FormData) {
   const retried = await retryContactResearchJob(jobId);
   revalidatePath("/research");
   revalidatePath("/settings");
-  redirect(
-    retried
-      ? researchHref({ retried: "1" })
-      : researchHref({ error: "retry_failed" })
-  );
+  if (!retried) redirect(researchHref({ error: "retry_failed" }));
+}
+
+async function saveResearchNotesAction(formData: FormData) {
+  "use server";
+  await requireServerActionAuth("/research");
+  const jobId = String(formData.get("jobId") ?? "").trim();
+  if (!jobId) redirect(researchHref({ error: "missing_job" }));
+  let updated = false;
+  try {
+    updated = await updateContactResearchJobUserNotes(
+      jobId,
+      formData.get("userNotes")
+    );
+  } catch (error) {
+    redirect(
+      researchHref({
+        error: "notes_failed",
+        detail: (error instanceof Error ? error.message : String(error)).slice(
+          0,
+          180
+        ),
+      })
+    );
+  }
+  revalidatePath("/research");
+  if (!updated) redirect(researchHref({ error: "notes_failed" }));
 }
 
 function statusTone(status: string): BadgeTone {
@@ -137,6 +157,7 @@ export default async function ContactResearchPage({
     approved?: SearchParamValue;
     rejected?: SearchParamValue;
     retried?: SearchParamValue;
+    notes_saved?: SearchParamValue;
     error?: SearchParamValue;
     detail?: SearchParamValue;
     sheet_error?: SearchParamValue;
@@ -150,6 +171,7 @@ export default async function ContactResearchPage({
     approved: firstSearchParam(raw.approved),
     rejected: firstSearchParam(raw.rejected),
     retried: firstSearchParam(raw.retried),
+    notesSaved: firstSearchParam(raw.notes_saved),
     error: firstSearchParam(raw.error),
     detail: firstSearchParam(raw.detail),
     sheetError: firstSearchParam(raw.sheet_error),
@@ -273,6 +295,11 @@ export default async function ContactResearchPage({
           {status.retried ? "Research queued again." : "Candidate rejected."}
         </div>
       )}
+      {status.notesSaved && (
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+          Research instructions saved.
+        </div>
+      )}
       {status.sheetError && (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
           {status.sheetError}
@@ -340,6 +367,26 @@ export default async function ContactResearchPage({
                       {job.agentNotes}
                     </p>
                   )}
+
+                  <form action={saveResearchNotesAction} className="mt-3">
+                    <input type="hidden" name="jobId" value={job.id} />
+                    <TextArea
+                      name="userNotes"
+                      label="Research instructions"
+                      description="Trusted context for the research agent. Say “skip this artist” or “do not research” to stop without browsing."
+                      rows={2}
+                      defaultValue={job.userNotes ?? ""}
+                      placeholder="Example: Skip this artist — I already know the team personally."
+                    />
+                    <PendingSubmitButton
+                      variant="secondary"
+                      size="sm"
+                      pendingLabel="Saving…"
+                      className="mt-2"
+                    >
+                      Save instructions
+                    </PendingSubmitButton>
+                  </form>
 
                   {candidates.length > 0 && (
                     <div className="mt-4 space-y-3">

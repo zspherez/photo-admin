@@ -63,6 +63,7 @@ session_state() {
       state.claimed === true ? 1 : 0,
       state.completed === true ? 1 : 0,
       state.empty === true ? 1 : 0,
+      state.stale === true ? 1 : 0,
     ].join(" "));
   ' "${broker_metrics}" "$1"
 }
@@ -105,7 +106,10 @@ worker_loop() {
     local copilot_status="$?"
     set -e
 
-    read -r claimed submitted empty <<<"$(session_state "${CONTACT_RESEARCH_AGENT_SESSION}")"
+    read -r claimed submitted empty stale <<<"$(session_state "${CONTACT_RESEARCH_AGENT_SESSION}")"
+    if (( stale == 1 )); then
+      continue
+    fi
     if (( copilot_status != 0 )); then
       echo "Worker ${worker_id} Copilot session exited with status ${copilot_status}" >&2
       return "${copilot_status}"
