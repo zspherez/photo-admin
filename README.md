@@ -230,8 +230,8 @@ Configure **`production`** as follows:
   pulled Vercel placeholder.
 - `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` come from the linked Vercel project.
   Scope `VERCEL_TOKEN` to the owning Vercel team/project; it must be able to
-  pull/build/deploy/promote, manage one-run deployment-protection bypasses, and
-  call the project pause/unpause APIs.
+  pull/build/deploy/promote, access protected staged deployments through
+  `vercel curl`, and call the project pause/unpause APIs.
 - The GitHub `DATABASE_URL` and `DIRECT_URL` secrets must identify the same
   production database used by Vercel. Vercel sensitive environment variables
   are write-only, so the workflow does not compare their pulled placeholder
@@ -252,9 +252,8 @@ Configure **`production`** as follows:
   markers, and returns no database URL or secret. The returned nonce must
   match and is conditionally deleted before pause. A different staged runtime
   database, APP base URL, or cron secret therefore stops the release before
-  pause or migration. The workflow mints a masked one-run Vercel automation
-  bypass before staging and revokes it in unconditional cleanup; failure to
-  create or revoke that bypass fails visibly.
+  pause or migration. The staged request uses authenticated `vercel curl`,
+  avoiding asynchronous project-level bypass propagation.
 - `APP_BASE_URL` must be the production HTTPS origin with no path, query, or
   fragment. `CRON_SECRET` must be a header-safe bearer secret. Their staged
   runtime values are proved operationally by the authenticated marker request,
