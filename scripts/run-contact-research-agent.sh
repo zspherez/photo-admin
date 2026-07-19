@@ -10,8 +10,8 @@ if [[ -z "${CONTACT_RESEARCH_AGENT_TOKEN:-}" ]] &&
 fi
 
 limit="${CONTACT_RESEARCH_LIMIT:-3}"
-if [[ ! "${limit}" =~ ^[1-9][0-9]*$ ]] || (( limit > 10 )); then
-  echo "CONTACT_RESEARCH_LIMIT must be an integer from 1 to 10" >&2
+if [[ ! "${limit}" =~ ^[1-9][0-9]*$ ]] || (( limit > 20 )); then
+  echo "CONTACT_RESEARCH_LIMIT must be an integer from 1 to 20" >&2
   exit 2
 fi
 
