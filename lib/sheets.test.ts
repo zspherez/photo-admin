@@ -903,6 +903,8 @@ test("protected release stages and verifies the exact target before pausing", ()
     source,
     /bash scripts\/verify-staged-runtime\.sh "\$\{TARGET_URL\}" "\$\{RELEASE_SHA\}"/
   );
+  assert.match(source, /sleep 360/);
+  assert.doesNotMatch(source, /sleep 1860/);
   assert.match(source, /VERCEL_TOKEN: \$\{\{ secrets\.VERCEL_TOKEN \}\}/);
   assert.doesNotMatch(source, /VERCEL_AUTOMATION_BYPASS_SECRET/);
   assert.doesNotMatch(source, /vercel env pull/);

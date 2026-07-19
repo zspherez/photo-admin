@@ -337,9 +337,9 @@ workflow from**, enter the full 40-character target commit SHA, and type
    exact staged deployment. This simultaneously proves the staged runtime
    database, `APP_BASE_URL`, and `CRON_SECRET`; the marker is deleted before
    continuing;
-7. arms recovery state, pauses the project, and waits 31 minutes—longer than
-   Vercel's [currently configurable 1,800-second function maximum](https://vercel.com/docs/functions/configuring-functions/duration#extended-max-duration)—so
-   old requests and outreach claims drain before any schema work;
+7. arms recovery state, pauses the project, and waits six minutes—longer than
+   this app's reviewed five-minute route ceiling—so old requests and outreach
+   claims drain before any schema work;
 8. marks schema cutover started, applies the reviewed expand/bridge migrations,
    and runs the exact revision's idempotent normalized-name backfill;
 9. requires all requested migrations to be applied with their original

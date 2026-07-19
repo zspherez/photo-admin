@@ -536,8 +536,8 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/vercel-project-state.sh pause
-          echo "Production is paused. Waiting 31 minutes for every old Vercel function and outreach claim to quiesce."
-          sleep 1860
+          echo "Production is paused. Waiting 6 minutes for the 5-minute application function ceiling plus safety margin."
+          sleep 360
 
       - name: Arm schema cutover recovery
         id: arm-schema
