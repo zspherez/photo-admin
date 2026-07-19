@@ -15,8 +15,44 @@ if [[ ! "${limit}" =~ ^[1-9][0-9]*$ ]] || (( limit > 10 )); then
   exit 2
 fi
 
-exec copilot \
+mcp_config="$(mktemp)"
+cleanup() {
+  rm -f "${mcp_config}"
+}
+trap cleanup EXIT
+MCP_CONFIG_PATH="${mcp_config}" node <<'NODE'
+const fs = require("node:fs");
+const required = (name) => process.env[name] ?? "";
+const config = {
+  mcpServers: {
+    "contact-research": {
+      type: "stdio",
+      command: process.execPath,
+      args: ["scripts/contact-research-mcp.mjs"],
+      env: {
+        APP_BASE_URL: required("APP_BASE_URL"),
+        CONTACT_RESEARCH_AGENT_TOKEN: required(
+          "CONTACT_RESEARCH_AGENT_TOKEN"
+        ),
+        ACTIONS_ID_TOKEN_REQUEST_URL: required(
+          "ACTIONS_ID_TOKEN_REQUEST_URL"
+        ),
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: required(
+          "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+        ),
+      },
+      tools: ["*"],
+    },
+  },
+};
+fs.writeFileSync(process.env.MCP_CONFIG_PATH, JSON.stringify(config), {
+  mode: 0o600,
+});
+NODE
+
+copilot \
   --agent contact-research \
+  --additional-mcp-config "@${mcp_config}" \
   --allow-all-tools \
   --allow-all-urls \
   --no-ask-user \
