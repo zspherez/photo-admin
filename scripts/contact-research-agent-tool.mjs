@@ -1,0 +1,81 @@
+#!/usr/bin/env node
+
+import { request } from "node:http";
+
+const socketPath = process.env.CONTACT_RESEARCH_BROKER_SOCKET?.trim();
+
+if (!socketPath) {
+  throw new Error("contact research broker is not configured");
+}
+
+const [action, first, second] = process.argv.slice(2);
+let input;
+switch (action) {
+  case "claim":
+    input = { limit: Number(first ?? "3") };
+    break;
+  case "search":
+    input = { query: first ?? "", limit: Number(second ?? "8") };
+    break;
+  case "fetch":
+    input = { url: first ?? "" };
+    break;
+  case "submit-candidates":
+  case "submit-exhausted":
+    try {
+      input = JSON.parse(first ?? "");
+    } catch {
+      throw new Error(`${action} requires one valid JSON argument`);
+    }
+    break;
+  default:
+    throw new Error(
+      "usage: claim [limit] | search <query> [limit] | fetch <url> | submit-candidates <json> | submit-exhausted <json>"
+    );
+}
+
+const payload = JSON.stringify(input);
+const result = await new Promise((resolve, reject) => {
+  const brokerRequest = request(
+    {
+      socketPath,
+      path: `/${action}`,
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(payload),
+      },
+      timeout: 130_000,
+    },
+    (response) => {
+      const chunks = [];
+      let total = 0;
+      response.on("data", (chunk) => {
+        total += chunk.length;
+        if (total > 2_000_000) {
+          response.destroy(new Error("broker response is too large"));
+          return;
+        }
+        chunks.push(Buffer.from(chunk));
+      });
+      response.on("end", () => {
+        resolve({
+          status: response.statusCode ?? 500,
+          text: Buffer.concat(chunks).toString("utf8"),
+        });
+      });
+    }
+  );
+  brokerRequest.on("timeout", () => {
+    brokerRequest.destroy(new Error("contact research broker timed out"));
+  });
+  brokerRequest.on("error", reject);
+  brokerRequest.end(payload);
+});
+if (result.status < 200 || result.status >= 300) {
+  throw new Error(
+    `contact research tool returned ${result.status}: ${result.text.slice(0, 1_000)}`
+  );
+}
+const value = result.text ? JSON.parse(result.text) : {};
+process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);

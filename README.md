@@ -162,12 +162,14 @@ The worker accepts manager/management contacts only. It checks artist websites,
 Instagram, Facebook, SoundCloud, linked Linktrees, and manager-focused Google
 searches before using Booking Agent Info solely to identify a manager. It then
 uses public company-domain patterns as a bounded Hunter-style fallback. Its
-narrow MCP bridge provides keyless public search and fixed-host page reading
-while keeping queue credentials out of the agent's tools.
+narrow localhost broker provides keyless public search and fixed-host page
+reading while keeping queue credentials out of the agent's process.
 
 This is automated **Copilot CLI on GitHub Actions**, not Copilot cloud agent.
-The explicit MCP provides queue calls plus bounded read-only web research;
-private-network targets, oversized responses, and unsafe redirects are blocked.
+A credential-isolated localhost broker provides queue calls plus bounded
+read-only web research; private-network targets, oversized responses, and
+unsafe redirects are blocked. Copilot autonomously chooses searches, follows
+evidence, and submits results through the broker.
 Copilot cloud agent currently does not map the custom-agent `web` alias, while
 its default Playwright MCP can access only localhost.
 
