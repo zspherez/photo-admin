@@ -15,46 +15,45 @@ if [[ ! "${limit}" =~ ^[1-9][0-9]*$ ]] || (( limit > 10 )); then
   exit 2
 fi
 
-mcp_config="$(mktemp)"
+broker_dir="$(mktemp -d)"
+broker_socket="${broker_dir}/broker.sock"
+broker_log="${broker_dir}/broker.log"
+broker_pid=""
 cleanup() {
-  rm -f "${mcp_config}"
+  if [[ -n "${broker_pid}" ]] && kill -0 "${broker_pid}" 2>/dev/null; then
+    kill "${broker_pid}" 2>/dev/null || true
+    wait "${broker_pid}" 2>/dev/null || true
+  fi
+  rm -f "${broker_socket}" "${broker_log}"
+  rmdir "${broker_dir}" 2>/dev/null || true
 }
 trap cleanup EXIT
-MCP_CONFIG_PATH="${mcp_config}" node <<'NODE'
-const fs = require("node:fs");
-const required = (name) => process.env[name] ?? "";
-const config = {
-  mcpServers: {
-    "contact-research": {
-      type: "stdio",
-      command: process.execPath,
-      args: ["scripts/contact-research-mcp.mjs"],
-      env: {
-        APP_BASE_URL: required("APP_BASE_URL"),
-        CONTACT_RESEARCH_AGENT_TOKEN: required(
-          "CONTACT_RESEARCH_AGENT_TOKEN"
-        ),
-        ACTIONS_ID_TOKEN_REQUEST_URL: required(
-          "ACTIONS_ID_TOKEN_REQUEST_URL"
-        ),
-        ACTIONS_ID_TOKEN_REQUEST_TOKEN: required(
-          "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
-        ),
-      },
-      tools: ["*"],
-    },
-  },
-};
-fs.writeFileSync(process.env.MCP_CONFIG_PATH, JSON.stringify(config), {
-  mode: 0o600,
-});
-NODE
+
+export CONTACT_RESEARCH_BROKER_SOCKET="${broker_socket}"
+node scripts/contact-research-broker.mjs >"${broker_log}" 2>&1 &
+broker_pid="$!"
+
+for _ in {1..100}; do
+  if [[ -S "${broker_socket}" ]]; then
+    break
+  fi
+  if ! kill -0 "${broker_pid}" 2>/dev/null; then
+    cat "${broker_log}" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+if [[ ! -S "${broker_socket}" ]]; then
+  echo "contact research broker did not start" >&2
+  cat "${broker_log}" >&2
+  exit 1
+fi
 
 copilot \
   --agent contact-research \
-  --additional-mcp-config "@${mcp_config}" \
-  --allow-all-tools \
-  --allow-all-urls \
+  --available-tools=bash \
+  --allow-tool='shell(scripts/contact-research-agent-tool.mjs:*)' \
+  --secret-env-vars=GITHUB_TOKEN,ACTIONS_ID_TOKEN_REQUEST_URL,ACTIONS_ID_TOKEN_REQUEST_TOKEN,CONTACT_RESEARCH_AGENT_TOKEN \
   --no-ask-user \
   --no-auto-update \
   --no-remote \

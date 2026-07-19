@@ -79,12 +79,17 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
     new URL("./run-contact-research-agent.sh", import.meta.url),
     "utf8"
   );
-  assert.match(agent, /tools: \["contact-research\/\*"\]/);
-  assert.doesNotMatch(agent, /tools: \[[^\]]*"execute"/);
+  assert.match(agent, /tools: \["bash"\]/);
   assert.doesNotMatch(agent, /mcp-servers:/);
-  assert.match(runner, /--additional-mcp-config "@\$\{mcp_config\}"/);
-  assert.match(runner, /--allow-all-tools/);
-  assert.match(runner, /--allow-all-urls/);
+  assert.match(runner, /contact-research-broker\.mjs/);
+  assert.match(runner, /--available-tools=bash/);
+  assert.match(
+    runner,
+    /--allow-tool='shell\(scripts\/contact-research-agent-tool\.mjs:\*\)'/
+  );
+  assert.match(runner, /--secret-env-vars=GITHUB_TOKEN/);
+  assert.doesNotMatch(runner, /--additional-mcp-config/);
+  assert.doesNotMatch(runner, /--allow-all/);
   assert.match(runner, /--no-ask-user/);
   assert.doesNotMatch(runner, /--max-ai-credits/);
 });
