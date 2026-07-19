@@ -51,13 +51,14 @@ export PATH="${PWD}/scripts:${PATH}"
 if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
   broker_privileged=true
   broker_group="$(id -gn)"
+  node_bin="$(command -v node)"
   chgrp "${broker_group}" "${broker_dir}"
   chmod 0770 "${broker_dir}"
   sudo -n \
     --preserve-env=APP_BASE_URL,CONTACT_RESEARCH_AGENT_TOKEN,ACTIONS_ID_TOKEN_REQUEST_URL,ACTIONS_ID_TOKEN_REQUEST_TOKEN,CONTACT_RESEARCH_BROKER_SOCKET,CONTACT_RESEARCH_BROKER_METRICS_FILE \
     -u nobody \
     -g "${broker_group}" \
-    node scripts/contact-research-broker.mjs >"${broker_log}" 2>&1 &
+    "${node_bin}" scripts/contact-research-broker.mjs >"${broker_log}" 2>&1 &
 else
   node scripts/contact-research-broker.mjs >"${broker_log}" 2>&1 &
 fi
