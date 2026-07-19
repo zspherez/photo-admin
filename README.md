@@ -356,9 +356,10 @@ workflow from**, enter the full 40-character target commit SHA, and type
 12. verifies the stored Sheet target, absence of active unowned Sheet contacts,
     exact migration history, fresh database nonce, and new-code schema queries,
     then idempotently unpauses;
-13. in the same already-approved job, calls the authenticated show, listen, and
-    top-playlist catch-up routes in dependency order with bounded transient
-    retries. Catch-up failure is visible but never re-pauses production;
+13. in the same already-approved job, calls the authenticated show, listen,
+    contact-research, and top-playlist catch-up routes independently with
+    bounded transient retries. Catch-up failures remain visible warnings but do
+    not mark a completed production release as failed or skip later catch-ups;
 14. on any earlier failure, an `if: always()` step uses the already-approved
     production credentials, while the independent watchdog uses only
     `production-recovery` credentials and inline recovery logic—never a

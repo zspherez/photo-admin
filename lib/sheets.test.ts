@@ -905,6 +905,14 @@ test("protected release stages and verifies the exact target before pausing", ()
   );
   assert.match(source, /sleep 360/);
   assert.doesNotMatch(source, /sleep 1860/);
+  assert.match(
+    source,
+    /if ! call_catch_up "Show sync"[\s\S]*if ! call_catch_up "Listen sync"[\s\S]*if ! call_catch_up "Contact research queue"[\s\S]*if ! call_catch_up "Top-playlist refresh"/
+  );
+  assert.match(
+    source,
+    /Production release succeeded, but post-resume catch-up remains incomplete/
+  );
   assert.match(source, /VERCEL_TOKEN: \$\{\{ secrets\.VERCEL_TOKEN \}\}/);
   assert.doesNotMatch(source, /VERCEL_AUTOMATION_BYPASS_SECRET/);
   assert.doesNotMatch(source, /vercel env pull/);

@@ -78,6 +78,21 @@ test("ambiguous name-only identities remain unmatched", () => {
   assert.equal(decision.conflicts[0]?.kind, "ambiguous-name");
 });
 
+test("providers can explicitly disable normalized-name bridging", () => {
+  const decision = chooseArtistIdentityCandidate(
+    {
+      key: "statsfm-ambiguous",
+      name: "Same Name",
+      statsfmId: "sf-1",
+      allowNameMatch: false,
+    },
+    [candidate("spotify", { spotifyId: "sp-1" })]
+  );
+
+  assert.equal(decision.action, "create");
+  assert.equal(decision.conflicts[0]?.kind, "normalized-name-conflict");
+});
+
 test("conflicting supplied external ids never merge two records", () => {
   const decision = chooseArtistIdentityCandidate(
     {

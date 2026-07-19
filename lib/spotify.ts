@@ -599,12 +599,89 @@ export async function updatePlaylistDescription(
   }
 }
 
-interface SpotifyArtistLite {
+export interface SpotifyArtistLite {
   id: string;
   name: string;
   genres?: string[];
   popularity?: number;
   images?: { url: string }[];
+}
+
+export function isUsableSpotifyArtist(
+  value: unknown
+): value is SpotifyArtistLite {
+  if (typeof value !== "object" || value === null) return false;
+  const id = Reflect.get(value, "id");
+  const name = Reflect.get(value, "name");
+  return (
+    typeof id === "string" &&
+    id.trim().length > 0 &&
+    typeof name === "string" &&
+    name.trim().length > 0
+  );
+}
+
+function spotifyArtistId(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const id = Reflect.get(value, "id");
+  return typeof id === "string" && id.trim() ? id : null;
+}
+
+export async function hydrateSpotifyArtistObservations(
+  token: string,
+  values: readonly unknown[],
+  source: string,
+  deadline: OperationDeadline
+): Promise<SpotifyArtistLite[]> {
+  const orderedIds = values.map(spotifyArtistId);
+  if (orderedIds.some((id) => id === null)) {
+    throw new Error(`Spotify ${source} returned an artist without an id`);
+  }
+
+  const artistsById = new Map<string, SpotifyArtistLite>();
+  for (const value of values) {
+    if (isUsableSpotifyArtist(value)) artistsById.set(value.id, value);
+  }
+  const missingIds = Array.from(
+    new Set(
+      orderedIds.filter(
+        (id): id is string => id !== null && !artistsById.has(id)
+      )
+    )
+  );
+  for (const idChunk of chunkItems(missingIds, 50)) {
+    const params = new URLSearchParams({ ids: idChunk.join(",") });
+    const response = await spotifyFetchWithToken<{ artists?: unknown[] }>(
+      token,
+      `/artists?${params.toString()}`,
+      {},
+      { deadline }
+    );
+    if (!Array.isArray(response.artists)) {
+      throw new Error(`Spotify ${source} artist hydration omitted artists`);
+    }
+    for (const artist of response.artists) {
+      if (isUsableSpotifyArtist(artist)) artistsById.set(artist.id, artist);
+    }
+  }
+  const unresolved = orderedIds.filter(
+    (id): id is string => id !== null && !artistsById.has(id)
+  );
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Spotify ${source} returned ${unresolved.length} artist record(s) without usable names`
+    );
+  }
+  if (missingIds.length > 0) {
+    console.warn(
+      JSON.stringify({
+        event: "spotify_invalid_artists_hydrated",
+        source,
+        hydrated: missingIds.length,
+      })
+    );
+  }
+  return orderedIds.map((id) => artistsById.get(id!)!);
 }
 
 export interface CurrentUserPlaylist {
@@ -689,7 +766,14 @@ async function fetchTopArtistsSnapshot(
     if (!Array.isArray(page.items)) {
       throw new Error(`Spotify top-${range} response omitted items`);
     }
-    items.push(...page.items);
+    items.push(
+      ...(await hydrateSpotifyArtistObservations(
+        token,
+        page.items,
+        `top:${range}`,
+        deadline
+      ))
+    );
     cursor = page.next ?? null;
   }
   return items.slice(0, limit);
@@ -697,7 +781,7 @@ async function fetchTopArtistsSnapshot(
 
 interface RecentPlayItem {
   played_at: string;
-  track: { artists: SpotifyArtistLite[] };
+  track: { artists?: unknown[] } | null;
 }
 
 interface RecentArtist {
@@ -729,7 +813,12 @@ async function fetchRecentlyPlayedSnapshot(
       throw new Error(`Spotify returned invalid played_at: ${item.played_at}`);
     }
     if (playedAt.getTime() <= cutoff) continue;
-    for (const artist of item.track.artists ?? []) {
+    for (const artist of await hydrateSpotifyArtistObservations(
+      token,
+      item.track?.artists ?? [],
+      "recent",
+      deadline
+    )) {
       const prior = seen.get(artist.id);
       if (!prior || prior.playedAt < playedAt) {
         seen.set(artist.id, { artist, playedAt });
@@ -761,7 +850,14 @@ async function fetchFollowedArtistsSnapshot(
     if (!Array.isArray(page.artists?.items)) {
       throw new Error("Spotify followed-artists response omitted items");
     }
-    items.push(...page.artists.items);
+    items.push(
+      ...(await hydrateSpotifyArtistObservations(
+        token,
+        page.artists.items,
+        "followed",
+        deadline
+      ))
+    );
     cursor = page.artists.next ?? null;
     if (visited.size > 1_000) {
       throw new Error("Spotify followed-artists pagination exceeded 1000 pages");
@@ -856,7 +952,7 @@ async function fetchPlaylistSnapshot(
       });
       let response: {
         items?: Array<{
-          item: { artists?: SpotifyArtistLite[] } | null;
+          item: { artists?: unknown[] } | null;
         }>;
         next?: string | null;
       };
@@ -878,8 +974,13 @@ async function fetchPlaylistSnapshot(
         );
       }
       for (const entry of response.items) {
-        for (const artist of entry.item?.artists ?? []) {
-          if (artist.id) artists.set(artist.id, artist);
+        for (const artist of await hydrateSpotifyArtistObservations(
+          token,
+          entry.item?.artists ?? [],
+          `playlist:${playlist.id}`,
+          deadline
+        )) {
+          artists.set(artist.id, artist);
         }
       }
       if (!response.next) break;

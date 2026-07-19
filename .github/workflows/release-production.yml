@@ -730,7 +730,7 @@ jobs:
                 esac
               fi
               if [[ "${retryable}" != "true" ]]; then
-                echo "::error::${name} catch-up failed with non-retryable curl status ${curl_status} and HTTP ${http_status}"
+                echo "::warning::${name} catch-up failed with non-retryable curl status ${curl_status} and HTTP ${http_status}"
                 return 1
               fi
 
@@ -747,14 +747,26 @@ jobs:
               fi
             done
 
-            echo "::error::${name} catch-up did not succeed within its bounded retry window"
+            echo "::warning::${name} catch-up did not succeed within its bounded retry window"
             return 1
           }
 
-          call_catch_up "Show sync" "/api/cron/sync-shows" 330 900
-          call_catch_up "Listen sync" "/api/cron/sync-listens" 330 900
-          call_catch_up "Contact research queue" "/api/cron/contact-research" 120 300
-          call_catch_up "Top-playlist refresh" "/api/cron/refresh-top-playlist" 210 600
+          catch_up_failures=()
+          if ! call_catch_up "Show sync" "/api/cron/sync-shows" 330 900; then
+            catch_up_failures+=("Show sync")
+          fi
+          if ! call_catch_up "Listen sync" "/api/cron/sync-listens" 330 900; then
+            catch_up_failures+=("Listen sync")
+          fi
+          if ! call_catch_up "Contact research queue" "/api/cron/contact-research" 120 300; then
+            catch_up_failures+=("Contact research queue")
+          fi
+          if ! call_catch_up "Top-playlist refresh" "/api/cron/refresh-top-playlist" 210 600; then
+            catch_up_failures+=("Top-playlist refresh")
+          fi
+          if (( ${#catch_up_failures[@]} > 0 )); then
+            echo "::warning::Production release succeeded, but post-resume catch-up remains incomplete for: ${catch_up_failures[*]}"
+          fi
 
       - name: Attempt safe in-job recovery with approved credentials
         id: recover-in-job

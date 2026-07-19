@@ -286,22 +286,34 @@ export async function rotateStatsfmToken(
   };
 }
 
-function spotifyIdFor(item: StatsfmTopArtistItem): string | null {
+export interface StatsfmSpotifyIdentityResolution {
+  spotifyId: string | null;
+  ambiguousCandidateCount: number;
+  candidateIds: string[];
+}
+
+export function resolveStatsfmSpotifyIdentity(
+  item: StatsfmTopArtistItem
+): StatsfmSpotifyIdentityResolution {
   const ids = Array.from(
     new Set((item.artist.externalIds?.spotify ?? []).filter(Boolean))
   );
-  if (ids.length > 1) {
-    throw new Error(
-      `Stats.fm artist ${item.artist.id} has multiple Spotify identities`
-    );
-  }
-  return ids[0] ?? null;
+  return {
+    spotifyId: ids.length === 1 ? ids[0] : null,
+    ambiguousCandidateCount: ids.length > 1 ? ids.length : 0,
+    candidateIds: ids,
+  };
 }
 
 export interface StatsfmSyncResult {
   fetched: number;
   written: number;
   identityConflicts: ArtistIdentityConflict[];
+  spotifyIdentityIssues: Array<{
+    statsfmId: string;
+    name: string;
+    candidateCount: number;
+  }>;
 }
 
 export interface StatsfmRangeRequest {
@@ -348,18 +360,43 @@ async function syncStatsfmTopArtistRangesSnapshot(
       itemsByStatsfmId.set(String(item.artist.id), item);
     }
   }
+  const spotifyIdentityIssues: StatsfmSyncResult["spotifyIdentityIssues"] = [];
+  const ambiguousSpotifyIdsByStatsfmId = new Map<string, string[]>();
   const identities: ArtistIdentityInput[] = Array.from(
     itemsByStatsfmId.entries(),
-    ([statsfmId, item]) => ({
-      key: statsfmId,
-      name: item.artist.name,
-      statsfmId,
-      spotifyId: spotifyIdFor(item),
-      genres: JSON.stringify(item.artist.genres ?? []),
-      popularity: item.artist.spotifyPopularity,
-      imageUrl: item.artist.image,
-    })
+    ([statsfmId, item]) => {
+      const spotifyIdentity = resolveStatsfmSpotifyIdentity(item);
+      if (spotifyIdentity.ambiguousCandidateCount > 0) {
+        ambiguousSpotifyIdsByStatsfmId.set(
+          statsfmId,
+          spotifyIdentity.candidateIds
+        );
+        spotifyIdentityIssues.push({
+          statsfmId,
+          name: item.artist.name,
+          candidateCount: spotifyIdentity.ambiguousCandidateCount,
+        });
+      }
+      return {
+        key: statsfmId,
+        name: item.artist.name,
+        statsfmId,
+        spotifyId: spotifyIdentity.spotifyId,
+        allowNameMatch: spotifyIdentity.ambiguousCandidateCount === 0,
+        genres: JSON.stringify(item.artist.genres ?? []),
+        popularity: item.artist.spotifyPopularity,
+        imageUrl: item.artist.image,
+      };
+    }
   );
+  if (spotifyIdentityIssues.length > 0) {
+    console.warn(
+      JSON.stringify({
+        event: "statsfm_ambiguous_spotify_identities",
+        issues: spotifyIdentityIssues,
+      })
+    );
+  }
 
   const now = new Date();
   const generation = randomUUID();
@@ -369,6 +406,19 @@ async function syncStatsfmTopArtistRangesSnapshot(
     async (tx) => {
       await lease.fenceTransaction(tx);
       const resolved = await resolveArtists(tx, identities);
+      for (const [statsfmId, candidateIds] of ambiguousSpotifyIdsByStatsfmId) {
+        const artist = resolved.artistsByKey.get(statsfmId);
+        if (
+          artist?.spotifyId &&
+          !candidateIds.includes(artist.spotifyId)
+        ) {
+          const updated = await tx.artist.update({
+            where: { id: artist.id },
+            data: { spotifyId: null },
+          });
+          resolved.artistsByKey.set(statsfmId, updated);
+        }
+      }
       const result: Record<StatsfmRange, StatsfmSyncResult | undefined> = {
         weeks: undefined,
         months: undefined,
@@ -415,6 +465,7 @@ async function syncStatsfmTopArtistRangesSnapshot(
           fetched: items.length,
           written: signals.length,
           identityConflicts: resolved.conflicts,
+          spotifyIdentityIssues,
         };
       }
       return result;
