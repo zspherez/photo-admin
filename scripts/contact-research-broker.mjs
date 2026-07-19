@@ -20,6 +20,7 @@ const metrics = {
   claimedJobs: 0,
   submissions: 0,
 };
+const sessions = new Map();
 
 if (
   !baseUrl ||
@@ -41,7 +42,7 @@ const candidateSchema = z.object({
 
 const schemas = {
   claim: z.object({
-    limit: z.number().int().min(1).max(10),
+    limit: z.literal(1),
   }).strict(),
   search: z.object({
     query: z.string().min(1).max(300),
@@ -62,6 +63,8 @@ const schemas = {
     notes: z.string().min(1).max(4_000),
   }).strict(),
 };
+
+class BrokerConflictError extends Error {}
 
 async function authorizationToken() {
   if (oidcRequestUrl && oidcRequestToken) {
@@ -161,16 +164,94 @@ function recordSuccessfulTool(name, value) {
   persistMetrics();
 }
 
-async function runTool(name, input) {
+function sessionState(sessionId) {
+  const existing = sessions.get(sessionId);
+  if (existing) return existing;
+  const created = { claim: null, completed: false };
+  sessions.set(sessionId, created);
+  return created;
+}
+
+function publicClaimResponse(value, state) {
+  const jobs = Array.isArray(value?.jobs) ? value.jobs : [];
+  if (jobs.length > 1) {
+    throw new Error("photo-admin returned more than one claimed job");
+  }
+  if (jobs.length === 0) return { jobs: [] };
+  const [job] = jobs;
+  const {
+    id,
+    artist,
+    ...jobFields
+  } = job;
+  if (
+    typeof id !== "string" ||
+    typeof job.claimToken !== "string" ||
+    !artist ||
+    typeof artist !== "object"
+  ) {
+    throw new Error("photo-admin returned an invalid claimed job");
+  }
+  const artistFields = { ...artist };
+  delete artistFields.id;
+  state.claim = { jobId: id, claimToken: job.claimToken };
+  return {
+    jobs: [
+      {
+        jobId: id,
+        ...jobFields,
+        artist: artistFields,
+      },
+    ],
+  };
+}
+
+function requireSessionClaim(state, input) {
+  if (!state.claim || state.completed) {
+    throw new BrokerConflictError("session has no active claimed job");
+  }
+  if (
+    input.jobId !== state.claim.jobId ||
+    input.claimToken !== state.claim.claimToken
+  ) {
+    throw new BrokerConflictError(
+      "submission must use the top-level jobId and claimToken from this session"
+    );
+  }
+}
+
+async function runTool(name, input, sessionId) {
+  const state = sessionState(sessionId);
   switch (name) {
-    case "claim":
-      return photoAdminRequest("/api/contact-research/claim", input);
+    case "claim": {
+      if (state.claim) {
+        throw new BrokerConflictError(
+          "claim may only be called once per agent session"
+        );
+      }
+      const result = await photoAdminRequest(
+        "/api/contact-research/claim",
+        input
+      );
+      return publicClaimResponse(result, state);
+    }
     case "search":
+      if (!state.claim || state.completed) {
+        throw new BrokerConflictError(
+          "search requires one active claimed job"
+        );
+      }
       return searchWeb(input.query, input.limit);
     case "fetch":
+      if (!state.claim || state.completed) {
+        throw new BrokerConflictError(
+          "fetch requires one active claimed job"
+        );
+      }
       return fetchReadablePage(input.url);
-    case "submit-candidates":
-      return photoAdminRequest(
+    case "submit-candidates": {
+      requireSessionClaim(state, input);
+      const result = await photoAdminRequest(
         `/api/contact-research/${encodeURIComponent(input.jobId)}/result`,
         {
           outcome: "candidates",
@@ -182,8 +263,12 @@ async function runTool(name, input) {
           })),
         }
       );
-    case "submit-exhausted":
-      return photoAdminRequest(
+      state.completed = true;
+      return result;
+    }
+    case "submit-exhausted": {
+      requireSessionClaim(state, input);
+      const result = await photoAdminRequest(
         `/api/contact-research/${encodeURIComponent(input.jobId)}/result`,
         {
           outcome: "exhausted",
@@ -191,6 +276,9 @@ async function runTool(name, input) {
           notes: input.notes,
         }
       );
+      state.completed = true;
+      return result;
+    }
     default:
       throw new Error("unknown tool");
   }
@@ -212,11 +300,23 @@ const server = createServer(async (request, response) => {
   }
 
   try {
+    const sessionId = request.headers["x-contact-research-session"];
+    if (
+      typeof sessionId !== "string" ||
+      !/^[A-Za-z0-9._-]{1,100}$/.test(sessionId)
+    ) {
+      sendJson(response, 400, { error: "invalid agent session" });
+      return;
+    }
     const input = schema.parse(await readJsonBody(request));
-    const result = await runTool(name, input);
+    const result = await runTool(name, input, sessionId);
     recordSuccessfulTool(name, result);
     sendJson(response, 200, result);
   } catch (error) {
+    if (error instanceof BrokerConflictError) {
+      sendJson(response, 409, { error: error.message });
+      return;
+    }
     if (error instanceof z.ZodError || error instanceof SyntaxError) {
       sendJson(response, 400, {
         error: error instanceof Error ? error.message : String(error),

@@ -3,8 +3,9 @@
 import { request } from "node:http";
 
 const socketPath = process.env.CONTACT_RESEARCH_BROKER_SOCKET?.trim();
+const sessionId = process.env.CONTACT_RESEARCH_AGENT_SESSION?.trim();
 
-if (!socketPath) {
+if (!socketPath || !sessionId) {
   throw new Error("contact research broker is not configured");
 }
 
@@ -44,6 +45,7 @@ const result = await new Promise((resolve, reject) => {
       headers: {
         "content-type": "application/json",
         "content-length": Buffer.byteLength(payload),
+        "x-contact-research-session": sessionId,
       },
       timeout: 130_000,
     },

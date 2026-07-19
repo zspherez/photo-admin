@@ -55,30 +55,11 @@ if [[ ! -S "${broker_socket}" ]]; then
   exit 1
 fi
 
-set +e
-copilot \
-  --agent contact-research \
-  --available-tools=bash \
-  --allow-tool='shell(contact-research-agent-tool)' \
-  --secret-env-vars=GITHUB_TOKEN,ACTIONS_ID_TOKEN_REQUEST_URL,ACTIONS_ID_TOKEN_REQUEST_TOKEN,CONTACT_RESEARCH_AGENT_TOKEN \
-  --no-ask-user \
-  --no-auto-update \
-  --no-remote \
-  --prompt \
-  "Claim and process up to ${limit} contact research jobs. Follow the agent workflow exactly."
-copilot_status="$?"
-set -e
-
-if (( copilot_status != 0 )); then
-  echo "Copilot research agent exited with status ${copilot_status}" >&2
-  exit "${copilot_status}"
-fi
-
-if [[ ! -s "${broker_metrics}" ]]; then
-  echo "contact research broker did not report tool metrics" >&2
-  exit 1
-fi
-metrics="$(
+read_metrics() {
+  if [[ ! -s "${broker_metrics}" ]]; then
+    echo "0 0 0"
+    return
+  fi
   node -e '
     const fs = require("node:fs");
     const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
@@ -88,14 +69,52 @@ metrics="$(
       value.submissions,
     ].join(" "));
   ' "${broker_metrics}"
-)"
-read -r claim_calls claimed_jobs submissions <<<"${metrics}"
-if (( claim_calls < 1 )); then
-  echo "research agent did not call the claim tool" >&2
-  exit 1
-fi
-if (( submissions != claimed_jobs )); then
-  echo "research agent completed ${submissions} of ${claimed_jobs} claimed job(s)" >&2
-  exit 1
-fi
-echo "Research agent completed ${submissions} of ${claimed_jobs} claimed job(s)"
+}
+
+completed=0
+for (( index = 1; index <= limit; index += 1 )); do
+  read -r before_claims before_jobs before_submissions <<<"$(read_metrics)"
+  export CONTACT_RESEARCH_AGENT_SESSION="job-${index}-$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
+
+  set +e
+  copilot \
+    --agent contact-research \
+    --available-tools=bash \
+    --allow-tool='shell(contact-research-agent-tool)' \
+    --secret-env-vars=GITHUB_TOKEN,ACTIONS_ID_TOKEN_REQUEST_URL,ACTIONS_ID_TOKEN_REQUEST_TOKEN,CONTACT_RESEARCH_AGENT_TOKEN \
+    --no-ask-user \
+    --no-auto-update \
+    --no-remote \
+    --prompt \
+    "Claim exactly one contact research job and complete it. Use the top-level jobId, never an artist ID. Do not call claim more than once."
+  copilot_status="$?"
+  set -e
+
+  if (( copilot_status != 0 )); then
+    echo "Copilot research agent exited with status ${copilot_status}" >&2
+    exit "${copilot_status}"
+  fi
+
+  read -r after_claims after_jobs after_submissions <<<"$(read_metrics)"
+  claim_delta=$((after_claims - before_claims))
+  job_delta=$((after_jobs - before_jobs))
+  submission_delta=$((after_submissions - before_submissions))
+  if (( claim_delta != 1 )); then
+    echo "research session made ${claim_delta} successful claim calls instead of 1" >&2
+    exit 1
+  fi
+  if (( job_delta == 0 )); then
+    if (( submission_delta != 0 )); then
+      echo "empty research session unexpectedly submitted a result" >&2
+      exit 1
+    fi
+    break
+  fi
+  if (( job_delta != 1 || submission_delta != 1 )); then
+    echo "research session completed ${submission_delta} of ${job_delta} claimed job(s)" >&2
+    exit 1
+  fi
+  completed=$((completed + 1))
+done
+
+echo "Research agent completed ${completed} job(s)"

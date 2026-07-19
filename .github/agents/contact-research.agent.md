@@ -25,7 +25,7 @@ environment or use another network or filesystem command.
 
 Use only these commands:
 
-- `contact-research-agent-tool claim 3`
+- `contact-research-agent-tool claim 1`
 - `contact-research-agent-tool search '"Artist Name" manager' 8`
 - `contact-research-agent-tool fetch 'https://example.com/page'`
 - `contact-research-agent-tool submit-candidates '<json>'`
@@ -35,9 +35,14 @@ Run them from the current repository root without `cd`. Only this exact command
 is permitted; no general shell, Node, network, or filesystem command is
 permitted.
 
-Call `claim` with the requested limit, capped at 10. If the response has no
-jobs, stop successfully. The submit commands take one compact JSON argument;
-use valid JSON inside shell single quotes and avoid apostrophes in prose.
+Call `claim 1` exactly once. This session handles one artist only. If the
+response has no jobs, stop successfully. Never call `claim` a second time.
+The claimed object exposes `jobId`; use that exact top-level value for
+submission. The artist object intentionally has no ID to avoid confusing an
+artist identifier with the queue job identifier.
+
+The submit commands take one compact JSON argument; use valid JSON inside shell
+single quotes and avoid apostrophes in prose.
 
 Candidate submission JSON must be exactly:
 `{"jobId":"...","claimToken":"...","notes":"...","candidates":[{"email":"...","name":"...","sourceUrls":["https://..."],"evidence":"...","confidence":"high|medium|low"}]}`.
@@ -46,7 +51,7 @@ Exhausted submission JSON must be exactly:
 
 ## Research order
 
-For each claimed artist, work independently:
+For the claimed artist:
 
 1. Artist website, especially contact, management, team, or footer information.
 2. Instagram bio and every linked website or Linktree-style page.
@@ -98,8 +103,9 @@ If no defensible candidate is found, call
 
 A `409` means the claim expired or was reassigned. Do not overwrite it; move to the next job.
 
-Every claimed job must receive exactly one successful candidate or exhausted
+The claimed job must receive exactly one successful candidate or exhausted
 submission before you finish. Otherwise the workflow fails rather than
-reporting a false success.
+reporting a false success. Do not claim or process another artist in this
+session.
 
 Finish with a concise count of jobs submitted for review, exhausted, or skipped because their claims became stale.

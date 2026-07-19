@@ -25,7 +25,12 @@ async function waitForSocket(path: string) {
   throw new Error("broker did not create its socket");
 }
 
-async function brokerRequest(socketPath: string, path: string, body: unknown) {
+async function brokerRequest(
+  socketPath: string,
+  path: string,
+  body: unknown,
+  session = "session-1"
+) {
   const payload = JSON.stringify(body);
   return new Promise<{ status: number; value: unknown }>((resolve, reject) => {
     const req = request(
@@ -36,6 +41,7 @@ async function brokerRequest(socketPath: string, path: string, body: unknown) {
         headers: {
           "content-type": "application/json",
           "content-length": Buffer.byteLength(payload),
+          "x-contact-research-session": session,
         },
       },
       (response) => {
@@ -67,7 +73,19 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
       response.end(
         JSON.stringify(
           request.url === "/api/contact-research/claim"
-            ? { jobs: [{ id: "job-1" }] }
+            ? {
+                jobs: [
+                  {
+                    id: "job-1",
+                    claimToken: "claim-1",
+                    priority: 10,
+                    artist: {
+                      id: "artist-1",
+                      name: "Example Artist",
+                    },
+                  },
+                ],
+              }
             : { ok: true, status: "exhausted" }
         )
       );
@@ -100,9 +118,34 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
   t.after(() => broker.kill("SIGTERM"));
   await waitForSocket(socketPath);
 
-  const claimed = await brokerRequest(socketPath, "/claim", { limit: 2 });
+  const claimed = await brokerRequest(socketPath, "/claim", { limit: 1 });
   assert.equal(claimed.status, 200);
-  assert.deepEqual(claimed.value, { jobs: [{ id: "job-1" }] });
+  assert.deepEqual(claimed.value, {
+    jobs: [
+      {
+        jobId: "job-1",
+        claimToken: "claim-1",
+        priority: 10,
+        artist: { name: "Example Artist" },
+      },
+    ],
+  });
+  const duplicateClaim = await brokerRequest(
+    socketPath,
+    "/claim",
+    { limit: 1 }
+  );
+  assert.equal(duplicateClaim.status, 409);
+  const wrongId = await brokerRequest(
+    socketPath,
+    "/submit-exhausted",
+    {
+      jobId: "artist-1",
+      claimToken: "claim-1",
+      notes: "Wrong identifier.",
+    }
+  );
+  assert.equal(wrongId.status, 409);
   const submitted = await brokerRequest(socketPath, "/submit-exhausted", {
     jobId: "job-1",
     claimToken: "claim-1",
@@ -112,7 +155,7 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
   assert.deepEqual(submitted.value, { ok: true, status: "exhausted" });
   assert.equal(authorization, "Bearer app-secret");
   assert.deepEqual(bodies, [
-    { limit: 2 },
+    { limit: 1 },
     {
       outcome: "exhausted",
       claimToken: "claim-1",
