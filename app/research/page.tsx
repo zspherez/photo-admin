@@ -284,10 +284,11 @@ export default async function ContactResearchPage({
         </div>
       )}
 
-      {!process.env.CONTACT_RESEARCH_AGENT_TOKEN && (
+      {!process.env.CONTACT_RESEARCH_AGENT_TOKEN &&
+        !process.env.CRON_SECRET && (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          Set <code>CONTACT_RESEARCH_AGENT_TOKEN</code> in the app and local
-          agent environments before running the worker.
+          Set <code>CRON_SECRET</code> or{" "}
+          <code>CONTACT_RESEARCH_AGENT_TOKEN</code> before running the worker.
         </div>
       )}
 

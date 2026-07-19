@@ -86,7 +86,7 @@ The full list is in `.env.example`. Minimum to boot:
 | `RESEND_FROM_EMAIL` | for sending | The verified `From:` sender, as `you@example.com` or `Name <you@example.com>`. Malformed values are rejected before a provider attempt is created. |
 | `RESEND_WEBHOOK_SECRET` | for webhooks | `whsec_...` from Resend → Webhooks. The webhook route fails closed when this is blank. |
 | `CRON_SECRET` | for scheduled jobs | Bearer token Vercel Cron and the scheduled GitHub Actions workflow present on `/api/cron/*`. Cron routes fail closed when this is blank. |
-| `CONTACT_RESEARCH_AGENT_TOKEN` | for contact research | Shared bearer token used by Copilot CLI workers and the hosted queue API. Configure the same value in Vercel and GitHub Actions. Generate it with `openssl rand -hex 32`. |
+| `CONTACT_RESEARCH_AGENT_TOKEN` | optional local contact research | Dedicated bearer token for a local worker. Hosted GitHub Actions research reuses `CRON_SECRET` to avoid production secret drift. |
 | `EDMTRAIN_API_KEY` | for show sync | Request a key at <https://edmtrain.com/api>. |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | for Spotify | Create an app at <https://developer.spotify.com/dashboard>. Redirect URI is `${APP_BASE_URL}/api/spotify/callback`. Spotify rejects `http://localhost`, so use `http://127.0.0.1:3000` locally. |
 | `STATSFM_TOKEN` | for Stats.fm | No public API — grab a session token from DevTools (Application → Local Storage → `token`) after logging into stats.fm. |
@@ -141,8 +141,8 @@ GitHub Actions runs Copilot CLI with a three-artist batch. The custom agent's
 per-artist research limit and the workflow's 45-minute timeout bound each run.
 Scheduled runs are enabled when the workflow reaches the default branch.
 
-Configure repository Actions secrets `APP_BASE_URL` and
-`CONTACT_RESEARCH_AGENT_TOKEN`. The token must exactly match Vercel. Copilot CLI
+Configure repository Actions secrets `APP_BASE_URL` and `CRON_SECRET`, both of
+which are already used by the scheduled application workflows. Copilot CLI
 authenticates with the workflow's short-lived `GITHUB_TOKEN`; no Copilot PAT is
 needed. For organization repositories, enable **Allow use of Copilot CLI billed
 to the organization** and keep the workflow's `copilot-requests: write`
@@ -491,9 +491,6 @@ The scheduled workflows require GitHub repository secrets under
   with no path.
 - `CRON_SECRET` — exactly the same secret configured in the production Vercel
   environment.
-- `CONTACT_RESEARCH_AGENT_TOKEN` — exactly the same strong token configured in
-  the production Vercel environment.
-
 The manager-research workflow also requires `copilot-requests: write`, already
 declared in the workflow. In organization-owned repositories, organization
 policy must allow Copilot CLI usage billed to the organization.

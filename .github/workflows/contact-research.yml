@@ -25,12 +25,12 @@ jobs:
         shell: bash
         env:
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
-          CONTACT_RESEARCH_AGENT_TOKEN: ${{ secrets.CONTACT_RESEARCH_AGENT_TOKEN }}
+          CONTACT_RESEARCH_AGENT_TOKEN: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
 
           if [[ -z "${APP_BASE_URL}" || -z "${CONTACT_RESEARCH_AGENT_TOKEN}" ]]; then
-            echo "::error::APP_BASE_URL and CONTACT_RESEARCH_AGENT_TOKEN repository secrets are required"
+            echo "::error::APP_BASE_URL and CRON_SECRET repository secrets are required"
             exit 1
           fi
 
@@ -84,6 +84,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
-          CONTACT_RESEARCH_AGENT_TOKEN: ${{ secrets.CONTACT_RESEARCH_AGENT_TOKEN }}
+          CONTACT_RESEARCH_AGENT_TOKEN: ${{ secrets.CRON_SECRET }}
           CONTACT_RESEARCH_LIMIT: "3"
         run: npm run contact-research:agent
