@@ -145,6 +145,23 @@ async function refreshTopPlaylist() {
           "Spotify may have completed the playlist replacement, but its response was lost. Freshness was not advanced; inspect the playlist and retry.";
         params.set("playlistId", execution.data.playlistId);
         params.set("url", execution.data.playlistUrl);
+      } else if (
+        execution.reason ===
+        "playlist_description_update_outcome_uncertain"
+      ) {
+        playlistStatus = "uncertain";
+        detail =
+          "Spotify replaced the playlist items, but the description update response was inconclusive. Freshness was not advanced; inspect the playlist and retry.";
+        params.set("playlistId", execution.data.playlistId);
+        params.set("url", execution.data.playlistUrl);
+      } else if (
+        execution.reason === "playlist_description_update_failed"
+      ) {
+        playlistStatus = "partial";
+        detail =
+          "Spotify replaced the playlist items, but the description update failed. Freshness was not advanced; retry to complete the refresh.";
+        params.set("playlistId", execution.data.playlistId);
+        params.set("url", execution.data.playlistUrl);
       } else {
         detail =
           "Spotify completed the playlist replacement, but freshness could not be saved. Freshness was not advanced; retry.";

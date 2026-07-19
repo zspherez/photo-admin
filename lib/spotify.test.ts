@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   SpotifyApiError,
+  SpotifyPlaylistDetailsMutationUncertainError,
   SpotifyPlaylistMutationUncertainError,
   buildSpotifyPlaylistReconciliationPlan,
   classifySpotifyPlaylistItemsError,
@@ -14,6 +15,7 @@ import {
   searchTrackUri,
   spotifyPlaylistSignalArtistIds,
   syncSpotifyListens,
+  updatePlaylistDescription,
 } from "./spotify";
 import {
   createOperationDeadline,
@@ -314,6 +316,80 @@ test("pre-dispatch Spotify playlist deadline failures remain safe deferrals", as
       }
     );
     assert.equal(fetches, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Spotify playlist descriptions use the supported details endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{
+    pathname: string;
+    method: string;
+    body: unknown;
+  }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input
+          : input.url
+    );
+    requests.push({
+      pathname: url.pathname,
+      method: init?.method ?? "GET",
+      body: JSON.parse(String(init?.body)),
+    });
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    await updatePlaylistDescription(
+      "playlist/id",
+      "Last updated",
+      "token",
+      createOperationDeadline(10_000, { now: () => 0 })
+    );
+    assert.deepEqual(requests, [
+      {
+        pathname: "/v1/playlists/playlist%2Fid",
+        method: "PUT",
+        body: { description: "Last updated" },
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ambiguous playlist description updates are not broadly retried", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetches = 0;
+  globalThis.fetch = (async () => {
+    fetches++;
+    throw Object.assign(new Error("connection lost after dispatch"), {
+      name: "AbortError",
+    });
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      updatePlaylistDescription(
+        "playlist",
+        "description",
+        "token",
+        createOperationDeadline(10_000, { now: () => 0 })
+      ),
+      (error) => {
+        assert.ok(
+          error instanceof SpotifyPlaylistDetailsMutationUncertainError
+        );
+        assert.equal(error.playlistId, "playlist");
+        return true;
+      }
+    );
+    assert.equal(fetches, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

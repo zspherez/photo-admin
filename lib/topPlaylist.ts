@@ -12,8 +12,10 @@ import {
   replacePlaylistItems,
   searchTrackUri,
   SpotifyApiError,
+  SpotifyPlaylistDetailsMutationUncertainError,
   SpotifyPlaylistMutationUncertainError,
   SPOTIFY_SYNC_LEASE_KEY,
+  updatePlaylistDescription,
   type CurrentUserPlaylist,
 } from "@/lib/spotify";
 import {
@@ -44,8 +46,10 @@ const PLAYLIST_ID_KEY = "top_tracks_playlist_id";
 const PLAYLIST_LOCK_KEY = "top_tracks_playlist_creation_lock";
 const PLAYLIST_LAST_SYNC_KEY = "top_tracks_playlist_last_sync";
 const PLAYLIST_NAME = "My Top Songs · Last 4 Weeks";
-const PLAYLIST_DESCRIPTION =
+export const PLAYLIST_DESCRIPTION_BASE =
   "Auto-updated every morning — my top tracks from the last 4 weeks (via stats.fm).";
+const PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX = `${PLAYLIST_DESCRIPTION_BASE} Last updated: `;
+const PLAYLIST_TIME_ZONE = "America/New_York";
 const PLAYLIST_CREATION_GRACE_MS = 10 * 60 * 1_000;
 const TOP_PLAYLIST_DEFAULT_OPERATION_MS = 3 * 60 * 1_000;
 const TOP_PLAYLIST_TRANSACTION_MAX_WAIT_MS = 15_000;
@@ -147,6 +151,64 @@ export interface TopPlaylistExternalWriteUncertainResult {
   };
 }
 
+export interface TopPlaylistDescriptionUpdateFailedResult {
+  ok: false;
+  status: "partial";
+  reason: "playlist_description_update_failed";
+  data: TopPlaylistResult;
+  details: {
+    phase: "playlist_description_update";
+    itemReplacementCompleted: true;
+    descriptionUpdateCompleted: false;
+    descriptionUpdateMayHaveCompleted: false;
+    freshnessPersisted: false;
+    priorSnapshotPreserved: false;
+    error: string;
+    providerStatus: number | null;
+    retryAfterMs: number | null;
+    deadline: {
+      cause: NonNullable<
+        OperationDeadlineDeferredResult["details"]["deadlineCause"]
+      >;
+      operation: string;
+      requiredMs: number;
+      remainingMs: number;
+      expiresAtMs: number | null;
+      retryAfterMs: number | null;
+      safeExecutionBudgetMs: number | null;
+    } | null;
+  };
+}
+
+export interface TopPlaylistDescriptionUpdateUncertainResult {
+  ok: false;
+  status: "partial";
+  reason: "playlist_description_update_outcome_uncertain";
+  data: TopPlaylistResult;
+  details: {
+    phase: "playlist_description_update";
+    itemReplacementCompleted: true;
+    descriptionUpdateCompleted: null;
+    descriptionUpdateMayHaveCompleted: true;
+    freshnessPersisted: false;
+    priorSnapshotPreserved: false;
+    verification: "not_attempted";
+    error: string;
+    playlistId: string;
+    deadline: {
+      cause: NonNullable<
+        OperationDeadlineDeferredResult["details"]["deadlineCause"]
+      >;
+      operation: string;
+      requiredMs: number;
+      remainingMs: number;
+      expiresAtMs: number | null;
+      retryAfterMs: number | null;
+      safeExecutionBudgetMs: number | null;
+    } | null;
+  };
+}
+
 export interface TopPlaylistCreationUncertainResult {
   ok: false;
   status: "partial";
@@ -215,8 +277,36 @@ export type TopPlaylistExecutionResult =
   | OperationDeadlineDeferredResult
   | TopPlaylistExternalWritePartialResult
   | TopPlaylistExternalWriteUncertainResult
+  | TopPlaylistDescriptionUpdateFailedResult
+  | TopPlaylistDescriptionUpdateUncertainResult
   | TopPlaylistCreationUncertainResult
   | TopPlaylistCreatedIncompleteResult;
+
+export function formatManagedPlaylistDescription(refreshedAt: Date): string {
+  if (Number.isNaN(refreshedAt.getTime())) {
+    throw new RangeError("Playlist refresh timestamp must be a valid date");
+  }
+  const timestamp = new Intl.DateTimeFormat("en-US", {
+    timeZone: PLAYLIST_TIME_ZONE,
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  }).format(refreshedAt);
+  return `${PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX}${timestamp}.`;
+}
+
+function isManagedPlaylistDescription(
+  description: string | undefined
+): boolean {
+  return (
+    description === PLAYLIST_DESCRIPTION_BASE ||
+    description?.startsWith(PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX) === true
+  );
+}
 
 export function minimumTopPlaylistFreshnessRemainingMs(): number {
   return minimumDeadlineTransactionRemainingMs(
@@ -226,7 +316,7 @@ export function minimumTopPlaylistFreshnessRemainingMs(): number {
 
 export function minimumTopPlaylistExternalWriteRemainingMs(): number {
   return (
-    PROVIDER_REQUEST_MIN_REMAINING_MS +
+    PROVIDER_REQUEST_MIN_REMAINING_MS * 2 +
     minimumTopPlaylistFreshnessRemainingMs()
   );
 }
@@ -443,6 +533,57 @@ export class TopPlaylistExternalWriteUncertainError<T> extends Error {
   }
 }
 
+export class TopPlaylistDescriptionUpdateFailedError<T> extends Error {
+  constructor(
+    readonly data: T,
+    readonly descriptionFailure: unknown
+  ) {
+    super(
+      "Spotify playlist items were replaced, but the description update failed",
+      { cause: descriptionFailure }
+    );
+    this.name = "TopPlaylistDescriptionUpdateFailedError";
+  }
+}
+
+export class TopPlaylistDescriptionUpdateUncertainError<T> extends Error {
+  constructor(
+    readonly data: T,
+    readonly mutationFailure: SpotifyPlaylistDetailsMutationUncertainError
+  ) {
+    super(
+      "Spotify playlist items were replaced, but the description update outcome is uncertain",
+      { cause: mutationFailure }
+    );
+    this.name = "TopPlaylistDescriptionUpdateUncertainError";
+  }
+}
+
+export async function runTopPlaylistExternalWrites<T>(
+  data: T,
+  replaceItems: () => Promise<void>,
+  updateDescription: () => Promise<void>
+): Promise<T> {
+  try {
+    await replaceItems();
+  } catch (error) {
+    if (error instanceof SpotifyPlaylistMutationUncertainError) {
+      throw new TopPlaylistExternalWriteUncertainError(data, error);
+    }
+    throw error;
+  }
+
+  try {
+    await updateDescription();
+  } catch (error) {
+    if (error instanceof SpotifyPlaylistDetailsMutationUncertainError) {
+      throw new TopPlaylistDescriptionUpdateUncertainError(data, error);
+    }
+    throw new TopPlaylistDescriptionUpdateFailedError(data, error);
+  }
+  return data;
+}
+
 export async function runTopPlaylistCreationWithReservedDownstream<
   T extends { id?: string; playlistId?: string },
 >(
@@ -507,7 +648,7 @@ export async function runTopPlaylistExternalWriteAndFreshness<T>(
   const freshnessBudgetMs = minimumTopPlaylistFreshnessRemainingMs();
   assertOperationTimeRemaining(
     deadline,
-    PROVIDER_REQUEST_MIN_REMAINING_MS + freshnessBudgetMs,
+    minimumTopPlaylistExternalWriteRemainingMs(),
     "Top-playlist replacement with freshness persistence"
   );
   const writeDeadline = operationDeadlineWithReservedTime(
@@ -530,6 +671,8 @@ export function asTopPlaylistExternalWritePartialResult(
 ):
   | TopPlaylistExternalWritePartialResult
   | TopPlaylistExternalWriteUncertainResult
+  | TopPlaylistDescriptionUpdateFailedResult
+  | TopPlaylistDescriptionUpdateUncertainResult
   | TopPlaylistCreationUncertainResult
   | TopPlaylistCreatedIncompleteResult
   | null {
@@ -667,6 +810,87 @@ export function asTopPlaylistExternalWritePartialResult(
       },
     };
   }
+  if (error instanceof TopPlaylistDescriptionUpdateUncertainError) {
+    const cause = error.mutationFailure;
+    const deferred = asOperationDeadlineDeferredResult(
+      cause.mutationFailure,
+      {
+        deadline,
+        operation: "Spotify playlist description update",
+      }
+    );
+    const details = deferred?.details;
+    return {
+      ok: false,
+      status: "partial",
+      reason: "playlist_description_update_outcome_uncertain",
+      data: error.data as TopPlaylistResult,
+      details: {
+        phase: "playlist_description_update",
+        itemReplacementCompleted: true,
+        descriptionUpdateCompleted: null,
+        descriptionUpdateMayHaveCompleted: true,
+        freshnessPersisted: false,
+        priorSnapshotPreserved: false,
+        verification: "not_attempted",
+        error:
+          cause.mutationFailure instanceof Error
+            ? cause.mutationFailure.message
+            : String(cause.mutationFailure),
+        playlistId: cause.playlistId,
+        deadline: details
+          ? {
+              cause: details.deadlineCause ?? "operation_deadline",
+              operation: details.operation,
+              requiredMs: details.requiredMs,
+              remainingMs: details.remainingMs,
+              expiresAtMs: details.expiresAtMs ?? null,
+              retryAfterMs: details.retryAfterMs ?? null,
+              safeExecutionBudgetMs:
+                details.safeExecutionBudgetMs ?? null,
+            }
+          : null,
+      },
+    };
+  }
+  if (error instanceof TopPlaylistDescriptionUpdateFailedError) {
+    const cause = error.descriptionFailure;
+    const deferred = asOperationDeadlineDeferredResult(cause, {
+      deadline,
+      operation: "Spotify playlist description update",
+    });
+    const details = deferred?.details;
+    return {
+      ok: false,
+      status: "partial",
+      reason: "playlist_description_update_failed",
+      data: error.data as TopPlaylistResult,
+      details: {
+        phase: "playlist_description_update",
+        itemReplacementCompleted: true,
+        descriptionUpdateCompleted: false,
+        descriptionUpdateMayHaveCompleted: false,
+        freshnessPersisted: false,
+        priorSnapshotPreserved: false,
+        error: cause instanceof Error ? cause.message : String(cause),
+        providerStatus: cause instanceof SpotifyApiError ? cause.status : null,
+        retryAfterMs:
+          cause instanceof SpotifyApiError ? cause.retryAfterMs : null,
+        deadline: details
+          ? {
+              cause: details.deadlineCause ?? "operation_deadline",
+              operation: details.operation,
+              requiredMs: details.requiredMs,
+              remainingMs: details.remainingMs,
+              expiresAtMs: details.expiresAtMs ?? null,
+              retryAfterMs: details.retryAfterMs ?? null,
+              safeExecutionBudgetMs:
+                details.safeExecutionBudgetMs ?? null,
+            }
+          : null,
+      },
+    };
+  }
   if (!(error instanceof TopPlaylistExternalWriteCompletedError)) return null;
   const cause = error.freshnessFailure;
   const deferred = asOperationDeadlineDeferredResult(cause, {
@@ -714,7 +938,7 @@ export function selectOwnedManagedPlaylist(
       .filter(
         (playlist) =>
           playlist.name === PLAYLIST_NAME &&
-          playlist.description === PLAYLIST_DESCRIPTION &&
+          isManagedPlaylistDescription(playlist.description) &&
           isSpotifyPlaylistOwnedByUser(playlist, currentUserId)
       )
       .sort((left, right) => left.id.localeCompare(right.id))[0] ?? null
@@ -903,6 +1127,7 @@ async function finishClaim(
 async function findOrCreateManagedPlaylist(
   token: string,
   currentUserId: string,
+  description: string,
   lease: IntegrationSyncLeaseGuard,
   deadline: OperationDeadline
 ): Promise<{
@@ -1006,7 +1231,7 @@ async function findOrCreateManagedPlaylist(
         (creationDeadline) =>
           createPlaylist(
             PLAYLIST_NAME,
-            PLAYLIST_DESCRIPTION,
+            description,
             false,
             token,
             creationDeadline
@@ -1130,6 +1355,7 @@ export function asTopPlaylistLeaseStaleResult(
 
 async function refreshTopTracksPlaylistUnleased(
   limit: number,
+  description: string,
   lease: IntegrationSyncLeaseGuard,
   deadline: OperationDeadline
 ): Promise<TopPlaylistResult> {
@@ -1198,6 +1424,7 @@ async function refreshTopTracksPlaylistUnleased(
     playlist = await findOrCreateManagedPlaylist(
       token,
       currentUserId,
+      description,
       lease,
       deadline
     );
@@ -1232,20 +1459,23 @@ async function refreshTopTracksPlaylistUnleased(
     return await runTopPlaylistExternalWriteAndFreshness(
       deadline,
       async (replacementDeadline) => {
-        try {
-          await replacePlaylistItems(
-            playlist.id,
-            uniqueUris,
-            token,
-            replacementDeadline
-          );
-        } catch (error) {
-          if (error instanceof SpotifyPlaylistMutationUncertainError) {
-            throw new TopPlaylistExternalWriteUncertainError(result, error);
-          }
-          throw error;
-        }
-        return result;
+        return runTopPlaylistExternalWrites(
+          result,
+          () =>
+            replacePlaylistItems(
+              playlist.id,
+              uniqueUris,
+              token,
+              replacementDeadline
+            ),
+          () =>
+            updatePlaylistDescription(
+              playlist.id,
+              description,
+              token,
+              replacementDeadline
+            )
+        );
       },
       async () => {
         await persistPlaylistFreshness(
@@ -1259,7 +1489,9 @@ async function refreshTopTracksPlaylistUnleased(
     if (
       playlist.created &&
       !(error instanceof TopPlaylistExternalWriteCompletedError) &&
-      !(error instanceof TopPlaylistExternalWriteUncertainError)
+      !(error instanceof TopPlaylistExternalWriteUncertainError) &&
+      !(error instanceof TopPlaylistDescriptionUpdateFailedError) &&
+      !(error instanceof TopPlaylistDescriptionUpdateUncertainError)
     ) {
       throw new TopPlaylistCreatedIncompleteError(
         result,
@@ -1273,12 +1505,20 @@ async function refreshTopTracksPlaylistUnleased(
 
 export async function refreshTopTracksPlaylist(
   limit = 50,
-  deadline: OperationDeadline = defaultTopPlaylistDeadline()
+  deadline: OperationDeadline = defaultTopPlaylistDeadline(),
+  refreshedAt: Date = new Date()
 ): Promise<TopPlaylistExecutionResult> {
+  const description = formatManagedPlaylistDescription(refreshedAt);
   try {
     return await withIntegrationSyncLease(
       SPOTIFY_SYNC_LEASE_KEY,
-      (lease) => refreshTopTracksPlaylistUnleased(limit, lease, deadline),
+      (lease) =>
+        refreshTopTracksPlaylistUnleased(
+          limit,
+          description,
+          lease,
+          deadline
+        ),
       {
         deadline,
         minimumRemainingMs: minimumDeadlineTransactionRemainingMs(

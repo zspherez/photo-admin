@@ -120,6 +120,21 @@ export class SpotifyPlaylistMutationUncertainError extends Error {
   }
 }
 
+export class SpotifyPlaylistDetailsMutationUncertainError extends Error {
+  readonly code = "spotify_playlist_details_mutation_uncertain";
+
+  constructor(
+    readonly playlistId: string,
+    readonly mutationFailure: unknown
+  ) {
+    super(
+      `Spotify playlist ${playlistId} details may have been updated, but the provider response was inconclusive`,
+      { cause: mutationFailure }
+    );
+    this.name = "SpotifyPlaylistDetailsMutationUncertainError";
+  }
+}
+
 type RetryMode = "safe" | "rate-limit-only" | "all" | "none";
 
 interface SpotifyRequestPolicy {
@@ -543,6 +558,40 @@ export async function replacePlaylistItems(
       throw new SpotifyPlaylistMutationUncertainError(
         playlistId,
         uris.slice(0, 100).length,
+        error
+      );
+    }
+    throw error;
+  }
+}
+
+export async function updatePlaylistDescription(
+  playlistId: string,
+  description: string,
+  tokenOverride?: string,
+  deadline: OperationDeadline = defaultSpotifyRequestDeadline()
+): Promise<void> {
+  const path = `/playlists/${encodeURIComponent(playlistId)}`;
+  const init: RequestInit = {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ description }),
+  };
+  const token = tokenOverride ?? (await getValidAccessToken(deadline));
+  if (!token) throw new Error("Spotify not connected");
+  let outcomeUncertain = false;
+  try {
+    await spotifyResponseWithToken(token, path, init, {
+      deadline,
+      retryMode: "rate-limit-only",
+      onAmbiguousFailure: () => {
+        outcomeUncertain = true;
+      },
+    });
+  } catch (error) {
+    if (outcomeUncertain) {
+      throw new SpotifyPlaylistDetailsMutationUncertainError(
+        playlistId,
         error
       );
     }

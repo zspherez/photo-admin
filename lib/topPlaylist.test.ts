@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   SPOTIFY_SYNC_LEASE_KEY,
   SpotifyApiError,
+  SpotifyPlaylistDetailsMutationUncertainError,
   SpotifyPlaylistMutationUncertainError,
 } from "./spotify";
 import {
@@ -20,15 +21,20 @@ import {
   asTopPlaylistExternalWritePartialResult,
   asTopPlaylistLeaseStaleResult,
   classifyTopPlaylistCreationFailure,
+  formatManagedPlaylistDescription,
   minimumTopPlaylistCreationRemainingMs,
   minimumTopPlaylistExternalWriteRemainingMs,
   minimumTopPlaylistFreshnessRemainingMs,
+  PLAYLIST_DESCRIPTION_BASE,
   refreshTopTracksPlaylist,
   runTopPlaylistCreationWithReservedDownstream,
   runTopPlaylistExternalWriteAndFreshness,
+  runTopPlaylistExternalWrites,
   selectOwnedManagedPlaylist,
   TopPlaylistCreatedIncompleteError,
   TopPlaylistCreationOutcomeUncertainError,
+  TopPlaylistDescriptionUpdateFailedError,
+  TopPlaylistDescriptionUpdateUncertainError,
   TopPlaylistExternalWriteUncertainError,
   type TopPlaylistResult,
 } from "./topPlaylist";
@@ -36,7 +42,7 @@ import {
 async function captureCreationFailure(error: unknown): Promise<unknown> {
   const completed = Symbol("completed");
   const failure = await runTopPlaylistCreationWithReservedDownstream(
-    createOperationDeadline(22_002, { now: () => 0 }),
+    createOperationDeadline(27_002, { now: () => 0 }),
     async () => {
       throw error;
     },
@@ -56,10 +62,24 @@ test("top-playlist refresh uses the shared Spotify provider lease key", () => {
   );
 });
 
+test("managed playlist descriptions use deterministic Eastern timestamps", () => {
+  assert.equal(
+    formatManagedPlaylistDescription(
+      new Date("2026-07-19T00:48:00.000Z")
+    ),
+    `${PLAYLIST_DESCRIPTION_BASE} Last updated: Jul 18, 2026, 8:48 PM EDT.`
+  );
+  assert.equal(
+    formatManagedPlaylistDescription(
+      new Date("2026-01-19T01:05:00.000Z")
+    ),
+    `${PLAYLIST_DESCRIPTION_BASE} Last updated: Jan 18, 2026, 8:05 PM EST.`
+  );
+});
+
 test("managed playlist discovery ignores matching foreign playlists", () => {
   const name = "My Top Songs · Last 4 Weeks";
-  const description =
-    "Auto-updated every morning — my top tracks from the last 4 weeks (via stats.fm).";
+  const description = `${PLAYLIST_DESCRIPTION_BASE} Last updated: Jul 18, 2026, 8:48 PM EDT.`;
   const selected = selectOwnedManagedPlaylist(
     [
       {
@@ -76,13 +96,19 @@ test("managed playlist discovery ignores matching foreign playlists", () => {
         owner: { id: "followed-owner" },
       },
       {
-        id: "c-owned",
+        id: "c-unrelated-owned",
+        name,
+        description: "A personal playlist with the same name.",
+        owner: { id: "current-user" },
+      },
+      {
+        id: "d-owned",
         name,
         description,
         owner: { id: "current-user" },
       },
       {
-        id: "d-owner-omitted",
+        id: "e-owner-omitted",
         name,
         description,
       },
@@ -90,7 +116,23 @@ test("managed playlist discovery ignores matching foreign playlists", () => {
     "current-user"
   );
 
-  assert.equal(selected?.id, "c-owned");
+  assert.equal(selected?.id, "d-owned");
+});
+
+test("managed playlist discovery accepts the legacy managed base description", () => {
+  const selected = selectOwnedManagedPlaylist(
+    [
+      {
+        id: "managed",
+        name: "My Top Songs · Last 4 Weeks",
+        description: PLAYLIST_DESCRIPTION_BASE,
+        owner: { id: "current-user" },
+      },
+    ],
+    "current-user"
+  );
+
+  assert.equal(selected?.id, "managed");
 });
 
 test("stored playlists are ownership-validated before replacement", () => {
@@ -110,7 +152,10 @@ test("stored playlists are ownership-validated before replacement", () => {
     "await clearMissingStoredPlaylist(",
     ownershipValidation
   );
-  const replacement = source.indexOf("await replacePlaylistItems(");
+  const replacement = source.indexOf(
+    "replacePlaylistItems(",
+    ownershipValidation
+  );
 
   assert.ok(currentUserRead >= 0);
   assert.ok(ownershipValidation > storedDecision);
@@ -165,12 +210,12 @@ test("top-playlist replacement reserves the deterministic freshness boundary", a
     created: false,
   };
   assert.equal(minimumTopPlaylistFreshnessRemainingMs(), 6_001);
-  assert.equal(minimumTopPlaylistExternalWriteRemainingMs(), 11_001);
+  assert.equal(minimumTopPlaylistExternalWriteRemainingMs(), 16_001);
 
   let externalWrites = 0;
   await assert.rejects(
     runTopPlaylistExternalWriteAndFreshness(
-      createOperationDeadline(11_000, { now: () => 0 }),
+      createOperationDeadline(16_000, { now: () => 0 }),
       async () => {
         externalWrites++;
         return result;
@@ -182,16 +227,16 @@ test("top-playlist replacement reserves the deterministic freshness boundary", a
   assert.equal(externalWrites, 0);
 
   let nowMs = 0;
-  const exactDeadline = createOperationDeadline(11_001, {
+  const exactDeadline = createOperationDeadline(16_001, {
     now: () => nowMs,
   });
   assert.equal(
     await runTopPlaylistExternalWriteAndFreshness(
       exactDeadline,
       async (writeDeadline) => {
-        assert.equal(remainingOperationTimeMs(writeDeadline), 5_000);
+        assert.equal(remainingOperationTimeMs(writeDeadline), 10_000);
         externalWrites++;
-        nowMs += 5_000;
+        nowMs += 10_000;
         return result;
       },
       async () => {
@@ -208,11 +253,11 @@ test("top-playlist replacement reserves the deterministic freshness boundary", a
 });
 
 test("playlist creation reserves ID persistence, replacement, and freshness before dispatch", async () => {
-  assert.equal(minimumTopPlaylistCreationRemainingMs(), 22_002);
+  assert.equal(minimumTopPlaylistCreationRemainingMs(), 27_002);
   let creationCalls = 0;
   await assert.rejects(
     runTopPlaylistCreationWithReservedDownstream(
-      createOperationDeadline(22_001, { now: () => 0 }),
+      createOperationDeadline(27_001, { now: () => 0 }),
       async () => {
         creationCalls++;
         return { id: "created", url: "https://example.com/created" };
@@ -224,7 +269,7 @@ test("playlist creation reserves ID persistence, replacement, and freshness befo
   assert.equal(creationCalls, 0);
 
   let nowMs = 0;
-  const deadline = createOperationDeadline(22_002, {
+  const deadline = createOperationDeadline(27_002, {
     now: () => nowMs,
   });
   const created = await runTopPlaylistCreationWithReservedDownstream(
@@ -406,7 +451,7 @@ test("a dispatched creation with a lost response is explicitly uncertain", () =>
 });
 
 test("a known created playlist ID survives persistence failure", async () => {
-  const deadline = createOperationDeadline(22_002, { now: () => 0 });
+  const deadline = createOperationDeadline(27_002, { now: () => 0 });
   const data: TopPlaylistResult = {
     sourceTracks: 1,
     matchedUris: 1,
@@ -460,14 +505,14 @@ test("post-write freshness failures report an explicit partial state", async () 
     created: false,
   };
   let nowMs = 0;
-  const deadline = createOperationDeadline(11_001, { now: () => nowMs });
+  const deadline = createOperationDeadline(16_001, { now: () => nowMs });
   let failure: unknown;
   try {
     await runTopPlaylistExternalWriteAndFreshness(
       deadline,
       async (writeDeadline) => {
-        assert.equal(remainingOperationTimeMs(writeDeadline), 5_000);
-        nowMs += 5_000;
+        assert.equal(remainingOperationTimeMs(writeDeadline), 10_000);
+        nowMs += 10_000;
         return result;
       },
       async () => {
@@ -514,7 +559,7 @@ test("ambiguous playlist PUT failures never advance freshness or claim preservat
     playlistUrl: "https://open.spotify.com/playlist/playlist",
     created: false,
   };
-  const deadline = createOperationDeadline(11_001, { now: () => 0 });
+  const deadline = createOperationDeadline(16_001, { now: () => 0 });
   const failure = new TopPlaylistExternalWriteUncertainError(
     result,
     new SpotifyPlaylistMutationUncertainError(
@@ -555,6 +600,157 @@ test("ambiguous playlist PUT failures never advance freshness or claim preservat
   assert.equal(
     JSON.stringify(partial).includes('"priorSnapshotPreserved":true'),
     false
+  );
+});
+
+test("playlist items, description, and freshness update in order", async () => {
+  const events: string[] = [];
+  const result: TopPlaylistResult = {
+    sourceTracks: 1,
+    matchedUris: 1,
+    unmatched: [],
+    playlistId: "playlist",
+    playlistUrl: "https://open.spotify.com/playlist/playlist",
+    created: false,
+  };
+
+  await runTopPlaylistExternalWriteAndFreshness(
+    createOperationDeadline(16_001, { now: () => 0 }),
+    () =>
+      runTopPlaylistExternalWrites(
+        result,
+        async () => {
+          events.push("items");
+        },
+        async () => {
+          events.push("description");
+        }
+      ),
+    async () => {
+      events.push("freshness");
+    }
+  );
+
+  assert.deepEqual(events, ["items", "description", "freshness"]);
+});
+
+test("definitive description failure is partial and does not persist freshness", async () => {
+  const result: TopPlaylistResult = {
+    sourceTracks: 1,
+    matchedUris: 1,
+    unmatched: [],
+    playlistId: "playlist",
+    playlistUrl: "https://open.spotify.com/playlist/playlist",
+    created: false,
+  };
+  const deadline = createOperationDeadline(16_001, { now: () => 0 });
+  let freshnessWrites = 0;
+  let failure: unknown;
+  try {
+    await runTopPlaylistExternalWriteAndFreshness(
+      deadline,
+      () =>
+        runTopPlaylistExternalWrites(
+          result,
+          async () => undefined,
+          async () => {
+            throw new SpotifyApiError(400, "invalid description", null);
+          }
+        ),
+      async () => {
+        freshnessWrites++;
+      }
+    );
+  } catch (error) {
+    failure = error;
+  }
+
+  assert.ok(failure instanceof TopPlaylistDescriptionUpdateFailedError);
+  assert.equal(freshnessWrites, 0);
+  const partial = asTopPlaylistExternalWritePartialResult(failure, deadline);
+  assert.equal(partial?.reason, "playlist_description_update_failed");
+  if (partial?.reason === "playlist_description_update_failed") {
+    assert.equal(partial.details.itemReplacementCompleted, true);
+    assert.equal(partial.details.descriptionUpdateCompleted, false);
+    assert.equal(partial.details.descriptionUpdateMayHaveCompleted, false);
+    assert.equal(partial.details.freshnessPersisted, false);
+    assert.equal(partial.details.priorSnapshotPreserved, false);
+    assert.equal(partial.details.providerStatus, 400);
+  }
+});
+
+test("uncertain description failure is partial and does not persist freshness", async () => {
+  const result: TopPlaylistResult = {
+    sourceTracks: 1,
+    matchedUris: 1,
+    unmatched: [],
+    playlistId: "playlist",
+    playlistUrl: "https://open.spotify.com/playlist/playlist",
+    created: false,
+  };
+  const deadline = createOperationDeadline(16_001, { now: () => 0 });
+  let freshnessWrites = 0;
+  let failure: unknown;
+  try {
+    await runTopPlaylistExternalWriteAndFreshness(
+      deadline,
+      () =>
+        runTopPlaylistExternalWrites(
+          result,
+          async () => undefined,
+          async () => {
+            throw new SpotifyPlaylistDetailsMutationUncertainError(
+              "playlist",
+              Object.assign(new Error("connection lost"), {
+                name: "AbortError",
+              })
+            );
+          }
+        ),
+      async () => {
+        freshnessWrites++;
+      }
+    );
+  } catch (error) {
+    failure = error;
+  }
+
+  assert.ok(failure instanceof TopPlaylistDescriptionUpdateUncertainError);
+  assert.equal(freshnessWrites, 0);
+  const partial = asTopPlaylistExternalWritePartialResult(failure, deadline);
+  assert.equal(
+    partial?.reason,
+    "playlist_description_update_outcome_uncertain"
+  );
+  if (
+    partial?.reason === "playlist_description_update_outcome_uncertain"
+  ) {
+    assert.equal(partial.details.itemReplacementCompleted, true);
+    assert.equal(partial.details.descriptionUpdateCompleted, null);
+    assert.equal(partial.details.descriptionUpdateMayHaveCompleted, true);
+    assert.equal(partial.details.freshnessPersisted, false);
+    assert.equal(partial.details.priorSnapshotPreserved, false);
+    assert.equal(partial.details.deadline?.cause, "abort_signal");
+  }
+});
+
+test("new playlist creation receives the refresh-attempt description", () => {
+  const source = readFileSync(
+    new URL("./topPlaylist.ts", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(
+    source,
+    /const description = formatManagedPlaylistDescription\(refreshedAt\)/
+  );
+  assert.match(
+    source,
+    /createPlaylist\(\s*PLAYLIST_NAME,\s*description,\s*false/
+  );
+  assert.ok(
+    source.indexOf("await replacePlaylistItems(") <
+      source.indexOf("updatePlaylistDescription(")
   );
 });
 
