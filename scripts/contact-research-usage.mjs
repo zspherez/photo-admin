@@ -16,6 +16,38 @@ export function parseUsageEvent(event, currentNanoAiu = null) {
   return currentNanoAiu;
 }
 
+export function parseOtelNanoAiu(lines) {
+  const spans = lines.flatMap((line) => {
+    try {
+      const value = JSON.parse(line);
+      return value?.type === "span" ? [value] : [];
+    } catch {
+      return [];
+    }
+  });
+  const root = spans.find(
+    (span) =>
+      span.name === "invoke_agent" &&
+      !span.parentSpanId &&
+      Number.isFinite(span.attributes?.["github.copilot.nano_aiu"])
+  );
+  if (root) return root.attributes["github.copilot.nano_aiu"];
+
+  const chatTotal = spans
+    .filter(
+      (span) =>
+        typeof span.name === "string" &&
+        span.name.startsWith("chat ") &&
+        Number.isFinite(span.attributes?.["github.copilot.nano_aiu"])
+    )
+    .reduce(
+      (sum, span) =>
+        sum + span.attributes["github.copilot.nano_aiu"],
+      0
+    );
+  return chatTotal > 0 ? chatTotal : null;
+}
+
 export function readArtistForSession(metricsFile, sessionId) {
   if (!metricsFile || !sessionId) return null;
   try {

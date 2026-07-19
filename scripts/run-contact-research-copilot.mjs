@@ -1,14 +1,26 @@
 import { spawn } from "node:child_process";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import {
   appendUsageRecord,
   creditsFromNanoAiu,
+  parseOtelNanoAiu,
   parseUsageEvent,
   readArtistForSession,
 } from "./contact-research-usage.mjs";
 
 const prompt = process.argv.slice(2).join(" ").trim();
 if (!prompt) throw new Error("A Copilot prompt is required");
+const telemetryDirectory = mkdtempSync(
+  join(tmpdir(), "contact-research-otel-")
+);
+const telemetryFile = join(telemetryDirectory, "usage.jsonl");
 
 const child = spawn(
   "copilot",
@@ -29,7 +41,10 @@ const child = spawn(
     prompt,
   ],
   {
-    env: process.env,
+    env: {
+      ...process.env,
+      COPILOT_OTEL_FILE_EXPORTER_PATH: telemetryFile,
+    },
     stdio: ["ignore", "pipe", "inherit"],
   }
 );
@@ -81,6 +96,16 @@ const processExitCode = await new Promise((resolve, reject) => {
   child.on("close", (code) => resolve(code ?? 1));
 });
 const exitCode = resultExitCode ?? processExitCode;
+let otelNanoAiu = null;
+try {
+  otelNanoAiu = parseOtelNanoAiu(
+    readFileSync(telemetryFile, "utf8").split(/\r?\n/)
+  );
+} catch {
+  // The JSON event checkpoint remains the fallback for older CLI versions.
+}
+rmSync(telemetryDirectory, { recursive: true, force: true });
+totalNanoAiu = otelNanoAiu ?? totalNanoAiu;
 const sessionId = process.env.CONTACT_RESEARCH_AGENT_SESSION ?? "";
 const artist = readArtistForSession(
   process.env.CONTACT_RESEARCH_BROKER_METRICS_FILE,
