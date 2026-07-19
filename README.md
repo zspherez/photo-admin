@@ -166,6 +166,12 @@ uses public company-domain patterns as a bounded Hunter-style fallback. Its
 narrow localhost broker provides keyless public search and fixed-host page
 reading while keeping queue credentials out of the agent's process.
 
+A blurred or paywalled Booking Agent Info manager email is treated as a lead,
+not an automatic exhausted result. The worker may use the visible manager
+identity and company to independently infer the manager email from public
+company addresses or use an official management-company inbox. It still never
+submits the booking-agent or publicist contact.
+
 This is automated **Copilot CLI on GitHub Actions**, not Copilot cloud agent.
 A credential-isolated localhost broker provides queue calls plus bounded
 read-only web research; private-network targets, oversized responses, and

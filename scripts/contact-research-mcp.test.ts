@@ -84,6 +84,12 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
     "utf8"
   );
   assert.match(agent, /tools: \["bash"\]/);
+  assert.match(agent, /Independently[\s\S]*reconstructing a manager email/);
+  assert.match(agent, /Do not mark the job exhausted merely because/);
+  assert.match(
+    agent,
+    /not about using Booking Agent Info to identify the actual manager/
+  );
   assert.doesNotMatch(agent, /mcp-servers:/);
   assert.match(runner, /contact-research-broker\.mjs/);
   assert.match(runner, /run-contact-research-copilot\.mjs/);
