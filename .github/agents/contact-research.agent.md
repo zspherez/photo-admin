@@ -100,6 +100,19 @@ Every submitted candidate must include:
   - `medium`: the identity and company are confirmed and the address is corroborated or follows a well-established public company pattern.
   - `low`: plausible but weakly corroborated; make the uncertainty explicit.
 
+Prefer contacts in this order:
+
+1. A named manager's direct professional email.
+2. A role-specific management inbox such as `management@company.com`.
+3. An official general management-company inbox.
+4. An artist-named inbox at the confirmed management company.
+
+Do not stop at a generic, company-wide, or artist-named inbox. Continue
+searching for a named manager and direct address first. Submit a fallback inbox
+only after checking public team/staff pages, manager-name searches, press
+releases, and established company email patterns; explain those checks in the
+evidence and do not rate the fallback above `medium`.
+
 Deduplicate addresses. Do not submit a candidate already present in `existingContacts`.
 
 ## Submit results

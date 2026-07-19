@@ -70,7 +70,7 @@ async function createContacts(formData: FormData) {
   const directOutreachNote =
     ((formData.get("directOutreachNote") as string) ?? "").trim() || null;
   const name = ((formData.get("name") as string) ?? "").trim() || null;
-  const role = ((formData.get("role") as string) ?? "").trim() || null;
+  const role = "management";
   const customPrice = ((formData.get("customPrice") as string) ?? "").trim() || null;
   const notes = ((formData.get("notes") as string) ?? "").trim() || null;
 
@@ -335,9 +335,9 @@ export default async function AddContactPage({
             <TextArea
               name="emails"
               label="Emails (optional if phone or direct outreach details given)"
-              description="One per line. Commas, semicolons, and spaces also separate. Each becomes a contact with the shared metadata below. Duplicates are deduped. Leave empty to create one direct/phone contact."
+              description="Manager or management-company emails only. One per line; commas, semicolons, and spaces also separate. Duplicates are deduped. Leave empty to create one direct/phone contact."
               rows={4}
-              placeholder={"manager@example.com\nbooking@example.com\nlabel@example.com"}
+              placeholder={"manager@example.com\nmanagement@company.com"}
               mono
             />
             <Field name="phone" label="Phone (shared, for texting)" type="tel" placeholder="+1 555 123 4567" />
@@ -349,7 +349,6 @@ export default async function AddContactPage({
               placeholder="Reach out directly through…"
             />
             <Field name="name" label="Manager name (shared)" placeholder="Thierry" />
-            <Field name="role" label="Role (shared)" placeholder="management / booking / label" />
             <Field name="customPrice" label="Custom rate (shared)" placeholder="$400" />
             <TextArea name="notes" label="Notes (shared)" rows={3} />
             <p className="text-xs text-zinc-500">

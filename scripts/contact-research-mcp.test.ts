@@ -90,6 +90,8 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
     agent,
     /not about using Booking Agent Info to identify the actual manager/
   );
+  assert.match(agent, /Do not stop at a generic, company-wide, or artist-named inbox/);
+  assert.match(agent, /do not rate the fallback above `medium`/);
   assert.doesNotMatch(agent, /mcp-servers:/);
   assert.match(runner, /contact-research-broker\.mjs/);
   assert.match(runner, /run-contact-research-copilot\.mjs/);
