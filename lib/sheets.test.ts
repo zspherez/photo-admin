@@ -863,7 +863,6 @@ test("protected release stages and verifies the exact target before pausing", ()
     "Check out previously validated main revision",
     "Verify trusted release checkout",
     "Validate protected environment and recovery target binding",
-    "Create one-run staged verification bypass",
     "Bind requested SHA to production migration history and verify database connections",
     "Validate Sheet cutover target before staging",
     "Build exact production revision before pausing",
@@ -882,7 +881,6 @@ test("protected release stages and verifies the exact target before pausing", ()
     "Verify new-code ownership and database compatibility",
     "Unpause verified exact target",
     "Catch up production data after resume",
-    "Revoke one-run staged verification bypass",
   ];
   invariantSteps.reduce((previous, step) => {
     const current = source.indexOf(step);
@@ -905,19 +903,8 @@ test("protected release stages and verifies the exact target before pausing", ()
     source,
     /bash scripts\/verify-staged-runtime\.sh "\$\{TARGET_URL\}" "\$\{RELEASE_SHA\}"/
   );
-  assert.match(
-    source,
-    /vercel project protection enable[\s\S]*--protection-bypass-secret "\$\{release_bypass\}"/
-  );
-  assert.match(source, /::add-mask::\$\{release_bypass\}/);
-  assert.match(
-    source,
-    /vercel project protection disable[\s\S]*--protection-bypass-secret "\$\{VERCEL_AUTOMATION_BYPASS_SECRET\}"/
-  );
-  assert.doesNotMatch(
-    source,
-    /secrets\.VERCEL_AUTOMATION_BYPASS_SECRET/
-  );
+  assert.match(source, /VERCEL_TOKEN: \$\{\{ secrets\.VERCEL_TOKEN \}\}/);
+  assert.doesNotMatch(source, /VERCEL_AUTOMATION_BYPASS_SECRET/);
   assert.doesNotMatch(source, /vercel env pull/);
   assert.doesNotMatch(
     source,

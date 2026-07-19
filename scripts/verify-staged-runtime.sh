@@ -16,7 +16,7 @@ fi
 : "${DIRECT_URL:?DIRECT_URL is required}"
 : "${APP_BASE_URL:?APP_BASE_URL is required}"
 : "${CRON_SECRET:?CRON_SECRET is required}"
-: "${VERCEL_AUTOMATION_BYPASS_SECRET:?VERCEL_AUTOMATION_BYPASS_SECRET is required}"
+: "${VERCEL_TOKEN:?VERCEL_TOKEN is required}"
 
 if [[ ! "${APP_BASE_URL}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]; then
   echo "APP_BASE_URL must be a production HTTPS origin" >&2
@@ -24,7 +24,7 @@ if [[ ! "${APP_BASE_URL}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]; then
 fi
 
 npm_bin="${NPM_BIN:-npm}"
-curl_bin="${CURL_BIN:-curl}"
+vercel_bin="${VERCEL_BIN:-vercel}"
 sleep_bin="${SLEEP_BIN:-sleep}"
 release_sha_lower="$(printf '%s' "${release_sha}" | tr '[:upper:]' '[:lower:]')"
 release_nonce=""
@@ -88,8 +88,11 @@ while (( request_attempt <= max_request_attempts )); do
   response=""
   if response="$(
     trap - EXIT
-    "${curl_bin}" \
-      "${deployment_url%/}/api/release/runtime-verification" \
+    "${vercel_bin}" curl \
+      "/api/release/runtime-verification" \
+      --deployment "${deployment_url%/}" \
+      --token "${VERCEL_TOKEN}" \
+      -- \
       --fail-with-body \
       --silent \
       --show-error \
@@ -97,7 +100,6 @@ while (( request_attempt <= max_request_attempts )); do
       --max-time 60 \
       --request GET \
       --header "${authorization_header}" \
-      --header "x-vercel-protection-bypass: ${VERCEL_AUTOMATION_BYPASS_SECRET}" \
       --header "Accept: application/json" \
       --header "X-Photo-Admin-Release-App-Base-URL: ${APP_BASE_URL}" \
       --header "X-Photo-Admin-Release-SHA: ${release_sha}" \

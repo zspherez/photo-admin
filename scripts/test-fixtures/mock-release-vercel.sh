@@ -4,10 +4,11 @@ set -euo pipefail
 authorization_header=""
 app_base_url_header=""
 release_sha_header=""
-bypass_header=""
 deployment=""
 token=""
+path=""
 previous_argument=""
+after_separator=false
 state_file="${MOCK_RUNTIME_STATE_FILE:-}"
 request_number=1
 if [[ -n "${state_file}" && -f "${state_file}" ]]; then
@@ -17,17 +18,20 @@ if [[ -n "${state_file}" ]]; then
   printf '%s' "${request_number}" > "${state_file}"
 fi
 for argument in "$@"; do
-  if [[ "${previous_argument}" == "--header" ]]; then
+  if [[ "${argument}" == "--" ]]; then
+    after_separator=true
+  elif [[ "${previous_argument}" == "--header" ]]; then
     case "${argument}" in
       Authorization:*) authorization_header="${argument}" ;;
       X-Photo-Admin-Release-App-Base-URL:*) app_base_url_header="${argument}" ;;
       X-Photo-Admin-Release-SHA:*) release_sha_header="${argument}" ;;
-      x-vercel-protection-bypass:*) bypass_header="${argument}" ;;
     esac
-  elif [[ "${argument}" =~ ^https://[A-Za-z0-9-]+\.vercel\.app/api/release/runtime-verification$ ]]; then
+  elif [[ "${previous_argument}" == "--deployment" ]]; then
     deployment="${argument}"
   elif [[ "${previous_argument}" == "--token" ]]; then
     token="${argument}"
+  elif [[ "${previous_argument}" == "curl" ]]; then
+    path="${argument}"
   fi
   previous_argument="${argument}"
 done
@@ -35,10 +39,10 @@ done
 if [[ "${authorization_header}" != "${MOCK_EXPECT_AUTHORIZATION_HEADER:-}" \
   || "${app_base_url_header}" != "${MOCK_EXPECT_APP_BASE_URL_HEADER:-}" \
   || "${release_sha_header}" != "${MOCK_EXPECT_RELEASE_SHA_HEADER:-}" \
-  || "${bypass_header}" != "${MOCK_EXPECT_BYPASS_HEADER:-}" \
-  || "${deployment}" != "${MOCK_EXPECT_DEPLOYMENT:-}/api/release/runtime-verification" \
-  || -n "${token}" \
-  || "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" != "${MOCK_EXPECT_BYPASS_SECRET:-}" ]]; then
+  || "${path}" != "/api/release/runtime-verification" \
+  || "${deployment}" != "${MOCK_EXPECT_DEPLOYMENT:-}" \
+  || "${token}" != "${MOCK_EXPECT_VERCEL_TOKEN:-}" \
+  || "${after_separator}" != "true" ]]; then
   printf '%s\n__PHOTO_ADMIN_HTTP_STATUS__:403' \
     '{"error":"invalid mock staged request"}'
   exit 0

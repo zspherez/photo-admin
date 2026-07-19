@@ -18,7 +18,7 @@ const releaseSha = "a".repeat(40);
 const nonce = Buffer.alloc(32, 9).toString("base64url");
 const appBaseUrl = "https://photo-admin.example";
 const cronSecret = "cron-secret-must-not-be-logged";
-const bypassSecret = "bypass-secret-must-not-be-logged";
+const vercelToken = "vercel-token-must-not-be-logged";
 
 function runtimeBody(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
@@ -50,9 +50,9 @@ function runVerification(
         DIRECT_URL: "postgresql://direct@example.test/photo_admin",
         APP_BASE_URL: appBaseUrl,
         CRON_SECRET: cronSecret,
-        VERCEL_AUTOMATION_BYPASS_SECRET: bypassSecret,
+        VERCEL_TOKEN: vercelToken,
         NPM_BIN: mockNpm,
-        CURL_BIN: mockVercel,
+        VERCEL_BIN: mockVercel,
         SLEEP_BIN: "/usr/bin/true",
         MOCK_RELEASE_NONCE: nonce,
         MOCK_RELEASE_STATE_FILE: stateFile,
@@ -63,10 +63,8 @@ function runVerification(
           `X-Photo-Admin-Release-App-Base-URL: ${appBaseUrl}`,
         MOCK_EXPECT_RELEASE_SHA_HEADER:
           `X-Photo-Admin-Release-SHA: ${releaseSha}`,
-        MOCK_EXPECT_BYPASS_HEADER:
-          `x-vercel-protection-bypass: ${bypassSecret}`,
         MOCK_EXPECT_DEPLOYMENT: deployment,
-        MOCK_EXPECT_BYPASS_SECRET: bypassSecret,
+        MOCK_EXPECT_VERCEL_TOKEN: vercelToken,
         ...overrides,
       },
     });
@@ -95,14 +93,16 @@ test("staged runtime proof verifies the marker and cleans it before success", ()
   );
   assert.doesNotMatch(
     `${result.stdout}\n${result.stderr}`,
-    new RegExp(`${nonce}|${cronSecret}|${bypassSecret}`)
+    new RegExp(`${nonce}|${cronSecret}|${vercelToken}`)
   );
 });
 
-test("deployment protection bypass stays in the request header", () => {
+test("staged proof uses authenticated Vercel curl instead of raw protection headers", () => {
   const source = readFileSync(script, "utf8");
-  assert.match(source, /x-vercel-protection-bypass: \$\{VERCEL_AUTOMATION_BYPASS_SECRET\}/);
-  assert.doesNotMatch(source, /--token/);
+  assert.match(source, /"\$\{vercel_bin\}" curl/);
+  assert.match(source, /--deployment "\$\{deployment_url%\/\}"/);
+  assert.match(source, /--token "\$\{VERCEL_TOKEN\}"/);
+  assert.doesNotMatch(source, /x-vercel-protection-bypass/);
 });
 
 test("wrong staged database marker fails before pause and still cleans the candidate marker", () => {
@@ -115,7 +115,7 @@ test("wrong staged database marker fails before pause and still cleans the candi
   assert.match(result.stderr, /did not return the fresh release runtime verification marker/);
   assert.doesNotMatch(
     `${result.stdout}\n${result.stderr}`,
-    new RegExp(`${nonce}|${cronSecret}|${bypassSecret}`)
+    new RegExp(`${nonce}|${cronSecret}|${vercelToken}`)
   );
 });
 
