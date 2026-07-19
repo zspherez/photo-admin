@@ -54,7 +54,13 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
   const tools = await client.listTools();
   assert.deepEqual(
     tools.tools.map((tool) => tool.name).sort(),
-    ["claim_jobs", "submit_candidates", "submit_exhausted"]
+    [
+      "claim_jobs",
+      "fetch_page",
+      "search_web",
+      "submit_candidates",
+      "submit_exhausted",
+    ]
   );
   const result = await client.callTool({
     name: "claim_jobs",
@@ -73,8 +79,10 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
     new URL("./run-contact-research-agent.sh", import.meta.url),
     "utf8"
   );
-  assert.match(agent, /tools: \["web", "contact-research\/\*"\]/);
+  assert.match(agent, /tools: \["contact-research\/\*"\]/);
   assert.doesNotMatch(agent, /tools: \[[^\]]*"execute"/);
+  assert.doesNotMatch(agent, /mcp-servers:/);
+  assert.match(runner, /--additional-mcp-config "@\$\{mcp_config\}"/);
   assert.match(runner, /--allow-all-tools/);
   assert.match(runner, /--allow-all-urls/);
   assert.match(runner, /--no-ask-user/);

@@ -1,6 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import {
+  fetchReadablePage,
+  searchWeb,
+} from "./contact-research-web.mjs";
 
 const baseUrl = process.env.APP_BASE_URL?.trim().replace(/\/+$/, "");
 const token = process.env.CONTACT_RESEARCH_AGENT_TOKEN?.trim();
@@ -98,6 +102,31 @@ const server = new McpServer({
   name: "photo-admin-contact-research",
   version: "1.0.0",
 });
+
+server.registerTool(
+  "search_web",
+  {
+    description:
+      "Search the public web for artist management evidence. Returns result titles, URLs, and snippets.",
+    inputSchema: {
+      query: z.string().min(1).max(300),
+      limit: z.number().int().min(1).max(10).default(8),
+    },
+  },
+  async ({ query, limit }) => toolResult(await searchWeb(query, limit))
+);
+
+server.registerTool(
+  "fetch_page",
+  {
+    description:
+      "Fetch a public HTTP(S) page and extract bounded readable text and links. Private-network URLs are blocked.",
+    inputSchema: {
+      url: z.string().url(),
+    },
+  },
+  async ({ url }) => toolResult(await fetchReadablePage(url))
+);
 
 server.registerTool(
   "claim_jobs",
