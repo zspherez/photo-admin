@@ -394,27 +394,29 @@ async function queueFestivalManagerResearch(formData: FormData) {
   const showId = String(formData.get("showId") ?? "").trim();
   const filter = parseFestivalFilter(formData.get("filter"));
   const genre = parseFestivalGenre(formData.get("genre"));
+  const listView = parseFestivalListView({
+    includeInternational: formData.get("includeInternational"),
+    dismissed: formData.get("dismissed"),
+  });
   if (!showId) redirect("/festivals");
 
   let destination: string;
   try {
     const result = await enqueueFestivalManagerResearch(showId);
-    destination = bulkResultHref(showId, filter, genre, {
+    destination = bulkResultHref(showId, filter, genre, listView, {
       manager_research: "1",
       manager_eligible: String(result.eligible),
       manager_queued: String(result.enqueued),
       manager_existing: String(result.alreadyQueued),
     });
   } catch (error) {
-    destination = bulkResultHref(showId, filter, genre, {
+    destination = bulkResultHref(showId, filter, genre, listView, {
       error: (
         error instanceof Error ? error.message : "Manager research failed"
       ).slice(0, 180),
     });
   }
-  revalidatePath(`/festivals/${showId}`);
-  revalidatePath("/research");
-  revalidatePath("/settings");
+  refreshWorkflowViews(formData.get("returnTo"), ["/research", "/settings"]);
   redirect(destination);
 }
 
@@ -704,6 +706,16 @@ export default async function FestivalDetailPage({
             <input type="hidden" name="filter" value={filter} />
             <input type="hidden" name="genre" value={genreFilter} />
             <input type="hidden" name="returnTo" value={returnTo} />
+            {listView.includeInternational && (
+              <input
+                type="hidden"
+                name="includeInternational"
+                value="1"
+              />
+            )}
+            {listView.dismissed && (
+              <input type="hidden" name="dismissed" value="1" />
+            )}
             <PendingSubmitButton
               disabled={!festivalActive || managerResearchCount === 0}
               pendingLabel="Queueing managers…"
