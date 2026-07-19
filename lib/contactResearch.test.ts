@@ -28,7 +28,7 @@ test("normalizes research emails and rejects malformed values", () => {
   );
 });
 
-test("accepts manager contacts only", () => {
+test("treats every active email as an existing manager contact", () => {
   assert.equal(normalizeManagerRole("manager"), "management");
   assert.equal(normalizeManagerRole("management"), "management");
   assert.throws(() => normalizeManagerRole("booking"), /role must be manager/);
@@ -44,6 +44,21 @@ test("accepts manager contacts only", () => {
     isManagerContact({
       email: "booking@example.com",
       role: "booking agent",
+    }),
+    true
+  );
+  assert.equal(
+    isManagerContact({
+      email: "legacy@example.com",
+      role: null,
+    }),
+    true
+  );
+  assert.equal(
+    isManagerContact({
+      email: "quarantined@example.com",
+      role: null,
+      state: "quarantined",
     }),
     false
   );
@@ -216,7 +231,7 @@ test("claims require current eligibility and unexpired ownership", () => {
   assert.match(source, /showArtist\.artistId === row\.artistId/);
   assert.doesNotMatch(
     source,
-    /LOWER\(COALESCE\(contact\."role", ''\)\) LIKE '%manager%'/
+    /COALESCE\(contact\."role"/
   );
   assert.match(
     source,
@@ -224,4 +239,8 @@ test("claims require current eligibility and unexpired ownership", () => {
   );
   assert.match(source, /prepareContactResearchQueue/);
   assert.match(source, /claimable/);
+  assert.match(
+    source,
+    /retryContactResearchJob[\s\S]*contacts: \{ none: ACTIVE_EMAIL_CONTACT_WHERE \}/
+  );
 });

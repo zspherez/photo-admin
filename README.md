@@ -129,7 +129,9 @@ a protected-release bootstrap.
 ## Contact research agent
 
 The hosted app automatically queues every non-festival artist with a show in
-the upcoming 90-day NYC window and no active manager email. Listening signals,
+the upcoming 90-day NYC window and no active email contact. Contact roles are
+treated as legacy metadata because this app stores manager contacts only.
+Listening signals,
 popularity, interest, and show proximity affect priority but no longer exclude
 artists. Festival pages can explicitly queue every matched lineup artist who
 still needs a manager. The repository custom agent submits candidates to

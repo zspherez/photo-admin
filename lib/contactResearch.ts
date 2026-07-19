@@ -77,14 +77,9 @@ export interface ContactResearchPriorityInput {
   daysUntilShow: number;
 }
 
-const MANAGER_CONTACT_WHERE = {
+const ACTIVE_EMAIL_CONTACT_WHERE = {
   state: "active",
   email: { not: null },
-  OR: [
-    { role: { equals: "manager", mode: "insensitive" } },
-    { role: { contains: "artist manager", mode: "insensitive" } },
-    { role: { contains: "management", mode: "insensitive" } },
-  ],
 } satisfies Prisma.ContactWhereInput;
 
 function optionalString(
@@ -132,12 +127,8 @@ export function isManagerContact(contact: {
   role: string | null;
   state?: "active" | "quarantined";
 }): boolean {
-  if (!contact.email?.trim() || contact.state === "quarantined") return false;
-  const role = contact.role?.trim().toLowerCase() ?? "";
-  return (
-    role === "manager" ||
-    role.includes("artist manager") ||
-    role.includes("management")
+  return Boolean(
+    contact.email?.trim() && contact.state !== "quarantined"
   );
 }
 
@@ -340,7 +331,7 @@ export async function refreshContactResearchQueue(
       },
       artist: {
         contacts: {
-          none: MANAGER_CONTACT_WHERE,
+          none: ACTIVE_EMAIL_CONTACT_WHERE,
         },
       },
     },
@@ -371,7 +362,7 @@ export async function refreshContactResearchQueue(
         syncStatus: "active",
       },
       artist: {
-        contacts: { none: MANAGER_CONTACT_WHERE },
+        contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
       },
     },
     select: {
@@ -443,7 +434,7 @@ export async function refreshContactResearchQueue(
         status: { in: ["pending", "claimed", "review", "exhausted"] },
         artist: {
           contacts: {
-            some: MANAGER_CONTACT_WHERE,
+            some: ACTIVE_EMAIL_CONTACT_WHERE,
           },
         },
       },
@@ -459,7 +450,7 @@ export async function refreshContactResearchQueue(
       status: { in: ["pending", "claimed", "review"] },
       artist: {
         contacts: {
-          none: MANAGER_CONTACT_WHERE,
+          none: ACTIVE_EMAIL_CONTACT_WHERE,
         },
       },
       ...(artistIds.length > 0
@@ -578,7 +569,7 @@ export async function enqueueFestivalManagerResearch(
       artists: {
         where: {
           artist: {
-            contacts: { none: MANAGER_CONTACT_WHERE },
+            contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
             listenSignals: { some: activeListenSignalWhere(now) },
           },
         },
@@ -743,11 +734,6 @@ export async function claimContactResearchJobs(
           WHERE contact."artistId" = job."artistId"
             AND contact."state" = 'active'
             AND contact."email" IS NOT NULL
-            AND (
-              LOWER(COALESCE(contact."role", '')) = 'manager'
-              OR LOWER(COALESCE(contact."role", '')) LIKE '%artist manager%'
-              OR LOWER(COALESCE(contact."role", '')) LIKE '%management%'
-            )
         )
         AND EXISTS (
           SELECT 1
@@ -1143,6 +1129,9 @@ export async function retryContactResearchJob(
     where: {
       id: jobId,
       status: { in: ["exhausted", "review"] },
+      artist: {
+        contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
+      },
     },
     data: {
       status: "pending",

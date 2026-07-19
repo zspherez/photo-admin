@@ -108,7 +108,7 @@ async function saveContact(formData: FormData) {
   const directOutreachNote =
     ((formData.get("directOutreachNote") as string) ?? "").trim() || null;
   const name = ((formData.get("name") as string) ?? "").trim() || null;
-  const role = ((formData.get("role") as string) ?? "").trim() || null;
+  const role = "management";
   const customPrice = ((formData.get("customPrice") as string) ?? "").trim() || null;
   const notes = ((formData.get("notes") as string) ?? "").trim() || null;
 
@@ -451,7 +451,6 @@ export default async function ContactEditPage({
               Provide an email, phone, or direct outreach details. Email and direct outreach details cannot be combined on one contact.
             </p>
             <Field name="name" label="Manager name" defaultValue={contact.name ?? ""} />
-            <Field name="role" label="Role" defaultValue={contact.role ?? ""} placeholder="management / booking / artist" />
             <Field name="customPrice" label="Custom rate" defaultValue={contact.customPrice ?? ""} placeholder="$400" />
             <TextArea name="notes" label="Notes" rows={3} defaultValue={contact.notes ?? ""} />
             <div className="flex gap-2">

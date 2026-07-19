@@ -356,11 +356,9 @@ export default async function ContactResearchPage({
                               {candidate.confidence}
                             </Badge>
                           </div>
-                          {(candidate.name || candidate.role) && (
+                          {candidate.name && (
                             <p className="mt-1 text-xs text-zinc-500">
-                              {[candidate.name, candidate.role]
-                                .filter(Boolean)
-                                .join(" · ")}
+                              {candidate.name}
                             </p>
                           )}
                           <p className="mt-2 text-sm">{candidate.evidence}</p>
