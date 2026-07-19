@@ -9,6 +9,8 @@ import {
   classifySpotifyPlaylistItemsError,
   finalizeSpotifySyncResult,
   getCurrentSpotifyUserId,
+  hydrateSpotifyArtistObservations,
+  isUsableSpotifyArtist,
   isSpotifyPlaylistOwnedByUser,
   playlistOwnedByUser,
   replacePlaylistItems,
@@ -92,6 +94,48 @@ test("foreign collaborative and followed Spotify playlists are not owned", () =>
     isSpotifyPlaylistOwnedByUser({ owner: undefined }, "current-user"),
     false
   );
+});
+
+test("malformed Spotify artists cannot enter identity reconciliation", () => {
+  assert.equal(
+    isUsableSpotifyArtist({ id: "artist-1", name: "Valid Artist" }),
+    true
+  );
+  assert.equal(isUsableSpotifyArtist({ id: "artist-1", name: null }), false);
+  assert.equal(isUsableSpotifyArtist({ id: "", name: "Missing ID" }), false);
+  assert.equal(isUsableSpotifyArtist(null), false);
+});
+
+test("Spotify artist observations hydrate missing names before reconciliation", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    const url = new URL(
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input
+          : input.url
+    );
+    assert.equal(url.pathname, "/v1/artists");
+    assert.equal(url.searchParams.get("ids"), "artist-1");
+    return Response.json({
+      artists: [{ id: "artist-1", name: "Hydrated Artist" }],
+    });
+  }) as typeof fetch;
+
+  try {
+    const artists = await hydrateSpotifyArtistObservations(
+      "token",
+      [{ id: "artist-1", name: null }],
+      "test",
+      createOperationDeadline(30_000)
+    );
+    assert.deepEqual(artists, [
+      { id: "artist-1", name: "Hydrated Artist" },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("playlist item authorization failures are incomplete snapshots", () => {

@@ -10,6 +10,7 @@ export interface ArtistIdentityInput {
   statsfmId?: string | null;
   edmtrainId?: number | null;
   updateName?: boolean;
+  allowNameMatch?: boolean;
   genres?: string | null;
   popularity?: number | null;
   imageUrl?: string | null;
@@ -176,6 +177,22 @@ export function chooseArtistIdentityCandidate(
         (candidate) => candidate.normalizedName === normalizedName
       )
     : [];
+  if (input.allowNameMatch === false) {
+    return {
+      action: "create",
+      conflicts:
+        sameName.length > 0
+          ? [
+              conflict(
+                input,
+                normalizedName,
+                "normalized-name-conflict",
+                sameName
+              ),
+            ]
+          : [],
+    };
+  }
   if (sameName.length === 0) return { action: "create", conflicts: [] };
 
   if (sameName.length === 1 && !hasExternalDisagreement(sameName[0], input)) {
