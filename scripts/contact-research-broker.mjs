@@ -1,4 +1,8 @@
-import { chmodSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { z } from "zod";
 import {
@@ -19,6 +23,8 @@ const metrics = {
   claimCalls: 0,
   claimedJobs: 0,
   submissions: 0,
+  artistBySession: {},
+  sessions: {},
 };
 const sessions = new Map();
 
@@ -144,8 +150,10 @@ function sendJson(response, status, value) {
 
 function persistMetrics() {
   if (!metricsFile) return;
-  writeFileSync(metricsFile, JSON.stringify(metrics), { mode: 0o660 });
-  chmodSync(metricsFile, 0o660);
+  const temporary = `${metricsFile}.tmp`;
+  writeFileSync(temporary, JSON.stringify(metrics), { mode: 0o660 });
+  chmodSync(temporary, 0o660);
+  renameSync(temporary, metricsFile);
 }
 
 function recordSuccessfulTool(name, value) {
@@ -167,8 +175,14 @@ function recordSuccessfulTool(name, value) {
 function sessionState(sessionId) {
   const existing = sessions.get(sessionId);
   if (existing) return existing;
-  const created = { claim: null, completed: false };
+  const created = { sessionId, claim: null, completed: false };
   sessions.set(sessionId, created);
+  metrics.sessions[sessionId] = {
+    artist: null,
+    claimed: false,
+    completed: false,
+    empty: false,
+  };
   return created;
 }
 
@@ -177,7 +191,10 @@ function publicClaimResponse(value, state) {
   if (jobs.length > 1) {
     throw new Error("photo-admin returned more than one claimed job");
   }
-  if (jobs.length === 0) return { jobs: [] };
+  if (jobs.length === 0) {
+    metrics.sessions[state.sessionId].empty = true;
+    return { jobs: [] };
+  }
   const [job] = jobs;
   const {
     id,
@@ -194,6 +211,14 @@ function publicClaimResponse(value, state) {
   }
   const artistFields = { ...artist };
   delete artistFields.id;
+  metrics.artistBySession[state.sessionId] =
+    typeof artist.name === "string" ? artist.name : "Unknown artist";
+  metrics.sessions[state.sessionId] = {
+    artist: metrics.artistBySession[state.sessionId],
+    claimed: true,
+    completed: false,
+    empty: false,
+  };
   state.claim = { jobId: id, claimToken: job.claimToken };
   return {
     jobs: [
@@ -264,6 +289,7 @@ async function runTool(name, input, sessionId) {
         }
       );
       state.completed = true;
+      metrics.sessions[sessionId].completed = true;
       return result;
     }
     case "submit-exhausted": {
@@ -277,6 +303,7 @@ async function runTool(name, input, sessionId) {
         }
       );
       state.completed = true;
+      metrics.sessions[sessionId].completed = true;
       return result;
     }
     default:

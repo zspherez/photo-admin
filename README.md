@@ -174,6 +174,12 @@ evidence, and submits results through the broker.
 Copilot cloud agent currently does not map the custom-agent `web` alias, while
 its default Playwright MCP can access only localhost.
 
+The workflow uses a shared database queue rather than fixed per-run quotas.
+Up to 10 Actions lanes each run four independent agents; every agent claims one
+artist with `FOR UPDATE SKIP LOCKED`, writes the result immediately, then claims
+another until the queue is empty. Each artist log ends with its AI-credit usage,
+and the workflow summary reports total and average AIC per researched artist.
+
 ## Email template
 
 The default outreach template is defined in `lib/template.ts` and seeded into
@@ -478,7 +484,7 @@ so the frequent outreach dispatcher runs in GitHub Actions instead.
 | Vercel `/api/cron/sync-listens` | Daily at 11:00 UTC | Refresh listening and contact data. |
 | GitHub Action `/api/cron/refresh-top-playlist` | Daily at 12:30 UTC | Refresh the top-tracks playlist after listening sync. |
 | Vercel `/api/cron/contact-research` | Daily at 13:00 UTC | Queue actionable artists that still need a manager contact. |
-| GitHub Action manager research | Hourly at minute 23 | Refresh the full upcoming-show queue and drain it in 200-artist waves using 10 worker lanes; each lane runs a fresh isolated Copilot session per artist. |
+| GitHub Action manager research | Hourly at minute 23 | Refresh and self-drain the full upcoming-show queue using up to 10 lanes with four independent agents each. Every artist result is written immediately. |
 | GitHub Action `/api/cron/send-scheduled` | Every 15 minutes from 13:00 through 15:45 UTC on weekdays, plus every four hours at minute 17 | Dispatch due outreach and keep provider retries moving evenings and weekends. |
 | Stats.fm token rotation GitHub Action | Mondays, Thursdays, and Saturdays at 03:17 UTC | Refresh the short-lived token every 2–3 days, away from listen sync. |
 
