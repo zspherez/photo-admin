@@ -72,6 +72,10 @@ import {
   canMarkOutreachManually,
   isActiveManualOutreachMarker,
 } from "@/lib/manualOutreach";
+import {
+  enqueueFestivalManagerResearch,
+  isManagerContact,
+} from "@/lib/contactResearch";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -117,6 +121,7 @@ const getFestivalDetails = cache(async (showId: string) =>
                   phone: true,
                   directOutreachNote: true,
                   name: true,
+                  role: true,
                   customPrice: true,
                   state: true,
                   isFullTeam: true,
@@ -383,6 +388,36 @@ async function bulkSend(formData: FormData) {
   redirect(bulkResultHref(showId, filter, genre, listView, resultParams));
 }
 
+async function queueFestivalManagerResearch(formData: FormData) {
+  "use server";
+  await requireServerActionAuth(formData.get("returnTo") ?? "/festivals");
+  const showId = String(formData.get("showId") ?? "").trim();
+  const filter = parseFestivalFilter(formData.get("filter"));
+  const genre = parseFestivalGenre(formData.get("genre"));
+  if (!showId) redirect("/festivals");
+
+  let destination: string;
+  try {
+    const result = await enqueueFestivalManagerResearch(showId);
+    destination = bulkResultHref(showId, filter, genre, {
+      manager_research: "1",
+      manager_eligible: String(result.eligible),
+      manager_queued: String(result.enqueued),
+      manager_existing: String(result.alreadyQueued),
+    });
+  } catch (error) {
+    destination = bulkResultHref(showId, filter, genre, {
+      error: (
+        error instanceof Error ? error.message : "Manager research failed"
+      ).slice(0, 180),
+    });
+  }
+  revalidatePath(`/festivals/${showId}`);
+  revalidatePath("/research");
+  revalidatePath("/settings");
+  redirect(destination);
+}
+
 export default async function FestivalDetailPage({
   params,
   searchParams,
@@ -402,6 +437,10 @@ export default async function FestivalDetailPage({
     sheet_errors?: SearchParamValue;
     cancelled?: SearchParamValue;
     bulk?: SearchParamValue;
+    manager_research?: SearchParamValue;
+    manager_eligible?: SearchParamValue;
+    manager_queued?: SearchParamValue;
+    manager_existing?: SearchParamValue;
     filter?: SearchParamValue;
     genre?: SearchParamValue;
     marked?: SearchParamValue;
@@ -435,6 +474,10 @@ export default async function FestivalDetailPage({
     unmarked: firstSearchParam(sp.unmarked),
     followUpSent: firstSearchParam(sp.followup_sent),
     followUpScheduled: firstSearchParam(sp.followup_scheduled),
+    managerResearch: firstSearchParam(sp.manager_research),
+    managerEligible: firstSearchParam(sp.manager_eligible),
+    managerQueued: firstSearchParam(sp.manager_queued),
+    managerExisting: firstSearchParam(sp.manager_existing),
   };
   const now = new Date();
   const weekend = isWeekendET();
@@ -489,6 +532,7 @@ export default async function FestivalDetailPage({
       directOutreachContact ??
       a.contacts[0] ??
       null;
+    const managerContact = a.contacts.find(isManagerContact) ?? null;
     const genres: string[] = (() => {
       try {
         return a.genres ? (JSON.parse(a.genres) as string[]).filter((g) => typeof g === "string") : [];
@@ -520,6 +564,7 @@ export default async function FestivalDetailPage({
       matched,
       contact,
       displayContact,
+      managerContact,
       hasAnyContact: a.contacts.length > 0,
       genres,
       manualMarker,
@@ -620,6 +665,9 @@ export default async function FestivalDetailPage({
           r.sendability?.sendable
       ).length
     : 0;
+  const managerResearchCount = rows.filter(
+    (row) => row.matched && !row.managerContact
+  ).length;
   const bulkFormId = "festival-bulk-outreach";
 
   const filterOptions: { key: FestivalFilter; label: string }[] = [
@@ -647,28 +695,47 @@ export default async function FestivalDetailPage({
             )}
           </p>
         </div>
-        <form
-          action={
-            festival.dismissedAt ? restoreShowAction : dismissShowAction
-          }
-        >
-          <input type="hidden" name="returnTo" value={returnTo} />
-          {groupedShowIds.map((groupedShowId) => (
-            <input
-              key={groupedShowId}
-              type="hidden"
-              name="showId"
-              value={groupedShowId}
-            />
-          ))}
-          <PendingSubmitButton
-            variant={festival.dismissedAt ? "secondary" : "ghost"}
-            size="sm"
-            pendingLabel="…"
+        <div className="flex flex-wrap items-center gap-2">
+          <LinkButton href="/research" variant="secondary">
+            Review research
+          </LinkButton>
+          <form action={queueFestivalManagerResearch}>
+            <input type="hidden" name="showId" value={showId} />
+            <input type="hidden" name="filter" value={filter} />
+            <input type="hidden" name="genre" value={genreFilter} />
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <PendingSubmitButton
+              disabled={!festivalActive || managerResearchCount === 0}
+              pendingLabel="Queueing managers…"
+            >
+              Research managers ({managerResearchCount})
+            </PendingSubmitButton>
+          </form>
+          <form
+            action={
+              festival.dismissedAt ? restoreShowAction : dismissShowAction
+            }
           >
-            {festival.dismissedAt ? "Restore festival" : "Dismiss festival"}
-          </PendingSubmitButton>
-        </form>
+            <input type="hidden" name="returnTo" value={returnTo} />
+            {groupedShowIds.map((groupedShowId) => (
+              <input
+                key={groupedShowId}
+                type="hidden"
+                name="showId"
+                value={groupedShowId}
+              />
+            ))}
+            <PendingSubmitButton
+              variant={festival.dismissedAt ? "secondary" : "ghost"}
+              size="sm"
+              pendingLabel="…"
+            >
+              {festival.dismissedAt
+                ? "Restore festival"
+                : "Dismiss festival"}
+            </PendingSubmitButton>
+          </form>
+        </div>
       </div>
 
       <div className="mt-4 space-y-2">
@@ -717,6 +784,13 @@ export default async function FestivalDetailPage({
             notices.skipped) && (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
             Bulk send: {notices.sent || 0} sent, {notices.scheduled || 0} scheduled, {notices.failed || 0} failed, {notices.skipped || 0} skipped.
+          </div>
+        )}
+        {notices.managerResearch && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Manager research: {notices.managerQueued ?? 0} queued,{" "}
+            {notices.managerExisting ?? 0} already active,{" "}
+            {notices.managerEligible ?? 0} eligible.
           </div>
         )}
         {!notices.bulk && notices.sent && (
@@ -934,6 +1008,9 @@ export default async function FestivalDetailPage({
                         hasDirectOutreachNote(r.displayContact) && (
                           <Badge tone="warning">Direct outreach</Badge>
                         )}
+                      {r.matched && !r.managerContact && (
+                        <Badge tone="warning">Manager needed</Badge>
+                      )}
                     </div>
                     {r.displayContact ? (
                       <p

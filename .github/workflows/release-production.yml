@@ -753,6 +753,7 @@ jobs:
 
           call_catch_up "Show sync" "/api/cron/sync-shows" 330 900
           call_catch_up "Listen sync" "/api/cron/sync-listens" 330 900
+          call_catch_up "Contact research queue" "/api/cron/contact-research" 120 300
           call_catch_up "Top-playlist refresh" "/api/cron/refresh-top-playlist" 210 600
 
       - name: Attempt safe in-job recovery with approved credentials

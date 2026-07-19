@@ -7,6 +7,7 @@
   },
   "crons": [
     { "path": "/api/cron/sync-shows", "schedule": "0 9 * * *" },
-    { "path": "/api/cron/sync-listens", "schedule": "0 11 * * *" }
+    { "path": "/api/cron/sync-listens", "schedule": "0 11 * * *" },
+    { "path": "/api/cron/contact-research", "schedule": "0 13 * * *" }
   ]
 }
