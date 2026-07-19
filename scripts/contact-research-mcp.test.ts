@@ -88,8 +88,7 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
     /--allow-tool='shell\(contact-research-agent-tool\)'/
   );
   assert.match(runner, /--secret-env-vars=GITHUB_TOKEN/);
-  assert.match(runner, /--preserve-env=APP_BASE_URL/);
-  assert.match(runner, /-u nobody/);
+  assert.doesNotMatch(runner, /sudo/);
   assert.match(runner, /claim_calls < 1/);
   assert.match(runner, /submissions != claimed_jobs/);
   assert.doesNotMatch(runner, /--additional-mcp-config/);

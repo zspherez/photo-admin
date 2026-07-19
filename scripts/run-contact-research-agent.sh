@@ -20,24 +20,12 @@ broker_socket="${broker_dir}/broker.sock"
 broker_log="${broker_dir}/broker.log"
 broker_metrics="${broker_dir}/metrics.json"
 broker_pid=""
-broker_privileged=false
 broker_running() {
-  if [[ "${broker_privileged}" == "true" ]]; then
-    sudo -n kill -0 "${broker_pid}" 2>/dev/null
-  else
-    kill -0 "${broker_pid}" 2>/dev/null
-  fi
-}
-stop_broker() {
-  if [[ "${broker_privileged}" == "true" ]]; then
-    sudo -n kill "${broker_pid}" 2>/dev/null || true
-  else
-    kill "${broker_pid}" 2>/dev/null || true
-  fi
+  kill -0 "${broker_pid}" 2>/dev/null
 }
 cleanup() {
   if [[ -n "${broker_pid}" ]] && broker_running; then
-    stop_broker
+    kill "${broker_pid}" 2>/dev/null || true
     wait "${broker_pid}" 2>/dev/null || true
   fi
   rm -f "${broker_socket}" "${broker_log}" "${broker_metrics}"
@@ -48,20 +36,7 @@ trap cleanup EXIT
 export CONTACT_RESEARCH_BROKER_SOCKET="${broker_socket}"
 export CONTACT_RESEARCH_BROKER_METRICS_FILE="${broker_metrics}"
 export PATH="${PWD}/scripts:${PATH}"
-if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-  broker_privileged=true
-  broker_group="$(id -gn)"
-  node_bin="$(command -v node)"
-  chgrp "${broker_group}" "${broker_dir}"
-  chmod 0770 "${broker_dir}"
-  sudo -n \
-    --preserve-env=APP_BASE_URL,CONTACT_RESEARCH_AGENT_TOKEN,ACTIONS_ID_TOKEN_REQUEST_URL,ACTIONS_ID_TOKEN_REQUEST_TOKEN,CONTACT_RESEARCH_BROKER_SOCKET,CONTACT_RESEARCH_BROKER_METRICS_FILE \
-    -u nobody \
-    -g "${broker_group}" \
-    "${node_bin}" scripts/contact-research-broker.mjs >"${broker_log}" 2>&1 &
-else
-  node scripts/contact-research-broker.mjs >"${broker_log}" 2>&1 &
-fi
+node scripts/contact-research-broker.mjs >"${broker_log}" 2>&1 &
 broker_pid="$!"
 
 for _ in {1..100}; do
