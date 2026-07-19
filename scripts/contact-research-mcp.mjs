@@ -4,17 +4,54 @@ import { z } from "zod";
 
 const baseUrl = process.env.APP_BASE_URL?.trim().replace(/\/+$/, "");
 const token = process.env.CONTACT_RESEARCH_AGENT_TOKEN?.trim();
-if (!baseUrl || !token) {
+const oidcRequestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL?.trim();
+const oidcRequestToken =
+  process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN?.trim();
+const oidcAudience = "photo-admin-contact-research";
+if (
+  !baseUrl ||
+  (!token && (!oidcRequestUrl || !oidcRequestToken))
+) {
   throw new Error(
-    "APP_BASE_URL and CONTACT_RESEARCH_AGENT_TOKEN are required"
+    "APP_BASE_URL plus a static token or GitHub Actions OIDC environment are required"
   );
 }
 
+async function authorizationToken() {
+  if (oidcRequestUrl && oidcRequestToken) {
+    const url = new URL(oidcRequestUrl);
+    url.searchParams.set("audience", oidcAudience);
+    const response = await fetch(url, {
+      headers: {
+        authorization: `Bearer ${oidcRequestToken}`,
+        accept: "application/json",
+      },
+    });
+    if (!response.ok) {
+      throw new Error(
+        `GitHub Actions OIDC returned ${response.status}`
+      );
+    }
+    const data = await response.json();
+    if (
+      typeof data !== "object" ||
+      data === null ||
+      typeof data.value !== "string" ||
+      !data.value
+    ) {
+      throw new Error("GitHub Actions OIDC response omitted value");
+    }
+    return data.value;
+  }
+  return token;
+}
+
 async function request(path, body) {
+  const requestToken = await authorizationToken();
   const response = await fetch(`${baseUrl}${path}`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${token}`,
+      authorization: `Bearer ${requestToken}`,
       "content-type": "application/json",
     },
     body: JSON.stringify(body),

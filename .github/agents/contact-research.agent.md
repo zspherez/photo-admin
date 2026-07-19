@@ -13,6 +13,8 @@ mcp-servers:
     env:
       APP_BASE_URL: $APP_BASE_URL
       CONTACT_RESEARCH_AGENT_TOKEN: $CONTACT_RESEARCH_AGENT_TOKEN
+      ACTIONS_ID_TOKEN_REQUEST_URL: $ACTIONS_ID_TOKEN_REQUEST_URL
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: $ACTIONS_ID_TOKEN_REQUEST_TOKEN
 ---
 
 You are the contact research worker for the photo-admin outreach app.

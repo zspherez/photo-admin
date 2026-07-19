@@ -80,3 +80,69 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
   assert.match(runner, /--no-ask-user/);
   assert.doesNotMatch(runner, /--max-ai-credits/);
 });
+
+test("contact research MCP refreshes GitHub Actions OIDC for API calls", async (t) => {
+  let authorization: string | undefined;
+  let oidcRequests = 0;
+  const oidcServer = createServer((request, response) => {
+    oidcRequests += 1;
+    assert.equal(
+      request.headers.authorization,
+      "Bearer oidc-request-secret"
+    );
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    assert.equal(
+      url.searchParams.get("audience"),
+      "photo-admin-contact-research"
+    );
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ value: `oidc-${oidcRequests}` }));
+  });
+  oidcServer.listen(0, "127.0.0.1");
+  await once(oidcServer, "listening");
+  t.after(() => oidcServer.close());
+
+  const apiServer = createServer((request, response) => {
+    authorization = request.headers.authorization;
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ jobs: [] }));
+    });
+  });
+  apiServer.listen(0, "127.0.0.1");
+  await once(apiServer, "listening");
+  t.after(() => apiServer.close());
+
+  const oidcAddress = oidcServer.address();
+  const apiAddress = apiServer.address();
+  assert.ok(oidcAddress && typeof oidcAddress === "object");
+  assert.ok(apiAddress && typeof apiAddress === "object");
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [
+      new URL("./contact-research-mcp.mjs", import.meta.url).pathname,
+    ],
+    env: {
+      ...stringEnvironment(),
+      APP_BASE_URL: `http://127.0.0.1:${apiAddress.port}`,
+      CONTACT_RESEARCH_AGENT_TOKEN: "",
+      ACTIONS_ID_TOKEN_REQUEST_URL:
+        `http://127.0.0.1:${oidcAddress.port}/token`,
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-request-secret",
+    },
+  });
+  const client = new Client({
+    name: "contact-research-oidc-test",
+    version: "1.0.0",
+  });
+  await client.connect(transport);
+  t.after(() => client.close());
+
+  await client.callTool({
+    name: "claim_jobs",
+    arguments: { limit: 1 },
+  });
+  assert.equal(authorization, "Bearer oidc-1");
+  assert.equal(oidcRequests, 1);
+});

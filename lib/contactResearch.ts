@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
+import {
+  createRemoteJWKSet,
+  jwtVerify,
+  type JWTPayload,
+} from "jose";
 import { db } from "@/lib/db";
 import {
   addDateOnlyDays,
@@ -16,9 +21,18 @@ export const CONTACT_RESEARCH_DEFAULT_CLAIM_LIMIT = 3;
 export const CONTACT_RESEARCH_MAX_CLAIM_LIMIT = 10;
 export const CONTACT_RESEARCH_CLAIM_TTL_MS = 60 * 60 * 1_000;
 export const CONTACT_RESEARCH_MIN_POPULARITY = 60;
+export const CONTACT_RESEARCH_OIDC_AUDIENCE =
+  "photo-admin-contact-research";
+export const CONTACT_RESEARCH_OIDC_ISSUER =
+  "https://token.actions.githubusercontent.com";
+export const CONTACT_RESEARCH_WORKFLOW_REF =
+  "zspherez/photo-admin/.github/workflows/contact-research.yml@refs/heads/main";
 
 const EMAIL_PATTERN = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
 const CONFIDENCE_VALUES = new Set(["high", "medium", "low"]);
+const githubActionsJwks = createRemoteJWKSet(
+  new URL(`${CONTACT_RESEARCH_OIDC_ISSUER}/.well-known/jwks`)
+);
 
 export interface ContactResearchCandidateInput {
   email: string;
@@ -249,7 +263,10 @@ export async function isValidContactResearchAuthorization(
     = [
       process.env.CONTACT_RESEARCH_AGENT_TOKEN,
       process.env.CRON_SECRET,
-    ]
+    ],
+  verifyGithubActionsToken: (
+    token: string
+  ) => Promise<boolean> = verifyGithubActionsContactResearchToken
 ): Promise<boolean> {
   if (!authorization?.startsWith("Bearer ")) return false;
   const token = authorization.slice("Bearer ".length);
@@ -257,11 +274,38 @@ export async function isValidContactResearchAuthorization(
   const candidates = (Array.isArray(secrets) ? secrets : [secrets]).filter(
     (secret): secret is string => Boolean(secret)
   );
-  if (candidates.length === 0) return false;
   const matches = await Promise.all(
     candidates.map((secret) => constantTimeEqual(token, secret))
   );
-  return matches.some(Boolean);
+  return matches.some(Boolean) || verifyGithubActionsToken(token);
+}
+
+export function isTrustedContactResearchOidcClaims(
+  payload: JWTPayload
+): boolean {
+  return (
+    payload.repository === "zspherez/photo-admin" &&
+    payload.repository_owner === "zspherez" &&
+    payload.ref === "refs/heads/main" &&
+    payload.workflow_ref === CONTACT_RESEARCH_WORKFLOW_REF &&
+    (payload.event_name === "schedule" ||
+      payload.event_name === "workflow_dispatch")
+  );
+}
+
+export async function verifyGithubActionsContactResearchToken(
+  token: string
+): Promise<boolean> {
+  if (token.split(".").length !== 3) return false;
+  try {
+    const { payload } = await jwtVerify(token, githubActionsJwks, {
+      issuer: CONTACT_RESEARCH_OIDC_ISSUER,
+      audience: CONTACT_RESEARCH_OIDC_AUDIENCE,
+    });
+    return isTrustedContactResearchOidcClaims(payload);
+  } catch {
+    return false;
+  }
 }
 
 export function contactResearchPriority(

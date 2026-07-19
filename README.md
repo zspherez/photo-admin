@@ -141,12 +141,13 @@ GitHub Actions runs Copilot CLI with a three-artist batch. The custom agent's
 per-artist research limit and the workflow's 45-minute timeout bound each run.
 Scheduled runs are enabled when the workflow reaches the default branch.
 
-Configure repository Actions secrets `APP_BASE_URL` and `CRON_SECRET`, both of
-which are already used by the scheduled application workflows. Copilot CLI
-authenticates with the workflow's short-lived `GITHUB_TOKEN`; no Copilot PAT is
-needed. For organization repositories, enable **Allow use of Copilot CLI billed
-to the organization** and keep the workflow's `copilot-requests: write`
-permission.
+Configure the repository Actions secret `APP_BASE_URL`. Hosted research uses a
+short-lived GitHub Actions OIDC token pinned to this repository, main branch,
+and workflow file; no shared app bearer or Copilot PAT is needed. Copilot CLI
+authenticates separately with the workflow's short-lived `GITHUB_TOKEN`. For
+organization repositories, enable **Allow use of Copilot CLI billed to the
+organization** and keep the workflow's `copilot-requests: write` and
+`id-token: write` permissions.
 
 The same worker can still be run locally:
 
@@ -492,9 +493,8 @@ The scheduled workflows require GitHub repository secrets under
   with no path.
 - `CRON_SECRET` — exactly the same secret configured in the production Vercel
   environment.
-The manager-research workflow also requires `copilot-requests: write`, already
-declared in the workflow. In organization-owned repositories, organization
-policy must allow Copilot CLI usage billed to the organization.
+The manager-research workflow's OIDC token is refreshed for every queue API
+request, so long-running research does not depend on one expiring token.
 
 The 13:00 UTC run is 09:00 in America/New_York during EDT; the 14:00 UTC run is
 09:00 during EST. Continuing through 15:45 UTC provides recovery opportunities

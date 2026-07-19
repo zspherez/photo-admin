@@ -3,8 +3,11 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   contactResearchPriority,
+  CONTACT_RESEARCH_OIDC_AUDIENCE,
+  CONTACT_RESEARCH_WORKFLOW_REF,
   isValidContactResearchAuthorization,
   isManagerContact,
+  isTrustedContactResearchOidcClaims,
   normalizeManagerRole,
   normalizeResearchEmail,
   normalizeResearchSourceUrl,
@@ -155,6 +158,48 @@ test("contact research bearer authorization fails closed", async () => {
       "cron-secret",
     ]),
     true
+  );
+  assert.equal(
+    await isValidContactResearchAuthorization(
+      "Bearer oidc-token",
+      [],
+      async (token) => token === "oidc-token"
+    ),
+    true
+  );
+});
+
+test("GitHub Actions OIDC claims are pinned to the research workflow", () => {
+  const trusted = {
+    aud: CONTACT_RESEARCH_OIDC_AUDIENCE,
+    repository: "zspherez/photo-admin",
+    repository_owner: "zspherez",
+    ref: "refs/heads/main",
+    workflow_ref: CONTACT_RESEARCH_WORKFLOW_REF,
+    event_name: "workflow_dispatch",
+  };
+  assert.equal(isTrustedContactResearchOidcClaims(trusted), true);
+  assert.equal(
+    isTrustedContactResearchOidcClaims({
+      ...trusted,
+      ref: "refs/heads/untrusted",
+    }),
+    false
+  );
+  assert.equal(
+    isTrustedContactResearchOidcClaims({
+      ...trusted,
+      workflow_ref:
+        "zspherez/photo-admin/.github/workflows/other.yml@refs/heads/main",
+    }),
+    false
+  );
+  assert.equal(
+    isTrustedContactResearchOidcClaims({
+      ...trusted,
+      event_name: "pull_request",
+    }),
+    false
   );
 });
 
