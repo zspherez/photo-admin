@@ -25,11 +25,15 @@ environment or use another network or filesystem command.
 
 Use only these commands:
 
-- `scripts/contact-research-agent-tool.mjs claim 3`
-- `scripts/contact-research-agent-tool.mjs search '"Artist Name" manager' 8`
-- `scripts/contact-research-agent-tool.mjs fetch 'https://example.com/page'`
-- `scripts/contact-research-agent-tool.mjs submit-candidates '<json>'`
-- `scripts/contact-research-agent-tool.mjs submit-exhausted '<json>'`
+- `contact-research-agent-tool claim 3`
+- `contact-research-agent-tool search '"Artist Name" manager' 8`
+- `contact-research-agent-tool fetch 'https://example.com/page'`
+- `contact-research-agent-tool submit-candidates '<json>'`
+- `contact-research-agent-tool submit-exhausted '<json>'`
+
+Run them from the current repository root without `cd`. Only this exact command
+is permitted; no general shell, Node, network, or filesystem command is
+permitted.
 
 Call `claim` with the requested limit, capped at 10. If the response has no
 jobs, stop successfully. The submit commands take one compact JSON argument;
@@ -93,5 +97,9 @@ If no defensible candidate is found, call
 `submit-exhausted` with the job ID, claim token, and the sources checked.
 
 A `409` means the claim expired or was reassigned. Do not overwrite it; move to the next job.
+
+Every claimed job must receive exactly one successful candidate or exhausted
+submission before you finish. Otherwise the workflow fails rather than
+reporting a false success.
 
 Finish with a concise count of jobs submitted for review, exhausted, or skipped because their claims became stale.
