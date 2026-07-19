@@ -433,6 +433,20 @@ jobs:
           umask 077
           vercel pull --yes --environment=production --token "${VERCEL_TOKEN}"
 
+      - name: Create one-run staged verification bypass
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          release_bypass="$(openssl rand -hex 16)"
+          echo "::add-mask::${release_bypass}"
+          vercel project protection enable \
+            --protection-bypass \
+            --protection-bypass-secret "${release_bypass}" \
+            --token "${VERCEL_TOKEN}"
+          echo "VERCEL_AUTOMATION_BYPASS_SECRET=${release_bypass}" >> "${GITHUB_ENV}"
+
       - name: Bind requested SHA to production migration history and verify database connections
         shell: bash
         env:
@@ -515,7 +529,6 @@ jobs:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           RELEASE_SHA: ${{ steps.revision.outputs.sha }}
           TARGET_URL: ${{ steps.deploy.outputs.url }}
         run: |
@@ -777,6 +790,21 @@ jobs:
           set -euo pipefail
           bash scripts/recover-production-release.sh
           echo "resumed=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Revoke one-run staged verification bypass
+        if: ${{ always() }}
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]]; then
+            exit 0
+          fi
+          vercel project protection disable \
+            --protection-bypass \
+            --protection-bypass-secret "${VERCEL_AUTOMATION_BYPASS_SECRET}" \
+            --token "${VERCEL_TOKEN}"
 
       - name: Remove pulled production settings
         if: ${{ always() }}
