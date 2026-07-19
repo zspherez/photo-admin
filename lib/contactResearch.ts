@@ -20,7 +20,6 @@ export const CONTACT_RESEARCH_WINDOW_DAYS = 90;
 export const CONTACT_RESEARCH_DEFAULT_CLAIM_LIMIT = 3;
 export const CONTACT_RESEARCH_MAX_CLAIM_LIMIT = 10;
 export const CONTACT_RESEARCH_CLAIM_TTL_MS = 60 * 60 * 1_000;
-export const CONTACT_RESEARCH_MIN_POPULARITY = 60;
 export const CONTACT_RESEARCH_OIDC_AUDIENCE =
   "photo-admin-contact-research";
 export const CONTACT_RESEARCH_OIDC_ISSUER =
@@ -343,10 +342,6 @@ export async function refreshContactResearchQueue(
         contacts: {
           none: MANAGER_CONTACT_WHERE,
         },
-        OR: [
-          { listenSignals: { some: activeSignalWhere } },
-          { popularity: { gte: CONTACT_RESEARCH_MIN_POPULARITY } },
-        ],
       },
     },
     select: {
@@ -497,59 +492,68 @@ export async function refreshContactResearchQueue(
     const existingByArtist = new Map(
       existing.map((job) => [job.artistId, job])
     );
-    const createRows = artistIds
-      .filter((artistId) => !existingByArtist.has(artistId))
-      .map((artistId) => {
-        const candidate = eligible.get(artistId)!;
-        return {
-          artistId,
-          priority: candidate.priority,
-          nextShowAt: candidate.nextShowAt,
-        };
-      });
-    if (createRows.length > 0) {
-      await tx.contactResearchJob.createMany({
-        data: createRows,
-        skipDuplicates: true,
-      });
-    }
-
+    let created = 0;
     let reopened = 0;
     let reprioritized = 0;
-    for (const job of existing) {
-      const candidate = eligible.get(job.artistId)!;
+    for (const artistId of artistIds) {
+      const job = existingByArtist.get(artistId);
+      if (!job) {
+        created += 1;
+        continue;
+      }
       if (job.status === "complete" || job.status === "inactive") {
-        await tx.contactResearchJob.update({
-          where: { artistId: job.artistId },
-          data: {
-            status: "pending",
-            priority: candidate.priority,
-            nextShowAt: candidate.nextShowAt,
-            completedAt: null,
-          },
-        });
         reopened += 1;
         continue;
       }
       if (!["pending", "claimed", "review"].includes(job.status)) continue;
-      await tx.contactResearchJob.update({
-        where: { artistId: job.artistId },
-        data: {
-          priority: candidate.priority,
-          nextShowAt: candidate.nextShowAt,
-        },
-      });
       reprioritized += 1;
     }
 
+    const values = artistIds.map((artistId) => {
+      const candidate = eligible.get(artistId)!;
+      return Prisma.sql`(
+        ${randomUUID()},
+        ${artistId},
+        'pending',
+        ${candidate.priority},
+        ${candidate.nextShowAt},
+        ${now},
+        ${now}
+      )`;
+    });
+    await tx.$executeRaw(Prisma.sql`
+      INSERT INTO "ContactResearchJob" AS job (
+        "id",
+        "artistId",
+        "status",
+        "priority",
+        "nextShowAt",
+        "createdAt",
+        "updatedAt"
+      )
+      VALUES ${Prisma.join(values)}
+      ON CONFLICT ("artistId") DO UPDATE SET
+        "status" = CASE
+          WHEN job."status" IN ('complete', 'inactive') THEN 'pending'
+          ELSE job."status"
+        END,
+        "priority" = EXCLUDED."priority",
+        "nextShowAt" = EXCLUDED."nextShowAt",
+        "completedAt" = CASE
+          WHEN job."status" IN ('complete', 'inactive') THEN NULL
+          ELSE job."completedAt"
+        END,
+        "updatedAt" = EXCLUDED."updatedAt"
+    `);
+
     return {
       eligible: artistIds.length,
-      enqueued: createRows.length + reopened,
+      enqueued: created + reopened,
       reprioritized,
       completed: completed.count,
       inactivated: inactivated.count,
     };
-  });
+  }, { timeout: 30_000 });
 }
 
 export async function enqueueFestivalManagerResearch(
@@ -750,8 +754,6 @@ export async function claimContactResearchJobs(
           FROM "ShowArtist" show_artist
           JOIN "Show" show
             ON show."id" = show_artist."showId"
-          JOIN "Artist" artist
-            ON artist."id" = show_artist."artistId"
           WHERE show_artist."artistId" = job."artistId"
             AND show."date" >= ${today}
             AND show."syncStatus" = 'active'
@@ -759,21 +761,6 @@ export async function claimContactResearchJobs(
               (
                 show."isFestival" = false
                 AND show."date" <= ${end}
-                AND (
-                  artist."popularity" >= ${CONTACT_RESEARCH_MIN_POPULARITY}
-                  OR EXISTS (
-                    SELECT 1
-                    FROM "ListenSignal" signal
-                    WHERE signal."artistId" = job."artistId"
-                      AND (
-                        signal."expiresAt" > ${now}
-                        OR (
-                          signal."source" <> 'spotify_recent'
-                          AND signal."expiresAt" IS NULL
-                        )
-                      )
-                  )
-                )
               )
               OR (
                 job."requestedShowId" = show."id"
@@ -954,12 +941,14 @@ export async function submitContactResearchResult(
 }
 
 async function withSerializableRetry<T>(
-  work: (tx: Prisma.TransactionClient) => Promise<T>
+  work: (tx: Prisma.TransactionClient) => Promise<T>,
+  options: { timeout?: number } = {}
 ): Promise<T> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       return await db.$transaction(work, {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: options.timeout ?? 5_000,
       });
     } catch (error) {
       const code =

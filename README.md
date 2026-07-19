@@ -128,10 +128,11 @@ a protected-release bootstrap.
 
 ## Contact research agent
 
-The hosted app automatically queues non-festival artists with an upcoming show,
-a current listen signal or Spotify popularity of at least 60, and no active
-manager email. Festival pages can explicitly queue every matched lineup artist
-who still needs a manager. The repository custom agent submits candidates to
+The hosted app automatically queues every non-festival artist with a show in
+the upcoming 90-day NYC window and no active manager email. Listening signals,
+popularity, interest, and show proximity affect priority but no longer exclude
+artists. Festival pages can explicitly queue every matched lineup artist who
+still needs a manager. The repository custom agent submits candidates to
 `/research`; it cannot approve contacts or send email.
 
 The default automation is `.github/workflows/contact-research.yml`. Every hour
@@ -477,7 +478,7 @@ so the frequent outreach dispatcher runs in GitHub Actions instead.
 | Vercel `/api/cron/sync-listens` | Daily at 11:00 UTC | Refresh listening and contact data. |
 | GitHub Action `/api/cron/refresh-top-playlist` | Daily at 12:30 UTC | Refresh the top-tracks playlist after listening sync. |
 | Vercel `/api/cron/contact-research` | Daily at 13:00 UTC | Queue actionable artists that still need a manager contact. |
-| GitHub Action manager research | Hourly at minute 23 | Refresh the queue, skip empty runs, and research up to three manager contacts with Copilot CLI. |
+| GitHub Action manager research | Hourly at minute 23 | Refresh the full upcoming-show queue and drain it in 200-artist waves using 10 worker lanes; each lane runs a fresh isolated Copilot session per artist. |
 | GitHub Action `/api/cron/send-scheduled` | Every 15 minutes from 13:00 through 15:45 UTC on weekdays, plus every four hours at minute 17 | Dispatch due outreach and keep provider retries moving evenings and weekends. |
 | Stats.fm token rotation GitHub Action | Mondays, Thursdays, and Saturdays at 03:17 UTC | Refresh the short-lived token every 2–3 days, away from listen sync. |
 
