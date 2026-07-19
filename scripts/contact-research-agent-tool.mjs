@@ -21,6 +21,13 @@ switch (action) {
   case "fetch":
     input = { url: first ?? "" };
     break;
+  case "known-contacts":
+    try {
+      input = JSON.parse(first ?? "");
+    } catch {
+      throw new Error("known-contacts requires one valid JSON argument");
+    }
+    break;
   case "submit-candidates":
   case "submit-exhausted":
     try {
@@ -31,7 +38,7 @@ switch (action) {
     break;
   default:
     throw new Error(
-      "usage: claim [limit] | search <query> [limit] | fetch <url> | submit-candidates <json> | submit-exhausted <json>"
+      "usage: claim [limit] | search <query> [limit] | fetch <url> | known-contacts <json> | submit-candidates <json> | submit-exhausted <json>"
     );
 }
 

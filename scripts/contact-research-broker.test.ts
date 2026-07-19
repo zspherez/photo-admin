@@ -86,7 +86,33 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
                   },
                 ],
               }
-            : { ok: true, status: "exhausted" }
+            : request.url === "/api/contact-research/known-contacts"
+              ? {
+                  query: {
+                    managerName: "Greg Burnell",
+                    company: "Palm Artists",
+                    domain: "palmartists.com",
+                  },
+                  matches: [
+                    {
+                      email: "greg@palmartists.com",
+                      name: null,
+                      evidence: null,
+                      source: "active_contact",
+                      status: "active",
+                      artists: ["Gorgon City", "SG Lewis"],
+                      sourceUrls: [],
+                      score: 125,
+                      matchReasons: [
+                        "same company domain",
+                        "email local-part matches manager first name",
+                        "already present in active contact list",
+                      ],
+                      sources: ["active_contact"],
+                    },
+                  ],
+                }
+              : { ok: true, status: "exhausted" }
         )
       );
     });
@@ -136,6 +162,41 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
     { limit: 1 }
   );
   assert.equal(duplicateClaim.status, 409);
+  const knownContacts = await brokerRequest(
+    socketPath,
+    "/known-contacts",
+    {
+      managerName: "Greg Burnell",
+      company: "Palm Artists",
+      domain: "palmartists.com",
+    }
+  );
+  assert.equal(knownContacts.status, 200);
+  assert.deepEqual(knownContacts.value, {
+    query: {
+      managerName: "Greg Burnell",
+      company: "Palm Artists",
+      domain: "palmartists.com",
+    },
+    matches: [
+      {
+        email: "greg@palmartists.com",
+        name: null,
+        evidence: null,
+        source: "active_contact",
+        status: "active",
+        artists: ["Gorgon City", "SG Lewis"],
+        sourceUrls: [],
+        score: 125,
+        matchReasons: [
+          "same company domain",
+          "email local-part matches manager first name",
+          "already present in active contact list",
+        ],
+        sources: ["active_contact"],
+      },
+    ],
+  });
   const wrongId = await brokerRequest(
     socketPath,
     "/submit-exhausted",
@@ -157,6 +218,11 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
   assert.deepEqual(bodies, [
     { limit: 1 },
     {
+      managerName: "Greg Burnell",
+      company: "Palm Artists",
+      domain: "palmartists.com",
+    },
+    {
       outcome: "exhausted",
       claimToken: "claim-1",
       notes: "Checked the bounded public sources.",
@@ -175,6 +241,7 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
         claimed: true,
         completed: true,
         empty: false,
+        stale: false,
       },
     },
   });
