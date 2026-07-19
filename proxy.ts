@@ -17,7 +17,11 @@ const PUBLIC_PATHS = new Set([
   "/robots.txt",
 ]);
 
-const PUBLIC_PREFIXES = ["/api/cron/", "/_next/"];
+const PUBLIC_PREFIXES = [
+  "/api/contact-research/",
+  "/api/cron/",
+  "/_next/",
+];
 
 function loginUrlFor(request: NextRequest): URL {
   const loginUrl = new URL("/login", request.url);

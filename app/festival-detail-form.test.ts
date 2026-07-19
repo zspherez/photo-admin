@@ -46,6 +46,7 @@ function isIdentifierExpression(
 test("festival outreach forms are valid and explicitly associated", () => {
   let bulkFormFound = false;
   let cancelFormFound = false;
+  let managerResearchFormFound = false;
   let contactCheckboxFound = false;
 
   const visit = (node: ts.Node, formDepth: number) => {
@@ -70,6 +71,14 @@ test("festival outreach forms are valid and explicitly associated", () => {
         )
       ) {
         cancelFormFound = true;
+      }
+      if (
+        isIdentifierExpression(
+          attribute(attributes, "action"),
+          "queueFestivalManagerResearch",
+        )
+      ) {
+        managerResearchFormFound = true;
       }
     }
 
@@ -104,5 +113,10 @@ test("festival outreach forms are valid and explicitly associated", () => {
     cancelFormFound,
     true,
     "Cancellation must remain an independent form action",
+  );
+  assert.equal(
+    managerResearchFormFound,
+    true,
+    "Festival pages need an independent manager-research action",
   );
 });

@@ -8,10 +8,11 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Settings" };
 
 export default async function SettingsIndex() {
-  const [spotify, statsfm, contactCount, template, showCount, settings] = await Promise.all([
+  const [spotify, statsfm, contactCount, researchReviewCount, template, showCount, settings] = await Promise.all([
     db.integrationCredential.findUnique({ where: { provider: "spotify" } }),
     db.integrationCredential.findUnique({ where: { provider: "statsfm" } }),
     db.contact.count({ where: { state: "active" } }),
+    db.contactResearchJob.count({ where: { status: "review" } }),
     db.emailTemplate.findFirst({ where: { isDefault: true } }),
     db.show.count({
       where: {
@@ -52,6 +53,13 @@ export default async function SettingsIndex() {
       status: `${contactCount.toLocaleString()} contacts`,
       ok: contactCount > 0,
       description: "Sync from Google Sheet.",
+    },
+    {
+      title: "Contact research",
+      href: "/research",
+      status: `${researchReviewCount.toLocaleString()} to review`,
+      ok: !!process.env.CONTACT_RESEARCH_AGENT_TOKEN,
+      description: "Agent queue and evidence-backed approvals.",
     },
     {
       title: "Email template",

@@ -1,0 +1,89 @@
+name: Research artist managers
+
+on:
+  schedule:
+    # Process daily and festival-triggered queue entries within about an hour.
+    # The API preflight prevents empty runs from invoking Copilot.
+    - cron: "23 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  copilot-requests: write
+
+concurrency:
+  group: photo-admin-contact-research
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check for manager research
+        id: queue
+        shell: bash
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CONTACT_RESEARCH_AGENT_TOKEN: ${{ secrets.CONTACT_RESEARCH_AGENT_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${APP_BASE_URL}" || -z "${CONTACT_RESEARCH_AGENT_TOKEN}" ]]; then
+            echo "::error::APP_BASE_URL and CONTACT_RESEARCH_AGENT_TOKEN repository secrets are required"
+            exit 1
+          fi
+
+          response_file="$(mktemp)"
+          trap 'rm -f "${response_file}"' EXIT
+          curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --connect-timeout 15 \
+            --max-time 120 \
+            --request POST \
+            --header "Authorization: ******" \
+            --header "Accept: application/json" \
+            --output "${response_file}" \
+            "${APP_BASE_URL%/}/api/contact-research/prepare"
+
+          claimable="$(
+            jq -er '
+              .claimable |
+              if type == "number" and . >= 0 and floor == .
+              then .
+              else error("invalid claimable count")
+              end
+            ' "${response_file}"
+          )"
+          echo "claimable=${claimable}" >> "${GITHUB_OUTPUT}"
+          echo "Manager research queue has ${claimable} claimable job(s)"
+
+      - name: Check out repository
+        if: steps.queue.outputs.claimable != '0'
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        if: steps.queue.outputs.claimable != '0'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install worker dependencies
+        if: steps.queue.outputs.claimable != '0'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install Copilot CLI
+        if: steps.queue.outputs.claimable != '0'
+        run: npm install --global @github/copilot@latest --no-audit --no-fund
+
+      - name: Research queued managers
+        if: steps.queue.outputs.claimable != '0'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CONTACT_RESEARCH_AGENT_TOKEN: ${{ secrets.CONTACT_RESEARCH_AGENT_TOKEN }}
+          CONTACT_RESEARCH_LIMIT: "3"
+        run: npm run contact-research:agent

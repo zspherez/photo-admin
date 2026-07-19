@@ -12,11 +12,14 @@ code is hopefully readable enough to fork.
 
 - **`/dashboard`** — ranked list of upcoming shows for artists I listen to, with
   per-contact send/preview/customize actions.
+- **`/research`** — evidence-backed contact candidates proposed by a local
+  Copilot agent and held for approval.
 - **`/shows`, `/festivals`, `/artists`, `/outreach`** — listing/detail views.
 - **`/settings`** — general config, Spotify connect, Stats.fm token, email
   template editor, contact import.
 - **`/api/cron/sync-shows`, `/api/cron/sync-listens`,
-  `/api/cron/refresh-top-playlist`, `/api/cron/send-scheduled`** —
+  `/api/cron/contact-research`, `/api/cron/refresh-top-playlist`,
+  `/api/cron/send-scheduled`** —
   authenticated scheduled jobs split between Vercel Cron and GitHub Actions.
 - **`/api/resend/webhook`** — receives delivery/bounce/open events from Resend.
 
@@ -83,6 +86,7 @@ The full list is in `.env.example`. Minimum to boot:
 | `RESEND_FROM_EMAIL` | for sending | The verified `From:` sender, as `you@example.com` or `Name <you@example.com>`. Malformed values are rejected before a provider attempt is created. |
 | `RESEND_WEBHOOK_SECRET` | for webhooks | `whsec_...` from Resend → Webhooks. The webhook route fails closed when this is blank. |
 | `CRON_SECRET` | for scheduled jobs | Bearer token Vercel Cron and the scheduled GitHub Actions workflow present on `/api/cron/*`. Cron routes fail closed when this is blank. |
+| `CONTACT_RESEARCH_AGENT_TOKEN` | for contact research | Shared bearer token used by Copilot CLI workers and the hosted queue API. Configure the same value in Vercel and GitHub Actions. Generate it with `openssl rand -hex 32`. |
 | `EDMTRAIN_API_KEY` | for show sync | Request a key at <https://edmtrain.com/api>. |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | for Spotify | Create an app at <https://developer.spotify.com/dashboard>. Redirect URI is `${APP_BASE_URL}/api/spotify/callback`. Spotify rejects `http://localhost`, so use `http://127.0.0.1:3000` locally. |
 | `STATSFM_TOKEN` | for Stats.fm | No public API — grab a session token from DevTools (Application → Local Storage → `token`) after logging into stats.fm. |
@@ -121,6 +125,49 @@ and quarantined rather than deleted.
 If the overrides are absent, both existing database settings must already be
 complete. `SPREADSHEET_ID` is only the interactive setup fallback and is never
 a protected-release bootstrap.
+
+## Contact research agent
+
+The hosted app automatically queues non-festival artists with an upcoming show,
+a current listen signal or Spotify popularity of at least 60, and no active
+manager email. Festival pages can explicitly queue every matched lineup artist
+who still needs a manager. The repository custom agent submits candidates to
+`/research`; it cannot approve contacts or send email.
+
+The default automation is `.github/workflows/contact-research.yml`. Every hour
+it calls a lightweight authenticated preflight. Empty queues stop before
+checkout, dependency installation, or any Copilot request. When work exists,
+GitHub Actions runs Copilot CLI with a three-artist batch. The custom agent's
+per-artist research limit and the workflow's 45-minute timeout bound each run.
+Scheduled runs are enabled when the workflow reaches the default branch.
+
+Configure repository Actions secrets `APP_BASE_URL` and
+`CONTACT_RESEARCH_AGENT_TOKEN`. The token must exactly match Vercel. Copilot CLI
+authenticates with the workflow's short-lived `GITHUB_TOKEN`; no Copilot PAT is
+needed. For organization repositories, enable **Allow use of Copilot CLI billed
+to the organization** and keep the workflow's `copilot-requests: write`
+permission.
+
+The same worker can still be run locally:
+
+```bash
+export APP_BASE_URL="https://your-photo-admin.example"
+export CONTACT_RESEARCH_AGENT_TOKEN="..."
+export CONTACT_RESEARCH_LIMIT=3
+npm run contact-research:agent
+```
+
+The worker accepts manager/management contacts only. It checks artist websites,
+Instagram, Facebook, SoundCloud, linked Linktrees, and manager-focused Google
+searches before using Booking Agent Info solely to identify a manager. It then
+uses public company-domain patterns as a bounded Hunter-style fallback. Its
+narrow MCP bridge keeps the app bearer token out of the browsing agent's
+tools.
+
+This is automated **Copilot CLI on GitHub Actions**, not Copilot cloud agent.
+The MCP bridge only handles queue API calls; CLI supplies external web
+search/fetch. Copilot cloud agent currently does not map the custom-agent `web`
+alias, while its default Playwright MCP can access only localhost.
 
 ## Email template
 
@@ -402,12 +449,14 @@ order, stopping if any request fails:
 
 1. `${APP_BASE_URL}/api/cron/sync-shows` (`--max-time 330`);
 2. `${APP_BASE_URL}/api/cron/sync-listens` (`--max-time 330`);
-3. `${APP_BASE_URL}/api/cron/refresh-top-playlist` (`--max-time 210`).
+3. `${APP_BASE_URL}/api/cron/contact-research` (`--max-time 120`);
+4. `${APP_BASE_URL}/api/cron/refresh-top-playlist` (`--max-time 210`).
 
 Use `curl --fail-with-body --silent --show-error --connect-timeout 15` and
 `Authorization: Bearer ${CRON_SECRET}`. Do not print the secret. The first two
-client limits allow response-delivery grace beyond their 300-second route
-maximum; the playlist limit likewise exceeds its 180-second route maximum.
+show/listen client limits allow response-delivery grace beyond their
+300-second route maximum; the queue and playlist limits likewise exceed their
+route maximums.
 
 ### Scheduled jobs
 
@@ -420,6 +469,8 @@ so the frequent outreach dispatcher runs in GitHub Actions instead.
 | Vercel `/api/cron/sync-shows` | Daily at 09:00 UTC | Import upcoming shows and festivals. |
 | Vercel `/api/cron/sync-listens` | Daily at 11:00 UTC | Refresh listening and contact data. |
 | GitHub Action `/api/cron/refresh-top-playlist` | Daily at 12:30 UTC | Refresh the top-tracks playlist after listening sync. |
+| Vercel `/api/cron/contact-research` | Daily at 13:00 UTC | Queue actionable artists that still need a manager contact. |
+| GitHub Action manager research | Hourly at minute 23 | Refresh the queue, skip empty runs, and research up to three manager contacts with Copilot CLI. |
 | GitHub Action `/api/cron/send-scheduled` | Every 15 minutes from 13:00 through 15:45 UTC on weekdays, plus every four hours at minute 17 | Dispatch due outreach and keep provider retries moving evenings and weekends. |
 | Stats.fm token rotation GitHub Action | Mondays, Thursdays, and Saturdays at 03:17 UTC | Refresh the short-lived token every 2–3 days, away from listen sync. |
 
@@ -427,18 +478,23 @@ The show and listen syncs have an empty Hobby scheduling hour between them.
 The listen sync can start as late as 11:59 UTC and run for five minutes, so the
 12:30 playlist refresh still has at least 25 minutes of separation. The
 playlist route is bounded to three minutes before outreach begins at 13:00.
-Release, playlist refresh, outreach, and token rotation each serialize only
-with another run of the same operation, so unrelated workflows cannot replace
-one another in GitHub's single pending concurrency slot.
+Release, playlist refresh, manager research, outreach, and token rotation each
+serialize only with another run of the same operation, so unrelated workflows
+cannot replace one another in GitHub's single pending concurrency slot.
 
-The playlist-refresh and outreach workflows require these GitHub repository
-secrets under
+The scheduled workflows require GitHub repository secrets under
 **Settings → Secrets and variables → Actions**:
 
 - `APP_BASE_URL` — the production origin, such as `https://photo.example.com`,
   with no path.
 - `CRON_SECRET` — exactly the same secret configured in the production Vercel
   environment.
+- `CONTACT_RESEARCH_AGENT_TOKEN` — exactly the same strong token configured in
+  the production Vercel environment.
+
+The manager-research workflow also requires `copilot-requests: write`, already
+declared in the workflow. In organization-owned repositories, organization
+policy must allow Copilot CLI usage billed to the organization.
 
 The 13:00 UTC run is 09:00 in America/New_York during EDT; the 14:00 UTC run is
 09:00 during EST. Continuing through 15:45 UTC provides recovery opportunities

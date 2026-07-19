@@ -32,6 +32,8 @@ async function main(): Promise<void> {
     outreachAttemptProbe,
     syncLeaseProbe,
     artistClaimProbe,
+    contactResearchJobProbe,
+    contactResearchCandidateProbe,
   ] = await Promise.all([
     db.setting.findMany({
       where: {
@@ -64,6 +66,8 @@ async function main(): Promise<void> {
     db.outreachSendAttempt.count({ take: 1 }),
     db.integrationSyncLease.count({ take: 1 }),
     db.artistIdentityNameClaim.count({ take: 1 }),
+    db.contactResearchJob.count({ take: 1 }),
+    db.contactResearchCandidate.count({ take: 1 }),
   ]);
   const values = new Map(settings.map((setting) => [setting.key, setting.value]));
 
@@ -77,6 +81,8 @@ async function main(): Promise<void> {
         outreachAttemptProbe,
         syncLeaseProbe,
         artistClaimProbe,
+        contactResearchJobProbe,
+        contactResearchCandidateProbe,
       ].every(Number.isInteger),
       configuredSpreadsheetId:
         values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,

@@ -38,22 +38,23 @@ model ArtistIdentityNameClaim {
 }
 
 model Artist {
-  id             String           @id @default(cuid())
-  name           String
-  normalizedName String
-  spotifyId      String?          @unique
-  statsfmId      String?          @unique
-  edmtrainId     Int?             @unique
-  genres         String?
-  popularity     Int?
-  imageUrl       String?
-  contacts       Contact[]
-  shows          ShowArtist[]
-  listenSignals  ListenSignal[]
-  playlists      ArtistPlaylist[]
-  outreaches     Outreach[]
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  id                 String              @id @default(cuid())
+  name               String
+  normalizedName     String
+  spotifyId          String?             @unique
+  statsfmId          String?             @unique
+  edmtrainId         Int?                @unique
+  genres             String?
+  popularity         Int?
+  imageUrl           String?
+  contacts           Contact[]
+  shows              ShowArtist[]
+  listenSignals      ListenSignal[]
+  playlists          ArtistPlaylist[]
+  outreaches         Outreach[]
+  contactResearchJob ContactResearchJob?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   @@index([normalizedName])
 }
@@ -111,34 +112,79 @@ model Contact {
   @@index([state])
 }
 
+model ContactResearchJob {
+  id              String                     @id @default(cuid())
+  artistId        String                     @unique
+  artist          Artist                     @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  requestedShowId String?
+  requestedShow   Show?                      @relation(fields: [requestedShowId], references: [id], onDelete: SetNull)
+  status          String                     @default("pending")
+  priority        Int                        @default(0)
+  nextShowAt      DateTime?
+  attemptCount    Int                        @default(0)
+  claimedAt       DateTime?
+  claimExpiresAt  DateTime?
+  claimToken      String?                    @unique
+  agentNotes      String?
+  completedAt     DateTime?
+  candidates      ContactResearchCandidate[]
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+
+  @@index([status, priority, nextShowAt, createdAt])
+  @@index([claimExpiresAt])
+  @@index([requestedShowId])
+}
+
+model ContactResearchCandidate {
+  id              String             @id @default(cuid())
+  jobId           String
+  job             ContactResearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  normalizedEmail String
+  email           String
+  name            String?
+  role            String
+  sourceUrls      String[]           @default([])
+  evidence        String
+  confidence      String
+  status          String             @default("pending")
+  reviewedAt      DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@unique([jobId, normalizedEmail])
+  @@index([status, createdAt])
+}
+
 model Show {
-  id               String       @id @default(cuid())
-  edmtrainId       Int?         @unique
-  date             DateTime
-  venueName        String
-  city             String
-  state            String?
+  id                  String               @id @default(cuid())
+  edmtrainId          Int?                 @unique
+  date                DateTime
+  venueName           String
+  city                String
+  state               String?
   /// ISO 3166-1 alpha-2 when known. Null is explicitly unknown, never assumed US.
-  countryCode      String?
+  countryCode         String?
   /// Provider/manual display value retained when an ISO code cannot be resolved.
-  countryName      String?
-  ticketUrl        String?
-  ages             String?
-  electronicGenre  String?
-  isFestival       Boolean      @default(false)
-  eventName        String?
-  source           String?
+  countryName         String?
+  ticketUrl           String?
+  ages                String?
+  electronicGenre     String?
+  isFestival          Boolean              @default(false)
+  eventName           String?
+  source              String?
   /// active, cancelled, blocked, or missing for provider-managed events.
-  syncStatus       String       @default("active")
-  sourceLastSeenAt DateTime?
-  sourceGeneration String?
-  dismissedAt      DateTime?
-  interestedAt     DateTime?
-  raw              String?
-  artists          ShowArtist[]
-  outreaches       Outreach[]
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  syncStatus          String               @default("active")
+  sourceLastSeenAt    DateTime?
+  sourceGeneration    String?
+  dismissedAt         DateTime?
+  interestedAt        DateTime?
+  raw                 String?
+  artists             ShowArtist[]
+  outreaches          Outreach[]
+  contactResearchJobs ContactResearchJob[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 
   @@index([date])
   @@index([isFestival, date])
