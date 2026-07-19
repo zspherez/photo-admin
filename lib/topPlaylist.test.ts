@@ -67,19 +67,19 @@ test("managed playlist descriptions use deterministic Eastern timestamps", () =>
     formatManagedPlaylistDescription(
       new Date("2026-07-19T00:48:00.000Z")
     ),
-    `${PLAYLIST_DESCRIPTION_BASE} Last updated: Jul 18, 2026, 8:48 PM EDT.`
+    `${PLAYLIST_DESCRIPTION_BASE} Updated: Jul 18, 2026, 8:48 PM EDT`
   );
   assert.equal(
     formatManagedPlaylistDescription(
       new Date("2026-01-19T01:05:00.000Z")
     ),
-    `${PLAYLIST_DESCRIPTION_BASE} Last updated: Jan 18, 2026, 8:05 PM EST.`
+    `${PLAYLIST_DESCRIPTION_BASE} Updated: Jan 18, 2026, 8:05 PM EST`
   );
 });
 
 test("managed playlist discovery ignores matching foreign playlists", () => {
   const name = "My Top Songs · Last 4 Weeks";
-  const description = `${PLAYLIST_DESCRIPTION_BASE} Last updated: Jul 18, 2026, 8:48 PM EDT.`;
+  const description = `${PLAYLIST_DESCRIPTION_BASE} Updated: Jul 18, 2026, 8:48 PM EDT`;
   const selected = selectOwnedManagedPlaylist(
     [
       {
@@ -119,13 +119,14 @@ test("managed playlist discovery ignores matching foreign playlists", () => {
   assert.equal(selected?.id, "d-owned");
 });
 
-test("managed playlist discovery accepts the legacy managed base description", () => {
+test("managed playlist discovery accepts legacy managed descriptions", () => {
   const selected = selectOwnedManagedPlaylist(
     [
       {
         id: "managed",
         name: "My Top Songs · Last 4 Weeks",
-        description: PLAYLIST_DESCRIPTION_BASE,
+        description:
+          "Auto-updated every morning — my top tracks from the last 4 weeks (via stats.fm). Last updated: Jul 18, 2026, 8:48 PM EDT.",
         owner: { id: "current-user" },
       },
     ],
