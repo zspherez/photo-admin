@@ -16,6 +16,11 @@ test("contact research automation is scheduled, bounded, and preflighted", () =>
   assert.match(source, /\/api\/contact-research\/prepare/);
   assert.match(source, /steps\.queue\.outputs\.claimable != '0'/);
   assert.match(source, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(
+    source,
+    /CONTACT_RESEARCH_AGENT_TOKEN: \$\{\{ secrets\.CRON_SECRET \}\}/
+  );
+  assert.doesNotMatch(source, /secrets\.CONTACT_RESEARCH_AGENT_TOKEN/);
   assert.doesNotMatch(source, /CONTACT_RESEARCH_MAX_AI_CREDITS/);
   assert.match(source, /CONTACT_RESEARCH_LIMIT: "3"/);
   assert.match(source, /npm run contact-research:agent/);

@@ -243,11 +243,25 @@ export function parseContactResearchSubmission(
 
 export async function isValidContactResearchAuthorization(
   authorization: string | null,
-  secret: string | undefined = process.env.CONTACT_RESEARCH_AGENT_TOKEN
+  secrets:
+    | string
+    | readonly (string | undefined)[]
+    = [
+      process.env.CONTACT_RESEARCH_AGENT_TOKEN,
+      process.env.CRON_SECRET,
+    ]
 ): Promise<boolean> {
-  if (!secret || !authorization?.startsWith("Bearer ")) return false;
+  if (!authorization?.startsWith("Bearer ")) return false;
   const token = authorization.slice("Bearer ".length);
-  return !!token && constantTimeEqual(token, secret);
+  if (!token) return false;
+  const candidates = (Array.isArray(secrets) ? secrets : [secrets]).filter(
+    (secret): secret is string => Boolean(secret)
+  );
+  if (candidates.length === 0) return false;
+  const matches = await Promise.all(
+    candidates.map((secret) => constantTimeEqual(token, secret))
+  );
+  return matches.some(Boolean);
 }
 
 export function contactResearchPriority(

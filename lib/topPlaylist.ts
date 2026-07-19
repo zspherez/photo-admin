@@ -47,8 +47,12 @@ const PLAYLIST_LOCK_KEY = "top_tracks_playlist_creation_lock";
 const PLAYLIST_LAST_SYNC_KEY = "top_tracks_playlist_last_sync";
 const PLAYLIST_NAME = "My Top Songs · Last 4 Weeks";
 export const PLAYLIST_DESCRIPTION_BASE =
+  "Based on stats.fm.";
+const PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX = `${PLAYLIST_DESCRIPTION_BASE} Updated: `;
+const LEGACY_PLAYLIST_DESCRIPTION_BASE =
   "Auto-updated every morning — my top tracks from the last 4 weeks (via stats.fm).";
-const PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX = `${PLAYLIST_DESCRIPTION_BASE} Last updated: `;
+const LEGACY_PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX =
+  `${LEGACY_PLAYLIST_DESCRIPTION_BASE} Last updated: `;
 const PLAYLIST_TIME_ZONE = "America/New_York";
 const PLAYLIST_CREATION_GRACE_MS = 10 * 60 * 1_000;
 const TOP_PLAYLIST_DEFAULT_OPERATION_MS = 3 * 60 * 1_000;
@@ -296,7 +300,7 @@ export function formatManagedPlaylistDescription(refreshedAt: Date): string {
     hour12: true,
     timeZoneName: "short",
   }).format(refreshedAt);
-  return `${PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX}${timestamp}.`;
+  return `${PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX}${timestamp}`;
 }
 
 function isManagedPlaylistDescription(
@@ -304,7 +308,11 @@ function isManagedPlaylistDescription(
 ): boolean {
   return (
     description === PLAYLIST_DESCRIPTION_BASE ||
-    description?.startsWith(PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX) === true
+    description?.startsWith(PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX) === true ||
+    description === LEGACY_PLAYLIST_DESCRIPTION_BASE ||
+    description?.startsWith(
+      LEGACY_PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX
+    ) === true
   );
 }
 

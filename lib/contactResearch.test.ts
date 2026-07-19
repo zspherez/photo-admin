@@ -146,8 +146,15 @@ test("contact research bearer authorization fails closed", async () => {
     false
   );
   assert.equal(
-    await isValidContactResearchAuthorization("Bearer correct", undefined),
+    await isValidContactResearchAuthorization("Bearer correct", []),
     false
+  );
+  assert.equal(
+    await isValidContactResearchAuthorization("Bearer cron-secret", [
+      "dedicated",
+      "cron-secret",
+    ]),
+    true
   );
 });
 
