@@ -916,6 +916,7 @@ test("protected release stages and verifies the exact target before pausing", ()
     "Apply expand-compatible production migrations",
     "Backfill Unicode-normalized artist names",
     "Unpause verified exact target",
+    "Catch up production data after resume",
   ]) {
     const start = source.indexOf(`      - name: ${step}`);
     assert.ok(start >= 0, `missing conditional migration step ${step}`);

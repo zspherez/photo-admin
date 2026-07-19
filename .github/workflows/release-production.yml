@@ -675,6 +675,7 @@ jobs:
           echo "resumed=true" >> "${GITHUB_OUTPUT}"
 
       - name: Catch up production data after resume
+        if: steps.database-targets.outputs.schema_change_required == 'true'
         shell: bash
         env:
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
