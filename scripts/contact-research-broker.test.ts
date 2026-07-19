@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
   mkdtempSync,
+  readFileSync,
   rmSync,
 } from "node:fs";
 import { createServer, request } from "node:http";
@@ -55,15 +56,21 @@ async function brokerRequest(socketPath: string, path: string, body: unknown) {
 
 test("agent broker keeps app authentication behind narrow localhost tools", async (t) => {
   let authorization: string | undefined;
-  let body: unknown;
+  const bodies: unknown[] = [];
   const api = createServer((request, response) => {
     authorization = request.headers.authorization;
     const chunks: Buffer[] = [];
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
     request.on("end", () => {
-      body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ jobs: [] }));
+      response.end(
+        JSON.stringify(
+          request.url === "/api/contact-research/claim"
+            ? { jobs: [{ id: "job-1" }] }
+            : { ok: true, status: "exhausted" }
+        )
+      );
     });
   });
   api.listen(0, "127.0.0.1");
@@ -74,6 +81,7 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
 
   const directory = mkdtempSync(join(tmpdir(), "contact-research-broker-"));
   const socketPath = join(directory, "broker.sock");
+  const metricsFile = join(directory, "metrics.json");
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const broker = spawn(
     process.execPath,
@@ -84,6 +92,7 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
         APP_BASE_URL: `http://127.0.0.1:${apiAddress.port}`,
         CONTACT_RESEARCH_AGENT_TOKEN: "app-secret",
         CONTACT_RESEARCH_BROKER_SOCKET: socketPath,
+        CONTACT_RESEARCH_BROKER_METRICS_FILE: metricsFile,
       },
       stdio: ["ignore", "pipe", "pipe"],
     }
@@ -93,7 +102,26 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
 
   const claimed = await brokerRequest(socketPath, "/claim", { limit: 2 });
   assert.equal(claimed.status, 200);
-  assert.deepEqual(claimed.value, { jobs: [] });
+  assert.deepEqual(claimed.value, { jobs: [{ id: "job-1" }] });
+  const submitted = await brokerRequest(socketPath, "/submit-exhausted", {
+    jobId: "job-1",
+    claimToken: "claim-1",
+    notes: "Checked the bounded public sources.",
+  });
+  assert.equal(submitted.status, 200);
+  assert.deepEqual(submitted.value, { ok: true, status: "exhausted" });
   assert.equal(authorization, "Bearer app-secret");
-  assert.deepEqual(body, { limit: 2 });
+  assert.deepEqual(bodies, [
+    { limit: 2 },
+    {
+      outcome: "exhausted",
+      claimToken: "claim-1",
+      notes: "Checked the bounded public sources.",
+    },
+  ]);
+  assert.deepEqual(JSON.parse(readFileSync(metricsFile, "utf8")), {
+    claimCalls: 1,
+    claimedJobs: 1,
+    submissions: 1,
+  });
 });

@@ -1,4 +1,4 @@
-import { chmodSync } from "node:fs";
+import { chmodSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { z } from "zod";
 import {
@@ -12,8 +12,14 @@ const oidcRequestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL?.trim();
 const oidcRequestToken =
   process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN?.trim();
 const socketPath = process.env.CONTACT_RESEARCH_BROKER_SOCKET?.trim();
+const metricsFile = process.env.CONTACT_RESEARCH_BROKER_METRICS_FILE?.trim();
 const oidcAudience = "photo-admin-contact-research";
 const maxRequestBytes = 100_000;
+const metrics = {
+  claimCalls: 0,
+  claimedJobs: 0,
+  submissions: 0,
+};
 
 if (
   !baseUrl ||
@@ -133,6 +139,28 @@ function sendJson(response, status, value) {
   response.end(JSON.stringify(value));
 }
 
+function persistMetrics() {
+  if (!metricsFile) return;
+  writeFileSync(metricsFile, JSON.stringify(metrics), { mode: 0o660 });
+  chmodSync(metricsFile, 0o660);
+}
+
+function recordSuccessfulTool(name, value) {
+  if (name === "claim") {
+    metrics.claimCalls += 1;
+    metrics.claimedJobs += Array.isArray(value?.jobs)
+      ? value.jobs.length
+      : 0;
+  }
+  if (
+    name === "submit-candidates" ||
+    name === "submit-exhausted"
+  ) {
+    metrics.submissions += 1;
+  }
+  persistMetrics();
+}
+
 async function runTool(name, input) {
   switch (name) {
     case "claim":
@@ -185,7 +213,9 @@ const server = createServer(async (request, response) => {
 
   try {
     const input = schema.parse(await readJsonBody(request));
-    sendJson(response, 200, await runTool(name, input));
+    const result = await runTool(name, input);
+    recordSuccessfulTool(name, result);
+    sendJson(response, 200, result);
   } catch (error) {
     if (error instanceof z.ZodError || error instanceof SyntaxError) {
       sendJson(response, 400, {
@@ -207,7 +237,8 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(socketPath, () => {
-  chmodSync(socketPath, 0o600);
+  chmodSync(socketPath, 0o660);
+  persistMetrics();
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
