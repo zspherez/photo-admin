@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
   copilot-requests: write
+  id-token: write
 
 concurrency:
   group: photo-admin-contact-research
@@ -25,14 +26,30 @@ jobs:
         shell: bash
         env:
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
-          CONTACT_RESEARCH_AGENT_TOKEN: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${APP_BASE_URL}" || -z "${CONTACT_RESEARCH_AGENT_TOKEN}" ]]; then
-            echo "::error::APP_BASE_URL and CRON_SECRET repository secrets are required"
+          if [[ -z "${APP_BASE_URL}" ]]; then
+            echo "::error::APP_BASE_URL repository secret is required"
             exit 1
           fi
+
+          oidc_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="?"
+          if [[ "${oidc_url}" == *"?"* ]]; then
+            separator="&"
+          fi
+          oidc_token="$(
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              --header "Accept: application/json" \
+              "${oidc_url}${separator}audience=photo-admin-contact-research" |
+              jq -er '.value | select(type == "string" and length > 0)'
+          )"
+          echo "::add-mask::${oidc_token}"
 
           response_file="$(mktemp)"
           trap 'rm -f "${response_file}"' EXIT
@@ -43,7 +60,7 @@ jobs:
             --connect-timeout 15 \
             --max-time 120 \
             --request POST \
-            --header "Authorization: ******" \
+            --header "Authorization: Bearer ${oidc_token}" \
             --header "Accept: application/json" \
             --output "${response_file}" \
             "${APP_BASE_URL%/}/api/contact-research/prepare"
@@ -84,6 +101,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
-          CONTACT_RESEARCH_AGENT_TOKEN: ${{ secrets.CRON_SECRET }}
           CONTACT_RESEARCH_LIMIT: "3"
         run: npm run contact-research:agent

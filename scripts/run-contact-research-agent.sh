@@ -2,7 +2,12 @@
 set -euo pipefail
 
 : "${APP_BASE_URL:?Set APP_BASE_URL to the deployed photo-admin origin}"
-: "${CONTACT_RESEARCH_AGENT_TOKEN:?Set CONTACT_RESEARCH_AGENT_TOKEN}"
+if [[ -z "${CONTACT_RESEARCH_AGENT_TOKEN:-}" ]] &&
+  [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ||
+    -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+  echo "Set CONTACT_RESEARCH_AGENT_TOKEN or run with GitHub Actions OIDC" >&2
+  exit 2
+fi
 
 limit="${CONTACT_RESEARCH_LIMIT:-3}"
 if [[ ! "${limit}" =~ ^[1-9][0-9]*$ ]] || (( limit > 10 )); then
