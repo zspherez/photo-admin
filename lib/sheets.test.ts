@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   assertExpectedPreviousSheetTarget,
+  captureAuditedContactSheetRollbackCells,
   contactSheetRowDisposition,
   configuredSheetTargetFromValues,
   isSheetSyncLeaseExpired,
@@ -11,6 +12,7 @@ import {
   makeSheetSyncLeaseKey,
   parseSheetEmails,
   parseSheetSourceKey,
+  planAuditedContactSheetCellUpdates,
   planContactSheetCellUpdates,
   reconcileSheetContactSlots,
   remainingLegacySheetAdoptions,
@@ -722,6 +724,11 @@ test("stale cleanup scopes ownership to one spreadsheet and tab", () => {
       false,
       [
         { id: "current", sourceKey: current },
+        {
+          id: "resolved-quarantine",
+          sourceKey: makeSheetSourceKey(target, "row-audit", 0),
+          preserveAuditHistory: true,
+        },
         { id: "other-spreadsheet", sourceKey: otherSpreadsheet },
         { id: "other-tab", sourceKey: otherTab },
         { id: "legacy", sourceKey: legacy },
@@ -782,16 +789,75 @@ test("approved stale Sheet identities stay quarantined until the Sheet target ch
   );
 });
 
+test("audit Sheet updates and rollback capture never touch price or notes", () => {
+  const header = [
+    "artist",
+    "email",
+    "manager_name",
+    "price",
+    "role",
+    "notes",
+  ];
+  const existing = [
+    "Artist",
+    "old@example.com",
+    "Newer Sheet Name",
+    "$975",
+    "management",
+    "Newer Sheet notes",
+  ];
+  const updates = planAuditedContactSheetCellUpdates({
+    tabName: "Artists",
+    sheetRow: 2,
+    header,
+    existing,
+    contactCellValue: "new@example.com",
+    managerName: "Audited Manager",
+    role: "management",
+  });
+  assert.deepEqual(
+    updates.map((update) => update.columnIndex),
+    [1, 2]
+  );
+  assert.deepEqual(
+    captureAuditedContactSheetRollbackCells(existing, updates),
+    [
+      {
+        columnIndex: 1,
+        before: "old@example.com",
+        after: "new@example.com",
+      },
+      {
+        columnIndex: 2,
+        before: "Newer Sheet Name",
+        after: "Audited Manager",
+      },
+    ]
+  );
+  assert.equal(existing[3], "$975");
+  assert.equal(existing[5], "Newer Sheet notes");
+});
+
 test("Sheet reconciliation honors approved stale audit decisions", () => {
   const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
-  assert.match(source, /finding: "stale",\s*resolution: "approved"/);
+  assert.match(source, /resolution: \{ not: null \}/);
   assert.match(
     source,
     /state: shouldKeepApprovedStaleSheetContactQuarantined/
   );
+  assert.match(source, /preserveAuditHistory:/);
+  assert.match(source, /contact\._count\.auditJobs > 0/);
+  assert.match(
+    source,
+    /!contact\.preserveAuditHistory[\s\S]*staleOwnedSheetContactIds/
+  );
   assert.match(
     source,
     /A contact audit decision is currently updating a Sheet-owned contact/
+  );
+  assert.match(
+    source,
+    /rollback\.cells\.some\([\s\S]*cell\.after[\s\S]*rollback was not applied/
   );
 });
 

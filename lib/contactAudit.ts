@@ -12,7 +12,10 @@ import {
   normalizeResearchEmail,
   normalizeResearchSourceUrl,
 } from "@/lib/contactResearch";
-import { updateContactInSheet } from "@/lib/sheets";
+import {
+  rollbackAuditedContactInSheet,
+  updateAuditedContactInSheet,
+} from "@/lib/sheets";
 import { CONTACT_AUDIT_RESOLUTION_CLAIM_TTL_MS } from "@/lib/contactAuditResolutionPolicy";
 
 export const CONTACT_AUDIT_DEFAULT_CLAIM_LIMIT = 1;
@@ -593,8 +596,6 @@ type ResolutionContact = {
   directOutreachNote: string | null;
   name: string | null;
   role: string | null;
-  customPrice: string | null;
-  notes: string | null;
   source: string | null;
   sourceKey: string | null;
   state: "active" | "quarantined";
@@ -619,7 +620,15 @@ type ResolutionReservation = {
   alternative: ResolutionAlternative | null;
 };
 
-type SheetContactUpdater = typeof updateContactInSheet;
+interface ContactAuditSheetMutations {
+  update: typeof updateAuditedContactInSheet;
+  rollback: typeof rollbackAuditedContactInSheet;
+}
+
+const CONTACT_AUDIT_SHEET_MUTATIONS: ContactAuditSheetMutations = {
+  update: updateAuditedContactInSheet,
+  rollback: rollbackAuditedContactInSheet,
+};
 
 function contactStillMatchesAuditSnapshot(
   job: {
@@ -1006,7 +1015,7 @@ export async function resolveContactAuditJob(
   resolution: ContactAuditResolution,
   alternativeId: string | null,
   now: Date = new Date(),
-  sheetUpdater: SheetContactUpdater = updateContactInSheet
+  sheetMutations: ContactAuditSheetMutations = CONTACT_AUDIT_SHEET_MUTATIONS
 ): Promise<ContactAuditResolutionResult> {
   const normalizedJobId = jobId.trim();
   const normalizedAlternativeId = alternativeId?.trim() || null;
@@ -1025,14 +1034,33 @@ export async function resolveContactAuditJob(
   if (!reserved.ok) return reserved.result;
 
   const { reservation } = reserved;
-  let sheetUpdate: Awaited<ReturnType<SheetContactUpdater>> | null = null;
+  let sheetUpdate: Awaited<
+    ReturnType<typeof updateAuditedContactInSheet>
+  > | null = null;
   if (
     decision.resolution === "approved" &&
     reservation.alternative &&
-    reservation.contact.source === "sheet"
+    reservation.contact.source === "sheet" &&
+    !reservation.contact.sourceKey
+  ) {
+    await releaseContactAuditResolutionClaim(
+      reservation.jobId,
+      reservation.claimToken
+    );
+    return {
+      ok: false,
+      error:
+        "This Sheet-owned contact has no stable row identity. Run a complete Sheet sync before approving the replacement.",
+    };
+  }
+  if (
+    decision.resolution === "approved" &&
+    reservation.alternative &&
+    reservation.contact.source === "sheet" &&
+    reservation.contact.sourceKey
   ) {
     try {
-      sheetUpdate = await sheetUpdater({
+      sheetUpdate = await sheetMutations.update({
         artistName: reservation.contact.artist.name,
         oldEmail: reservation.contact.email,
         newEmail: reservation.alternative.normalizedEmail,
@@ -1041,8 +1069,6 @@ export async function resolveContactAuditJob(
         sourceKey: reservation.contact.sourceKey,
         managerName: reservation.alternative.name,
         role: "management",
-        customPrice: reservation.contact.customPrice,
-        notes: reservation.contact.notes,
       });
     } catch (error) {
       await releaseContactAuditResolutionClaim(
@@ -1080,18 +1106,7 @@ export async function resolveContactAuditJob(
 
   let rollbackError: string | null = null;
   try {
-    await sheetUpdater({
-      artistName: reservation.contact.artist.name,
-      oldEmail: reservation.alternative.normalizedEmail,
-      newEmail: reservation.contact.email,
-      oldDirectOutreachNote: null,
-      newDirectOutreachNote: reservation.contact.directOutreachNote,
-      sourceKey: sheetUpdate.sourceKey,
-      managerName: reservation.contact.name,
-      role: reservation.contact.role,
-      customPrice: reservation.contact.customPrice,
-      notes: reservation.contact.notes,
-    });
+    await sheetMutations.rollback(sheetUpdate.rollback);
   } catch (error) {
     rollbackError = error instanceof Error ? error.message : String(error);
   }

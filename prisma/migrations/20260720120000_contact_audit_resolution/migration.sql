@@ -65,11 +65,14 @@ ALTER TABLE "ContactAuditJob"
       (
         "resolution" IS NOT NULL
         AND "status" = 'complete'
+        AND "finding" IS NOT NULL
         AND "finding" IN ('changed', 'stale', 'ambiguous')
+        AND "verifiedAt" IS NOT NULL
         AND "resolvedAt" IS NOT NULL
         AND "resolvedAt" >= "verifiedAt"
         AND "resolvedContactId" IS NOT NULL
         AND "resolvedArtistId" IS NOT NULL
+        AND "resolvedArtistName" IS NOT NULL
         AND char_length(btrim("resolvedArtistName")) > 0
         AND "resolvedState" IS NOT NULL
         AND "resolutionClaimToken" IS NULL

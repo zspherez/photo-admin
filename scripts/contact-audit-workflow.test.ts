@@ -99,5 +99,13 @@ test("contact audit decisions have immutable constrained provenance", () => {
     resolutionMigration,
     /Resolved contact audit history cannot be deleted/
   );
+  assert.match(
+    resolutionMigration,
+    /"finding" IS NOT NULL[\s\S]*"verifiedAt" IS NOT NULL[\s\S]*"resolvedAt" IS NOT NULL/
+  );
+  assert.match(
+    resolutionMigration,
+    /"resolvedArtistName" IS NOT NULL[\s\S]*char_length\(btrim\("resolvedArtistName"\)\) > 0/
+  );
   assert.match(resolutionMigration, /COMMIT;\s*$/);
 });

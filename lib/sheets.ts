@@ -1157,6 +1157,7 @@ export function remainingLegacySheetAdoptions(
 export interface SheetContactOwnership {
   id: string;
   sourceKey: string | null;
+  preserveAuditHistory?: boolean;
 }
 
 export function staleOwnedSheetContactIds(
@@ -1170,6 +1171,7 @@ export function staleOwnedSheetContactIds(
     .filter(
       (contact) =>
         !claimedContactIds.has(contact.id) &&
+        !contact.preserveAuditHistory &&
         contact.sourceKey !== null &&
         sheetSourceKeyBelongsToTarget(
           contact.sourceKey,
@@ -1667,12 +1669,12 @@ async function syncContactsAtTarget(
           ],
         },
         include: {
+          _count: { select: { auditJobs: true } },
           auditJobs: {
             where: {
               OR: [
                 {
-                  finding: "stale",
-                  resolution: "approved",
+                  resolution: { not: null },
                 },
                 {
                   resolution: null,
@@ -1857,7 +1859,13 @@ async function syncContactsAtTarget(
       const staleIds = staleOwnedSheetContactIds(
         target,
         allowLegacyOwnership,
-        contacts,
+        contacts.map((contact) => ({
+          id: contact.id,
+          sourceKey: contact.sourceKey,
+          preserveAuditHistory:
+            contact.state === "quarantined" &&
+            contact._count.auditJobs > 0,
+        })),
         claimedContactIds,
         seenSourceKeys
       );
@@ -2133,6 +2141,17 @@ export interface UpdateContactInput {
   notes?: string | null;
 }
 
+export interface UpdateAuditedContactInput {
+  artistName: string;
+  oldEmail?: string | null;
+  newEmail?: string | null;
+  oldDirectOutreachNote?: string | null;
+  newDirectOutreachNote?: string | null;
+  sourceKey: string;
+  managerName?: string | null;
+  role?: string | null;
+}
+
 export interface ContactSheetCellUpdate {
   columnIndex: number;
   value: string;
@@ -2148,8 +2167,8 @@ export interface ContactSheetCellUpdatePlanInput {
   contactCellValue: string | null;
   managerName: string;
   role: string;
-  customPrice: string;
-  notes: string;
+  customPrice: string | null;
+  notes: string | null;
 }
 
 export function planContactSheetCellUpdates(
@@ -2191,6 +2210,48 @@ export function planContactSheetCellUpdates(
   return updates.sort((left, right) => left.columnIndex - right.columnIndex);
 }
 
+export function planAuditedContactSheetCellUpdates(
+  input: Omit<ContactSheetCellUpdatePlanInput, "customPrice" | "notes">
+): ContactSheetCellUpdate[] {
+  return planContactSheetCellUpdates({
+    ...input,
+    customPrice: null,
+    notes: null,
+  });
+}
+
+export interface AuditedContactSheetRollback {
+  sourceKey: string;
+  rowId: string;
+  cells: Array<{
+    columnIndex: number;
+    before: string;
+    after: string;
+  }>;
+}
+
+export function captureAuditedContactSheetRollbackCells(
+  existing: readonly string[],
+  updates: readonly ContactSheetCellUpdate[]
+): AuditedContactSheetRollback["cells"] {
+  return updates.map((update) => ({
+    columnIndex: update.columnIndex,
+    before: existing[update.columnIndex] ?? "",
+    after: update.value,
+  }));
+}
+
+export interface SheetContactUpdateResult {
+  updated: boolean;
+  rowIndex: number | null;
+  sourceKey: string;
+}
+
+export interface AuditedContactSheetUpdateResult
+  extends SheetContactUpdateResult {
+  rollback: AuditedContactSheetRollback;
+}
+
 type SheetManagedContactTarget =
   | { kind: "email"; email: string; cellValue: string }
   | {
@@ -2230,13 +2291,10 @@ function sheetManagedContactTarget(
   );
 }
 
-export async function updateContactInSheet(
-  data: UpdateContactInput
-): Promise<{
-  updated: boolean;
-  rowIndex: number | null;
-  sourceKey: string;
-}> {
+async function updateContactInSheetInternal(
+  data: UpdateContactInput,
+  auditOnly: boolean
+): Promise<SheetContactUpdateResult | AuditedContactSheetUpdateResult> {
   const normalizedArtist = normalizeArtistName(data.artistName);
   const oldTarget = sheetManagedContactTarget(
     data.oldEmail,
@@ -2310,6 +2368,9 @@ export async function updateContactInSheet(
     }
 
     if (matchIndex < 0) {
+      if (auditOnly) {
+        throw new Error("The audited source Sheet row no longer exists");
+      }
       const rowId = await appendContactRow(
         sheet,
         {
@@ -2408,7 +2469,7 @@ export async function updateContactInSheet(
     matchedSourceKey = makeSheetSourceKey(target, rowId, identitySlot);
 
     const sheetRow = matchIndex + 2;
-    const updates = planContactSheetCellUpdates({
+    const commonPlan = {
       tabName: target.tabName,
       sheetRow,
       header: sheet.header,
@@ -2416,9 +2477,14 @@ export async function updateContactInSheet(
       contactCellValue,
       managerName: data.managerName ?? "",
       role: data.role ?? "",
-      customPrice: data.customPrice ?? "",
-      notes: data.notes ?? "",
-    });
+    };
+    const updates = auditOnly
+      ? planAuditedContactSheetCellUpdates(commonPlan)
+      : planContactSheetCellUpdates({
+          ...commonPlan,
+          customPrice: data.customPrice ?? "",
+          notes: data.notes ?? "",
+        });
     if (updates.length > 0) {
       await sheet.sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: sheet.spreadsheetId,
@@ -2459,11 +2525,106 @@ export async function updateContactInSheet(
     ) {
       throw new Error("The Sheet contact update could not be verified");
     }
-    return {
+    const result: SheetContactUpdateResult = {
       updated: true,
       rowIndex: sheetRow,
       sourceKey: matchedSourceKey,
     };
+    if (!auditOnly) return result;
+    return {
+      ...result,
+      rollback: {
+        sourceKey: matchedSourceKey,
+        rowId,
+        cells: captureAuditedContactSheetRollbackCells(existing, updates),
+      },
+    };
+    }
+  );
+}
+
+export async function updateContactInSheet(
+  data: UpdateContactInput
+): Promise<SheetContactUpdateResult> {
+  return updateContactInSheetInternal(
+    data,
+    false
+  ) as Promise<SheetContactUpdateResult>;
+}
+
+export async function updateAuditedContactInSheet(
+  data: UpdateAuditedContactInput
+): Promise<AuditedContactSheetUpdateResult> {
+  return updateContactInSheetInternal(
+    data,
+    true
+  ) as Promise<AuditedContactSheetUpdateResult>;
+}
+
+export async function rollbackAuditedContactInSheet(
+  rollback: AuditedContactSheetRollback
+): Promise<void> {
+  const target = await targetForSheetMutation(rollback.sourceKey);
+  return withSheetSyncLease(
+    target.spreadsheetId,
+    target.tabName,
+    async (lease) => {
+      await ensureStableRowIds(await readRawSheet(target));
+      await lease.assertOwned();
+      const sheet = requireStableRowIds(await readRawSheet(target));
+      const source = parseSheetSourceKey(rollback.sourceKey);
+      if (
+        !source ||
+        source.rowId !== rollback.rowId ||
+        !sheetSourceKeyBelongsToTarget(rollback.sourceKey, target, true)
+      ) {
+        throw new Error("Audit Sheet rollback has an invalid source identity");
+      }
+      const rowIndex = sheet.rows.findIndex(
+        (row) => (row[sheet.sourceIdColumn] ?? "").trim() === rollback.rowId
+      );
+      if (rowIndex < 0) {
+        throw new Error("The audited source Sheet row no longer exists");
+      }
+      const row = sheet.rows[rowIndex];
+      if (
+        rollback.cells.some(
+          (cell) => (row[cell.columnIndex] ?? "") !== cell.after
+        )
+      ) {
+        throw new Error(
+          "The audited Sheet fields changed after approval; rollback was not applied"
+        );
+      }
+      if (rollback.cells.length > 0) {
+        await sheet.sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: sheet.spreadsheetId,
+          requestBody: {
+            valueInputOption: "RAW",
+            data: rollback.cells.map((cell) => ({
+              range: `${quoteTab(target.tabName)}!${colNumToLetter(
+                cell.columnIndex + 1
+              )}${rowIndex + 2}`,
+              values: [[cell.before]],
+            })),
+          },
+        });
+      }
+      await lease.assertOwned();
+      const finalSheet = requireStableRowIds(await readRawSheet(target));
+      const finalRow = finalSheet.rows.find(
+        (candidate) =>
+          (candidate[finalSheet.sourceIdColumn] ?? "").trim() ===
+          rollback.rowId
+      );
+      if (
+        !finalRow ||
+        rollback.cells.some(
+          (cell) => (finalRow[cell.columnIndex] ?? "") !== cell.before
+        )
+      ) {
+        throw new Error("The audited Sheet rollback could not be verified");
+      }
     }
   );
 }
