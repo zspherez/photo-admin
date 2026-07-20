@@ -79,22 +79,26 @@ test("quoted-printable message source is rejected instead of rendered or manuall
     '<div style=3D"font-family:Arial">It=E2=80=99s ready=<br>\r\nnow</div>',
   );
   assert.equal(sourceWithoutHeaders.ok, false);
-  const ordinaryEqualsText = normalizeArbitraryEmailContent(
-    "<p>Use the literal values =3D and x=3D in this explanation.</p>",
-  );
-  assert.equal(ordinaryEqualsText.ok, true);
 
   for (const encoded of [
-    "=3Cp=3EHello=20world=3C/p=3E",
-    "=3Cdiv=3E=48=65=6C=6C=6F=20=74=65=61=6D=3C/div=3E",
+    '=3Cp=3EHello=20world=3C/p=3E',
+    '=3Cdiv=3E=48=65=6C=6C=6F=20=74=65=61=6D=3C/div=3E',
+    '<a href=3D"https://example.com">Link</a>',
+    '<img SRC=3d"https://example.com/photo.jpg">',
+    '<div Style=3D"color:red">Styled</div>',
+    '<span CLASS=3d"example">Classed</span>',
   ]) {
     assert.equal(normalizeArbitraryEmailContent(encoded).ok, false);
   }
   for (const ordinary of [
+    "<p>Use the literal values =3D and x=3D in this explanation.</p>",
     "<p>Equation: total=3C + tax=20.</p>",
     "<p>Literal tokens =3Ctag=3E remain text.</p>",
+    "<p>ASCII bytes: =41 =42 =43 =44 =45 =46 =47 =48.</p>",
+    '<p>Documentation: href=3D"https://example.com", STYLE=3d"color:red".</p>',
     "<p>Tokens: =3G =0Z = and =4.</p>",
     "<p>Occasional hex-like values: =41 then =42.</p>",
+    "=3Cdiv=3E",
   ]) {
     assert.equal(normalizeArbitraryEmailContent(ordinary).ok, true);
   }
@@ -114,10 +118,10 @@ test("unsafe content and hidden tracking are removed while safe formatting and v
     <img src="https://tracker.example/max-width.gif" style="max-width: 1px !important" alt="">
     <img src="https://tracker.example/max-height.gif" style="max-height: .5px" alt="">
     <img src="https://tracker.example/mixed.gif" style="height: 600px; max-width: 1px" alt="">
-    <img src="https://tracker.example/min-width.gif" style="min-width: 1px" alt="">
+    <img src="https://tracker.example/width.gif" style="width: .5px" alt="">
     <img src="https://tracker.example/attribute.gif" max-width=".5px" alt="">
     <img src="data:image/png;base64,AAAA" alt="embedded">
-    <img src="https://images.example/photo.jpg" width="600" style="width: 600px; min-width: 200px; max-width: 100%" alt="Gallery">
+    <img src="https://images.example/photo.jpg" style="width: 100%; min-width: 0; min-height: .5px; max-width: 600px" alt="Gallery">
     <div style="display:none">hidden preheader tracker</div>
   `);
 
@@ -134,9 +138,12 @@ test("unsafe content and hidden tracking are removed while safe formatting and v
   );
   assert.match(
     result.content.html,
-    /src="https:\/\/images\.example\/photo\.jpg" alt="Gallery" width="600"/,
+    /src="https:\/\/images\.example\/photo\.jpg" alt="Gallery"/,
   );
-  assert.match(result.content.html, /max-width: 100%/);
+  assert.match(
+    result.content.html,
+    /width: 100%; min-width: 0; min-height: \.5px; max-width: 600px/,
+  );
 });
 
 test("inline sibling whitespace is preserved while block indentation is removed", () => {

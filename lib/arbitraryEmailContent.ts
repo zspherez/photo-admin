@@ -187,43 +187,80 @@ export type NormalizeArbitraryEmailContentResult =
   | { ok: true; content: NormalizedArbitraryEmailContent }
   | { ok: false; error: string };
 
+const HTML_TAG_NAME_PATTERN =
+  "(?:html|head|body|meta|title|style|div|span|p|br|hr|h[1-6]|ul|ol|li|blockquote|pre|code|table|thead|tbody|tfoot|tr|th|td|a|img|strong|b|em|i|u|s|sub|sup|address)";
+
+function rawHtmlTags(value: string): string[] {
+  const tags: string[] = [];
+  let cursor = 0;
+  while (cursor < value.length) {
+    const start = value.indexOf("<", cursor);
+    if (start < 0) break;
+    if (value.startsWith("<!--", start)) {
+      const commentEnd = value.indexOf("-->", start + 4);
+      cursor = commentEnd < 0 ? value.length : commentEnd + 3;
+      continue;
+    }
+
+    let quote: "'" | '"' | null = null;
+    let end = start + 1;
+    for (; end < value.length; end += 1) {
+      const character = value[end];
+      if (quote) {
+        if (character === quote) quote = null;
+      } else if (character === "'" || character === '"') {
+        quote = character;
+      } else if (character === ">") {
+        break;
+      }
+    }
+    if (end >= value.length) break;
+    const tag = value.slice(start, end + 1);
+    if (/^<\s*\/?\s*[A-Za-z][A-Za-z0-9:-]*\b/.test(tag)) {
+      tags.push(tag);
+    }
+    cursor = end + 1;
+  }
+  return tags;
+}
+
+function hasEncodedAssignmentInRawHtmlTag(value: string): boolean {
+  return rawHtmlTags(value).some(
+    (tag) =>
+      !/^<\s*\//.test(tag) &&
+      /\b(?:href|src|style|class)\s*=3d(?=["']|[^\s>])/i.test(tag),
+  );
+}
+
+function hasStandaloneEncodedHtmlStructure(value: string): boolean {
+  if (rawHtmlTags(value).length > 0) return false;
+  if (!/=3c/i.test(value) || !/=3e/i.test(value)) return false;
+
+  const decoded = value.replace(
+    /=([0-9a-f]{2})/gi,
+    (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)),
+  );
+  const tagPattern = new RegExp(
+    `<\\s*(\\/?)\\s*(${HTML_TAG_NAME_PATTERN})\\b[^>]*>`,
+    "gi",
+  );
+  const openingTags = new Set<string>();
+  const closingTags = new Set<string>();
+  for (const match of decoded.matchAll(tagPattern)) {
+    const name = match[2].toLowerCase();
+    if (match[1]) closingTags.add(name);
+    else openingTags.add(name);
+  }
+  return Array.from(openingTags).some((name) => closingTags.has(name));
+}
+
 function looksLikeQuotedPrintableSource(value: string): boolean {
   if (/content-transfer-encoding\s*:\s*quoted-printable/i.test(value)) {
     return true;
   }
-
-  const assignments = value.match(/=3D/gi)?.length ?? 0;
-  const encodedBytes = value.match(/=[0-9a-f]{2}/gi)?.length ?? 0;
-  const softBreaks = value.match(/=\r?\n/g)?.length ?? 0;
-  const encodedUtf8 = /(?:=[c-f][0-9a-f])(?:=[89ab][0-9a-f]){1,3}/i.test(value);
-  const encodedLength = encodedBytes * 3;
-  const compactLength = value.replace(/\s/g, "").length;
-  const denseEncodedAscii =
-    encodedBytes >= 6 &&
-    compactLength > 0 &&
-    encodedLength / compactLength >= 0.35;
-  const asciiDecodedProbe = value
-    .replace(/</g, "\u0001")
-    .replace(/>/g, "\u0002")
-    .replace(
-      /=([0-9a-f]{2})/gi,
-      (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)),
-    );
-  const encodedMarkupTags = Array.from(
-    asciiDecodedProbe.matchAll(
-      /<\/?(?:html|head|body|meta|title|style|div|span|p|br|hr|h[1-6]|ul|ol|li|blockquote|pre|code|table|thead|tbody|tfoot|tr|th|td|a|img|strong|b|em|i|u|s|sub|sup|address)\b[^>]*>/gi,
-    ),
-  ).length;
-  const encodedMarkup =
-    /=3c/i.test(value) &&
-    /=3e/i.test(value) &&
-    encodedMarkupTags >= 2;
   return (
-    (assignments >= 2 && (softBreaks >= 1 || encodedBytes >= 6)) ||
-    (softBreaks >= 2 && encodedBytes >= 3) ||
-    (assignments >= 1 && encodedUtf8) ||
-    encodedMarkup ||
-    denseEncodedAscii
+    hasEncodedAssignmentInRawHtmlTag(value) ||
+    hasStandaloneEncodedHtmlStructure(value)
   );
 }
 
@@ -337,12 +374,8 @@ function isTrackingImage(
   for (const name of [
     "width",
     "height",
-    "min-width",
-    "min-height",
     "max-width",
     "max-height",
-    "minwidth",
-    "minheight",
     "maxwidth",
     "maxheight",
   ]) {
@@ -354,7 +387,7 @@ function isTrackingImage(
     const separator = declaration.indexOf(":");
     if (separator < 1) continue;
     const property = declaration.slice(0, separator).trim().toLowerCase();
-    if (!/^(?:min-|max-)?(?:width|height)$/.test(property)) continue;
+    if (!/^(?:max-)?(?:width|height)$/.test(property)) continue;
     const dimension = pixelDimension(declaration.slice(separator + 1));
     if (dimension !== null && dimension <= 1) return true;
   }
