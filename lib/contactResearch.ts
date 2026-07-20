@@ -2131,6 +2131,7 @@ export async function unskipContactResearchArtist(
   const result = await unskipContactResearchTarget(
     { jobId },
     now,
+    null,
     runTransaction
   );
   return result.ok;
@@ -2346,6 +2347,7 @@ async function skipContactResearchTarget(
 async function unskipContactResearchTarget(
   target: ContactResearchMutationTarget,
   now: Date,
+  requestedShowId: string | null,
   runTransaction: ContactResearchTransactionRunner
 ): Promise<ArtistContactResearchMutationResult> {
   const today = easternTodayStoredDate(now);
@@ -2383,33 +2385,68 @@ async function unskipContactResearchTarget(
       return { ok: false, reason: "not_skipped" } as const;
     }
 
-    const eligibleShow = await tx.showArtist.findFirst({
-      where: {
-        artistId: job.artistId,
-        OR: [
-          {
+    const hasActiveContact = job.artist.contacts.length > 0;
+    const suppliedRequestedShowId =
+      "artistId" in target ? requestedShowId : null;
+    const effectiveRequestedShowId =
+      job.requestedShowId ?? suppliedRequestedShowId;
+    const eligibleRequestedShow = effectiveRequestedShowId
+      ? await tx.showArtist.findFirst({
+          where: {
+            artistId: job.artistId,
+            showId: effectiveRequestedShowId,
             show: {
-              isFestival: false,
+              isFestival: true,
               syncStatus: "active",
-              date: { gte: today, lte: end },
+              date: { gte: today },
+              AND: [festivalLeadTimeWhere(now)],
             },
           },
-          ...(job.requestedShowId
-            ? [
-                {
-                  showId: job.requestedShowId,
-                  show: {
-                    syncStatus: "active",
-                    date: { gte: today },
-                    AND: [festivalLeadTimeWhere(now)],
-                  },
-                },
-              ]
-            : []),
-        ],
-      },
-      select: { showId: true },
-    });
+          select: { showId: true },
+        })
+      : null;
+
+    if (suppliedRequestedShowId && !job.requestedShowId) {
+      if (hasActiveContact) {
+        return { ok: false, reason: "active_contact" } as const;
+      }
+      if (!eligibleRequestedShow) {
+        return { ok: false, reason: "ineligible" } as const;
+      }
+    }
+
+    const eligibleRegularShow =
+      hasActiveContact || eligibleRequestedShow
+        ? null
+        : await tx.showArtist.findFirst({
+            where: {
+              artistId: job.artistId,
+              show: {
+                isFestival: false,
+                syncStatus: "active",
+                date: { gte: today, lte: end },
+              },
+            },
+            select: { showId: true },
+          });
+    const restoredStatus = hasActiveContact
+      ? "complete"
+      : eligibleRequestedShow || eligibleRegularShow
+        ? "pending"
+        : "inactive";
+    const restoredRequestedShowId =
+      !job.requestedShowId &&
+      suppliedRequestedShowId &&
+      eligibleRequestedShow
+        ? suppliedRequestedShowId
+        : null;
+
+    if (restoredRequestedShowId) {
+      await tx.contactResearchJob.update({
+        where: { id: job.id },
+        data: { requestedShowId: restoredRequestedShowId },
+      });
+    }
     await tx.artistResearchSkip.update({
       where: { id: activeSkip.id },
       data: {
@@ -2417,15 +2454,10 @@ async function unskipContactResearchTarget(
         clearedBy: "manual",
       },
     });
-    const hasActiveContact = job.artist.contacts.length > 0;
     await tx.contactResearchJob.update({
       where: { id: job.id },
       data: {
-        status: hasActiveContact
-          ? "complete"
-          : eligibleShow
-            ? "pending"
-            : "inactive",
+        status: restoredStatus,
         completedAt: hasActiveContact ? now : null,
         claimToken: null,
         claimedAt: null,
@@ -2435,11 +2467,7 @@ async function unskipContactResearchTarget(
     return {
       ok: true,
       jobId: job.id,
-      status: hasActiveContact
-        ? "complete"
-        : eligibleShow
-          ? "pending"
-          : "inactive",
+      status: restoredStatus,
     };
   });
 }
@@ -2484,12 +2512,14 @@ export async function unskipContactResearchArtistByArtistId(
   artistId: string,
   options: {
     now?: Date;
+    requestedShowId?: string | null;
     runTransaction?: ContactResearchTransactionRunner;
   } = {}
 ): Promise<ArtistContactResearchMutationResult> {
   return unskipContactResearchTarget(
     { artistId },
     options.now ?? new Date(),
+    options.requestedShowId ?? null,
     options.runTransaction ?? ((work) => withSerializableRetry(work))
   );
 }

@@ -173,7 +173,9 @@ async function handleUnskipArtistResearch(
     | null = null;
   let error: string | null = null;
   try {
-    result = await unskipContactResearchArtistByArtistId(artistId);
+    result = await unskipContactResearchArtistByArtistId(artistId, {
+      requestedShowId: workflowFestivalShowId(returnTo),
+    });
   } catch (caught) {
     error = researchActionError(caught);
   }

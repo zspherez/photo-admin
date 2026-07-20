@@ -80,7 +80,7 @@ test("artist actions authenticate internally and mutate only by their bound arti
   );
   assert.match(
     source,
-    /handleUnskipArtistResearch[\s\S]*unskipContactResearchArtistByArtistId\(artistId\)/
+    /handleUnskipArtistResearch[\s\S]*unskipContactResearchArtistByArtistId\(artistId, \{[\s\S]*requestedShowId: workflowFestivalShowId\(returnTo\)/
   );
   assert.ok((source.match(/RedirectType\.replace/g)?.length ?? 0) === 3);
 });
