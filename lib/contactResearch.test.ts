@@ -333,10 +333,18 @@ test("claims require current eligibility and unexpired ownership", () => {
   assert.match(source, /researchInstructions: job\.userNotes/);
   assert.match(
     source,
-    /retryContactResearchJob[\s\S]*contacts: \{ none: ACTIVE_EMAIL_CONTACT_WHERE \}/
+    /retryContactResearchJob[\s\S]*retryEligibleContactResearchJobs/
   );
   assert.match(
     source,
-    /retryAllContactResearchJobs[\s\S]*status: \{ in: \["exhausted", "review"\] \}[\s\S]*data: \{\s*status: "pending"/
+    /retryAllExhaustedContactResearchJobs[\s\S]*retryContactResearchJobsByStatus\("exhausted"\)/
+  );
+  assert.match(
+    source,
+    /retryAllReviewContactResearchJobs[\s\S]*retryContactResearchJobsByStatus\("review"\)/
+  );
+  assert.match(
+    source,
+    /retryEligibleContactResearchJobs[\s\S]*show\."syncStatus" = 'active'[\s\S]*show\."date" <= \$\{end\}[\s\S]*job\."requestedShowId" = show\."id"/
   );
 });

@@ -1529,34 +1529,72 @@ export async function updateContactResearchJobUserNotes(
 }
 
 export async function retryContactResearchJob(
-  jobId: string
+  jobId: string,
+  now: Date = new Date()
 ): Promise<boolean> {
-  const result = await db.contactResearchJob.updateMany({
-    where: {
-      id: jobId,
-      status: { in: ["exhausted", "review"] },
-      artist: {
-        contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
-      },
-    },
-    data: {
-      status: "pending",
-    },
-  });
-  return result.count === 1;
+  return (
+    (await retryEligibleContactResearchJobs(
+      Prisma.sql`job."id" = ${jobId}
+        AND job."status" IN ('exhausted', 'review')`,
+      now
+    )) === 1
+  );
 }
 
-export async function retryAllContactResearchJobs(): Promise<number> {
-  const result = await db.contactResearchJob.updateMany({
-    where: {
-      status: { in: ["exhausted", "review"] },
-      artist: {
-        contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
-      },
-    },
-    data: {
-      status: "pending",
-    },
-  });
-  return result.count;
+async function retryContactResearchJobsByStatus(
+  status: "exhausted" | "review",
+  now: Date = new Date()
+): Promise<number> {
+  return retryEligibleContactResearchJobs(
+    Prisma.sql`job."status" = ${status}`,
+    now
+  );
+}
+
+async function retryEligibleContactResearchJobs(
+  statusWhere: Prisma.Sql,
+  now: Date
+): Promise<number> {
+  const today = easternTodayStoredDate(now);
+  const end = parseDateOnly(
+    addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
+  );
+  return db.$executeRaw(Prisma.sql`
+    UPDATE "ContactResearchJob" AS job
+    SET
+      "status" = 'pending',
+      "updatedAt" = ${now}
+    WHERE ${statusWhere}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "Contact" contact
+        WHERE contact."artistId" = job."artistId"
+          AND contact."state" = 'active'
+          AND contact."email" IS NOT NULL
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM "ShowArtist" show_artist
+        JOIN "Show" show
+          ON show."id" = show_artist."showId"
+        WHERE show_artist."artistId" = job."artistId"
+          AND show."date" >= ${today}
+          AND show."syncStatus" = 'active'
+          AND (
+            (
+              show."isFestival" = false
+              AND show."date" <= ${end}
+            )
+            OR job."requestedShowId" = show."id"
+          )
+      )
+  `);
+}
+
+export function retryAllExhaustedContactResearchJobs(): Promise<number> {
+  return retryContactResearchJobsByStatus("exhausted");
+}
+
+export function retryAllReviewContactResearchJobs(): Promise<number> {
+  return retryContactResearchJobsByStatus("review");
 }

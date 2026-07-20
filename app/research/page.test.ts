@@ -30,9 +30,16 @@ test("successful research actions revalidate without redirecting to the top", ()
   const retry = actionSource("retryJobAction", "saveResearchNotesAction");
   const notes = actionSource(
     "saveResearchNotesAction",
-    "retryAllJobsAction"
+    "retryAllExhaustedJobsAction"
   );
-  const retryAll = actionSource("retryAllJobsAction", "statusTone");
+  const retryExhausted = actionSource(
+    "retryAllExhaustedJobsAction",
+    "retryAllReviewJobsAction"
+  );
+  const retryReview = actionSource(
+    "retryAllReviewJobsAction",
+    "statusTone"
+  );
 
   assert.match(approve, /if \(!result\.ok\)[\s\S]*redirect/);
   assert.match(approve, /if \(result\.sheetError\)[\s\S]*redirect/);
@@ -43,16 +50,29 @@ test("successful research actions revalidate without redirecting to the top", ()
   assert.doesNotMatch(retry, /retried: "1"/);
   assert.match(notes, /if \(!updated\) redirect/);
   assert.doesNotMatch(notes, /notes_saved: "1"/);
-  assert.match(retryAll, /retryAllContactResearchJobs/);
-  assert.doesNotMatch(retryAll, /redirect\(/);
+  assert.match(retryExhausted, /retryAllExhaustedContactResearchJobs/);
+  assert.match(retryReview, /retryAllReviewContactResearchJobs/);
+  assert.doesNotMatch(retryExhausted, /redirect\(/);
+  assert.doesNotMatch(retryReview, /redirect\(/);
 });
 
-test("all review and exhausted jobs can be requeued together", () => {
+test("review and exhausted jobs have separate bulk requeue actions", () => {
+  assert.match(source, /Requeue all review \(\{retryReviewCount\}\)/);
   assert.match(
     source,
-    /Requeue all review\/exhausted \(\{retryAllCount\}\)/
+    /Requeue exhausted \(\{retryExhaustedCount\}\)/
   );
-  assert.match(source, /disabled=\{retryAllCount === 0\}/);
+  assert.match(source, /disabled=\{retryReviewCount === 0\}/);
+  assert.match(source, /disabled=\{retryExhaustedCount === 0\}/);
+});
+
+test("research jobs are ranked by the best upcoming venue tier", () => {
+  assert.match(source, /venueTierSql/);
+  assert.match(source, /LEFT JOIN LATERAL/);
+  assert.match(source, /ORDER BY "tier" DESC, show\."date" ASC/);
+  assert.match(source, /COALESCE\(best_show\."tier", 0\) DESC/);
+  assert.match(source, /LIMIT 125/);
+  assert.match(source, /venueTierLabel\(job\.bestShow\.tier\)/);
 });
 
 test("review and exhausted jobs can be requeued", () => {
