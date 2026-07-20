@@ -89,3 +89,27 @@ test("rejects excluded or unreviewed candidates", () => {
     /missing from reviewedEmails/
   );
 });
+
+test("rejects duplicate reviewed-email classifications", () => {
+  assert.throws(
+    () =>
+      validateCandidateReview({
+        candidates: [fallback],
+        reviewedEmails: [
+          {
+            email: fallback.email,
+            classification: "excluded_non_manager",
+            personName: null,
+            reason: "Booking.",
+          },
+          {
+            email: fallback.email.toUpperCase(),
+            classification: "management_fallback",
+            personName: null,
+            reason: "Management.",
+          },
+        ],
+      }),
+    /reviewedEmails contains duplicate email/
+  );
+});

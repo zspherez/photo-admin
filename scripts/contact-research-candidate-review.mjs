@@ -1,4 +1,15 @@
 export function validateCandidateReview(input) {
+  const reviewedEmails = input.reviewedEmails.map((reviewed) =>
+    reviewed.email.toLowerCase()
+  );
+  const duplicateReviewedEmails = reviewedEmails.filter(
+    (email, index) => reviewedEmails.indexOf(email) !== index
+  );
+  if (duplicateReviewedEmails.length > 0) {
+    throw new Error(
+      `reviewedEmails contains duplicate email(s): ${Array.from(new Set(duplicateReviewedEmails)).join(", ")}`
+    );
+  }
   const candidateEmails = input.candidates.map((candidate) =>
     candidate.email.toLowerCase()
   );
