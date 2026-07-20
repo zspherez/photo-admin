@@ -756,7 +756,10 @@ test("test failures isolate while unknown legacy webhooks stay quarantined", () 
   );
   assert.match(route, /!canBindResendWebhookProviderMessage\(correlation\.attempt\)/);
   assert.match(route, /outreachAttempts\.length === 1/);
-  assert.match(route, /recipientEmails: normalizeEmails\(parsed\.data\.to/);
+  assert.match(
+    route,
+    /recipientEmails: impactedRecipients/,
+  );
   assert.ok(
     route.indexOf("if (!failurePolicy.processAttemptEvents)") <
       route.indexOf(

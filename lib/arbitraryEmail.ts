@@ -1,5 +1,5 @@
 import { appendUtmParametersToHtml } from "@/lib/emailUtm";
-import { normalizeEmail } from "@/lib/resend";
+import { normalizeEmail, normalizeEmails } from "@/lib/resend";
 
 export const ARBITRARY_EMAIL_UTM_KEYS = [
   "utm_source",
@@ -101,6 +101,45 @@ interface ArbitraryEmailWebhookRecord {
   providerMessageId: string | null;
 }
 
+export interface ArbitraryEmailWebhookRecipientFields {
+  to?: unknown;
+  cc?: unknown;
+  bcc?: unknown;
+}
+
+export interface ArbitraryEmailWebhookRecipientImpact {
+  impactedRecipients: string[];
+  affectsAggregate: boolean;
+}
+
+function stringRecipients(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+export function arbitraryEmailWebhookImpactedRecipients(
+  fields: ArbitraryEmailWebhookRecipientFields,
+): string[] {
+  return normalizeEmails([
+    ...stringRecipients(fields.to),
+    ...stringRecipients(fields.cc),
+    ...stringRecipients(fields.bcc),
+  ]);
+}
+
+export function arbitraryEmailWebhookRecipientImpact(
+  intendedRecipients: readonly string[],
+  fields: ArbitraryEmailWebhookRecipientFields,
+): ArbitraryEmailWebhookRecipientImpact {
+  const impactedRecipients = arbitraryEmailWebhookImpactedRecipients(fields);
+  const intended = new Set(normalizeEmails([...intendedRecipients]));
+  return {
+    impactedRecipients,
+    affectsAggregate: impactedRecipients.some((email) => intended.has(email)),
+  };
+}
+
 export function arbitraryEmailWebhookConflict(
   identity: ArbitraryEmailWebhookIdentity,
   taggedArbitraryEmail: ArbitraryEmailWebhookRecord | null,
@@ -143,6 +182,19 @@ function later(current: Date | null, candidate: Date): Date {
   return !current || candidate > current ? candidate : current;
 }
 
+function engagementAcceptanceUpdate(
+  email: ArbitraryEmailEventState & { testSend: boolean },
+  occurredAt: Date,
+): Record<string, unknown> {
+  if (email.status === "failed") return {};
+  return {
+    status: email.testSend ? "test" : "sent",
+    sentAt: earlier(email.sentAt, occurredAt),
+    deliveredAt: earlier(email.deliveredAt, occurredAt),
+    error: null,
+  };
+}
+
 export function arbitraryEmailEventUpdate(
   email: ArbitraryEmailEventState & { testSend: boolean },
   type: string,
@@ -169,18 +221,20 @@ export function arbitraryEmailEventUpdate(
             : email.testSend
               ? "test"
               : "sent",
-        sentAt: email.sentAt ?? occurredAt,
+        sentAt: earlier(email.sentAt, occurredAt),
         deliveredAt: earlier(email.deliveredAt, occurredAt),
         ...(email.status === "failed" ? {} : { error: null }),
       };
     case "email.opened":
       return {
+        ...engagementAcceptanceUpdate(email, occurredAt),
         firstOpenedAt: earlier(email.firstOpenedAt, occurredAt),
         lastOpenedAt: later(email.lastOpenedAt, occurredAt),
         openCount: { increment: 1 },
       };
     case "email.clicked":
       return {
+        ...engagementAcceptanceUpdate(email, occurredAt),
         firstClickedAt: earlier(email.firstClickedAt, occurredAt),
         lastClickedAt: later(email.lastClickedAt, occurredAt),
         clickCount: { increment: 1 },

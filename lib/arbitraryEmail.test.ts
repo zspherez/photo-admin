@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   arbitraryEmailEventUpdate,
   arbitraryEmailWebhookConflict,
+  arbitraryEmailWebhookRecipientImpact,
   parseArbitraryEmailInput,
 } from "./arbitraryEmail";
 
@@ -80,15 +81,170 @@ test("arbitrary email event updates count engagement and preserve event bounds",
   };
 
   assert.deepEqual(arbitraryEmailEventUpdate(state, "email.opened", first), {
+    status: "sent",
+    sentAt: first,
+    deliveredAt: first,
+    error: null,
     firstOpenedAt: first,
     lastOpenedAt: later,
     openCount: { increment: 1 },
   });
   assert.deepEqual(arbitraryEmailEventUpdate(state, "email.clicked", later), {
+    status: "sent",
+    sentAt: first,
+    deliveredAt: later,
+    error: null,
     firstClickedAt: later,
     lastClickedAt: later,
     clickCount: { increment: 1 },
   });
+});
+
+test("arbitrary webhook recipient impact excludes neutral and audit recipients", () => {
+  const intended = ["first@example.com", "second@example.com"];
+  for (const type of ["email.opened", "email.bounced"]) {
+    assert.deepEqual(
+      arbitraryEmailWebhookRecipientImpact(intended, {
+        to: ["sender@example.com"],
+      }),
+      {
+        impactedRecipients: ["sender@example.com"],
+        affectsAggregate: false,
+      },
+      `${type} from the neutral To address must not affect aggregates`,
+    );
+    assert.deepEqual(
+      arbitraryEmailWebhookRecipientImpact(intended, {
+        to: ["sender@example.com"],
+        bcc: ["audit@example.com"],
+      }),
+      {
+        impactedRecipients: ["audit@example.com", "sender@example.com"],
+        affectsAggregate: false,
+      },
+      `${type} from audit BCC must not affect aggregates`,
+    );
+  }
+});
+
+test("arbitrary webhook recipient impact accepts intended BCC and mixed events", () => {
+  const intended = ["first@example.com", "second@example.com"];
+  assert.deepEqual(
+    arbitraryEmailWebhookRecipientImpact(intended, {
+      to: ["sender@example.com"],
+      bcc: ["SECOND@example.com"],
+    }),
+    {
+      impactedRecipients: ["second@example.com", "sender@example.com"],
+      affectsAggregate: true,
+    },
+  );
+  assert.deepEqual(
+    arbitraryEmailWebhookRecipientImpact(intended, {
+      to: ["sender@example.com"],
+      cc: ["audit@example.com"],
+      bcc: ["first@example.com", "audit@example.com"],
+    }),
+    {
+      impactedRecipients: [
+        "audit@example.com",
+        "first@example.com",
+        "sender@example.com",
+      ],
+      affectsAggregate: true,
+    },
+  );
+});
+
+test("arbitrary webhook recipient impact fails closed without usable metadata", () => {
+  assert.deepEqual(
+    arbitraryEmailWebhookRecipientImpact(["first@example.com"], {}),
+    { impactedRecipients: [], affectsAggregate: false },
+  );
+  assert.deepEqual(
+    arbitraryEmailWebhookRecipientImpact(["first@example.com"], {
+      to: "first@example.com",
+      bcc: [null, 42],
+    }),
+    { impactedRecipients: [], affectsAggregate: false },
+  );
+});
+
+test("engagement reconciles uncertain real and test sends before acceptance events", () => {
+  const occurredAt = new Date("2026-07-20T14:00:00Z");
+  const uncertain = {
+    status: "manual_review",
+    testSend: false,
+    sentAt: null,
+    deliveredAt: null,
+    firstOpenedAt: null,
+    lastOpenedAt: null,
+    openCount: 0,
+    firstClickedAt: null,
+    lastClickedAt: null,
+    clickCount: 0,
+    bouncedAt: null,
+    complainedAt: null,
+  };
+  assert.deepEqual(arbitraryEmailEventUpdate(uncertain, "email.opened", occurredAt), {
+    status: "sent",
+    sentAt: occurredAt,
+    deliveredAt: occurredAt,
+    error: null,
+    firstOpenedAt: occurredAt,
+    lastOpenedAt: occurredAt,
+    openCount: { increment: 1 },
+  });
+  assert.deepEqual(
+    arbitraryEmailEventUpdate(
+      { ...uncertain, testSend: true },
+      "email.clicked",
+      occurredAt,
+    ),
+    {
+      status: "test",
+      sentAt: occurredAt,
+      deliveredAt: occurredAt,
+      error: null,
+      firstClickedAt: occurredAt,
+      lastClickedAt: occurredAt,
+      clickCount: { increment: 1 },
+    },
+  );
+});
+
+test("out-of-order acceptance events preserve earliest delivery bounds", () => {
+  const openedAt = new Date("2026-07-20T14:00:00Z");
+  const sentAt = new Date("2026-07-20T13:00:00Z");
+  const reconciled = {
+    status: "sent",
+    testSend: false,
+    sentAt: openedAt,
+    deliveredAt: openedAt,
+    firstOpenedAt: openedAt,
+    lastOpenedAt: openedAt,
+    openCount: 1,
+    firstClickedAt: null,
+    lastClickedAt: null,
+    clickCount: 0,
+    bouncedAt: null,
+    complainedAt: null,
+  };
+
+  assert.deepEqual(arbitraryEmailEventUpdate(reconciled, "email.sent", sentAt), {
+    status: "sent",
+    sentAt,
+    error: null,
+  });
+  assert.deepEqual(
+    arbitraryEmailEventUpdate(reconciled, "email.delivered", sentAt),
+    {
+      status: "sent",
+      sentAt,
+      deliveredAt: sentAt,
+      error: null,
+    },
+  );
 });
 
 test("late provider acceptance does not erase a terminal delivery failure", () => {
@@ -123,6 +279,34 @@ test("late provider acceptance does not erase a terminal delivery failure", () =
   assert.deepEqual(
     arbitraryEmailEventUpdate(state, "email.suppressed", occurredAt),
     {},
+  );
+  assert.deepEqual(arbitraryEmailEventUpdate(state, "email.opened", occurredAt), {
+    firstOpenedAt: occurredAt,
+    lastOpenedAt: occurredAt,
+    openCount: { increment: 1 },
+  });
+});
+
+test("duplicate arbitrary webhooks are recorded before aggregate mutation", () => {
+  const route = readFileSync(
+    new URL("../app/api/resend/webhook/route.ts", import.meta.url),
+    "utf8",
+  );
+  const arbitraryBranch = route.slice(
+    route.indexOf("if (arbitraryEmailId || messageArbitraryEmail)"),
+    route.indexOf("const [", route.indexOf("if (arbitraryEmailId || messageArbitraryEmail)") + 1),
+  );
+  assert.ok(
+    arbitraryBranch.indexOf("resendWebhookEvent.create") <
+      arbitraryBranch.indexOf("const update = arbitraryEmailEventUpdate"),
+  );
+  assert.match(
+    arbitraryBranch,
+    /applySuppression\([\s\S]*impactedRecipients[\s\S]*if \(intendedRecipientImpact\.affectsAggregate\)/,
+  );
+  assert.match(
+    route,
+    /error\.code === "P2002"[\s\S]*resendWebhookEvent\.findUnique[\s\S]*duplicate event/,
   );
 });
 
