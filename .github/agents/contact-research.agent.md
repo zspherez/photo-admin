@@ -59,7 +59,7 @@ The submit commands take one compact JSON argument; use valid JSON inside shell
 single quotes and avoid apostrophes in prose.
 
 Candidate submission JSON must be exactly:
-`{"jobId":"...","claimToken":"...","notes":"...","candidates":[{"email":"...","name":"...","sourceUrls":["https://..."],"evidence":"...","confidence":"high|medium|low"}]}`.
+`{"jobId":"...","claimToken":"...","notes":"...","candidates":[{"email":"...","name":"...","sourceUrls":["https://..."],"evidence":"...","confidence":"high|medium|low"}],"reviewedEmails":[{"email":"...","classification":"named_manager|management_fallback|excluded_non_manager","personName":"... or null","reason":"..."}]}`.
 Exhausted submission JSON must be exactly:
 `{"jobId":"...","claimToken":"...","notes":"sources checked and why no manager email was defensible"}`.
 
@@ -131,6 +131,20 @@ Prefer contacts in this order:
 2. A role-specific management inbox such as `management@company.com`.
 3. An official general management-company inbox.
 4. An artist-named inbox at the confirmed management company.
+
+If any collected source or your own evidence identifies a named person's
+management email, you **must** submit that direct email as the first candidate.
+You may submit a role-specific, general, or artist-specific inbox as an
+additional fallback, but never instead of the named person's address. Before
+submitting, inventory every discovered email in `reviewedEmails`:
+
+- `named_manager`: a named person's direct management email. `personName` is
+  required, the email must be included as a candidate, and a named-manager
+  email must be the first candidate.
+- `management_fallback`: a role-specific, general, or artist-specific
+  management inbox. It may be included after direct named-manager addresses.
+- `excluded_non_manager`: booking, publicist, label, press, venue, or other
+  non-manager address. It must not be submitted.
 
 Do not stop at a generic, company-wide, or artist-named inbox. Continue
 searching for a named manager and direct address first. Submit a fallback inbox

@@ -6,6 +6,10 @@ const source = readFileSync(
   new URL("./page.tsx", import.meta.url),
   "utf8"
 );
+const dismissSource = readFileSync(
+  new URL("./auto-dismiss-status.tsx", import.meta.url),
+  "utf8"
+);
 
 function actionSource(name: string, nextName: string): string {
   return source.slice(
@@ -46,4 +50,11 @@ test("review and exhausted jobs can be requeued", () => {
     /job\.status === "exhausted" \|\|\s*job\.status === "review"/
   );
   assert.match(source, />\s*Requeue research\s*</);
+});
+
+test("research status banners clear after three seconds without navigation", () => {
+  assert.match(dismissSource, /}, 3_000\)/);
+  assert.match(dismissSource, /window\.history\.replaceState/);
+  assert.doesNotMatch(dismissSource, /router\.(push|replace)/);
+  assert.match(source, /<AutoDismissStatus>/);
 });

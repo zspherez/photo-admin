@@ -17,6 +17,7 @@ import { Card, CardBody } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { TextArea } from "@/components/ui/field";
+import { AutoDismissStatus } from "./auto-dismiss-status";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact research" };
@@ -280,35 +281,47 @@ export default async function ContactResearchPage({
       </div>
 
       {status.refreshed && (
-        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
-          Queue refreshed: {status.eligible ?? "0"} eligible ·{" "}
-          {status.enqueued ?? "0"} newly queued.
-        </div>
+        <AutoDismissStatus>
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Queue refreshed: {status.eligible ?? "0"} eligible ·{" "}
+            {status.enqueued ?? "0"} newly queued.
+          </div>
+        </AutoDismissStatus>
       )}
       {status.approved && (
-        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
-          Contact approved.
-        </div>
+        <AutoDismissStatus>
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Contact approved.
+          </div>
+        </AutoDismissStatus>
       )}
       {(status.rejected || status.retried) && (
-        <div className="mt-4 rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-950">
-          {status.retried ? "Research queued again." : "Candidate rejected."}
-        </div>
+        <AutoDismissStatus>
+          <div className="mt-4 rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-950">
+            {status.retried ? "Research queued again." : "Candidate rejected."}
+          </div>
+        </AutoDismissStatus>
       )}
       {status.notesSaved && (
-        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
-          Research instructions saved.
-        </div>
+        <AutoDismissStatus>
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Research instructions saved.
+          </div>
+        </AutoDismissStatus>
       )}
       {status.sheetError && (
-        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          {status.sheetError}
-        </div>
+        <AutoDismissStatus>
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+            {status.sheetError}
+          </div>
+        </AutoDismissStatus>
       )}
       {status.error && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          {status.detail ?? status.error}
-        </div>
+        <AutoDismissStatus>
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+            {status.detail ?? status.error}
+          </div>
+        </AutoDismissStatus>
       )}
 
       {!process.env.CONTACT_RESEARCH_AGENT_TOKEN &&

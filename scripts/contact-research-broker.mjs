@@ -9,6 +9,7 @@ import {
   fetchReadablePage,
   searchWeb,
 } from "./contact-research-web.mjs";
+import { validateCandidateReview } from "./contact-research-candidate-review.mjs";
 
 const baseUrl = process.env.APP_BASE_URL?.trim().replace(/\/+$/, "");
 const staticToken = process.env.CONTACT_RESEARCH_AGENT_TOKEN?.trim();
@@ -45,6 +46,24 @@ const candidateSchema = z.object({
   evidence: z.string().min(1).max(4_000),
   confidence: z.enum(["high", "medium", "low"]),
 }).strict();
+const reviewedEmailSchema = z
+  .object({
+    email: z.string().email(),
+    classification: z.enum([
+      "named_manager",
+      "management_fallback",
+      "excluded_non_manager",
+    ]),
+    personName: z.string().min(1).max(200).nullable().optional(),
+    reason: z.string().min(1).max(1_000),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.classification !== "named_manager" ||
+      Boolean(value.personName),
+    "named manager email requires personName"
+  );
 
 const schemas = {
   claim: z.object({
@@ -73,6 +92,7 @@ const schemas = {
     claimToken: z.string().min(1),
     notes: z.string().max(4_000).nullable().optional(),
     candidates: z.array(candidateSchema).min(1).max(10),
+    reviewedEmails: z.array(reviewedEmailSchema).min(1).max(30),
   }).strict(),
   "submit-exhausted": z.object({
     jobId: z.string().min(1),
@@ -82,6 +102,7 @@ const schemas = {
 };
 
 class BrokerConflictError extends Error {}
+class BrokerInputError extends Error {}
 class PhotoAdminRequestError extends Error {
   status;
 
@@ -247,6 +268,8 @@ function publicClaimResponse(value, state) {
     stale: false,
   };
   state.claim = { jobId: id, claimToken: job.claimToken };
+  state.artistName =
+    typeof artist.name === "string" ? artist.name : null;
   return {
     jobs: [
       {
@@ -319,6 +342,13 @@ async function runTool(name, input, sessionId) {
       );
     case "submit-candidates": {
       requireSessionClaim(state, input);
+      try {
+        validateCandidateReview(input);
+      } catch (error) {
+        throw new BrokerInputError(
+          error instanceof Error ? error.message : String(error)
+        );
+      }
       let result;
       try {
         result = await photoAdminRequest(
@@ -413,6 +443,10 @@ const server = createServer(async (request, response) => {
   } catch (error) {
     if (error instanceof BrokerConflictError) {
       sendJson(response, 409, { error: error.message });
+      return;
+    }
+    if (error instanceof BrokerInputError) {
+      sendJson(response, 400, { error: error.message });
       return;
     }
     if (error instanceof z.ZodError || error instanceof SyntaxError) {
