@@ -6,10 +6,15 @@ import {
   canBindResendWebhookProviderMessage,
   correlateResendWebhookAttempt,
   getResendWebhookFailurePolicy,
-  normalizeEmails,
   shouldMirrorResendAttempt,
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
+import {
+  arbitraryEmailEventUpdate,
+  arbitraryEmailWebhookImpactedRecipients,
+  arbitraryEmailWebhookRecipientImpact,
+  arbitraryEmailWebhookConflict,
+} from "@/lib/arbitraryEmail";
 
 interface ResendEvent {
   type: string;
@@ -18,6 +23,8 @@ interface ResendEvent {
     created_at?: string;
     email_id?: string;
     to?: string[];
+    cc?: string[];
+    bcc?: string[];
     tags?: Record<string, string> | { name: string; value: string }[];
     headers?: { name: string; value: string }[];
     click?: { link?: string; timestamp?: string };
@@ -51,6 +58,13 @@ function findAttemptId(evt: ResendEvent): string | null {
   return (
     findTag(evt, "outreach_attempt_id") ??
     findHeader(evt, "x-outreach-attempt-id")
+  );
+}
+
+function findArbitraryEmailId(evt: ResendEvent): string | null {
+  return (
+    findTag(evt, "arbitrary_email_id") ??
+    findHeader(evt, "x-arbitrary-email-id")
   );
 }
 
@@ -97,6 +111,7 @@ async function applySuppression(
   eventId: string,
   parsed: ResendEvent,
   providerCreatedAt: Date,
+  normalizedEmails: string[],
 ): Promise<void> {
   if (
     parsed.type !== "email.bounced" &&
@@ -105,9 +120,7 @@ async function applySuppression(
   ) {
     return;
   }
-
   const reason = suppressionReason(parsed);
-  const normalizedEmails = normalizeEmails(parsed.data.to ?? []);
   await acquireOutreachRecipientPolicyLocks(tx, normalizedEmails);
   for (const normalizedEmail of normalizedEmails) {
     const existing = await tx.emailSuppression.findUnique({
@@ -141,8 +154,143 @@ async function processEvent(
         async (tx) => {
           const attemptId = findAttemptId(parsed);
           const outreachId = findOutreachId(parsed);
+          const arbitraryEmailId = findArbitraryEmailId(parsed);
           const messageId = parsed.data.email_id ?? null;
           const providerCreatedAt = eventDate(parsed);
+          const impactedRecipients =
+            arbitraryEmailWebhookImpactedRecipients(parsed.data);
+
+          const [
+            taggedArbitraryEmail,
+            messageArbitraryEmail,
+            messageOutreachAttempt,
+          ] =
+            await Promise.all([
+              arbitraryEmailId
+                ? tx.arbitraryEmail.findUnique({
+                    where: { id: arbitraryEmailId },
+                  })
+                : Promise.resolve(null),
+              messageId
+                ? tx.arbitraryEmail.findUnique({
+                    where: { providerMessageId: messageId },
+                  })
+                : Promise.resolve(null),
+              messageId
+                ? tx.outreachSendAttempt.findUnique({
+                    where: { providerMessageId: messageId },
+                    select: { id: true },
+                  })
+                : Promise.resolve(null),
+            ]);
+          if (arbitraryEmailId || messageArbitraryEmail) {
+            let arbitraryEmail =
+              taggedArbitraryEmail ?? messageArbitraryEmail;
+            let conflict = arbitraryEmailWebhookConflict(
+              {
+                arbitraryEmailId,
+                outreachId,
+                attemptId,
+                providerMessageId: messageId,
+              },
+              taggedArbitraryEmail,
+              messageArbitraryEmail,
+              messageOutreachAttempt,
+            );
+            if (
+              !conflict &&
+              arbitraryEmail &&
+              messageId &&
+              !arbitraryEmail.providerMessageId
+            ) {
+              await tx.arbitraryEmail.updateMany({
+                where: {
+                  id: arbitraryEmail.id,
+                  providerMessageId: null,
+                },
+                data: { providerMessageId: messageId },
+              });
+              const rebound = await tx.arbitraryEmail.findUnique({
+                where: { id: arbitraryEmail.id },
+              });
+              if (!rebound || rebound.providerMessageId !== messageId) {
+                conflict =
+                  "provider message could not be bound to arbitrary email";
+              } else {
+                arbitraryEmail = rebound;
+              }
+            }
+            if (!arbitraryEmail || conflict) {
+              await tx.resendWebhookEvent.create({
+                data: {
+                  eventId,
+                  type: parsed.type,
+                  providerMessageId: messageId,
+                  recipientEmails: impactedRecipients,
+                  providerCreatedAt,
+                  correlationStatus: "conflict",
+                  correlationError: conflict ?? "arbitrary email not found",
+                },
+              });
+              return {
+                note: `conflict webhook quarantined: ${
+                  conflict ?? "arbitrary email not found"
+                }`,
+              };
+            }
+
+            await tx.resendWebhookEvent.create({
+              data: {
+                eventId,
+                type: parsed.type,
+                providerMessageId: messageId,
+                recipientEmails: impactedRecipients,
+                providerCreatedAt,
+                arbitraryEmailId: arbitraryEmail.id,
+                correlationStatus: "matched",
+              },
+            });
+            if (!arbitraryEmail.testSend) {
+              await applySuppression(
+                tx,
+                eventId,
+                parsed,
+                providerCreatedAt,
+                impactedRecipients,
+              );
+            }
+            const intendedRecipientImpact =
+              arbitraryEmailWebhookRecipientImpact(
+                arbitraryEmail.recipientEmails,
+                parsed.data,
+              );
+            if (intendedRecipientImpact.affectsAggregate) {
+              const update = arbitraryEmailEventUpdate(
+                arbitraryEmail,
+                parsed.type,
+                providerCreatedAt,
+                isDeliveryProblemEvent(parsed.type)
+                  ? parsed.type === "email.bounced" ||
+                    parsed.type === "email.complained" ||
+                    parsed.type === "email.suppressed"
+                    ? suppressionReason(parsed)
+                    : parsed.type
+                  : undefined,
+              ) as Prisma.ArbitraryEmailUpdateInput;
+              if (Object.keys(update).length > 0) {
+                await tx.arbitraryEmail.update({
+                  where: { id: arbitraryEmail.id },
+                  data: update,
+                });
+              }
+            }
+            return intendedRecipientImpact.affectsAggregate
+              ? {}
+              : {
+                  note:
+                    "auxiliary recipient webhook recorded without aggregate mutation",
+                };
+          }
 
           const [
             taggedAttempt,
@@ -244,7 +392,7 @@ async function processEvent(
               eventId,
               type: parsed.type,
               providerMessageId: messageId,
-              recipientEmails: normalizeEmails(parsed.data.to ?? []),
+              recipientEmails: impactedRecipients,
               providerCreatedAt,
               outreachId: matchedAttempt?.outreachId ?? null,
               attemptId: matchedAttempt?.id ?? null,
@@ -261,7 +409,13 @@ async function processEvent(
                 : matchedAttempt,
             );
           if (failurePolicy.applySuppression) {
-            await applySuppression(tx, eventId, parsed, providerCreatedAt);
+            await applySuppression(
+              tx,
+              eventId,
+              parsed,
+              providerCreatedAt,
+              impactedRecipients,
+            );
           }
 
           if (correlation.status !== "matched") {

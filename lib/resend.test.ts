@@ -9,6 +9,7 @@ import {
   RESEND_FULL_CONFIGURATION_ERROR,
   RATE_CARD_MISSING_WARNING,
   ResendPreparationError,
+  buildArbitraryResendDeliveryPolicy,
   buildResendDeliveryPolicy,
   canBindResendWebhookProviderMessage,
   canRetryResendRequest,
@@ -204,6 +205,7 @@ test("retry policy detects suppression, test-mode, BCC, and sender changes", () 
     bccEmails: REQUEST.bcc,
     suppressedEmails: [],
   });
+
   assert.equal(current.ok, true);
   if (!current.ok) return;
   assert.equal(compareResendRequestToPolicy(REQUEST, false, current.policy), null);
@@ -275,6 +277,69 @@ test("retry policy detects suppression, test-mode, BCC, and sender changes", () 
         "Invalid RESEND_FROM_EMAIL; expected email@example.com or Name <email@example.com>",
     },
   );
+});
+
+test("arbitrary multi-recipient delivery hides every recipient in BCC", () => {
+  const result = buildArbitraryResendDeliveryPolicy({
+    from: "Photo Admin <sender@example.com>",
+    intendedRecipients: [
+      "first@example.com",
+      "second@example.com",
+      "FIRST@example.com",
+    ],
+    subject: "Private update",
+    testOverride: null,
+    bccEmails: ["audit@example.com", "second@example.com", "sender@example.com"],
+    suppressedEmails: [],
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.policy.to, ["sender@example.com"]);
+  assert.deepEqual(result.policy.bcc, [
+    "audit@example.com",
+    "first@example.com",
+    "second@example.com",
+  ]);
+  assert.deepEqual(result.policy.intendedRecipients, [
+    "first@example.com",
+    "second@example.com",
+  ]);
+});
+
+test("arbitrary single-recipient and test-override delivery preserve expected routing", () => {
+  const single = buildArbitraryResendDeliveryPolicy({
+    from: "Photo Admin <sender@example.com>",
+    intendedRecipients: ["person@example.com"],
+    subject: "Direct update",
+    testOverride: null,
+    bccEmails: ["audit@example.com", "person@example.com"],
+    suppressedEmails: [],
+  });
+  assert.equal(single.ok, true);
+  if (single.ok) {
+    assert.deepEqual(single.policy.to, ["person@example.com"]);
+    assert.deepEqual(single.policy.bcc, ["audit@example.com"]);
+  }
+
+  const testOverride = buildArbitraryResendDeliveryPolicy({
+    from: "Photo Admin <sender@example.com>",
+    intendedRecipients: ["first@example.com", "second@example.com"],
+    subject: "Private update",
+    testOverride: "TEST@example.com",
+    bccEmails: ["audit@example.com"],
+    suppressedEmails: [],
+  });
+  assert.equal(testOverride.ok, true);
+  if (testOverride.ok) {
+    assert.deepEqual(testOverride.policy.to, ["test@example.com"]);
+    assert.deepEqual(testOverride.policy.bcc, []);
+    assert.equal(testOverride.policy.testSend, true);
+    assert.equal(
+      testOverride.policy.subject,
+      "[TEST → first@example.com, second@example.com] Private update",
+    );
+  }
 });
 
 test("provider credential rejections are configuration outages without broadening content retries", () => {
@@ -691,7 +756,10 @@ test("test failures isolate while unknown legacy webhooks stay quarantined", () 
   );
   assert.match(route, /!canBindResendWebhookProviderMessage\(correlation\.attempt\)/);
   assert.match(route, /outreachAttempts\.length === 1/);
-  assert.match(route, /recipientEmails: normalizeEmails\(parsed\.data\.to/);
+  assert.match(
+    route,
+    /recipientEmails: impactedRecipients/,
+  );
   assert.ok(
     route.indexOf("if (!failurePolicy.processAttemptEvents)") <
       route.indexOf(

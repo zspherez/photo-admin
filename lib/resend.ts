@@ -123,6 +123,14 @@ export interface PrepareResendRequestArgs {
   idempotencyKey: string;
 }
 
+export interface PrepareArbitraryResendRequestArgs {
+  to: string[];
+  subject: string;
+  html: string;
+  arbitraryEmailId: string;
+  idempotencyKey: string;
+}
+
 export type ResendPreparationDisposition = "retryable" | "permanent";
 
 export type PrepareResendRequestResult =
@@ -131,6 +139,7 @@ export type PrepareResendRequestResult =
       request: ResendRequestSnapshot;
       requestHash: string;
       testSend: boolean;
+      intendedRecipients: string[];
       attachmentBlobs: ResendAttachmentBlob[];
       warnings: string[];
       rateCardAttachmentOmitted: boolean;
@@ -503,6 +512,52 @@ export function buildResendDeliveryPolicy({
   };
 }
 
+export function buildArbitraryResendDeliveryPolicy(
+  args: BuildResendDeliveryPolicyArgs,
+): ResendDeliveryPolicyResult {
+  const resolved = buildResendDeliveryPolicy(args);
+  if (!resolved.ok || resolved.policy.testSend) return resolved;
+
+  const { policy } = resolved;
+  if (policy.intendedRecipients.length === 1) {
+    const to = new Set(policy.to);
+    return {
+      ok: true,
+      policy: {
+        ...policy,
+        bcc: policy.bcc.filter((email) => !to.has(email)),
+      },
+    };
+  }
+
+  const neutralTo = normalizeEmail(policy.from);
+  if (!neutralTo) {
+    return {
+      ok: false,
+      error: "Configured sender cannot be used as the privacy-preserving To address",
+    };
+  }
+  const blocked = new Set(normalizeEmails(Array.from(args.suppressedEmails)));
+  if (blocked.has(neutralTo)) {
+    return {
+      ok: false,
+      error: "Configured sender is suppressed and cannot receive the privacy copy",
+    };
+  }
+
+  return {
+    ok: true,
+    policy: {
+      ...policy,
+      to: [neutralTo],
+      bcc: normalizeEmails([
+        ...policy.intendedRecipients,
+        ...policy.bcc,
+      ]).filter((email) => email !== neutralTo),
+    },
+  };
+}
+
 export async function resolveResendDeliveryPolicy(
   intendedRecipients: string[],
   subject: string,
@@ -522,6 +577,35 @@ export async function resolveResendDeliveryPolicy(
           select: { normalizedEmail: true },
         });
   return buildResendDeliveryPolicy({
+    from,
+    intendedRecipients,
+    subject,
+    testOverride,
+    bccEmails,
+    suppressedEmails: suppressed.map((row) => row.normalizedEmail),
+  });
+}
+
+export async function resolveArbitraryResendDeliveryPolicy(
+  intendedRecipients: string[],
+  subject: string,
+): Promise<ResendDeliveryPolicyResult> {
+  const { from, testOverride, bccEmails } =
+    await getResendDeliverySettingsSnapshot();
+  const candidates = normalizeEmails([
+    ...intendedRecipients,
+    ...bccEmails,
+    ...(testOverride ? [testOverride] : []),
+    ...(from ? [from] : []),
+  ]);
+  const suppressed =
+    candidates.length === 0
+      ? []
+      : await db.emailSuppression.findMany({
+          where: { normalizedEmail: { in: candidates } },
+          select: { normalizedEmail: true },
+        });
+  return buildArbitraryResendDeliveryPolicy({
     from,
     intendedRecipients,
     subject,
@@ -632,6 +716,48 @@ export async function prepareResendRequest({
     request,
     requestHash: hashResendRequestSnapshot(request),
     testSend: policy.testSend,
+    intendedRecipients: policy.intendedRecipients,
+    attachmentBlobs: [],
+    warnings: [],
+    rateCardAttachmentOmitted: false,
+  };
+}
+
+export async function prepareArbitraryResendRequest({
+  to,
+  subject,
+  html,
+  arbitraryEmailId,
+  idempotencyKey,
+}: PrepareArbitraryResendRequestArgs): Promise<PrepareResendRequestResult> {
+  const resolvedPolicy = await resolveArbitraryResendDeliveryPolicy(to, subject);
+  if (!resolvedPolicy.ok) {
+    return {
+      ...resolvedPolicy,
+      preparationDisposition: "permanent",
+    };
+  }
+  const { policy } = resolvedPolicy;
+  const request: ResendRequestSnapshot = {
+    version: 1,
+    idempotencyKey,
+    from: policy.from,
+    to: policy.to,
+    cc: [],
+    bcc: policy.bcc,
+    replyTo: [],
+    subject: policy.subject,
+    html,
+    headers: { "X-Arbitrary-Email-Id": arbitraryEmailId },
+    tags: [{ name: "arbitrary_email_id", value: arbitraryEmailId }],
+    attachments: [],
+  };
+  return {
+    ok: true,
+    request,
+    requestHash: hashResendRequestSnapshot(request),
+    testSend: policy.testSend,
+    intendedRecipients: policy.intendedRecipients,
     attachmentBlobs: [],
     warnings: [],
     rateCardAttachmentOmitted: false,

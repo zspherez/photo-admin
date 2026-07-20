@@ -513,12 +513,50 @@ model ResendWebhookEvent {
   outreach          Outreach?            @relation(fields: [outreachId], references: [id], onDelete: SetNull)
   attemptId         String?
   attempt           OutreachSendAttempt? @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+  arbitraryEmailId  String?
+  arbitraryEmail    ArbitraryEmail?      @relation(fields: [arbitraryEmailId], references: [id], onDelete: SetNull)
   correlationStatus String               @default("unmatched")
   correlationError  String?
   processedAt       DateTime             @default(now())
 
   @@index([outreachId, providerCreatedAt])
   @@index([attemptId, providerCreatedAt])
+  @@index([arbitraryEmailId, providerCreatedAt])
+}
+
+model ArbitraryEmail {
+  id                String               @id
+  recipientEmails   String[]             @default([])
+  subject           String
+  html              String
+  utmSource         String?
+  utmMedium         String?
+  utmCampaign       String?
+  utmContent        String?
+  utmTerm           String?
+  status            String
+  error             String?
+  providerMessageId String?              @unique
+  idempotencyKey    String               @unique
+  providerRequest   Json
+  requestHash       String
+  testSend          Boolean              @default(false)
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  firstOpenedAt     DateTime?
+  lastOpenedAt      DateTime?
+  openCount         Int                  @default(0)
+  firstClickedAt    DateTime?
+  lastClickedAt     DateTime?
+  clickCount        Int                  @default(0)
+  bouncedAt         DateTime?
+  complainedAt      DateTime?
+  webhookEvents     ResendWebhookEvent[]
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  @@index([createdAt])
+  @@index([status, createdAt])
 }
 
 model Setting {

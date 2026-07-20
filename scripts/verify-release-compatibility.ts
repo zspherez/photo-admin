@@ -40,6 +40,8 @@ async function main(): Promise<void> {
     contactAuditRunProbe,
     contactAuditJobProbe,
     contactAuditAlternativeProbe,
+    arbitraryEmailProbe,
+    resendWebhookArbitraryEmailProbe,
   ] = await Promise.all([
     db.setting.findMany({
       where: {
@@ -203,6 +205,45 @@ async function main(): Promise<void> {
         updatedAt: true,
       },
     }),
+    db.arbitraryEmail.findMany({
+      take: 1,
+      select: {
+        id: true,
+        recipientEmails: true,
+        subject: true,
+        html: true,
+        utmSource: true,
+        utmMedium: true,
+        utmCampaign: true,
+        utmContent: true,
+        utmTerm: true,
+        status: true,
+        error: true,
+        providerMessageId: true,
+        idempotencyKey: true,
+        providerRequest: true,
+        requestHash: true,
+        testSend: true,
+        sentAt: true,
+        deliveredAt: true,
+        firstOpenedAt: true,
+        lastOpenedAt: true,
+        openCount: true,
+        firstClickedAt: true,
+        lastClickedAt: true,
+        clickCount: true,
+        bouncedAt: true,
+        complainedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+    db.resendWebhookEvent.findMany({
+      take: 1,
+      select: {
+        arbitraryEmailId: true,
+      },
+    }),
   ]);
   const values = new Map(settings.map((setting) => [setting.key, setting.value]));
 
@@ -226,6 +267,8 @@ async function main(): Promise<void> {
           contactAuditRunProbe,
           contactAuditJobProbe,
           contactAuditAlternativeProbe,
+          arbitraryEmailProbe,
+          resendWebhookArbitraryEmailProbe,
         ].every(Array.isArray),
       configuredSpreadsheetId:
         values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,
@@ -243,6 +286,8 @@ async function main(): Promise<void> {
         "ContactAuditRun",
         "ContactAuditJob",
         "ContactAuditAlternative",
+        "ArbitraryEmail",
+        "ResendWebhookEvent.arbitraryEmailId",
       ],
     })
   );
