@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import {
   arbitraryEmailEventUpdate,
+  arbitraryEmailWebhookConflict,
   parseArbitraryEmailInput,
 } from "./arbitraryEmail";
 
@@ -28,6 +30,16 @@ test("arbitrary email input validates recipients and adds explicit UTM values", 
     result.input.html,
     /view=all&amp;utm_source=newsletter&amp;utm_medium=email&amp;utm_campaign=summer&amp;utm_content=hero&amp;utm_term=portraits#new/,
   );
+  const unsafeScheme = parseArbitraryEmailInput({
+    recipients: "one@example.com",
+    subject: "Safe link",
+    html: '<a href="javascript:alert(1)">Do not rewrite</a>',
+    utm_source: "newsletter",
+  });
+  assert.equal(unsafeScheme.ok, true);
+  if (unsafeScheme.ok) {
+    assert.match(unsafeScheme.input.html, /href="javascript:alert\(1\)"/);
+  }
 });
 
 test("arbitrary email input rejects invalid recipients and header injection", () => {
@@ -103,5 +115,113 @@ test("late provider acceptance does not erase a terminal delivery failure", () =
   assert.deepEqual(
     arbitraryEmailEventUpdate(state, "email.delivery_delayed", occurredAt),
     {},
+  );
+  assert.deepEqual(
+    arbitraryEmailEventUpdate(state, "email.failed", occurredAt),
+    {},
+  );
+  assert.deepEqual(
+    arbitraryEmailEventUpdate(state, "email.suppressed", occurredAt),
+    {},
+  );
+});
+
+test("arbitrary webhook correlation rejects outreach and provider identity conflicts", () => {
+  const arbitrary = { id: "arbitrary-1", providerMessageId: null };
+  assert.equal(
+    arbitraryEmailWebhookConflict(
+      {
+        arbitraryEmailId: arbitrary.id,
+        outreachId: null,
+        attemptId: null,
+        providerMessageId: "message-1",
+      },
+      arbitrary,
+      null,
+      null,
+    ),
+    null,
+  );
+  assert.match(
+    arbitraryEmailWebhookConflict(
+      {
+        arbitraryEmailId: arbitrary.id,
+        outreachId: "outreach-1",
+        attemptId: null,
+        providerMessageId: "message-1",
+      },
+      arbitrary,
+      null,
+      null,
+    ) ?? "",
+    /conflicts with outreach identity/,
+  );
+  assert.match(
+    arbitraryEmailWebhookConflict(
+      {
+        arbitraryEmailId: arbitrary.id,
+        outreachId: null,
+        attemptId: null,
+        providerMessageId: "message-1",
+      },
+      arbitrary,
+      null,
+      { id: "attempt-1" },
+    ) ?? "",
+    /belongs to an outreach attempt/,
+  );
+  assert.match(
+    arbitraryEmailWebhookConflict(
+      {
+        arbitraryEmailId: "missing-arbitrary",
+        outreachId: null,
+        attemptId: null,
+        providerMessageId: "message-1",
+      },
+      null,
+      arbitrary,
+      null,
+    ) ?? "",
+    /tagged arbitrary email not found/,
+  );
+  assert.match(
+    arbitraryEmailWebhookConflict(
+      {
+        arbitraryEmailId: arbitrary.id,
+        outreachId: null,
+        attemptId: null,
+        providerMessageId: "message-2",
+      },
+      { ...arbitrary, providerMessageId: "message-1" },
+      null,
+      null,
+    ) ?? "",
+    /conflicts with arbitrary email/,
+  );
+});
+
+test("arbitrary email migration is ordered, transactional, and constrained", () => {
+  const migrationsDirectory = new URL("../prisma/migrations/", import.meta.url);
+  const migrationNames = readdirSync(migrationsDirectory, {
+    withFileTypes: true,
+  })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  const migrationName = "20260720190000_arbitrary_emails";
+  assert.equal(migrationNames.at(-1), migrationName);
+
+  const migration = readFileSync(
+    new URL(`${migrationName}/migration.sql`, migrationsDirectory),
+    "utf8",
+  );
+  assert.match(migration, /^BEGIN;\n/);
+  assert.match(migration, /\nCOMMIT;\s*$/);
+  assert.match(migration, /CONSTRAINT "ArbitraryEmail_status_check"/);
+  assert.match(migration, /CONSTRAINT "ArbitraryEmail_requestHash_check"/);
+  assert.match(migration, /CONSTRAINT "ArbitraryEmail_recipientEmails_check"/);
+  assert.match(
+    migration,
+    /FOREIGN KEY \("arbitraryEmailId"\) REFERENCES "ArbitraryEmail"\("id"\)/,
   );
 });

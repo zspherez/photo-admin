@@ -141,7 +141,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,
@@ -213,8 +213,45 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "updatedAt",
     ],
   );
+  assert.deepEqual(
+    selectedScalarFields(source, "arbitraryEmail"),
+    [
+      "id",
+      "recipientEmails",
+      "subject",
+      "html",
+      "utmSource",
+      "utmMedium",
+      "utmCampaign",
+      "utmContent",
+      "utmTerm",
+      "status",
+      "error",
+      "providerMessageId",
+      "idempotencyKey",
+      "providerRequest",
+      "requestHash",
+      "testSend",
+      "sentAt",
+      "deliveredAt",
+      "firstOpenedAt",
+      "lastOpenedAt",
+      "openCount",
+      "firstClickedAt",
+      "lastClickedAt",
+      "clickCount",
+      "bouncedAt",
+      "complainedAt",
+      "createdAt",
+      "updatedAt",
+    ],
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "resendWebhookEvent"),
+    ["arbitraryEmailId"],
+  );
   assert.match(
     source,
-    /addedRuntimeRoleProbes: \[\s*"ArtistResearchSkip",\s*"ContactAuditRun",\s*"ContactAuditJob",\s*"ContactAuditAlternative",\s*\]/,
+    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*\]/,
   );
 });

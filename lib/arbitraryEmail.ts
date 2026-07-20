@@ -89,6 +89,52 @@ interface ArbitraryEmailEventState {
   complainedAt: Date | null;
 }
 
+interface ArbitraryEmailWebhookIdentity {
+  arbitraryEmailId: string | null;
+  outreachId: string | null;
+  attemptId: string | null;
+  providerMessageId: string | null;
+}
+
+interface ArbitraryEmailWebhookRecord {
+  id: string;
+  providerMessageId: string | null;
+}
+
+export function arbitraryEmailWebhookConflict(
+  identity: ArbitraryEmailWebhookIdentity,
+  taggedArbitraryEmail: ArbitraryEmailWebhookRecord | null,
+  messageArbitraryEmail: ArbitraryEmailWebhookRecord | null,
+  messageOutreachAttempt: { id: string } | null,
+): string | null {
+  if (identity.arbitraryEmailId && !taggedArbitraryEmail) {
+    return "tagged arbitrary email not found";
+  }
+  const arbitraryEmail = taggedArbitraryEmail ?? messageArbitraryEmail;
+  if (!arbitraryEmail) return "arbitrary email not found";
+  if (identity.outreachId || identity.attemptId) {
+    return "arbitrary email identity conflicts with outreach identity";
+  }
+  if (messageOutreachAttempt) {
+    return "provider message belongs to an outreach attempt";
+  }
+  if (
+    taggedArbitraryEmail &&
+    messageArbitraryEmail &&
+    taggedArbitraryEmail.id !== messageArbitraryEmail.id
+  ) {
+    return "arbitrary email tag conflicts with provider message";
+  }
+  if (
+    identity.providerMessageId &&
+    arbitraryEmail.providerMessageId &&
+    arbitraryEmail.providerMessageId !== identity.providerMessageId
+  ) {
+    return "provider message conflicts with arbitrary email";
+  }
+  return null;
+}
+
 function earlier(current: Date | null, candidate: Date): Date {
   return !current || candidate < current ? candidate : current;
 }
@@ -152,8 +198,13 @@ export function arbitraryEmailEventUpdate(
         error: "complaint",
       };
     case "email.suppressed":
+      return email.bouncedAt || email.complainedAt || email.status === "failed"
+        ? {}
+        : { status: "failed", error: failureReason ?? type };
     case "email.failed":
-      return { status: "failed", error: failureReason ?? type };
+      return email.status === "failed"
+        ? {}
+        : { status: "failed", error: failureReason ?? type };
     case "email.delivery_delayed":
       return email.status === "failed" ? {} : { error: type };
     default:

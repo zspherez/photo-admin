@@ -10,7 +10,10 @@ import {
   shouldMirrorResendAttempt,
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
-import { arbitraryEmailEventUpdate } from "@/lib/arbitraryEmail";
+import {
+  arbitraryEmailEventUpdate,
+  arbitraryEmailWebhookConflict,
+} from "@/lib/arbitraryEmail";
 
 interface ResendEvent {
   type: string;
@@ -153,7 +156,11 @@ async function processEvent(
           const messageId = parsed.data.email_id ?? null;
           const providerCreatedAt = eventDate(parsed);
 
-          const [taggedArbitraryEmail, messageArbitraryEmail] =
+          const [
+            taggedArbitraryEmail,
+            messageArbitraryEmail,
+            messageOutreachAttempt,
+          ] =
             await Promise.all([
               arbitraryEmailId
                 ? tx.arbitraryEmail.findUnique({
@@ -165,22 +172,50 @@ async function processEvent(
                     where: { providerMessageId: messageId },
                   })
                 : Promise.resolve(null),
+              messageId
+                ? tx.outreachSendAttempt.findUnique({
+                    where: { providerMessageId: messageId },
+                    select: { id: true },
+                  })
+                : Promise.resolve(null),
             ]);
           if (arbitraryEmailId || messageArbitraryEmail) {
-            const arbitraryEmail =
+            let arbitraryEmail =
               taggedArbitraryEmail ?? messageArbitraryEmail;
-            const conflict =
-              !arbitraryEmail
-                ? "arbitrary email not found"
-                : taggedArbitraryEmail &&
-                    messageArbitraryEmail &&
-                    taggedArbitraryEmail.id !== messageArbitraryEmail.id
-                  ? "arbitrary email tag conflicts with provider message"
-                  : messageId &&
-                      arbitraryEmail.providerMessageId &&
-                      arbitraryEmail.providerMessageId !== messageId
-                    ? "provider message conflicts with arbitrary email"
-                    : null;
+            let conflict = arbitraryEmailWebhookConflict(
+              {
+                arbitraryEmailId,
+                outreachId,
+                attemptId,
+                providerMessageId: messageId,
+              },
+              taggedArbitraryEmail,
+              messageArbitraryEmail,
+              messageOutreachAttempt,
+            );
+            if (
+              !conflict &&
+              arbitraryEmail &&
+              messageId &&
+              !arbitraryEmail.providerMessageId
+            ) {
+              await tx.arbitraryEmail.updateMany({
+                where: {
+                  id: arbitraryEmail.id,
+                  providerMessageId: null,
+                },
+                data: { providerMessageId: messageId },
+              });
+              const rebound = await tx.arbitraryEmail.findUnique({
+                where: { id: arbitraryEmail.id },
+              });
+              if (!rebound || rebound.providerMessageId !== messageId) {
+                conflict =
+                  "provider message could not be bound to arbitrary email";
+              } else {
+                arbitraryEmail = rebound;
+              }
+            }
             if (!arbitraryEmail || conflict) {
               await tx.resendWebhookEvent.create({
                 data: {
@@ -200,12 +235,6 @@ async function processEvent(
               };
             }
 
-            if (messageId && !arbitraryEmail.providerMessageId) {
-              await tx.arbitraryEmail.update({
-                where: { id: arbitraryEmail.id },
-                data: { providerMessageId: messageId },
-              });
-            }
             await tx.resendWebhookEvent.create({
               data: {
                 eventId,
