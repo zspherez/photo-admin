@@ -238,6 +238,7 @@ export default async function ContactResearchPage({
       ) best_show ON TRUE
       WHERE job."status" IN ('pending', 'claimed', 'review', 'exhausted')
       ORDER BY
+        CASE WHEN job."status" = 'exhausted' THEN 1 ELSE 0 END,
         COALESCE(best_show."tier", 0) DESC,
         CASE job."status"
           WHEN 'review' THEN 0

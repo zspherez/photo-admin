@@ -70,7 +70,10 @@ test("research jobs are ranked by the best upcoming venue tier", () => {
   assert.match(source, /venueTierSql/);
   assert.match(source, /LEFT JOIN LATERAL/);
   assert.match(source, /ORDER BY "tier" DESC, show\."date" ASC/);
-  assert.match(source, /COALESCE\(best_show\."tier", 0\) DESC/);
+  assert.match(
+    source,
+    /CASE WHEN job\."status" = 'exhausted' THEN 1 ELSE 0 END,\s*COALESCE\(best_show\."tier", 0\) DESC/
+  );
   assert.match(source, /LIMIT 125/);
   assert.match(source, /venueTierLabel\(job\.bestShow\.tier\)/);
 });
