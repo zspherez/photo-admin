@@ -10,6 +10,7 @@ import { Button, LinkButton } from "@/components/ui/button";
 import { formatShowDate } from "@/lib/formatDate";
 import { easternTodayStoredDate } from "@/lib/calendarDate";
 import { activeListenSignalWhere } from "@/lib/listenSignal";
+import { festivalLeadTimeWhere } from "@/lib/festivalEligibility";
 import { requireServerActionAuth } from "@/lib/auth";
 import type { SearchParamValue } from "@/lib/searchParams";
 import {
@@ -36,16 +37,18 @@ function storedCheckpoint(value: string | undefined): Date {
 function snapshotWhere(
   lastSeen: Date,
   cutoff: Date,
-  today: Date,
+  now: Date,
   cursor: NewShowSnapshotCursor | null,
 ): Prisma.ShowWhereInput {
+  const today = easternTodayStoredDate(now);
   return {
     createdAt: { gt: lastSeen, lte: cutoff },
     date: { gte: today },
     syncStatus: "active",
-    ...(cursor
-      ? {
-          AND: [
+    AND: [
+      festivalLeadTimeWhere(now),
+      ...(cursor
+        ? [
             {
               OR: [
                 { createdAt: { lt: cursor.createdAt } },
@@ -55,9 +58,9 @@ function snapshotWhere(
                 },
               ],
             },
-          ],
-        }
-      : {}),
+          ]
+        : []),
+    ],
   };
 }
 
@@ -96,12 +99,11 @@ async function markAllSeen(formData: FormData) {
   });
   const lastSeen = storedCheckpoint(current?.value);
   if (lastSeen < cutoff) {
-    const today = easternTodayStoredDate(actionNow);
     await traverseNewShowSnapshot({
       cutoff,
       fetchPage: ({ cursor, take }) =>
         db.show.findMany({
-          where: snapshotWhere(lastSeen, cutoff, today, cursor),
+          where: snapshotWhere(lastSeen, cutoff, actionNow, cursor),
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take,
           select: { id: true, createdAt: true },
@@ -139,7 +141,7 @@ export default async function NewlyAnnouncedPage({
     where: snapshotWhere(
       lastSeen,
       cutoff,
-      easternTodayStoredDate(now),
+      now,
       cursor,
     ),
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],

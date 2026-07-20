@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { easternTodayStoredDate } from "@/lib/calendarDate";
 import { activeListenSignalWhere } from "@/lib/listenSignal";
+import { satisfiesFestivalLeadTime } from "@/lib/festivalEligibility";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -39,7 +40,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
   const upcoming = artist.shows
     .map((sa) => sa.show)
-    .filter((s) => s.date >= today && s.syncStatus === "active")
+    .filter(
+      (s) =>
+        s.date >= today &&
+        s.syncStatus === "active" &&
+        satisfiesFestivalLeadTime(s, now)
+    )
     .slice(0, 20);
 
   return NextResponse.json({

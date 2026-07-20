@@ -61,6 +61,7 @@ async function persistFestival(
   date: Date,
   countryCode: string,
   countryName: string,
+  festivalNycStatus: "inside_nyc" | "outside_nyc" | "unknown",
   entries: FestivalLineupEntry[],
   selections: Map<string, string>
 ): Promise<string> {
@@ -167,6 +168,7 @@ async function persistFestival(
               countryCode,
               countryName,
               isFestival: true,
+              festivalNycStatus,
               eventName: values.name,
               source: "manual",
             },
@@ -228,6 +230,7 @@ export async function createFestival(
       validation.date,
       validation.countryCode,
       validation.countryName,
+      validation.festivalNycStatus,
       validation.entries,
       selections
     );

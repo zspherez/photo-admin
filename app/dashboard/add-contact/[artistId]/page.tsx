@@ -24,6 +24,7 @@ import {
   hasDirectOutreachNote,
   isDirectOutreachOnly,
 } from "@/lib/contactDisplay";
+import { satisfiesFestivalLeadTime } from "@/lib/festivalEligibility";
 
 export const dynamic = "force-dynamic";
 
@@ -272,10 +273,16 @@ export default async function AddContactPage({
   const artist = await getArtistForContact(artistId);
   if (!artist) return notFound();
 
-  const today = easternTodayStoredDate();
+  const now = new Date();
+  const today = easternTodayStoredDate(now);
   const upcomingShows = artist.shows
     .map((sa) => sa.show)
-    .filter((s) => s.date >= today && s.syncStatus === "active")
+    .filter(
+      (s) =>
+        s.date >= today &&
+        s.syncStatus === "active" &&
+        satisfiesFestivalLeadTime(s, now)
+    )
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
   return (

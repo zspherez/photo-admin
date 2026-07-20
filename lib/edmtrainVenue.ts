@@ -3,15 +3,18 @@ import { normalizeCountry } from "@/lib/country";
 
 export type VenueNycStatus = "inside_nyc" | "outside_nyc" | "unknown";
 
-export interface EdmtrainVenueInput {
-  id: number;
-  name: string;
+export interface VenueGeographyInput {
   location?: string | null;
   state?: string | null;
   address?: string | null;
   country?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+}
+
+export interface EdmtrainVenueInput extends VenueGeographyInput {
+  id: number;
+  name: string;
 }
 
 export interface CachedEdmtrainVenue {
@@ -104,7 +107,7 @@ function stateFromAddress(parts: string[]): string | null {
   return cleanText(region.replace(/\b\d{5}(?:-\d{4})?\b.*$/, ""));
 }
 
-function providerGeography(venue: EdmtrainVenueInput) {
+function providerGeography(venue: VenueGeographyInput) {
   const location = cleanText(venue.location);
   const locationParts = (location ?? "")
     .split(",")
@@ -143,8 +146,8 @@ function validCoordinatePair(
   );
 }
 
-export function classifyEdmtrainVenueGeography(
-  venue: EdmtrainVenueInput
+export function classifyVenueNycGeography(
+  venue: VenueGeographyInput
 ): { status: VenueNycStatus; reason: string } {
   const geography = providerGeography(venue);
   if (geography.countryCode && geography.countryCode !== "US") {
@@ -179,6 +182,12 @@ export function classifyEdmtrainVenueGeography(
     };
   }
   return { status: "unknown", reason: "insufficient_provider_geography" };
+}
+
+export function classifyEdmtrainVenueGeography(
+  venue: EdmtrainVenueInput
+): { status: VenueNycStatus; reason: string } {
+  return classifyVenueNycGeography(venue);
 }
 
 function venueFingerprint(venue: EdmtrainVenueInput): string {

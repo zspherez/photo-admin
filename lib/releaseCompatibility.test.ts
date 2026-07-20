@@ -96,7 +96,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /db\.show\.count\(\{[\s\S]*countryCode: "US"[\s\S]*countryName: \{ not: null \}/,
+    /db\.show\.count\(\{[\s\S]*countryCode: "US"[\s\S]*countryName: \{ not: null \}[\s\S]*festivalNycStatus: \{[\s\S]*inside_nyc[\s\S]*outside_nyc[\s\S]*unknown/,
   );
   assert.match(
     source,

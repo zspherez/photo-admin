@@ -293,6 +293,8 @@ model Show {
   ages                String?
   electronicGenre     String?
   isFestival          Boolean              @default(false)
+  /// inside_nyc, outside_nyc, or unknown for festival eligibility.
+  festivalNycStatus   String?
   eventName           String?
   source              String?
   /// active, cancelled, blocked, or missing for provider-managed events.
@@ -311,6 +313,7 @@ model Show {
   @@index([date])
   @@index([edmtrainVenueId])
   @@index([isFestival, date])
+  @@index([isFestival, festivalNycStatus, date])
   @@index([isFestival, countryCode, dismissedAt, date])
   @@index([source, syncStatus, date])
   @@index([dismissedAt])

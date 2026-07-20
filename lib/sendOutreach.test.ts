@@ -345,30 +345,146 @@ test("dismissed festivals block original and follow-up delivery", () => {
   const dismissedFestival = {
     isFestival: true,
     dismissedAt: NOW,
+    date: new Date("2026-08-01T00:00:00.000Z"),
+    festivalNycStatus: "outside_nyc",
   };
 
   assert.equal(
-    festivalOutreachBlockingReason(dismissedFestival, "original"),
+    festivalOutreachBlockingReason(dismissedFestival, "original", NOW),
     "Restore this festival before sending outreach",
   );
   assert.equal(
-    festivalOutreachBlockingReason(dismissedFestival, "follow_up"),
+    festivalOutreachBlockingReason(dismissedFestival, "follow_up", NOW),
     "Restore this festival before sending follow-up",
   );
   assert.equal(
     festivalOutreachBlockingReason(
-      { isFestival: false, dismissedAt: NOW },
+      {
+        isFestival: false,
+        dismissedAt: NOW,
+        date: NOW,
+        festivalNycStatus: null,
+      },
       "original",
+      NOW,
     ),
     null,
   );
   assert.equal(
     festivalOutreachBlockingReason(
-      { isFestival: true, dismissedAt: null },
+      {
+        isFestival: true,
+        dismissedAt: null,
+        date: new Date("2026-08-01T00:00:00.000Z"),
+        festivalNycStatus: "outside_nyc",
+      },
       "original",
+      NOW,
     ),
     null,
   );
+});
+
+test("follow-up availability shares festival boundaries without changing regular shows", () => {
+  const date = new Date("2026-07-22T00:00:00.000Z");
+  assert.equal(
+    festivalOutreachBlockingReason(
+      {
+        isFestival: true,
+        dismissedAt: null,
+        date,
+        festivalNycStatus: "outside_nyc",
+      },
+      "follow_up",
+      NOW,
+    ),
+    "Non-NYC festivals fewer than 7 calendar days away are not actionable.",
+  );
+  assert.equal(
+    festivalOutreachBlockingReason(
+      {
+        isFestival: true,
+        dismissedAt: null,
+        date,
+        festivalNycStatus: "inside_nyc",
+      },
+      "follow_up",
+      NOW,
+    ),
+    null,
+  );
+  assert.equal(
+    festivalOutreachBlockingReason(
+      {
+        isFestival: true,
+        dismissedAt: null,
+        date: new Date("2026-07-23T00:00:00.000Z"),
+        festivalNycStatus: "outside_nyc",
+      },
+      "follow_up",
+      NOW,
+    ),
+    null,
+  );
+  assert.equal(
+    festivalOutreachBlockingReason(
+      {
+        isFestival: true,
+        dismissedAt: null,
+        date: new Date("2026-07-15T00:00:00.000Z"),
+        festivalNycStatus: "inside_nyc",
+      },
+      "follow_up",
+      NOW,
+    ),
+    "Past festivals are not actionable.",
+  );
+  assert.equal(
+    festivalOutreachBlockingReason(
+      {
+        isFestival: false,
+        dismissedAt: null,
+        date: new Date("2026-07-15T00:00:00.000Z"),
+        festivalNycStatus: null,
+      },
+      "follow_up",
+      NOW,
+    ),
+    null,
+  );
+});
+
+test("locked delivery query is valid for regular and festival sends", () => {
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  const lockedPolicy = source.slice(
+    source.indexOf("async function evaluateLockedOutreachDeliveryPolicy"),
+    source.indexOf("function blockedSendability"),
+  );
+  assert.match(lockedPolicy, /FROM "Show" show[\s\S]*FOR UPDATE OF show/);
+  assert.doesNotMatch(lockedPolicy, /LEFT JOIN "EdmtrainVenue"/);
+
+  for (const show of [
+    {
+      isFestival: false,
+      dismissedAt: null,
+      date: new Date("2026-07-15T00:00:00.000Z"),
+      festivalNycStatus: null,
+    },
+    {
+      isFestival: true,
+      dismissedAt: null,
+      date: new Date("2026-07-23T00:00:00.000Z"),
+      festivalNycStatus: "outside_nyc",
+    },
+  ]) {
+    assert.equal(
+      festivalOutreachBlockingReason(show, "original", NOW),
+      null,
+    );
+  }
 });
 
 test("Resend configuration outages requeue scheduled work without consuming attempts", () => {
@@ -1506,7 +1622,8 @@ test("sending transition revalidates and holds policy locks through provider sub
     RESEND_PROVIDER_REQUEST_TIMEOUT_MS <
       OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
   );
-  assert.match(lockedPolicy, /FROM "Show"[\s\S]*FOR UPDATE/);
+  assert.match(lockedPolicy, /FROM "Show" show[\s\S]*FOR UPDATE OF show/);
+  assert.doesNotMatch(lockedPolicy, /LEFT JOIN "EdmtrainVenue"/);
   assert.match(lockedPolicy, /FROM "Artist"[\s\S]*FOR UPDATE/);
   assert.match(lockedPolicy, /FROM "Contact"[\s\S]*FOR UPDATE/);
   assert.match(
@@ -1750,6 +1867,10 @@ test("follow-up send and schedule reuse the immutable child machinery", () => {
   assert.match(
     source,
     /getFollowUpEligibilityBatch[\s\S]*getResendDeliverySettingsSnapshot[\s\S]*emailSuppression\.findMany[\s\S]*evaluateOutreachDeliveryPolicy/,
+  );
+  assert.match(
+    source,
+    /getFollowUpEligibilityBatch[\s\S]*festivalOutreachBlockingReason\(\s*show,\s*"follow_up",\s*now/,
   );
   assert.match(
     source,

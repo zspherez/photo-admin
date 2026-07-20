@@ -23,6 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { easternTodayStoredDate } from "@/lib/calendarDate";
 import { pickEmailContact } from "@/lib/contactSelection";
 import { activeListenSignalWhere } from "@/lib/listenSignal";
+import { festivalLeadTimeWhere } from "@/lib/festivalEligibility";
 import { requireServerActionAuth } from "@/lib/auth";
 import {
   firstSearchParam,
@@ -106,6 +107,7 @@ export default async function TemplateSettingsPage({
       where: {
         date: { gte: easternTodayStoredDate(now) },
         syncStatus: "active",
+        AND: [festivalLeadTimeWhere(now)],
         artists: {
           some: {
             artist: {

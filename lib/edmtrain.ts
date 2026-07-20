@@ -18,6 +18,7 @@ import {
   type CachedEdmtrainVenue,
   type VenueNycStatus,
 } from "@/lib/edmtrainVenue";
+import { festivalLeadTimeExclusion } from "@/lib/festivalEligibility";
 import {
   asOperationDeadlineDeferredResult,
   assertOperationTimeRemaining,
@@ -276,13 +277,17 @@ export function isBlocked(venueName: string, blocklist: string[]): boolean {
 export function edmtrainEventStatus(
   event: EdmtrainEvent,
   blocked: boolean,
-  venueNycStatus: VenueNycStatus = "inside_nyc"
+  venueNycStatus: VenueNycStatus = "inside_nyc",
+  now: Date = new Date()
 ):
   | "active"
   | "cancelled"
   | "blocked"
   | "outside_nyc"
-  | "geography_unknown" {
+  | "geography_unknown"
+  | "festival_past"
+  | "lead_time_outside_nyc"
+  | "lead_time_geography_unknown" {
   if (
     event.cancelledInd === true ||
     event.canceledInd === true ||
@@ -291,7 +296,18 @@ export function edmtrainEventStatus(
     return "cancelled";
   }
   if (blocked) return "blocked";
-  if (event.festivalInd) return "active";
+  if (event.festivalInd) {
+    return (
+      festivalLeadTimeExclusion(
+        {
+          isFestival: true,
+          date: parseDateOnly(event.date),
+          festivalNycStatus: venueNycStatus,
+        },
+        now
+      ) ?? "active"
+    );
+  }
   if (venueNycStatus === "outside_nyc") return "outside_nyc";
   if (venueNycStatus === "unknown") return "geography_unknown";
   return "active";
@@ -316,6 +332,8 @@ export interface SyncResult {
   cancelled: number;
   outsideNyc: number;
   geographyUnknown: number;
+  leadTimeExcluded: number;
+  leadTimeGeographyUnknown: number;
   venuesCached: number;
   venuesReused: number;
   identityConflicts: ArtistIdentityConflict[];
@@ -533,7 +551,7 @@ async function reconcileEdmtrainSnapshots(
             state: venue.state,
             countryCode: venue.countryCode,
             countryName: venue.countryName,
-            status: edmtrainEventStatus(event, blocked, venue.nycStatus),
+            status: edmtrainEventStatus(event, blocked, venue.nycStatus, now),
           };
         });
 
@@ -565,6 +583,7 @@ async function reconcileEdmtrainSnapshots(
                     ${event.ages},
                     ${event.electronicGenreInd ? "electronic" : "other"},
                     ${event.festivalInd},
+                    ${event.festivalInd ? venue.nycStatus : null},
                     ${event.name},
                     ${"edmtrain"},
                     ${status},
@@ -581,7 +600,7 @@ async function reconcileEdmtrainSnapshots(
                 INSERT INTO "Show" (
                   "id", "edmtrainId", "edmtrainVenueId", "date", "venueName", "city", "state",
                   "countryCode", "countryName", "ticketUrl", "ages",
-                  "electronicGenre", "isFestival", "eventName", "source",
+                  "electronicGenre", "isFestival", "festivalNycStatus", "eventName", "source",
                   "syncStatus", "sourceLastSeenAt", "sourceGeneration", "raw",
                   "createdAt", "updatedAt"
                 )
@@ -598,6 +617,7 @@ async function reconcileEdmtrainSnapshots(
                   "ages" = EXCLUDED."ages",
                   "electronicGenre" = EXCLUDED."electronicGenre",
                   "isFestival" = EXCLUDED."isFestival",
+                  "festivalNycStatus" = EXCLUDED."festivalNycStatus",
                   "eventName" = EXCLUDED."eventName",
                   "source" = EXCLUDED."source",
                   "syncStatus" = EXCLUDED."syncStatus",
@@ -677,6 +697,12 @@ async function reconcileEdmtrainSnapshots(
         const geographyUnknownCount = rows.filter(
           (row) => row.status === "geography_unknown"
         ).length;
+        const leadTimeExcludedCount = rows.filter(
+          (row) => row.status === "lead_time_outside_nyc"
+        ).length;
+        const leadTimeGeographyUnknownCount = rows.filter(
+          (row) => row.status === "lead_time_geography_unknown"
+        ).length;
         const settingKey =
           snapshot.scope === "festivals"
             ? "edmtrain_festivals_last_sync"
@@ -695,6 +721,8 @@ async function reconcileEdmtrainSnapshots(
           cancelled: cancelledCount,
           outsideNyc: outsideNycCount,
           geographyUnknown: geographyUnknownCount,
+          leadTimeExcluded: leadTimeExcludedCount,
+          leadTimeGeographyUnknown: leadTimeGeographyUnknownCount,
           venuesCached: venues.length,
           venuesReused: venues.filter((venue) => venue.reused).length,
           identityConflicts: resolved.conflicts,

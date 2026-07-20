@@ -19,7 +19,6 @@ import { ArtistLink } from "@/components/artist-modal";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { FollowUpButton } from "@/components/follow-up-button";
 import { cn } from "@/lib/cn";
-import { easternTodayStoredDate } from "@/lib/calendarDate";
 import {
   pickDirectOutreachContact,
   pickEmailContact,
@@ -76,6 +75,10 @@ import {
   enqueueFestivalManagerResearch,
   needsManagerContactResearch,
 } from "@/lib/contactResearch";
+import {
+  activeFestivalWhere,
+  satisfiesFestivalLeadTime,
+} from "@/lib/festivalEligibility";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -95,6 +98,7 @@ const getFestivalDetails = cache(async (showId: string) =>
       countryName: true,
       ticketUrl: true,
       isFestival: true,
+      festivalNycStatus: true,
       eventName: true,
       syncStatus: true,
       dismissedAt: true,
@@ -223,6 +227,8 @@ async function festivalBulkCandidates(
     where: { id: showId },
     select: {
       isFestival: true,
+      date: true,
+      festivalNycStatus: true,
       syncStatus: true,
       dismissedAt: true,
       artists: {
@@ -254,6 +260,7 @@ async function festivalBulkCandidates(
   const contactIds = new Set<string>();
   if (
     festival.syncStatus === "active" &&
+    satisfiesFestivalLeadTime(festival, now) &&
     festival.dismissedAt === null
   ) {
     for (const { artist } of festival.artists) {
@@ -265,6 +272,7 @@ async function festivalBulkCandidates(
   return {
     active:
       festival.syncStatus === "active" &&
+      satisfiesFestivalLeadTime(festival, now) &&
       festival.dismissedAt === null,
     contactIds,
   };
@@ -496,11 +504,7 @@ export default async function FestivalDetailPage({
   const festivalGroup = festivalGroupKey(festival);
   const groupedShowIds = (
     await db.show.findMany({
-      where: {
-        isFestival: true,
-        syncStatus: "active",
-        date: { gte: easternTodayStoredDate(now) },
-      },
+      where: activeFestivalWhere(now),
       orderBy: { date: "asc" },
       select: {
         id: true,
@@ -516,7 +520,9 @@ export default async function FestivalDetailPage({
     .filter((candidate) => festivalGroupKey(candidate) === festivalGroup)
     .map((candidate) => candidate.id);
   if (!groupedShowIds.includes(showId)) groupedShowIds.push(showId);
-  const festivalActive = festival.syncStatus === "active";
+  const festivalActive =
+    festival.syncStatus === "active" &&
+    satisfiesFestivalLeadTime(festival, now);
   const outreachEnabled =
     festivalActive && festival.dismissedAt === null;
 

@@ -10,6 +10,11 @@ import {
   countryNameForCode,
   normalizeCountryCode,
 } from "@/lib/country";
+import { classifyVenueNycGeography } from "@/lib/edmtrainVenue";
+import {
+  festivalLeadTimeError,
+  festivalLeadTimeExclusion,
+} from "@/lib/festivalEligibility";
 import type { FestivalFormValues } from "./form-state";
 
 export type FestivalCreationValidation =
@@ -19,6 +24,7 @@ export type FestivalCreationValidation =
       entries: FestivalLineupEntry[];
       countryCode: string;
       countryName: string;
+      festivalNycStatus: "inside_nyc" | "outside_nyc" | "unknown";
     }
   | {
       ok: false;
@@ -64,6 +70,26 @@ export function validateFestivalCreation(
     };
   }
 
+  const geography = classifyVenueNycGeography({
+    location: [values.city, values.state].filter(Boolean).join(", "),
+    state: values.state || null,
+    country: countryCode,
+  });
+  const leadTimeExclusion = festivalLeadTimeExclusion(
+    {
+      isFestival: true,
+      date,
+      festivalNycStatus: geography.status,
+    },
+    now
+  );
+  if (leadTimeExclusion) {
+    return {
+      ok: false,
+      message: festivalLeadTimeError(leadTimeExclusion),
+    };
+  }
+
   const lineup = parseFestivalLineupEntries(values.lineup);
   if (lineup.error) {
     return { ok: false, message: lineup.error };
@@ -81,5 +107,6 @@ export function validateFestivalCreation(
     entries: lineup.entries,
     countryCode,
     countryName,
+    festivalNycStatus: geography.status,
   };
 }

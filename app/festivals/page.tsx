@@ -5,7 +5,6 @@ import { Card } from "@/components/ui/card";
 import { LinkButton } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
-import { easternTodayStoredDate } from "@/lib/calendarDate";
 import { pickEmailContact } from "@/lib/contactSelection";
 import { countryLabel } from "@/lib/country";
 import {
@@ -20,6 +19,7 @@ import { formatShowDate } from "@/lib/formatDate";
 import { pickTopListenSignal } from "@/lib/listenSignal";
 import { festivalReturnPath } from "@/lib/dashboardReturnUrl";
 import type { SearchParamValue } from "@/lib/searchParams";
+import { activeFestivalWhere } from "@/lib/festivalEligibility";
 import {
   dismissShowAction,
   restoreShowAction,
@@ -36,9 +36,7 @@ type FestivalRow = Awaited<ReturnType<typeof loadFestivals>>[number];
 async function loadFestivals(now: Date) {
   return db.show.findMany({
     where: {
-      isFestival: true,
-      syncStatus: "active",
-      date: { gte: easternTodayStoredDate(now) },
+      ...activeFestivalWhere(now),
     },
     orderBy: { date: "asc" },
     include: {

@@ -34,6 +34,8 @@ const syncResult = (fetched: number): SyncResult => ({
   cancelled: 0,
   outsideNyc: 0,
   geographyUnknown: 0,
+  leadTimeExcluded: 0,
+  leadTimeGeographyUnknown: 0,
   venuesCached: 0,
   venuesReused: 0,
   identityConflicts: [],
@@ -385,7 +387,7 @@ test("EDMTrain scope flags must be present booleans before a snapshot is complet
   }
 });
 
-test("regular shows fail closed outside NYC or with unknown geography while festivals remain allowed", () => {
+test("regular shows and near-term festivals fail closed by NYC geography", () => {
   const event = eventWithCountry("United States");
   event.festivalInd = false;
   assert.equal(edmtrainEventStatus(event, false, "inside_nyc"), "active");
@@ -399,8 +401,115 @@ test("regular shows fail closed outside NYC or with unknown geography while fest
   );
 
   event.festivalInd = true;
-  assert.equal(edmtrainEventStatus(event, false, "outside_nyc"), "active");
-  assert.equal(edmtrainEventStatus(event, false, "unknown"), "active");
+  event.date = "2026-07-26";
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  assert.equal(
+    edmtrainEventStatus(event, false, "inside_nyc", now),
+    "active"
+  );
+  assert.equal(
+    edmtrainEventStatus(event, false, "outside_nyc", now),
+    "lead_time_outside_nyc"
+  );
+  assert.equal(
+    edmtrainEventStatus(event, false, "unknown", now),
+    "lead_time_geography_unknown"
+  );
+
+  event.date = "2026-07-27";
+  assert.equal(
+    edmtrainEventStatus(event, false, "outside_nyc", now),
+    "active"
+  );
+  event.date = "2026-07-19";
+  assert.equal(
+    edmtrainEventStatus(event, false, "inside_nyc", now),
+    "festival_past"
+  );
+
+  const source = readFileSync(new URL("./edmtrain.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /event\.festivalInd \? venue\.nycStatus : null[\s\S]*"festivalNycStatus"/
+  );
+});
+
+test("festival migration permits every emitted sync status and rejects unrelated values", () => {
+  const migration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260720170000_festival_lead_time/migration.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  const constraint = /ADD CONSTRAINT "Show_syncStatus_check"[\s\S]*?CHECK \(\s*"syncStatus" IN \(([\s\S]*?)\)\s*\);/.exec(
+    migration
+  );
+  assert.ok(constraint, "sync status constraint must be recreated");
+  const allowed = new Set(
+    [...constraint[1].matchAll(/'([^']+)'/g)].map((match) => match[1])
+  );
+  assert.deepEqual(allowed, new Set([
+    "active",
+    "cancelled",
+    "blocked",
+    "missing",
+    "outside_nyc",
+    "geography_unknown",
+    "festival_past",
+    "lead_time_outside_nyc",
+    "lead_time_geography_unknown",
+  ]));
+
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const active = eventWithCountry("United States");
+  active.festivalInd = false;
+  active.date = "2026-07-20";
+  const cancelled = { ...active, cancelledInd: true };
+  const festival = { ...active, festivalInd: true };
+  const emitted = new Set([
+    edmtrainEventStatus(active, false, "inside_nyc", now),
+    edmtrainEventStatus(cancelled, false, "inside_nyc", now),
+    edmtrainEventStatus(active, true, "inside_nyc", now),
+    edmtrainEventStatus(active, false, "outside_nyc", now),
+    edmtrainEventStatus(active, false, "unknown", now),
+    edmtrainEventStatus(
+      { ...festival, date: "2026-07-19" },
+      false,
+      "inside_nyc",
+      now
+    ),
+    edmtrainEventStatus(
+      { ...festival, date: "2026-07-26" },
+      false,
+      "outside_nyc",
+      now
+    ),
+    edmtrainEventStatus(
+      { ...festival, date: "2026-07-26" },
+      false,
+      "unknown",
+      now
+    ),
+  ]);
+  assert.deepEqual(emitted, new Set([
+    "active",
+    "cancelled",
+    "blocked",
+    "outside_nyc",
+    "geography_unknown",
+    "festival_past",
+    "lead_time_outside_nyc",
+    "lead_time_geography_unknown",
+  ]));
+  for (const status of emitted) assert.ok(allowed.has(status));
+  assert.equal(allowed.has("lead_time_unknown"), false);
+
+  const begin = migration.indexOf("BEGIN;");
+  const drop = migration.indexOf('DROP CONSTRAINT "Show_syncStatus_check"');
+  const add = migration.indexOf('ADD CONSTRAINT "Show_syncStatus_check"');
+  const commit = migration.lastIndexOf("COMMIT;");
+  assert.ok(begin >= 0 && begin < drop && drop < add && add < commit);
 });
 
 test("EDMTrain retry-budget failures remain structured at the provider boundary", async () => {

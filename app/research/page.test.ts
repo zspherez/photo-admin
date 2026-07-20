@@ -76,6 +76,10 @@ test("research jobs are ranked by the best upcoming venue tier", () => {
   );
   assert.match(source, /LIMIT 125/);
   assert.match(source, /venueTierLabel\(job\.bestShow\.tier\)/);
+  assert.match(
+    source,
+    /show\."syncStatus" = 'active'[\s\S]*festivalLeadTimeSql\(now\)/
+  );
 });
 
 test("status filtering happens before ordering and limiting while counts stay global", () => {
