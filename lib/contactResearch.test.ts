@@ -306,6 +306,50 @@ test("official artist management sources are strictly normalized", () => {
   );
 });
 
+test("official source evidence matches complete Unicode-aware mailbox tokens", () => {
+  const normalizeEvidence = (evidence: string) =>
+    normalizeOfficialManagementSource(
+      {
+        type: "website",
+        url: "https://exampleartist.com/contact",
+        managementLabel: "management",
+        evidence,
+      },
+      "manager@example.com",
+      ["https://exampleartist.com/contact"]
+    );
+
+  for (const evidence of [
+    "émanager@example.com",
+    "管理manager@example.com",
+    "\u0301manager@example.com",
+    "manager@example.comé",
+    "manager@example.com管理",
+    "manager@example.com\u0301",
+    "xmanager@example.com",
+    "manager@example.comx",
+    "manager@example.com.example",
+  ]) {
+    assert.throws(
+      () => normalizeEvidence(evidence),
+      /contain the exact candidate email/,
+      evidence
+    );
+  }
+
+  for (const evidence of [
+    "Management: manager@example.com.",
+    "Management (manager@example.com),",
+    "mailto:manager@example.com",
+    '<a href="mailto:manager@example.com?subject=Management">Email</a>',
+  ]) {
+    assert.equal(
+      normalizeEvidence(evidence).officialSourceEvidence,
+      evidence
+    );
+  }
+});
+
 test("direct publication is eligible while inferred sources remain review-only", () => {
   const candidate = {
     email: "manager@example.com",

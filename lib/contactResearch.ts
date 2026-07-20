@@ -37,6 +37,10 @@ const OFFICIAL_SOURCE_TYPES = new Set([
   "soundcloud",
 ]);
 const OFFICIAL_MANAGEMENT_LABELS = new Set(["mgmt", "management"]);
+const MAILBOX_PREFIX_CHARACTER =
+  /[\p{L}\p{N}\p{M}.!#$%&'*+/=?^_`{|}~@-]/u;
+const MAILBOX_SUFFIX_CHARACTER = /[\p{L}\p{N}\p{M}_@+-]/u;
+const MAILBOX_DOMAIN_LABEL_CHARACTER = /[\p{L}\p{N}\p{M}]/u;
 const githubActionsJwks = createRemoteJWKSet(
   new URL(`${CONTACT_RESEARCH_OIDC_ISSUER}/.well-known/jwks`)
 );
@@ -201,6 +205,47 @@ function officialSourceHostAllowed(
   return host === "soundcloud.com" || host.endsWith(".soundcloud.com");
 }
 
+function containsExactMailboxToken(
+  value: string,
+  candidateEmail: string
+): boolean {
+  const normalizedValue = value.toLowerCase();
+  const normalizedCandidateEmail = candidateEmail.toLowerCase();
+  let matchIndex = normalizedValue.indexOf(normalizedCandidateEmail);
+
+  while (matchIndex !== -1) {
+    const precedingCharacter = Array.from(
+      normalizedValue.slice(0, matchIndex)
+    ).at(-1);
+    const suffix = normalizedValue.slice(
+      matchIndex + normalizedCandidateEmail.length
+    );
+    const followingCharacters = Array.from(suffix);
+    const followingCharacter = followingCharacters[0];
+    const continuesDomain =
+      followingCharacter === "." &&
+      followingCharacters[1] !== undefined &&
+      MAILBOX_DOMAIN_LABEL_CHARACTER.test(followingCharacters[1]);
+
+    if (
+      (!precedingCharacter ||
+        !MAILBOX_PREFIX_CHARACTER.test(precedingCharacter)) &&
+      (!followingCharacter ||
+        (!MAILBOX_SUFFIX_CHARACTER.test(followingCharacter) &&
+          !continuesDomain))
+    ) {
+      return true;
+    }
+
+    matchIndex = normalizedValue.indexOf(
+      normalizedCandidateEmail,
+      matchIndex + normalizedCandidateEmail.length
+    );
+  }
+
+  return false;
+}
+
 export function normalizeOfficialManagementSource(
   value: unknown,
   candidateEmail: string,
@@ -257,17 +302,7 @@ export function normalizeOfficialManagementSource(
     4_000,
     "official source evidence"
   );
-  const escapedCandidateEmail = candidateEmail.replace(
-    /[.*+?^${}()|[\]\\]/g,
-    "\\$&"
-  );
-  const mailboxPrefixCharacters =
-    "A-Z0-9.!#$%&'*+/=?^_`{|}~@-";
-  const exactEmailPattern = new RegExp(
-    `(?<![${mailboxPrefixCharacters}])${escapedCandidateEmail}(?![A-Z0-9_@+-]|\\.[A-Z0-9])`,
-    "i"
-  );
-  if (!exactEmailPattern.test(evidence)) {
+  if (!containsExactMailboxToken(evidence, candidateEmail)) {
     throw new Error(
       "official source evidence must contain the exact candidate email"
     );
