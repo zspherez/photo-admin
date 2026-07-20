@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "Overview" };
 
 export default async function Home() {
   const [showCount, festivalCount, artistCount, contactCount, integrations, defaultTemplate] = await Promise.all([
-    db.show.count({ where: { isFestival: false } }),
+    db.show.count({ where: { isFestival: false, syncStatus: "active" } }),
     db.show.count({ where: { isFestival: true } }),
     db.artist.count(),
     db.contact.count({ where: { state: "active" } }),

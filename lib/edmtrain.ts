@@ -14,6 +14,11 @@ import {
 } from "@/lib/artistIdentity";
 import { normalizeCountry } from "@/lib/country";
 import {
+  resolveEdmtrainVenue,
+  type CachedEdmtrainVenue,
+  type VenueNycStatus,
+} from "@/lib/edmtrainVenue";
+import {
   asOperationDeadlineDeferredResult,
   assertOperationTimeRemaining,
   chunkItems,
@@ -118,6 +123,7 @@ export function isValidEdmtrainSnapshotEvent(
     typeof candidate.date === "string" &&
     typeof candidate.festivalInd === "boolean" &&
     typeof candidate.electronicGenreInd === "boolean" &&
+    typeof candidate.venue?.id === "number" &&
     typeof candidate.venue?.name === "string" &&
     Array.isArray(candidate.artistList)
   );
@@ -269,8 +275,14 @@ export function isBlocked(venueName: string, blocklist: string[]): boolean {
 
 export function edmtrainEventStatus(
   event: EdmtrainEvent,
-  blocked: boolean
-): "active" | "cancelled" | "blocked" {
+  blocked: boolean,
+  venueNycStatus: VenueNycStatus = "inside_nyc"
+):
+  | "active"
+  | "cancelled"
+  | "blocked"
+  | "outside_nyc"
+  | "geography_unknown" {
   if (
     event.cancelledInd === true ||
     event.canceledInd === true ||
@@ -278,7 +290,11 @@ export function edmtrainEventStatus(
   ) {
     return "cancelled";
   }
-  return blocked ? "blocked" : "active";
+  if (blocked) return "blocked";
+  if (event.festivalInd) return "active";
+  if (venueNycStatus === "outside_nyc") return "outside_nyc";
+  if (venueNycStatus === "unknown") return "geography_unknown";
+  return "active";
 }
 
 type EdmtrainScope = "nyc" | "festivals";
@@ -298,6 +314,10 @@ export interface SyncResult {
   artistsLinked: number;
   missing: number;
   cancelled: number;
+  outsideNyc: number;
+  geographyUnknown: number;
+  venuesCached: number;
+  venuesReused: number;
   identityConflicts: ArtistIdentityConflict[];
 }
 
@@ -407,14 +427,113 @@ async function reconcileEdmtrainSnapshots(
       };
 
       for (const snapshot of snapshots) {
+        const venueById = new Map(
+          snapshot.events.map((event) => [event.venue.id, event.venue])
+        );
+        const cachedVenues = await tx.edmtrainVenue.findMany({
+          where: { id: { in: [...venueById.keys()] } },
+          select: {
+            id: true,
+            address: true,
+            location: true,
+            city: true,
+            state: true,
+            countryCode: true,
+            countryName: true,
+            latitude: true,
+            longitude: true,
+            nycStatus: true,
+            nycStatusReason: true,
+            classificationVersion: true,
+            sourceFingerprint: true,
+          },
+        });
+        const cachedVenueById = new Map(
+          cachedVenues.map((venue) => [
+            venue.id,
+            venue as CachedEdmtrainVenue,
+          ])
+        );
+        const venues = [...venueById.values()].map((venue) =>
+          resolveEdmtrainVenue(venue, cachedVenueById.get(venue.id))
+        );
+        const resolvedVenueById = new Map(
+          venues.map((venue) => [venue.id, venue])
+        );
+
+        for (const venueChunk of chunkItems(venues, 400)) {
+          const values = Prisma.join(
+            venueChunk.map(
+              (venue) =>
+                Prisma.sql`(
+                  ${venue.id},
+                  ${venue.name},
+                  ${venue.address},
+                  ${venue.location},
+                  ${venue.city},
+                  ${venue.state},
+                  ${venue.countryCode},
+                  ${venue.countryName},
+                  ${venue.latitude},
+                  ${venue.longitude},
+                  ${venue.nycStatus},
+                  ${venue.nycStatusReason},
+                  ${venue.geographySource},
+                  ${venue.classificationVersion},
+                  ${venue.sourceFingerprint},
+                  ${now},
+                  ${now},
+                  ${now}
+                )`
+            )
+          );
+          await tx.$executeRaw(
+            Prisma.sql`
+              INSERT INTO "EdmtrainVenue" (
+                "id", "name", "address", "location", "city", "state",
+                "countryCode", "countryName", "latitude", "longitude",
+                "nycStatus", "nycStatusReason", "geographySource",
+                "classificationVersion", "sourceFingerprint", "lastSeenAt",
+                "createdAt", "updatedAt"
+              )
+              VALUES ${values}
+              ON CONFLICT ("id") DO UPDATE SET
+                "name" = EXCLUDED."name",
+                "address" = EXCLUDED."address",
+                "location" = EXCLUDED."location",
+                "city" = EXCLUDED."city",
+                "state" = EXCLUDED."state",
+                "countryCode" = EXCLUDED."countryCode",
+                "countryName" = EXCLUDED."countryName",
+                "latitude" = EXCLUDED."latitude",
+                "longitude" = EXCLUDED."longitude",
+                "nycStatus" = EXCLUDED."nycStatus",
+                "nycStatusReason" = EXCLUDED."nycStatusReason",
+                "geographySource" = EXCLUDED."geographySource",
+                "classificationVersion" = EXCLUDED."classificationVersion",
+                "sourceFingerprint" = EXCLUDED."sourceFingerprint",
+                "lastSeenAt" = EXCLUDED."lastSeenAt",
+                "updatedAt" = EXCLUDED."updatedAt"
+            `
+          );
+        }
+
         const rows = snapshot.events.map((event) => {
           const blocked = isBlocked(event.venue.name, snapshot.blocklist);
+          const venue = resolvedVenueById.get(event.venue.id);
+          if (!venue) {
+            throw new Error(`EDMTrain venue was not resolved: ${event.venue.id}`);
+          }
           return {
             id: randomUUID(),
             event,
             date: parseDateOnly(event.date),
-            ...edmtrainEventGeography(event),
-            status: edmtrainEventStatus(event, blocked),
+            venue,
+            city: venue.city ?? "Unknown",
+            state: venue.state,
+            countryCode: venue.countryCode,
+            countryName: venue.countryName,
+            status: edmtrainEventStatus(event, blocked, venue.nycStatus),
           };
         });
 
@@ -425,6 +544,7 @@ async function reconcileEdmtrainSnapshots(
                 id,
                 event,
                 date,
+                venue,
                 city,
                 state,
                 countryCode,
@@ -434,6 +554,7 @@ async function reconcileEdmtrainSnapshots(
                 Prisma.sql`(
                     ${id},
                     ${event.id},
+                    ${venue.id},
                     ${date},
                     ${event.venue.name},
                     ${city},
@@ -458,7 +579,7 @@ async function reconcileEdmtrainSnapshots(
           await tx.$executeRaw(
             Prisma.sql`
                 INSERT INTO "Show" (
-                  "id", "edmtrainId", "date", "venueName", "city", "state",
+                  "id", "edmtrainId", "edmtrainVenueId", "date", "venueName", "city", "state",
                   "countryCode", "countryName", "ticketUrl", "ages",
                   "electronicGenre", "isFestival", "eventName", "source",
                   "syncStatus", "sourceLastSeenAt", "sourceGeneration", "raw",
@@ -467,6 +588,7 @@ async function reconcileEdmtrainSnapshots(
                 VALUES ${values}
                 ON CONFLICT ("edmtrainId") DO UPDATE SET
                   "date" = EXCLUDED."date",
+                  "edmtrainVenueId" = EXCLUDED."edmtrainVenueId",
                   "venueName" = EXCLUDED."venueName",
                   "city" = EXCLUDED."city",
                   "state" = EXCLUDED."state",
@@ -549,6 +671,12 @@ async function reconcileEdmtrainSnapshots(
         const cancelledCount = rows.filter(
           (row) => row.status === "cancelled"
         ).length;
+        const outsideNycCount = rows.filter(
+          (row) => row.status === "outside_nyc"
+        ).length;
+        const geographyUnknownCount = rows.filter(
+          (row) => row.status === "geography_unknown"
+        ).length;
         const settingKey =
           snapshot.scope === "festivals"
             ? "edmtrain_festivals_last_sync"
@@ -565,6 +693,10 @@ async function reconcileEdmtrainSnapshots(
           artistsLinked: lineupRows.length,
           missing: missing.count,
           cancelled: cancelledCount,
+          outsideNyc: outsideNycCount,
+          geographyUnknown: geographyUnknownCount,
+          venuesCached: venues.length,
+          venuesReused: venues.filter((venue) => venue.reused).length,
           identityConflicts: resolved.conflicts,
         };
       }

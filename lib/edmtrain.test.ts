@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createSerializedEdmtrainReconciliationScheduler,
   edmtrainEventGeography,
+  edmtrainEventStatus,
   fetchEdmtrainEvents,
   isValidEdmtrainSnapshotEvent,
   runLeasedEdmtrainSnapshotSync,
@@ -31,6 +32,10 @@ const syncResult = (fetched: number): SyncResult => ({
   artistsLinked: 0,
   missing: 0,
   cancelled: 0,
+  outsideNyc: 0,
+  geographyUnknown: 0,
+  venuesCached: 0,
+  venuesReused: 0,
   identityConflicts: [],
 });
 
@@ -328,7 +333,7 @@ test("EDMTrain scope flags must be present booleans before a snapshot is complet
   const baseEvent = {
     id: 1,
     date: "2026-07-16",
-    venue: { name: "Venue" },
+    venue: { id: 1, name: "Venue" },
     artistList: [],
   };
   assert.equal(
@@ -378,6 +383,24 @@ test("EDMTrain scope flags must be present booleans before a snapshot is complet
     if (originalApiKey === undefined) delete process.env.EDMTRAIN_API_KEY;
     else process.env.EDMTRAIN_API_KEY = originalApiKey;
   }
+});
+
+test("regular shows fail closed outside NYC or with unknown geography while festivals remain allowed", () => {
+  const event = eventWithCountry("United States");
+  event.festivalInd = false;
+  assert.equal(edmtrainEventStatus(event, false, "inside_nyc"), "active");
+  assert.equal(
+    edmtrainEventStatus(event, false, "outside_nyc"),
+    "outside_nyc"
+  );
+  assert.equal(
+    edmtrainEventStatus(event, false, "unknown"),
+    "geography_unknown"
+  );
+
+  event.festivalInd = true;
+  assert.equal(edmtrainEventStatus(event, false, "outside_nyc"), "active");
+  assert.equal(edmtrainEventStatus(event, false, "unknown"), "active");
 });
 
 test("EDMTrain retry-budget failures remain structured at the provider boundary", async () => {

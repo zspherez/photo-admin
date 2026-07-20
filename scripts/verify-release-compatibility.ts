@@ -35,6 +35,7 @@ async function main(): Promise<void> {
     contactResearchJobProbe,
     contactResearchCandidateProbe,
     agentRuleSetProbe,
+    edmtrainVenueProbe,
   ] = await Promise.all([
     db.setting.findMany({
       where: {
@@ -94,6 +95,12 @@ async function main(): Promise<void> {
         updatedAt: true,
       },
     }),
+    db.edmtrainVenue.count({
+      where: {
+        nycStatus: { in: ["inside_nyc", "outside_nyc", "unknown"] },
+      },
+      take: 1,
+    }),
   ]);
   const values = new Map(settings.map((setting) => [setting.key, setting.value]));
 
@@ -107,6 +114,7 @@ async function main(): Promise<void> {
         outreachAttemptProbe,
         syncLeaseProbe,
         artistClaimProbe,
+        edmtrainVenueProbe,
       ].every(Number.isInteger) &&
         [
           contactResearchJobProbe,

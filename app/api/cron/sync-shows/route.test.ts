@@ -14,6 +14,10 @@ const synced: SyncResult = {
   artistsLinked: 0,
   missing: 0,
   cancelled: 0,
+  outsideNyc: 0,
+  geographyUnknown: 0,
+  venuesCached: 1,
+  venuesReused: 0,
   identityConflicts: [],
 };
 
