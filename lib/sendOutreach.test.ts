@@ -1333,6 +1333,123 @@ test("a direct-only contact cannot trigger full-team email fanout", () => {
   );
 });
 
+test("customized outreach selects one address even from a full-team marker", () => {
+  const teamContact = {
+    id: "contact-1",
+    artistId: "artist-1",
+    email: "manager@example.com",
+    state: "active" as const,
+    isFullTeam: true,
+  };
+  const artistContacts = [
+    teamContact,
+    {
+      id: "contact-2",
+      artistId: "artist-1",
+      email: "agent@example.com",
+      state: "active" as const,
+      isFullTeam: false,
+    },
+  ];
+  const customized = evaluateOutreachDeliveryPolicy(
+    deliveryPolicyFixture({
+      contact: teamContact,
+      artistContacts,
+      stored: null,
+      attempt: null,
+      bccEmails: [],
+      requestedFullTeamSend: false,
+    }),
+  );
+  assert.equal(customized.ok, true);
+  if (customized.ok) {
+    assert.deepEqual(customized.currentRecipients, ["manager@example.com"]);
+    assert.equal(customized.fullTeamSend, false);
+    assert.deepEqual(customized.policy.to, ["manager@example.com"]);
+  }
+
+  const ordinaryBulk = evaluateOutreachDeliveryPolicy(
+    deliveryPolicyFixture({
+      contact: teamContact,
+      artistContacts,
+      stored: null,
+      attempt: null,
+      bccEmails: [],
+    }),
+  );
+  assert.equal(ordinaryBulk.ok, true);
+  if (ordinaryBulk.ok) {
+    assert.deepEqual(ordinaryBulk.currentRecipients, [
+      "agent@example.com",
+      "manager@example.com",
+    ]);
+    assert.equal(ordinaryBulk.fullTeamSend, true);
+  }
+});
+
+test("test override changes delivery but not the selected intended-recipient snapshot", () => {
+  const teamContact = {
+    id: "contact-1",
+    artistId: "artist-1",
+    email: "manager@example.com",
+    state: "active" as const,
+    isFullTeam: true,
+  };
+  const decision = evaluateOutreachDeliveryPolicy(
+    deliveryPolicyFixture({
+      contact: teamContact,
+      artistContacts: [
+        teamContact,
+        {
+          id: "contact-2",
+          artistId: "artist-1",
+          email: "agent@example.com",
+          state: "active",
+          isFullTeam: false,
+        },
+      ],
+      stored: null,
+      attempt: null,
+      bccEmails: [],
+      requestedFullTeamSend: false,
+      testOverride: "preview@example.com",
+    }),
+  );
+  assert.equal(decision.ok, true);
+  if (decision.ok) {
+    assert.deepEqual(decision.currentRecipients, ["manager@example.com"]);
+    assert.deepEqual(decision.policy.intendedRecipients, [
+      "manager@example.com",
+    ]);
+    assert.deepEqual(decision.policy.to, ["preview@example.com"]);
+    assert.equal(decision.policy.testSend, true);
+  }
+});
+
+test("retries keep the original customized recipient when contact markers change", () => {
+  const fixture = deliveryPolicyFixture();
+  const decision = evaluateOutreachDeliveryPolicy({
+    ...fixture,
+    contact: { ...fixture.contact!, isFullTeam: true },
+    artistContacts: [
+      { ...fixture.contact!, isFullTeam: true },
+      {
+        id: "contact-2",
+        artistId: "artist-1",
+        email: "new@example.com",
+        state: "active",
+        isFullTeam: false,
+      },
+    ],
+    requestedFullTeamSend: true,
+  });
+  assert.equal(decision.ok, true);
+  if (decision.ok) {
+    assert.deepEqual(decision.currentRecipients, ["manager@example.com"]);
+    assert.equal(decision.fullTeamSend, false);
+  }
+});
+
 test("delivery policy revalidation classifies contact, suppression, and configuration changes", () => {
   const quarantined = deliveryPolicyFixture({
     contact: {

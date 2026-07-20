@@ -59,6 +59,7 @@ export interface SendOutreachInput {
   contactId: string;
   subjectOverride?: string;
   htmlOverride?: string;
+  singleRecipient?: boolean;
 }
 
 export type OutreachKindValue = "original" | "follow_up";
@@ -1014,6 +1015,7 @@ export interface EvaluateOutreachDeliveryPolicyInput {
   suppressedEmails: readonly string[];
   configurationError?: string | null;
   allowMissingFrom?: boolean;
+  requestedFullTeamSend?: boolean;
 }
 
 export type OutreachDeliveryPolicyDecision =
@@ -1055,6 +1057,7 @@ export function evaluateOutreachDeliveryPolicy({
   suppressedEmails,
   configurationError = null,
   allowMissingFrom = false,
+  requestedFullTeamSend,
 }: EvaluateOutreachDeliveryPolicyInput): OutreachDeliveryPolicyDecision {
   if (showSyncStatus === null) {
     return { ok: false, state: "cancelled", error: "Show not found" };
@@ -1102,7 +1105,19 @@ export function evaluateOutreachDeliveryPolicy({
     };
   }
 
-  const intendedRecipients = contact.isFullTeam
+  const fullTeamSend =
+    stored?.fullTeamSend ?? requestedFullTeamSend ?? contact.isFullTeam;
+  if (fullTeamSend && !contact.isFullTeam) {
+    return {
+      ok: false,
+      state: stored ? "manual_review" : "cancelled",
+      error: stored
+        ? "Current full-team contact marker conflicts with the verified outreach snapshot"
+        : "Selected contact is not eligible for full-team outreach",
+    };
+  }
+
+  const intendedRecipients = fullTeamSend
     ? activeContactRecipientEmails(artistContacts)
     : activeContactRecipientEmails([contact]);
   if (intendedRecipients.length === 0) {
@@ -1139,7 +1154,7 @@ export function evaluateOutreachDeliveryPolicy({
     const snapshotConflict = recipientSnapshotConflict(
       stored,
       resolved.policy.intendedRecipients,
-      contact.isFullTeam,
+      fullTeamSend,
     );
     if (snapshotConflict) {
       return {
@@ -1212,7 +1227,7 @@ export function evaluateOutreachDeliveryPolicy({
   return {
     ok: true,
     currentRecipients: resolved.policy.intendedRecipients,
-    fullTeamSend: contact.isFullTeam,
+    fullTeamSend,
     policy: resolved.policy,
     request,
   };
@@ -1332,6 +1347,7 @@ function isRetryableOutreachTransactionError(error: unknown): boolean {
 export interface OutreachSendabilityInput {
   showId: string;
   contactId: string;
+  singleRecipient?: boolean;
 }
 
 export interface OutreachSendability {
@@ -1477,7 +1493,7 @@ async function evaluateLockedOutreachDeliveryPolicy(
   const deliverySettings = await getResendDeliverySettingsSnapshot(tx);
   const { testOverride, bccEmails } = deliverySettings;
   const intendedRecipients =
-    contact?.isFullTeam === true
+    outreach.fullTeamSend
       ? activeContactRecipientEmails(artistContacts)
       : contact
         ? activeContactRecipientEmails([contact])
@@ -1622,13 +1638,15 @@ export async function getOutreachSendabilityBatch(
     emailsByArtist.set(artistId, activeContactRecipientEmails(contacts));
   }
   const suppressionCandidates = normalizeEmails([
-    ...targetContacts.flatMap((contact) =>
-      contact.isFullTeam
+    ...inputs.flatMap((input) => {
+      const contact = targetById.get(input.contactId);
+      if (!contact) return [];
+      return !input.singleRecipient && contact.isFullTeam
         ? emailsByArtist.get(contact.artistId) ?? []
         : contact.state === "active" && contact.email
           ? [contact.email]
-          : [],
-    ),
+          : [];
+    }),
     ...bccEmails,
     ...(testOverride ? [testOverride] : []),
   ]);
@@ -1712,6 +1730,7 @@ export async function getOutreachSendabilityBatch(
       bccEmails,
       suppressedEmails,
       allowMissingFrom: true,
+      requestedFullTeamSend: input.singleRecipient ? false : undefined,
     });
     if (!initialPolicy.ok) {
       return blockedSendability(input, initialPolicy.error, {
@@ -1725,7 +1744,7 @@ export async function getOutreachSendabilityBatch(
     const details = {
       artistId: contact.artistId,
       recipients,
-      fullTeamSend: contact.isFullTeam,
+      fullTeamSend: initialPolicy.fullTeamSend,
     };
 
     const sent = rows.find((row) => row.status === "sent");
@@ -1977,6 +1996,8 @@ export async function getOutreachSendabilityBatch(
     return {
       ...input,
       ...details,
+      recipients: currentPolicy.currentRecipients,
+      fullTeamSend: currentPolicy.fullTeamSend,
       sendable: true,
       mode: "retry",
       reason: null,
@@ -2339,9 +2360,15 @@ export async function getFollowUpEligibilityBatch(
 async function prepareOriginalOutreach(
   input: SendOutreachInput,
 ): Promise<PreparedOutreach | { error: string }> {
-  const { showId, contactId, subjectOverride, htmlOverride } = input;
+  const {
+    showId,
+    contactId,
+    subjectOverride,
+    htmlOverride,
+    singleRecipient,
+  } = input;
   const [sendability] = await getOutreachSendabilityBatch([
-    { showId, contactId },
+    { showId, contactId, singleRecipient },
   ]);
   if (!sendability.sendable) {
     return { error: sendability.reason ?? "Outreach is not sendable" };
@@ -2392,7 +2419,7 @@ async function prepareOriginalOutreach(
     contactId,
     templateId: template.id,
     recipients: sendability.recipients,
-    fullTeamSend: contact.isFullTeam,
+    fullTeamSend: sendability.fullTeamSend,
     subject: normalizedSubjectOverride || applyTemplate(template.subject, vars),
     html: normalizedHtmlOverride
       ? appendEmailUtmToHtml(
@@ -3077,6 +3104,7 @@ async function preparedDeliveryPolicyBlockingReason(
       (suppression) => suppression.normalizedEmail,
     ),
     allowMissingFrom: true,
+    requestedFullTeamSend: prep.fullTeamSend,
   });
   if (!decision.ok) return decision.error;
   if (

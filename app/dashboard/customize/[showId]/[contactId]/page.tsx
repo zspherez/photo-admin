@@ -1,19 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { redirect, notFound } from "next/navigation";
+import { notFound } from "next/navigation";
 import { cache } from "react";
 import { db } from "@/lib/db";
-import {
-  dashboardResultHref,
-  festivalReturnPath,
-  workflowReturnPath,
-} from "@/lib/dashboardReturnUrl";
-import {
-  getOutreachSendabilityBatch,
-  sendOutreach,
-  scheduleOutreach,
-} from "@/lib/sendOutreach";
-import { isWeekendET, getNextMondaySlot } from "@/lib/schedule";
+import { workflowReturnPath } from "@/lib/dashboardReturnUrl";
+import { getOutreachSendabilityBatch } from "@/lib/sendOutreach";
+import { isWeekendET } from "@/lib/schedule";
 import {
   applyHtmlTemplate,
   applyTemplate,
@@ -21,18 +13,22 @@ import {
   ensureDefaultTemplate,
 } from "@/lib/template";
 import { Card, CardBody } from "@/components/ui/card";
-import { LinkButton } from "@/components/ui/button";
-import { TemplateEditor } from "@/components/template-editor";
-import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { formatShowDate } from "@/lib/formatDate";
-import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
-import { refreshWorkflowViews } from "@/lib/workflowRefresh";
 import {
   contactDisplayValue,
   hasDirectOutreachNote,
   isDirectOutreachOnly,
 } from "@/lib/contactDisplay";
+import {
+  eligibleCustomizeRecipientContacts,
+} from "@/lib/customizeRecipients";
+import { normalizeEmail, normalizeEmails } from "@/lib/resend";
+import {
+  CustomizeForm,
+  type CustomizeRecipientOption,
+} from "./customize-form";
+import { sendCustom } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -64,54 +60,19 @@ export async function generateMetadata({
   };
 }
 
-async function sendCustom(formData: FormData) {
-  "use server";
-  await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
-  const returnTo = workflowReturnPath(formData.get("returnTo"));
-  const showId = formData.get("showId") as string;
-  const contactId = formData.get("contactId") as string;
-  const subjectOverride = (formData.get("subject") as string) ?? "";
-  const htmlOverride = (formData.get("html") as string) ?? "";
-  const [show, contact] = await Promise.all([
-    db.show.findUnique({
-      where: { id: showId },
-      select: { syncStatus: true },
-    }),
-    db.contact.findFirst({
-      where: { id: contactId, state: "active" },
-      select: { email: true },
-    }),
-  ]);
-  if (!show || show.syncStatus !== "active") {
-    redirect(dashboardResultHref(returnTo, "error", "Show is inactive"));
-  }
-  if (!contact?.email?.trim()) {
-    redirect(
-      dashboardResultHref(returnTo, "error", "Selected contact has no email")
-    );
-  }
-
-  if (isWeekendET()) {
-    const result = await scheduleOutreach({ showId, contactId, subjectOverride, htmlOverride }, getNextMondaySlot());
-    refreshWorkflowViews(returnTo, ["/outreach", festivalReturnPath(showId)]);
-    if (result.ok) {
-      redirect(dashboardResultHref(returnTo, "scheduled"));
-    } else {
-      redirect(
-        dashboardResultHref(returnTo, "error", result.error ?? "Unknown error")
-      );
-    }
-  }
-
-  const result = await sendOutreach({ showId, contactId, subjectOverride, htmlOverride });
-  refreshWorkflowViews(returnTo, ["/outreach", festivalReturnPath(showId)]);
-  if (result.ok) {
-    redirect(dashboardResultHref(returnTo, "sent"));
-  } else {
-    redirect(
-      dashboardResultHref(returnTo, "error", result.error ?? "Unknown error")
-    );
-  }
+function recipientLabel(contact: {
+  email: string | null;
+  name: string | null;
+  role: string | null;
+  isFullTeam: boolean;
+}): string {
+  const email = normalizeEmail(contact.email ?? "") ?? "No valid email";
+  const identity = contact.name ? `${contact.name} <${email}>` : email;
+  const details = [
+    contact.role?.trim() || null,
+    contact.isFullTeam ? "Full team marker" : null,
+  ].filter((value): value is string => !!value);
+  return details.length ? `${identity} · ${details.join(" · ")}` : identity;
 }
 
 export default async function CustomizePage({
@@ -124,16 +85,90 @@ export default async function CustomizePage({
   const { showId, contactId } = await params;
   const search = await searchParams;
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
-  const [[show, contact], template, sendabilityRows] = await Promise.all([
+  const [[show, contact], template] = await Promise.all([
     getCustomizeContext(showId, contactId),
     ensureDefaultTemplate(),
-    getOutreachSendabilityBatch([{ showId, contactId }]),
   ]);
   if (!show || !contact) return notFound();
-  const sendability = sendabilityRows[0];
-  const canSend = sendability?.sendable === true;
-  const isRetry = canSend && sendability.mode === "retry";
-  const weekend = isWeekendET();
+
+  const artistContacts = await db.contact.findMany({
+    where: { artistId: contact.artistId },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      artistId: true,
+      email: true,
+      name: true,
+      role: true,
+      state: true,
+      isFullTeam: true,
+      createdAt: true,
+    },
+  });
+  const candidateEmails = normalizeEmails(
+    artistContacts.flatMap((candidate) =>
+      candidate.email ? [candidate.email] : [],
+    ),
+  );
+  const suppressions =
+    candidateEmails.length === 0
+      ? []
+      : await db.emailSuppression.findMany({
+          where: { normalizedEmail: { in: candidateEmails } },
+          select: { normalizedEmail: true },
+        });
+  const suppressedEmails = suppressions.map(
+    (suppression) => suppression.normalizedEmail,
+  );
+  const eligibleContacts = eligibleCustomizeRecipientContacts(
+    artistContacts,
+    contactId,
+    suppressedEmails,
+  );
+  const sendabilityRows = await getOutreachSendabilityBatch(
+    eligibleContacts.map((candidate) => ({
+      showId,
+      contactId: candidate.id,
+      singleRecipient: true,
+    })),
+  );
+  const sendabilityByContact = new Map(
+    sendabilityRows.map((row) => [row.contactId, row]),
+  );
+  const recipientOptions: CustomizeRecipientOption[] = eligibleContacts.map(
+    (candidate) => {
+      const sendability = sendabilityByContact.get(candidate.id);
+      return {
+        id: candidate.id,
+        email: normalizeEmail(candidate.email ?? "")!,
+        label: recipientLabel(candidate),
+        eligible: true,
+        sendable: sendability?.sendable === true,
+        mode: sendability?.mode ?? null,
+        reason: sendability?.reason ?? null,
+        recipients: sendability?.recipients ?? [],
+        isFullTeam: candidate.isFullTeam,
+      };
+    },
+  );
+  if (!recipientOptions.some((option) => option.id === contactId)) {
+    const normalizedContextEmail = normalizeEmail(contact.email ?? "");
+    recipientOptions.unshift({
+      id: contactId,
+      email: normalizedContextEmail ?? contactDisplayValue(contact),
+      label: `${recipientLabel(contact)} · Unavailable`,
+      eligible: false,
+      sendable: false,
+      mode: null,
+      reason: normalizedContextEmail
+        ? "This recipient address is suppressed."
+        : isDirectOutreachOnly(contact)
+          ? "This is a direct-outreach contact with no email action."
+          : "This contact has no valid email action.",
+      recipients: [],
+      isFullTeam: contact.isFullTeam,
+    });
+  }
 
   const vars = await buildVarsForShow({
     artistName: contact.artist.name,
@@ -149,17 +184,7 @@ export default async function CustomizePage({
       <Link href={safeReturnTo} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Back</Link>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">Customize &amp; send</h1>
       <p className="mt-1 text-sm text-zinc-500">
-        To{" "}
-        <b>
-          {contact.email
-            ? contact.name
-              ? `${contact.name} <${contact.email}>`
-              : contact.email
-            : contact.name
-              ? `${contact.name} · ${contactDisplayValue(contact)}`
-              : contactDisplayValue(contact)}
-        </b>{" "}
-        · {contact.artist.name} at {show.venueName},{" "}
+        {contact.artist.name} at {show.venueName},{" "}
         {formatShowDate(show.date, {})}
       </p>
       {hasDirectOutreachNote(contact) && (
@@ -167,74 +192,21 @@ export default async function CustomizePage({
           <b>Direct outreach:</b> {contact.directOutreachNote}
         </p>
       )}
-      {!canSend && (
-        <div
-          role="alert"
-          className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
-        >
-          {show.syncStatus !== "active"
-            ? "This show is inactive. Email outreach is disabled."
-            : !contact.email?.trim()
-              ? isDirectOutreachOnly(contact)
-                ? "This is a direct-outreach contact with no email action."
-                : "This contact has no email action."
-              : sendability?.reason ?? "Email outreach is unavailable."}
-        </div>
-      )}
-      {isRetry && (
-        <div
-          role="status"
-          className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
-        >
-          This retry will reuse the original immutable recipients, subject,
-          body, and attachment snapshot. Editing is disabled.
-        </div>
-      )}
-
       <Card className="mt-6">
         <CardBody>
-          <form action={sendCustom} className="space-y-4">
-            <input type="hidden" name="showId" value={showId} />
-            <input type="hidden" name="contactId" value={contactId} />
-            <input type="hidden" name="returnTo" value={safeReturnTo} />
-            {isRetry ? (
-              <>
-                <input type="hidden" name="subject" value={subject} />
-                <input type="hidden" name="html" value={html} />
-              </>
-            ) : (
-              <TemplateEditor
-                initialSubject={subject}
-                initialHtml={html}
-                variables={[]}
-              />
-            )}
-            <div className="flex gap-2">
-              {canSend && (
-                <PendingSubmitButton
-                  variant="primary"
-                  pendingLabel={
-                    isRetry
-                      ? weekend
-                        ? "Scheduling retry…"
-                        : "Retrying…"
-                      : weekend
-                        ? "Scheduling…"
-                        : "Sending…"
-                  }
-                >
-                  {isRetry
-                    ? weekend
-                      ? "Schedule retry"
-                      : "Retry now"
-                    : weekend
-                      ? "Schedule Monday"
-                      : "Send now"}
-                </PendingSubmitButton>
-              )}
-              <LinkButton href={safeReturnTo} variant="secondary">Cancel</LinkButton>
-            </div>
-          </form>
+          <CustomizeForm
+            contextContactId={contactId}
+            returnTo={safeReturnTo}
+            initialSubject={subject}
+            initialHtml={html}
+            recipientOptions={recipientOptions}
+            weekend={isWeekendET()}
+            action={sendCustom.bind(null, {
+              showId,
+              contextContactId: contactId,
+              returnTo: safeReturnTo,
+            })}
+          />
         </CardBody>
       </Card>
     </main>
