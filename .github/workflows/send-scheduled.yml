@@ -2,12 +2,23 @@ name: Dispatch scheduled outreach
 
 on:
   schedule:
-    # 09:00 America/New_York is 13:00 UTC in EDT and 14:00 UTC in EST.
-    # The remaining runs provide bounded recovery for delayed or failed dispatches.
-    - cron: "*/15 13-15 * * 1-5"
-    # Keep automatic retries moving evenings and weekends while limiting idle runs.
+    # Candidate UTC hours for the single weekday 09:00 America/New_York run.
+    # The workflow's IANA-time-zone gate selects exactly one across DST changes.
+    - cron: "0 13 * * 1-5"
+    - cron: "0 14 * * 1-5"
+    # Exceptional recovery only: retries, stale claims, and overdue missed sends.
     - cron: "17 */4 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Dispatch mode
+        required: true
+        default: manual
+        type: choice
+        options:
+          - manual
+          - morning
+          - recovery
 
 permissions: {}
 
@@ -25,6 +36,8 @@ jobs:
         env:
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          OUTREACH_DISPATCH_MODE: ${{ inputs.mode || '' }}
+          SCHEDULE_EXPRESSION: ${{ github.event.schedule || '' }}
         run: |
           set -euo pipefail
 
@@ -33,16 +46,43 @@ jobs:
             exit 1
           fi
 
+          date_bin="${DATE_BIN:-date}"
+          dispatch_mode="${OUTREACH_DISPATCH_MODE:-}"
+          case "${SCHEDULE_EXPRESSION:-}" in
+            "0 13 * * 1-5"|"0 14 * * 1-5")
+              local_hour="${OUTREACH_LOCAL_HOUR_OVERRIDE:-$(TZ=America/New_York "${date_bin}" +%H)}"
+              if [[ "${local_hour}" != "09" ]]; then
+                echo "::notice::Skipping inactive UTC candidate; normal outreach dispatch runs only during 09:00-09:59 America/New_York"
+                exit 0
+              fi
+              dispatch_mode="morning"
+              echo "::notice::Normal morning outreach dispatch (09:00 America/New_York)"
+              ;;
+            "17 */4 * * *")
+              dispatch_mode="recovery"
+              echo "::notice::Exceptional outreach recovery dispatch (four-hour safety cadence)"
+              ;;
+          esac
+          if [[ -z "${dispatch_mode}" ]]; then
+            dispatch_mode="manual"
+          fi
+          case "${dispatch_mode}" in
+            morning|recovery|manual) ;;
+            *)
+              echo "::error::Invalid outreach dispatch mode: ${dispatch_mode}"
+              exit 1
+              ;;
+          esac
+
           attempt=1
           delay=60
           response_polls=0
           max_response_polls=8
           terminal_failures_seen=0
           deadline=$((SECONDS + 15 * 60))
-          endpoint="${APP_BASE_URL%/}/api/cron/send-scheduled"
+          endpoint="${APP_BASE_URL%/}/api/cron/send-scheduled?mode=${dispatch_mode}"
           curl_bin="${CURL_BIN:-curl}"
           sleep_bin="${SLEEP_BIN:-sleep}"
-          date_bin="${DATE_BIN:-date}"
 
           while (( SECONDS < deadline )); do
             remaining=$((deadline - SECONDS))
@@ -207,7 +247,7 @@ jobs:
                   echo "::error::Outreach dispatcher retries did not recover within the response-aware polling window"
                   exit 1
                 fi
-                echo "::warning::Outreach retries or backlog remain after ${max_response_polls} response-aware polls; the four-hour safety schedule will continue recovery"
+                echo "::warning::Outreach retries or backlog remain after ${max_response_polls} response-aware polls; the exceptional four-hour recovery schedule will continue recovery"
                 exit 0
               fi
 
@@ -249,7 +289,7 @@ jobs:
                   echo "::error::Outreach claims remained unresolved through the polling deadline"
                   exit 1
                 fi
-                echo "::warning::Outreach retries or backlog remain after the bounded response-aware polling window; the four-hour safety schedule will continue recovery"
+                echo "::warning::Outreach retries or backlog remain after the bounded response-aware polling window; the exceptional four-hour recovery schedule will continue recovery"
                 exit 0
               fi
               echo "::notice::Outreach state ${dispatch_state_name} remains pending; polling again in ${poll_delay}s"
