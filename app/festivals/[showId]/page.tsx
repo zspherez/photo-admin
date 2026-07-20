@@ -122,7 +122,6 @@ const getFestivalDetails = cache(async (showId: string) =>
                   directOutreachNote: true,
                   name: true,
                   role: true,
-                  customPrice: true,
                   state: true,
                   isFullTeam: true,
                 },
@@ -1037,9 +1036,6 @@ export default async function FestivalDetailPage({
                         {hasDirectOutreachNote(r.displayContact) &&
                         !isDirectOutreachOnly(r.displayContact)
                           ? ` · ${directOutreachNoteValue(r.displayContact)}`
-                          : ""}
-                        {r.displayContact.customPrice
-                          ? ` · ${r.displayContact.customPrice}`
                           : ""}
                         {displayStatus &&
                           ` · ${

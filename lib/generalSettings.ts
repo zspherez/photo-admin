@@ -41,12 +41,6 @@ export const GENERAL_SETTING_FIELDS = [
     description: "Substituted into {{portfolio_url}} in email templates.",
   },
   {
-    key: "default_rate",
-    label: "Default rate",
-    placeholder: "$400",
-    description: "Used for {{rate}} when a contact has no customPrice.",
-  },
-  {
     key: "venue_blocklist",
     label: "Venue blocklist",
     placeholder: "venue one, venue two",

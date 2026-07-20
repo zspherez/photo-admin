@@ -233,14 +233,16 @@ The default outreach template is defined in `lib/template.ts` and seeded into
 the DB on first request. It references these variables, all populated from
 **Settings → General** or the Contact/Show rows:
 
-- `{{artist}}`, `{{venue}}`, `{{date}}`, `{{rate}}`, `{{manager_name}}`
+- `{{artist}}`, `{{venue}}`, `{{date}}`, `{{manager_name}}`
 - `{{sender_name}}`, `{{sender_email}}`, `{{sender_phone}}`, `{{sender_city}}`,
   `{{portfolio_url}}`
 
 Edit the template at **Settings → Email template**. "Reset to default" reverts
-to the seed. `{{rate}}` uses the contact's nonblank custom rate, then the
-configured **Default rate**, then the built-in `$400` fallback. An unchanged
-legacy seed is upgraded automatically; edited templates are left untouched.
+to the seed. Legacy rate placeholders are stripped when templates are loaded,
+saved, previewed, or rendered, and unchanged legacy seeds are upgraded
+automatically. Existing contact custom-price data and the legacy default-rate
+setting remain stored for Sheet and database compatibility, but outreach email
+templates no longer use them.
 
 ## Deploying to Vercel
 

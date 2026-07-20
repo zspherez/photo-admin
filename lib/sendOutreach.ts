@@ -6,6 +6,8 @@ import {
   buildVarsForShow,
   ensureDefaultTemplate,
   ensureFollowUpTemplate,
+  normalizeLegacyRateTemplateHtml,
+  normalizeLegacyRateTemplateVariable,
 } from "@/lib/template";
 import {
   appendEmailUtmToHtml,
@@ -2264,9 +2266,14 @@ async function prepareOriginalOutreach(
     artistName: contact.artist.name,
     venueName: show.venueName,
     showDate: show.date,
-    customPrice: contact.customPrice,
     managerName: contact.name,
   });
+  const normalizedSubjectOverride = normalizeLegacyRateTemplateVariable(
+    subjectOverride?.trim() ?? "",
+  );
+  const normalizedHtmlOverride = normalizeLegacyRateTemplateHtml(
+    htmlOverride?.trim() ?? "",
+  );
 
   return {
     kind: "original",
@@ -2277,10 +2284,10 @@ async function prepareOriginalOutreach(
     templateId: template.id,
     recipients: sendability.recipients,
     fullTeamSend: contact.isFullTeam,
-    subject: subjectOverride?.trim() || applyTemplate(template.subject, vars),
-    html: htmlOverride?.trim()
+    subject: normalizedSubjectOverride || applyTemplate(template.subject, vars),
+    html: normalizedHtmlOverride
       ? appendEmailUtmToHtml(
-          htmlOverride.trim(),
+          normalizedHtmlOverride,
           "original",
           contact.artist.name,
           utmSettings,
@@ -2332,7 +2339,6 @@ async function prepareFollowUpOutreach(
             id: true,
             artistId: true,
             name: true,
-            customPrice: true,
             state: true,
             artist: { select: { name: true } },
           },
@@ -2379,7 +2385,6 @@ async function prepareFollowUpOutreach(
     artistName: parent.contact.artist.name,
     venueName: parent.show.venueName,
     showDate: parent.show.date,
-    customPrice: parent.contact.customPrice,
     managerName: parent.contact.name,
   });
   return {

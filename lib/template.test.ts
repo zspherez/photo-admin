@@ -7,13 +7,52 @@ import {
   buildVarsForShow,
   cloneTemplateContent,
   DEFAULT_TEMPLATE_HTML,
+  extractVars,
   FOLLOW_UP_TEMPLATE_NAME,
+  normalizeDefaultTemplateContent,
+  normalizeLegacyRateTemplateHtml,
+  normalizeLegacyRateTemplateVariable,
+  normalizeTemplateContent,
+  SUPPORTED_TEMPLATE_VARS,
 } from "./template";
 
 test("plain substitutions remain unescaped", () => {
   assert.equal(
     applyTemplate("Hi {{name}} — {{missing}}", { name: "A&B <Team>" }),
     "Hi A&B <Team> — "
+  );
+});
+
+test("legacy rate variables are stripped even when callers provide a value", () => {
+  const vars = { artist: "Artist", rate: "$650" };
+  assert.equal(
+    applyTemplate("{{artist}} — {{ rate }}", vars),
+    "Artist — ",
+  );
+  assert.equal(
+    applyHtmlTemplate("<p>{{RATE}}</p>", vars),
+    "",
+  );
+  assert.equal(
+    normalizeLegacyRateTemplateVariable("Rate: {{rate}}"),
+    "Rate: ",
+  );
+  assert.equal(
+    normalizeLegacyRateTemplateHtml(
+      "<p>My rate is {{rate}} for photo/video, or $200 for photo.</p><p>Keep me.</p>",
+    ),
+    "<p>Keep me.</p>",
+  );
+  assert.equal(
+    normalizeLegacyRateTemplateHtml(
+      "<p>My standard NYC show rate is $650 for photo/video.</p><p>Keep me.</p>",
+    ),
+    "<p>Keep me.</p>",
+  );
+  assert.deepEqual(extractVars("{{artist}} {{ rate }}"), ["artist"]);
+  assert.equal(
+    (SUPPORTED_TEMPLATE_VARS as readonly string[]).includes("rate"),
+    false,
   );
 });
 
@@ -27,62 +66,76 @@ test("HTML substitutions are escaped without changing authored markup", () => {
   );
 });
 
-test("show variables use the default rate for null or blank custom prices", async () => {
+test("show variables do not read or expose legacy rate settings", async () => {
   const requestedKeys: string[] = [];
   const readSetting = async (key: string, fallback: string) => {
     requestedKeys.push(key);
-    return key === "default_rate" ? " $400 " : fallback;
+    return fallback;
   };
-  const baseContext = {
-    artistName: "Artist",
-    venueName: "Venue",
-    showDate: new Date("2026-08-01T00:00:00.000Z"),
-    managerName: null,
-  };
-
-  const nullPrice = await buildVarsForShow(
-    { ...baseContext, customPrice: null },
-    readSetting,
-  );
-  const blankPrice = await buildVarsForShow(
-    { ...baseContext, customPrice: "   " },
-    readSetting,
-  );
-
-  assert.equal(nullPrice.rate, "$400");
-  assert.equal(blankPrice.rate, "$400");
-  assert.ok(requestedKeys.includes("default_rate"));
-});
-
-test("the default template uses the built-in rate fallback", async () => {
   const vars = await buildVarsForShow(
     {
       artistName: "Artist",
       venueName: "Venue",
       showDate: new Date("2026-08-01T00:00:00.000Z"),
-      customPrice: null,
       managerName: null,
     },
-    async (_key, fallback) => fallback,
+    readSetting,
   );
 
-  assert.equal(vars.rate, "$400");
-  assert.match(DEFAULT_TEMPLATE_HTML, /\{\{rate\}\}/);
+  assert.equal(Object.hasOwn(vars, "rate"), false);
+  assert.equal(requestedKeys.includes("default_rate"), false);
 });
 
-test("a nonblank custom price wins over the default rate", async () => {
-  const vars = await buildVarsForShow(
+test("legacy saved templates and built-in defaults normalize without pricing", () => {
+  assert.deepEqual(
+    normalizeTemplateContent({
+      subject: "{{artist}} {{ rate }}",
+      htmlBody: "<p>Hello {{RATE}}</p>",
+    }),
     {
-      artistName: "Artist",
-      venueName: "Venue",
-      showDate: new Date("2026-08-01T00:00:00.000Z"),
-      customPrice: "  $650  ",
-      managerName: "Manager",
+      subject: "{{artist}} ",
+      htmlBody: "",
     },
-    async (key, fallback) => key === "default_rate" ? "$400" : fallback,
   );
 
-  assert.equal(vars.rate, "$650");
+  const oldDefault = `<html>
+  <body>
+    <p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p>
+    <p>Gave a brief summary of my rates/deliverables below, and I'm happy to work with you to meet your needs!</p>
+    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
+    <p>My standard {{sender_city}} show rate is {{rate}} for photo/video, or $200 for just photo.</p>
+    <p>You can check out some examples of my previous work at <a href="{{portfolio_url}}">{{portfolio_url}}</a></p>
+    <p>I look forward to hearing from you soon!</p>
+    <p>Best,<br>
+       {{sender_name}}<br>
+       <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
+    </p>
+  </body>
+</html>`;
+  const normalized = normalizeDefaultTemplateContent({
+    subject: "{{artist}}",
+    htmlBody: oldDefault,
+  });
+  assert.equal(normalized.htmlBody, DEFAULT_TEMPLATE_HTML);
+  assert.doesNotMatch(normalized.htmlBody, /\brate\b|\$[0-9]/i);
+
+  const fixedRateDefault = oldDefault
+    .replace(
+      "Gave a brief summary of my rates/deliverables below, and I'm happy to work with you to meet your needs!",
+      "Gave a brief summary of my rates/deliverables below, and attached my full rate card to this email but I'm happy to work with you to meet your needs!",
+    )
+    .replace(
+      "{{rate}} for photo/video, or $200 for just photo.",
+      "$400 for photo/video, or $200 for just photo, more details in my rate card.",
+    );
+  assert.equal(
+    normalizeDefaultTemplateContent({
+      subject: "{{artist}}",
+      htmlBody: fixedRateDefault,
+    }).htmlBody,
+    DEFAULT_TEMPLATE_HTML,
+  );
+  assert.doesNotMatch(DEFAULT_TEMPLATE_HTML, /\{\{\s*rate\s*\}\}|\$[0-9]/i);
 });
 
 test("follow-up template cloning is a one-time independent snapshot", () => {
@@ -107,7 +160,7 @@ test("follow-up template cloning is a one-time independent snapshot", () => {
   );
   assert.match(
     source,
-    /if \(existing\) return existing;[\s\S]*const original = await ensureDefaultTemplate\(\)/,
+    /if \(existing\) \{[\s\S]*persistNormalizedTemplate\([\s\S]*existing,[\s\S]*normalizeDefaultTemplateContent,[\s\S]*\)[\s\S]*const original = await ensureDefaultTemplate\(\)/,
   );
   assert.match(
     source,

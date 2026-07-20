@@ -633,22 +633,15 @@ export function DashboardClient({
                             >
                               {hasDirectOutreachNote(contact)
                                 ? contact.directOutreachNote
-                                : contact.customPrice ??
-                                  (artist.contacts.length > 1
-                                    ? `${artist.contacts.length} contacts`
-                                    : "edit")}
+                                : artist.contacts.length > 1
+                                  ? `${artist.contacts.length} contacts`
+                                  : "edit"}
                             </Link>
                             {hasDirectOutreachNote(contact) && (
                               <Badge tone="warning" size="xs">
                                 Direct outreach
                               </Badge>
                             )}
-                            {hasDirectOutreachNote(contact) &&
-                              contact.customPrice && (
-                                <Badge tone="default" size="xs">
-                                  {contact.customPrice}
-                                </Badge>
-                              )}
                             {emailContact?.isFullTeam && (
                               <Badge
                                 tone="accent"
