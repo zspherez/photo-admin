@@ -34,8 +34,12 @@ async function main(): Promise<void> {
     artistClaimProbe,
     contactResearchJobProbe,
     contactResearchCandidateProbe,
+    artistResearchSkipProbe,
     agentRuleSetProbe,
     edmtrainVenueProbe,
+    contactAuditRunProbe,
+    contactAuditJobProbe,
+    contactAuditAlternativeProbe,
   ] = await Promise.all([
     db.setting.findMany({
       where: {
@@ -85,6 +89,18 @@ async function main(): Promise<void> {
         officialSourceEvidence: true,
       },
     }),
+    db.artistResearchSkip.findMany({
+      take: 1,
+      select: {
+        artistId: true,
+        source: true,
+        reason: true,
+        sourceJobId: true,
+        agentRuleVersion: true,
+        agentRuleText: true,
+        clearedAt: true,
+      },
+    }),
     db.agentRuleSet.findMany({
       take: 1,
       select: {
@@ -100,6 +116,45 @@ async function main(): Promise<void> {
         nycStatus: { in: ["inside_nyc", "outside_nyc", "unknown"] },
       },
       take: 1,
+    }),
+    db.contactAuditRun.findMany({
+      take: 1,
+      select: {
+        status: true,
+        contactCount: true,
+        completedAt: true,
+        createdAt: true,
+      },
+    }),
+    db.contactAuditJob.findMany({
+      take: 1,
+      select: {
+        runId: true,
+        snapshotArtistName: true,
+        snapshotEmail: true,
+        status: true,
+        claimExpiresAt: true,
+        finding: true,
+        sourceUrls: true,
+        evidence: true,
+        confidence: true,
+        verifiedAt: true,
+        reviewedAt: true,
+        createdAt: true,
+      },
+    }),
+    db.contactAuditAlternative.findMany({
+      take: 1,
+      select: {
+        jobId: true,
+        normalizedEmail: true,
+        email: true,
+        role: true,
+        sourceUrls: true,
+        evidence: true,
+        confidence: true,
+        createdAt: true,
+      },
     }),
   ]);
   const values = new Map(settings.map((setting) => [setting.key, setting.value]));
@@ -119,7 +174,11 @@ async function main(): Promise<void> {
         [
           contactResearchJobProbe,
           contactResearchCandidateProbe,
+          artistResearchSkipProbe,
           agentRuleSetProbe,
+          contactAuditRunProbe,
+          contactAuditJobProbe,
+          contactAuditAlternativeProbe,
         ].every(Array.isArray),
       configuredSpreadsheetId:
         values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,
@@ -132,6 +191,12 @@ async function main(): Promise<void> {
     JSON.stringify({
       event: "release_compatibility_verified",
       sheetAdoptionRequired: requireSheetAdoption,
+      addedRuntimeRoleProbes: [
+        "ArtistResearchSkip",
+        "ContactAuditRun",
+        "ContactAuditJob",
+        "ContactAuditAlternative",
+      ],
     })
   );
 }

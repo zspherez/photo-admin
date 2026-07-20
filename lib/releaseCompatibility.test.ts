@@ -76,7 +76,7 @@ test("required schema probes fail closed", () => {
   );
 });
 
-test("release probe exercises festival, venue-cache, outreach, research, and agent schema surfaces", () => {
+test("release probe exercises all release-critical runtime schema surfaces", () => {
   const source = readFileSync(
     new URL("../scripts/verify-release-compatibility.ts", import.meta.url),
     "utf8",
@@ -106,14 +106,35 @@ test("release probe exercises festival, venue-cache, outreach, research, and age
   assert.doesNotMatch(source, /db\.contactResearchCandidate\.count/);
   assert.match(
     source,
+    /db\.artistResearchSkip\.findMany\(\{[\s\S]*artistId: true,[\s\S]*source: true,[\s\S]*reason: true,[\s\S]*sourceJobId: true,[\s\S]*agentRuleVersion: true,[\s\S]*agentRuleText: true,[\s\S]*clearedAt: true/,
+  );
+  assert.doesNotMatch(source, /db\.artistResearchSkip\.count/);
+  assert.match(
+    source,
     /db\.agentRuleSet\.findMany\(\{[\s\S]*scope: true,[\s\S]*instructions: true,[\s\S]*version: true,[\s\S]*createdAt: true,[\s\S]*updatedAt: true/,
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*agentRuleSetProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,
     /db\.edmtrainVenue\.count\(\{[\s\S]*nycStatus: \{ in: \["inside_nyc", "outside_nyc", "unknown"\] \}/
+  );
+  assert.match(
+    source,
+    /db\.contactAuditRun\.findMany\(\{[\s\S]*status: true,[\s\S]*contactCount: true,[\s\S]*completedAt: true,[\s\S]*createdAt: true/,
+  );
+  assert.match(
+    source,
+    /db\.contactAuditJob\.findMany\(\{[\s\S]*runId: true,[\s\S]*snapshotArtistName: true,[\s\S]*snapshotEmail: true,[\s\S]*status: true,[\s\S]*claimExpiresAt: true,[\s\S]*finding: true,[\s\S]*sourceUrls: true,[\s\S]*evidence: true,[\s\S]*confidence: true,[\s\S]*verifiedAt: true,[\s\S]*reviewedAt: true/,
+  );
+  assert.match(
+    source,
+    /db\.contactAuditAlternative\.findMany\(\{[\s\S]*jobId: true,[\s\S]*normalizedEmail: true,[\s\S]*email: true,[\s\S]*role: true,[\s\S]*sourceUrls: true,[\s\S]*evidence: true,[\s\S]*confidence: true/,
+  );
+  assert.match(
+    source,
+    /addedRuntimeRoleProbes: \[\s*"ArtistResearchSkip",\s*"ContactAuditRun",\s*"ContactAuditJob",\s*"ContactAuditAlternative",\s*\]/,
   );
 });
