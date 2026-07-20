@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -7,7 +8,8 @@ import {
   approveContactResearchCandidate,
   refreshContactResearchQueue,
   rejectContactResearchCandidate,
-  retryAllContactResearchJobs,
+  retryAllExhaustedContactResearchJobs,
+  retryAllReviewContactResearchJobs,
   retryContactResearchJob,
   updateContactResearchJobUserNotes,
 } from "@/lib/contactResearch";
@@ -19,6 +21,12 @@ import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { TextArea } from "@/components/ui/field";
 import { AutoDismissStatus } from "./auto-dismiss-status";
+import { easternTodayStoredDate } from "@/lib/calendarDate";
+import {
+  type VenueTier,
+  venueTierSql,
+  venueTierLabel,
+} from "@/lib/venueTier";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact research" };
@@ -128,10 +136,18 @@ async function saveResearchNotesAction(formData: FormData) {
   if (!updated) redirect(researchHref({ error: "notes_failed" }));
 }
 
-async function retryAllJobsAction() {
+async function retryAllExhaustedJobsAction() {
   "use server";
   await requireServerActionAuth("/research");
-  await retryAllContactResearchJobs();
+  await retryAllExhaustedContactResearchJobs();
+  revalidatePath("/research");
+  revalidatePath("/settings");
+}
+
+async function retryAllReviewJobsAction() {
+  "use server";
+  await requireServerActionAuth("/research");
+  await retryAllReviewContactResearchJobs();
   revalidatePath("/research");
   revalidatePath("/settings");
 }
@@ -149,13 +165,6 @@ function confidenceTone(confidence: string): BadgeTone {
   if (confidence === "medium") return "warning";
   return "muted";
 }
-
-const STATUS_ORDER = new Map([
-  ["review", 0],
-  ["claimed", 1],
-  ["pending", 2],
-  ["exhausted", 3],
-]);
 
 export default async function ContactResearchPage({
   searchParams,
@@ -186,73 +195,107 @@ export default async function ContactResearchPage({
     detail: firstSearchParam(raw.detail),
     sheetError: firstSearchParam(raw.sheet_error),
   };
-  const [groupedCounts, activeRows, exhaustedRows] = await Promise.all([
+  const today = easternTodayStoredDate();
+  const bestTierExpression = venueTierSql(
+    Prisma.sql`show."venueName"`,
+    Prisma.sql`show."eventName"`
+  );
+  const [groupedCounts, rankedSummaries] = await Promise.all([
     db.contactResearchJob.groupBy({
       by: ["status"],
       _count: { _all: true },
     }),
-    db.contactResearchJob.findMany({
-      where: {
-        status: { in: ["pending", "claimed", "review"] },
-      },
-      orderBy: [
-        { priority: "desc" },
-        { nextShowAt: "asc" },
-        { createdAt: "asc" },
-      ],
-      take: 100,
-      include: {
-        artist: {
-          select: {
-            id: true,
-            name: true,
-            popularity: true,
-          },
-        },
-        candidates: {
-          orderBy: [
-            { status: "asc" },
-            { createdAt: "asc" },
-          ],
-        },
-      },
-    }),
-    db.contactResearchJob.findMany({
-      where: { status: "exhausted" },
-      orderBy: [{ updatedAt: "desc" }],
-      take: 25,
-      include: {
-        artist: {
-          select: {
-            id: true,
-            name: true,
-            popularity: true,
-          },
-        },
-        candidates: {
-          orderBy: [{ status: "asc" }, { createdAt: "asc" }],
-        },
-      },
-    }),
+    db.$queryRaw<
+      Array<{
+        id: string;
+        bestShowDate: Date | null;
+        bestVenueName: string | null;
+        bestEventName: string | null;
+        bestTier: number;
+      }>
+    >(Prisma.sql`
+      SELECT
+        job."id",
+        best_show."date" AS "bestShowDate",
+        best_show."venueName" AS "bestVenueName",
+        best_show."eventName" AS "bestEventName",
+        COALESCE(best_show."tier", 0) AS "bestTier"
+      FROM "ContactResearchJob" job
+      LEFT JOIN LATERAL (
+        SELECT
+          show."date",
+          show."venueName",
+          show."eventName",
+          ${bestTierExpression} AS "tier"
+        FROM "ShowArtist" show_artist
+        JOIN "Show" show
+          ON show."id" = show_artist."showId"
+        WHERE show_artist."artistId" = job."artistId"
+          AND show."date" >= ${today}
+          AND show."syncStatus" = 'active'
+        ORDER BY "tier" DESC, show."date" ASC
+        LIMIT 1
+      ) best_show ON TRUE
+      WHERE job."status" IN ('pending', 'claimed', 'review', 'exhausted')
+      ORDER BY
+        COALESCE(best_show."tier", 0) DESC,
+        CASE job."status"
+          WHEN 'review' THEN 0
+          WHEN 'claimed' THEN 1
+          WHEN 'pending' THEN 2
+          WHEN 'exhausted' THEN 3
+          ELSE 99
+        END,
+        job."priority" DESC,
+        job."nextShowAt" ASC NULLS LAST,
+        job."createdAt" ASC
+      LIMIT 125
+    `),
   ]);
   const counts = new Map(
     groupedCounts.map((row) => [row.status, row._count._all])
   );
-  const jobs = [...activeRows, ...exhaustedRows].sort((a, b) => {
-    const statusDifference =
-      (STATUS_ORDER.get(a.status) ?? 99) - (STATUS_ORDER.get(b.status) ?? 99);
-    if (statusDifference !== 0) return statusDifference;
-    if (a.priority !== b.priority) return b.priority - a.priority;
-    return (a.nextShowAt?.getTime() ?? Infinity) -
-      (b.nextShowAt?.getTime() ?? Infinity);
+  const detailedRows = await db.contactResearchJob.findMany({
+    where: { id: { in: rankedSummaries.map((job) => job.id) } },
+    include: {
+      artist: {
+        select: {
+          id: true,
+          name: true,
+          popularity: true,
+        },
+      },
+      candidates: {
+        orderBy: [{ status: "asc" }, { createdAt: "asc" }],
+      },
+    },
+  });
+  const detailsById = new Map(detailedRows.map((job) => [job.id, job]));
+  const jobs = rankedSummaries.flatMap((summary) => {
+    const details = detailsById.get(summary.id);
+    return details
+      ? [
+          {
+            ...details,
+            bestShow:
+              summary.bestShowDate && summary.bestVenueName
+                ? {
+                    date: summary.bestShowDate,
+                    venueName: summary.bestVenueName,
+                    eventName: summary.bestEventName,
+                    tier: summary.bestTier as VenueTier,
+                  }
+                : null,
+          },
+        ]
+      : [];
   });
   const activeCount =
     (counts.get("pending") ?? 0) +
     (counts.get("claimed") ?? 0) +
     (counts.get("review") ?? 0);
-  const retryAllCount =
-    (counts.get("review") ?? 0) +
-    (counts.get("exhausted") ?? 0);
+  const retryReviewCount = counts.get("review") ?? 0;
+  const retryExhaustedCount = counts.get("exhausted") ?? 0;
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-10">
@@ -267,13 +310,22 @@ export default async function ContactResearchPage({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <form action={retryAllJobsAction}>
+          <form action={retryAllReviewJobsAction}>
             <PendingSubmitButton
               variant="secondary"
               pendingLabel="Requeueing…"
-              disabled={retryAllCount === 0}
+              disabled={retryReviewCount === 0}
             >
-              Requeue all review/exhausted ({retryAllCount})
+              Requeue all review ({retryReviewCount})
+            </PendingSubmitButton>
+          </form>
+          <form action={retryAllExhaustedJobsAction}>
+            <PendingSubmitButton
+              variant="secondary"
+              pendingLabel="Requeueing…"
+              disabled={retryExhaustedCount === 0}
+            >
+              Requeue exhausted ({retryExhaustedCount})
             </PendingSubmitButton>
           </form>
           <form action={refreshQueueAction}>
@@ -392,6 +444,9 @@ export default async function ContactResearchPage({
                         {job.artist.popularity != null
                           ? ` · popularity ${job.artist.popularity}`
                           : ""}
+                        {job.bestShow
+                          ? ` · ${venueTierLabel(job.bestShow.tier)} · ${job.bestShow.eventName || job.bestShow.venueName}`
+                          : " · Venue tier unknown"}
                         {` · priority ${job.priority}`}
                       </p>
                     </div>

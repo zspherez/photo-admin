@@ -78,6 +78,64 @@ test("ambiguous name-only identities remain unmatched", () => {
   assert.equal(decision.conflicts[0]?.kind, "ambiguous-name");
 });
 
+test("complementary provider identities resolve to the show-linked artist", () => {
+  const decision = chooseArtistIdentityCandidate(
+    { key: "same name", name: "Same Name" },
+    [
+      candidate("statsfm", { statsfmId: "sf-1" }),
+      candidate("edmtrain", { edmtrainId: 100 }),
+    ]
+  );
+  assert.equal(decision.action, "use");
+  if (decision.action === "use") {
+    assert.equal(decision.candidate.id, "edmtrain");
+  }
+  assert.deepEqual(decision.conflicts, []);
+});
+
+test("authoritative external matches ignore complementary provider splits", () => {
+  const decision = chooseArtistIdentityCandidate(
+    { key: "edmtrain:100", name: "Same Name", edmtrainId: 100 },
+    [
+      candidate("statsfm", { statsfmId: "sf-1" }),
+      candidate("edmtrain", { edmtrainId: 100 }),
+    ]
+  );
+  assert.equal(decision.action, "use");
+  if (decision.action === "use") {
+    assert.equal(decision.candidate.id, "edmtrain");
+  }
+  assert.deepEqual(decision.conflicts, []);
+});
+
+test("same-provider disagreements remain ambiguous", () => {
+  const decision = chooseArtistIdentityCandidate(
+    { key: "same name", name: "Same Name" },
+    [
+      candidate("statsfm-a", { statsfmId: "sf-1" }),
+      candidate("statsfm-b", { statsfmId: "sf-2", edmtrainId: 100 }),
+    ]
+  );
+  assert.equal(decision.action, "unmatched");
+  assert.equal(decision.conflicts[0]?.kind, "ambiguous-name");
+});
+
+test("id-less same-name candidates preserve ambiguity", () => {
+  const decision = chooseArtistIdentityCandidate(
+    {
+      key: "spotify-new",
+      name: "Same Name",
+      spotifyId: "sp-new",
+    },
+    [
+      candidate("edmtrain", { edmtrainId: 100 }),
+      candidate("unidentified"),
+    ]
+  );
+  assert.equal(decision.action, "create");
+  assert.equal(decision.conflicts[0]?.kind, "ambiguous-name");
+});
+
 test("providers can explicitly disable normalized-name bridging", () => {
   const decision = chooseArtistIdentityCandidate(
     {

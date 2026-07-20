@@ -91,6 +91,51 @@ function hasExternalDisagreement(
   );
 }
 
+function hasCompatibleComplementaryExternalIds(
+  candidates: readonly IdentityCandidate[],
+  input: ArtistIdentityInput
+): boolean {
+  if (
+    candidates.some(
+      (candidate) =>
+        !externalFields.some((field) => candidate[field] != null)
+    )
+  ) {
+    return false;
+  }
+  const representedFields = new Set<
+    (typeof externalFields)[number]
+  >();
+  for (const field of externalFields) {
+    const values = new Set<string | number>();
+    const inputValue = input[field];
+    if (inputValue != null) {
+      values.add(inputValue);
+      representedFields.add(field);
+    }
+    for (const candidate of candidates) {
+      const value = candidate[field];
+      if (value == null) continue;
+      values.add(value);
+      representedFields.add(field);
+    }
+    if (values.size > 1) return false;
+  }
+  return representedFields.size >= 2;
+}
+
+function canonicalComplementaryCandidate(
+  candidates: readonly IdentityCandidate[]
+): IdentityCandidate {
+  return [...candidates].sort((left, right) => {
+    const score = (candidate: IdentityCandidate) =>
+      (candidate.edmtrainId != null ? 4 : 0) +
+      (candidate.spotifyId != null ? 2 : 0) +
+      (candidate.statsfmId != null ? 1 : 0);
+    return score(right) - score(left) || left.id.localeCompare(right.id);
+  })[0];
+}
+
 function conflict(
   input: ArtistIdentityInput,
   normalizedName: string,
@@ -159,7 +204,11 @@ export function chooseArtistIdentityCandidate(
       action: "use",
       candidate: externalMatch,
       conflicts:
-        sameNameOthers.length > 0
+        sameNameOthers.length > 0 &&
+        !hasCompatibleComplementaryExternalIds(
+          [externalMatch, ...sameNameOthers],
+          input
+        )
           ? [
               conflict(
                 input,
@@ -197,6 +246,13 @@ export function chooseArtistIdentityCandidate(
 
   if (sameName.length === 1 && !hasExternalDisagreement(sameName[0], input)) {
     return { action: "use", candidate: sameName[0], conflicts: [] };
+  }
+  if (hasCompatibleComplementaryExternalIds(sameName, input)) {
+    return {
+      action: "use",
+      candidate: canonicalComplementaryCandidate(sameName),
+      conflicts: [],
+    };
   }
 
   const nameConflict = conflict(
