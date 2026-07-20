@@ -28,8 +28,11 @@ import {
   isOfficialManagementAutoApprovalEligible,
   refreshContactResearchQueue,
   skipContactResearchArtist,
+  skipContactResearchArtistByArtistId,
   submitContactResearchResult,
   unskipContactResearchArtist,
+  unskipContactResearchArtistByArtistId,
+  updateContactResearchArtistUserNotes,
 } from "./contactResearch";
 
 function runWithTransaction(
@@ -810,6 +813,323 @@ test("accepts only exact rules from the trusted claim snapshot", () => {
     isTrustedAgentSkipRuleProvenance(0, "", 1, "Skip this artist."),
     false
   );
+});
+
+test("artist notes reuse an existing claimed job and invalidate stale ownership", async () => {
+  const updates: unknown[] = [];
+  const result = await updateContactResearchArtistUserNotes(
+    "artist-1",
+    " Check the official management page first. ",
+    {
+      now: new Date("2026-07-20T12:00:00.000Z"),
+      runTransaction: runWithTransaction({
+        contactResearchJob: {
+          findUnique: async () => ({
+            id: "job-1",
+            artistId: "artist-1",
+            status: "claimed",
+          }),
+          update: async (value: unknown) => {
+            updates.push(value);
+            return {};
+          },
+        },
+      }),
+    }
+  );
+
+  assert.deepEqual(result, {
+    ok: true,
+    jobId: "job-1",
+    status: "pending",
+  });
+  assert.deepEqual(updates, [
+    {
+      where: { id: "job-1" },
+      data: {
+        userNotes: "Check the official management page first.",
+        status: "pending",
+        claimToken: null,
+        claimedAt: null,
+        claimExpiresAt: null,
+      },
+    },
+  ]);
+});
+
+test("artist notes materialize one inactive job without queueing research", async () => {
+  const upserts: unknown[] = [];
+  const updates: unknown[] = [];
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const showDate = new Date("2026-08-20T00:00:00.000Z");
+  const result = await updateContactResearchArtistUserNotes(
+    "artist-1",
+    "Use the festival website.",
+    {
+      now,
+      requestedShowId: "festival-1",
+      runTransaction: runWithTransaction({
+        contactResearchJob: {
+          findUnique: async () => null,
+          upsert: async (value: unknown) => {
+            upserts.push(value);
+            return {
+              id: "job-1",
+              artistId: "artist-1",
+              status: "inactive",
+            };
+          },
+          update: async (value: unknown) => {
+            updates.push(value);
+            return {};
+          },
+        },
+        artist: {
+          findUnique: async () => ({ id: "artist-1", contacts: [] }),
+        },
+        showArtist: {
+          findFirst: async () => ({
+            showId: "festival-1",
+            show: { date: showDate },
+          }),
+        },
+      }),
+    }
+  );
+
+  assert.deepEqual(result, {
+    ok: true,
+    jobId: "job-1",
+    status: "inactive",
+  });
+  assert.deepEqual(upserts, [
+    {
+      where: { artistId: "artist-1" },
+      create: {
+        artistId: "artist-1",
+        requestedShowId: "festival-1",
+        status: "inactive",
+        nextShowAt: showDate,
+      },
+      update: {},
+      select: { id: true, artistId: true, status: true },
+    },
+  ]);
+  assert.deepEqual(updates, [
+    {
+      where: { id: "job-1" },
+      data: { userNotes: "Use the festival website." },
+    },
+  ]);
+});
+
+test("artist skip materializes a skipped job and explicit unskip restores eligibility", async () => {
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const showDate = new Date("2026-08-20T00:00:00.000Z");
+  const skipCreates: unknown[] = [];
+  const jobUpdates: unknown[] = [];
+  const skipped = await skipContactResearchArtistByArtistId(
+    "artist-1",
+    " Existing relationship ",
+    {
+      now,
+      requestedShowId: "festival-1",
+      runTransaction: runWithTransaction({
+        contactResearchJob: {
+          findUnique: async () => null,
+          upsert: async () => ({
+            id: "job-1",
+            artistId: "artist-1",
+            status: "inactive",
+          }),
+          update: async (value: unknown) => {
+            jobUpdates.push(value);
+            return {};
+          },
+        },
+        artist: {
+          findUnique: async () => ({ id: "artist-1", contacts: [] }),
+        },
+        showArtist: {
+          findFirst: async () => ({
+            showId: "festival-1",
+            show: { date: showDate },
+          }),
+        },
+        artistResearchSkip: {
+          findFirst: async () => null,
+          create: async (value: unknown) => {
+            skipCreates.push(value);
+            return {};
+          },
+        },
+      }),
+    }
+  );
+  assert.deepEqual(skipped, {
+    ok: true,
+    jobId: "job-1",
+    status: "skipped",
+  });
+  assert.deepEqual(skipCreates, [
+    {
+      data: {
+        artistId: "artist-1",
+        source: "manual",
+        reason: "Existing relationship",
+        setAt: now,
+      },
+    },
+  ]);
+  assert.equal(
+    (jobUpdates[0] as { data: { status: string } }).data.status,
+    "skipped"
+  );
+
+  const cleared: unknown[] = [];
+  const restored: unknown[] = [];
+  const unskipped = await unskipContactResearchArtistByArtistId("artist-1", {
+    now,
+    runTransaction: runWithTransaction({
+      contactResearchJob: {
+        findUnique: async () => ({
+          id: "job-1",
+          artistId: "artist-1",
+          status: "skipped",
+          requestedShowId: "festival-1",
+          artist: { contacts: [] },
+        }),
+        update: async (value: unknown) => {
+          restored.push(value);
+          return {};
+        },
+      },
+      artistResearchSkip: {
+        findFirst: async () => ({ id: "skip-1" }),
+        update: async (value: unknown) => {
+          cleared.push(value);
+          return {};
+        },
+      },
+      showArtist: {
+        findFirst: async () => ({ showId: "festival-1" }),
+      },
+    }),
+  });
+  assert.deepEqual(unskipped, {
+    ok: true,
+    jobId: "job-1",
+    status: "pending",
+  });
+  assert.deepEqual(cleared, [
+    {
+      where: { id: "skip-1" },
+      data: { clearedAt: now, clearedBy: "manual" },
+    },
+  ]);
+  assert.equal(
+    (restored[0] as { data: { status: string } }).data.status,
+    "pending"
+  );
+});
+
+test("concurrent artist note actions reuse the unique artist job", async () => {
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const showDate = new Date("2026-08-20T00:00:00.000Z");
+  let storedJob:
+    | { id: string; artistId: string; status: string }
+    | null = null;
+  let upsertCount = 0;
+  let transactionTail = Promise.resolve();
+  const tx = {
+    contactResearchJob: {
+      findUnique: async () => storedJob,
+      upsert: async () => {
+        upsertCount += 1;
+        storedJob = {
+          id: "job-1",
+          artistId: "artist-1",
+          status: "inactive",
+        };
+        return storedJob;
+      },
+      update: async () => ({}),
+    },
+    artist: {
+      findUnique: async () => ({ id: "artist-1", contacts: [] }),
+    },
+    showArtist: {
+      findFirst: async () => ({
+        showId: "show-1",
+        show: { date: showDate },
+      }),
+    },
+  };
+  const serialRunner: ContactResearchTransactionRunner = async (work) => {
+    const previous = transactionTail;
+    let release!: () => void;
+    transactionTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await work(tx as unknown as Prisma.TransactionClient);
+    } finally {
+      release();
+    }
+  };
+
+  const results = await Promise.all([
+    updateContactResearchArtistUserNotes("artist-1", "First note", {
+      now,
+      runTransaction: serialRunner,
+    }),
+    updateContactResearchArtistUserNotes("artist-1", "Second note", {
+      now,
+      runTransaction: serialRunner,
+    }),
+  ]);
+
+  assert.equal(upsertCount, 1);
+  assert.deepEqual(storedJob, {
+    id: "job-1",
+    artistId: "artist-1",
+    status: "inactive",
+  });
+  assert.ok(results.every((result) => result.ok));
+});
+
+test("artists without jobs are not materialized when a contact or show eligibility blocks research", async () => {
+  for (const blockedBy of ["active_contact", "ineligible"] as const) {
+    let upserted = false;
+    const result = await updateContactResearchArtistUserNotes(
+      "artist-1",
+      "Remember this",
+      {
+        now: new Date("2026-07-20T12:00:00.000Z"),
+        runTransaction: runWithTransaction({
+          contactResearchJob: {
+            findUnique: async () => null,
+            upsert: async () => {
+              upserted = true;
+              return {};
+            },
+          },
+          artist: {
+            findUnique: async () => ({
+              id: "artist-1",
+              contacts: blockedBy === "active_contact" ? [{ id: "c-1" }] : [],
+            }),
+          },
+          showArtist: {
+            findFirst: async () => null,
+          },
+        }),
+      }
+    );
+    assert.deepEqual(result, { ok: false, reason: blockedBy });
+    assert.equal(upserted, false);
+  }
 });
 
 test("manual skip and explicit unskip preserve one job and audit history", async () => {

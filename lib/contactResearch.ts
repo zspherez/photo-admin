@@ -108,6 +108,26 @@ export type ContactResearchTransactionRunner = <T>(
   work: (tx: Prisma.TransactionClient) => Promise<T>
 ) => Promise<T>;
 
+export type ArtistContactResearchMutationFailure =
+  | "artist_not_found"
+  | "active_contact"
+  | "ineligible"
+  | "empty_instructions"
+  | "job_not_found"
+  | "already_skipped"
+  | "not_skipped";
+
+export type ArtistContactResearchMutationResult =
+  | {
+      ok: true;
+      jobId: string;
+      status: string;
+    }
+  | {
+      ok: false;
+      reason: ArtistContactResearchMutationFailure;
+    };
+
 export interface ContactResearchPriorityInput {
   interested: boolean;
   hasActiveSignal: boolean;
@@ -2075,29 +2095,14 @@ export async function updateContactResearchJobUserNotes(
   jobId: string,
   value: unknown
 ): Promise<boolean> {
-  const userNotes = normalizeContactResearchUserNotes(value);
-  return withSerializableRetry(async (tx) => {
-    const job = await tx.contactResearchJob.findUnique({
-      where: { id: jobId },
-      select: { id: true, status: true },
-    });
-    if (!job) return false;
-    await tx.contactResearchJob.update({
-      where: { id: job.id },
-      data: {
-        userNotes,
-        ...(job.status === "claimed"
-          ? {
-              status: "pending",
-              claimToken: null,
-              claimedAt: null,
-              claimExpiresAt: null,
-            }
-          : {}),
-      },
-    });
-    return true;
-  });
+  const result = await updateContactResearchUserNotes(
+    { jobId },
+    value,
+    new Date(),
+    null,
+    (work) => withSerializableRetry(work)
+  );
+  return result.ok;
 }
 
 export async function skipContactResearchArtist(
@@ -2107,18 +2112,215 @@ export async function skipContactResearchArtist(
   runTransaction: ContactResearchTransactionRunner = (work) =>
     withSerializableRetry(work)
 ): Promise<boolean> {
+  const result = await skipContactResearchTarget(
+    { jobId },
+    value,
+    now,
+    null,
+    runTransaction
+  );
+  return result.ok;
+}
+
+export async function unskipContactResearchArtist(
+  jobId: string,
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work)
+): Promise<boolean> {
+  const result = await unskipContactResearchTarget(
+    { jobId },
+    now,
+    runTransaction
+  );
+  return result.ok;
+}
+
+type ContactResearchMutationTarget =
+  | { jobId: string }
+  | { artistId: string };
+
+async function materializeArtistContactResearchJob(
+  tx: Prisma.TransactionClient,
+  artistId: string,
+  now: Date,
+  requestedShowId: string | null
+): Promise<
+  | { ok: true; job: { id: string; artistId: string; status: string } }
+  | { ok: false; reason: ArtistContactResearchMutationFailure }
+> {
+  const existing = await tx.contactResearchJob.findUnique({
+    where: { artistId },
+    select: { id: true, artistId: true, status: true },
+  });
+  if (existing) return { ok: true, job: existing };
+
+  const artist = await tx.artist.findUnique({
+    where: { id: artistId },
+    select: {
+      id: true,
+      contacts: {
+        where: ACTIVE_EMAIL_CONTACT_WHERE,
+        take: 1,
+        select: { id: true },
+      },
+    },
+  });
+  if (!artist) return { ok: false, reason: "artist_not_found" };
+  if (artist.contacts.length > 0) {
+    return { ok: false, reason: "active_contact" };
+  }
+
+  const today = easternTodayStoredDate(now);
+  const end = parseDateOnly(
+    addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
+  );
+  const requestedShow = requestedShowId
+    ? await tx.showArtist.findFirst({
+        where: {
+          artistId,
+          showId: requestedShowId,
+          show: {
+            isFestival: true,
+            syncStatus: "active",
+            date: { gte: today },
+            AND: [festivalLeadTimeWhere(now)],
+          },
+        },
+        select: {
+          showId: true,
+          show: { select: { date: true } },
+        },
+      })
+    : null;
+  const regularShow =
+    requestedShow ??
+    (await tx.showArtist.findFirst({
+      where: {
+        artistId,
+        show: {
+          isFestival: false,
+          syncStatus: "active",
+          date: { gte: today, lte: end },
+        },
+      },
+      orderBy: { show: { date: "asc" } },
+      select: {
+        showId: true,
+        show: { select: { date: true } },
+      },
+    }));
+  if (!regularShow) return { ok: false, reason: "ineligible" };
+
+  const job = await tx.contactResearchJob.upsert({
+    where: { artistId },
+    create: {
+      artistId,
+      requestedShowId: requestedShow?.showId ?? null,
+      status: "inactive",
+      nextShowAt: regularShow.show.date,
+    },
+    update: {},
+    select: { id: true, artistId: true, status: true },
+  });
+  return { ok: true, job };
+}
+
+async function resolveContactResearchMutationJob(
+  tx: Prisma.TransactionClient,
+  target: ContactResearchMutationTarget,
+  now: Date,
+  requestedShowId: string | null
+): Promise<
+  | { ok: true; job: { id: string; artistId: string; status: string } }
+  | { ok: false; reason: ArtistContactResearchMutationFailure }
+> {
+  if ("artistId" in target) {
+    return materializeArtistContactResearchJob(
+      tx,
+      target.artistId,
+      now,
+      requestedShowId
+    );
+  }
+  const job = await tx.contactResearchJob.findUnique({
+    where: { id: target.jobId },
+    select: { id: true, artistId: true, status: true },
+  });
+  return job
+    ? { ok: true, job }
+    : { ok: false, reason: "job_not_found" };
+}
+
+async function updateContactResearchUserNotes(
+  target: ContactResearchMutationTarget,
+  value: unknown,
+  now: Date,
+  requestedShowId: string | null,
+  runTransaction: ContactResearchTransactionRunner
+): Promise<ArtistContactResearchMutationResult> {
+  const userNotes = normalizeContactResearchUserNotes(value);
+  return runTransaction(async (tx) => {
+    if ("artistId" in target && userNotes === null) {
+      const existing = await tx.contactResearchJob.findUnique({
+        where: { artistId: target.artistId },
+        select: { id: true, artistId: true, status: true },
+      });
+      if (!existing) {
+        return { ok: false, reason: "empty_instructions" } as const;
+      }
+    }
+    const resolved = await resolveContactResearchMutationJob(
+      tx,
+      target,
+      now,
+      requestedShowId
+    );
+    if (!resolved.ok) return resolved;
+    const { job } = resolved;
+    const status = job.status === "claimed" ? "pending" : job.status;
+    await tx.contactResearchJob.update({
+      where: { id: job.id },
+      data: {
+        userNotes,
+        ...(job.status === "claimed"
+          ? {
+              status,
+              claimToken: null,
+              claimedAt: null,
+              claimExpiresAt: null,
+            }
+          : {}),
+      },
+    });
+    return { ok: true, jobId: job.id, status };
+  });
+}
+
+async function skipContactResearchTarget(
+  target: ContactResearchMutationTarget,
+  value: unknown,
+  now: Date,
+  requestedShowId: string | null,
+  runTransaction: ContactResearchTransactionRunner
+): Promise<ArtistContactResearchMutationResult> {
   const reason = normalizeArtistResearchSkipReason(value);
   return runTransaction(async (tx) => {
-    const job = await tx.contactResearchJob.findUnique({
-      where: { id: jobId },
-      select: { id: true, artistId: true },
-    });
-    if (!job) return false;
+    const resolved = await resolveContactResearchMutationJob(
+      tx,
+      target,
+      now,
+      requestedShowId
+    );
+    if (!resolved.ok) return resolved;
+    const { job } = resolved;
     const activeSkip = await tx.artistResearchSkip.findFirst({
       where: { artistId: job.artistId, clearedAt: null },
       select: { id: true },
     });
-    if (activeSkip) return false;
+    if (activeSkip) {
+      return { ok: false, reason: "already_skipped" } as const;
+    }
     await tx.artistResearchSkip.create({
       data: {
         artistId: job.artistId,
@@ -2137,26 +2339,29 @@ export async function skipContactResearchArtist(
         completedAt: null,
       },
     });
-    return true;
+    return { ok: true, jobId: job.id, status: "skipped" };
   });
 }
 
-export async function unskipContactResearchArtist(
-  jobId: string,
-  now: Date = new Date(),
-  runTransaction: ContactResearchTransactionRunner = (work) =>
-    withSerializableRetry(work)
-): Promise<boolean> {
+async function unskipContactResearchTarget(
+  target: ContactResearchMutationTarget,
+  now: Date,
+  runTransaction: ContactResearchTransactionRunner
+): Promise<ArtistContactResearchMutationResult> {
   const today = easternTodayStoredDate(now);
   const end = parseDateOnly(
     addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
   );
   return runTransaction(async (tx) => {
     const job = await tx.contactResearchJob.findUnique({
-      where: { id: jobId },
+      where:
+        "artistId" in target
+          ? { artistId: target.artistId }
+          : { id: target.jobId },
       select: {
         id: true,
         artistId: true,
+        status: true,
         requestedShowId: true,
         artist: {
           select: {
@@ -2169,12 +2374,14 @@ export async function unskipContactResearchArtist(
         },
       },
     });
-    if (!job) return false;
+    if (!job) return { ok: false, reason: "job_not_found" } as const;
     const activeSkip = await tx.artistResearchSkip.findFirst({
       where: { artistId: job.artistId, clearedAt: null },
       select: { id: true },
     });
-    if (!activeSkip) return false;
+    if (!activeSkip) {
+      return { ok: false, reason: "not_skipped" } as const;
+    }
 
     const eligibleShow = await tx.showArtist.findFirst({
       where: {
@@ -2225,8 +2432,66 @@ export async function unskipContactResearchArtist(
         claimExpiresAt: null,
       },
     });
-    return true;
+    return {
+      ok: true,
+      jobId: job.id,
+      status: hasActiveContact
+        ? "complete"
+        : eligibleShow
+          ? "pending"
+          : "inactive",
+    };
   });
+}
+
+export async function updateContactResearchArtistUserNotes(
+  artistId: string,
+  value: unknown,
+  options: {
+    now?: Date;
+    requestedShowId?: string | null;
+    runTransaction?: ContactResearchTransactionRunner;
+  } = {}
+): Promise<ArtistContactResearchMutationResult> {
+  return updateContactResearchUserNotes(
+    { artistId },
+    value,
+    options.now ?? new Date(),
+    options.requestedShowId ?? null,
+    options.runTransaction ?? ((work) => withSerializableRetry(work))
+  );
+}
+
+export async function skipContactResearchArtistByArtistId(
+  artistId: string,
+  value: unknown,
+  options: {
+    now?: Date;
+    requestedShowId?: string | null;
+    runTransaction?: ContactResearchTransactionRunner;
+  } = {}
+): Promise<ArtistContactResearchMutationResult> {
+  return skipContactResearchTarget(
+    { artistId },
+    value,
+    options.now ?? new Date(),
+    options.requestedShowId ?? null,
+    options.runTransaction ?? ((work) => withSerializableRetry(work))
+  );
+}
+
+export async function unskipContactResearchArtistByArtistId(
+  artistId: string,
+  options: {
+    now?: Date;
+    runTransaction?: ContactResearchTransactionRunner;
+  } = {}
+): Promise<ArtistContactResearchMutationResult> {
+  return unskipContactResearchTarget(
+    { artistId },
+    options.now ?? new Date(),
+    options.runTransaction ?? ((work) => withSerializableRetry(work))
+  );
 }
 
 export async function retryContactResearchJob(

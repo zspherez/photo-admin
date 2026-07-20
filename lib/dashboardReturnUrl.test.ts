@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   appendWorkflowResult,
+  artistWorkflowPath,
   dashboardResultHref,
   dashboardReturnPath,
   festivalReturnPath,
   parseFestivalFilter,
   parseFestivalGenre,
   workflowReturnPath,
+  workflowFestivalShowId,
   withWorkflowReturnTo,
 } from "./dashboardReturnUrl";
 
@@ -140,4 +142,32 @@ test("workflow returns reject nested, reserved, and external routes", () => {
     ),
     "/artists/artist_123",
   );
+});
+
+test("artist workflow actions preserve safe festival returns and reject unsafe returns", () => {
+  assert.equal(
+    artistWorkflowPath(
+      "artist_123",
+      "/festivals/show_123?filter=needs_contact",
+      { research_saved: "1" }
+    ),
+    "/artists/artist_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dneeds_contact&research_saved=1"
+  );
+  assert.equal(
+    workflowFestivalShowId(
+      "/festivals/show_123?filter=needs_contact"
+    ),
+    "show_123"
+  );
+  for (const unsafe of [
+    "https://example.com/festivals/show_123",
+    "//example.com/festivals/show_123",
+    "/festivals/show_123/edit",
+  ]) {
+    assert.equal(workflowFestivalShowId(unsafe), null);
+    assert.equal(
+      artistWorkflowPath("artist_123", unsafe, { research_error: "unsafe" }),
+      "/artists/artist_123?research_error=unsafe"
+    );
+  }
 });
