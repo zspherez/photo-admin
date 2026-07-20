@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
-  getScheduledDispatchDisposition,
   getNextMondaySlot,
+  getOutreachRecoveryCutoff,
+  getScheduledDispatchDisposition,
+  isOutreachMorningDispatchWindow,
   isStaleOutreachClaim,
   isWeekendET,
   OUTREACH_CLAIM_TIMEOUT_MS,
@@ -27,6 +29,38 @@ test("next Monday slot handles daylight saving time", () => {
   assert.equal(
     getNextMondaySlot(new Date("2026-12-05T16:00:00Z")).toISOString(),
     "2026-12-07T14:00:00.000Z"
+  );
+});
+
+test("morning dispatch window is explicit and DST-safe", () => {
+  assert.equal(
+    isOutreachMorningDispatchWindow(new Date("2026-03-09T13:30:00Z")),
+    true,
+  );
+  assert.equal(
+    isOutreachMorningDispatchWindow(new Date("2026-03-09T14:00:00Z")),
+    false,
+  );
+  assert.equal(
+    isOutreachMorningDispatchWindow(new Date("2026-11-02T14:30:00Z")),
+    true,
+  );
+  assert.equal(
+    isOutreachMorningDispatchWindow(new Date("2026-11-02T13:30:00Z")),
+    false,
+  );
+  assert.equal(
+    isOutreachMorningDispatchWindow(new Date("2026-11-07T14:30:00Z")),
+    false,
+  );
+});
+
+test("recovery waits until normal scheduled outreach is two hours overdue", () => {
+  assert.equal(
+    getOutreachRecoveryCutoff(
+      new Date("2026-07-20T17:00:00.000Z"),
+    ).toISOString(),
+    "2026-07-20T15:00:00.000Z",
   );
 });
 
@@ -74,7 +108,7 @@ test("claim and dispatch bounds are deterministic", () => {
   );
 });
 
-test("scheduled retry polling continues evenings and weekends within bounds", () => {
+test("normal morning dispatch and exceptional recovery stay distinct", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/send-scheduled.yml", import.meta.url),
     "utf8",
@@ -84,8 +118,14 @@ test("scheduled retry polling continues evenings and weekends within bounds", ()
     "utf8",
   );
 
-  assert.match(workflow, /cron: "\*\/15 13-15 \* \* 1-5"/);
+  assert.match(workflow, /cron: "0 13 \* \* 1-5"/);
+  assert.match(workflow, /cron: "0 14 \* \* 1-5"/);
   assert.match(workflow, /cron: "17 \*\/4 \* \* \*"/);
+  assert.match(workflow, /TZ=America\/New_York/);
+  assert.match(workflow, /local_hour.*!= "09"/);
+  assert.match(workflow, /dispatch_mode="morning"/);
+  assert.match(workflow, /dispatch_mode="recovery"/);
+  assert.match(workflow, /send-scheduled\?mode=\$\{dispatch_mode\}/);
   assert.match(
     workflow,
     /group: photo-admin-send-scheduled\s+cancel-in-progress: false/,
@@ -99,7 +139,10 @@ test("scheduled retry polling continues evenings and weekends within bounds", ()
   assert.match(workflow, /next_retry_at/);
   assert.match(workflow, /poll_delay > 300/);
   assert.match(workflow, /max_response_polls=8/);
-  assert.match(workflow, /four-hour safety schedule will continue recovery/);
+  assert.match(
+    workflow,
+    /exceptional four-hour recovery schedule will continue recovery/,
+  );
   assert.match(workflow, /terminal_failures_seen=0/);
   assert.match(workflow, /\.terminalFailures/);
   assert.match(workflow, /\.retryableFailures/);
@@ -121,6 +164,19 @@ test("scheduled retry polling continues evenings and weekends within bounds", ()
     route,
     /status: "queued",\s+claimedAt: \{ gt: staleBefore \}/,
   );
+  assert.match(
+    route,
+    /status: "scheduled",\s+nextAttemptAt: \{\s+lte: mode === "recovery" \? recoveryCutoff : now/,
+  );
+  assert.match(
+    route,
+    /status: "retry_scheduled",\s+nextAttemptAt: \{ lte: now \}/,
+  );
+  assert.match(
+    route,
+    /status: "queued",\s+nextAttemptAt: \{ lte: now \},\s+OR:/,
+  );
+  assert.match(route, /isOutreachMorningDispatchWindow\(\)/);
   assert.match(route, /export const maxDuration = 60/);
   assert.match(route, /nextRetryAt,/);
   assert.match(route, /nextClaimExpiryAt,/);

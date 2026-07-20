@@ -64,7 +64,11 @@ function legacyResponse(
   });
 }
 
-function runSequence(name: string, rows: string[]) {
+function runSequence(
+  name: string,
+  rows: string[],
+  env: Record<string, string> = {},
+) {
   const stem = fileURLToPath(
     new URL(`./test-fixtures/.send-scheduled-${process.pid}-${name}`, import.meta.url),
   );
@@ -82,6 +86,7 @@ function runSequence(name: string, rows: string[]) {
         SLEEP_BIN: "/usr/bin/true",
         MOCK_CURL_RESPONSES_FILE: responsesFile,
         MOCK_CURL_STATE_FILE: stateFile,
+        ...env,
       },
       maxBuffer: 1024 * 1024,
     });
@@ -93,6 +98,38 @@ function runSequence(name: string, rows: string[]) {
     }
   }
 }
+
+test("workflow runs exactly one DST-gated normal morning candidate", () => {
+  const active = runSequence(
+    "morning-active",
+    [`0\t200\t${response("complete")}`],
+    {
+      SCHEDULE_EXPRESSION: "0 13 * * 1-5",
+      OUTREACH_LOCAL_HOUR_OVERRIDE: "09",
+    },
+  );
+  assert.equal(active.status, 0, active.stderr);
+  assert.match(active.stdout, /Normal morning outreach dispatch/);
+
+  const inactive = runSequence("morning-inactive", [], {
+    SCHEDULE_EXPRESSION: "0 14 * * 1-5",
+    OUTREACH_LOCAL_HOUR_OVERRIDE: "10",
+  });
+  assert.equal(inactive.status, 0, inactive.stderr);
+  assert.match(inactive.stdout, /Skipping inactive UTC candidate/);
+  assert.doesNotMatch(inactive.stdout, /Outreach dispatch attempt/);
+});
+
+test("workflow labels the four-hour schedule as exceptional recovery", () => {
+  const result = runSequence(
+    "recovery",
+    [`0\t200\t${response("complete")}`],
+    { SCHEDULE_EXPRESSION: "17 */4 * * *" },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Exceptional outreach recovery dispatch/);
+});
 
 test("workflow keeps retryable failures and fresh claims sticky past the soft poll cap", () => {
   const rows = [

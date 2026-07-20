@@ -3,7 +3,11 @@
  * All logic uses America/New_York (ET) since this app manages NYC shows.
  */
 
-const TZ = "America/New_York";
+import { EASTERN_TIME_ZONE } from "@/lib/calendarDate";
+
+export const OUTREACH_TIME_ZONE = EASTERN_TIME_ZONE;
+export const OUTREACH_MORNING_DISPATCH_HOUR = 9;
+export const OUTREACH_RECOVERY_OVERDUE_MS = 2 * 60 * 60 * 1000;
 export const OUTREACH_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
 export const OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS = 30 * 1000;
 export const SCHEDULED_DISPATCH_ROUTE_TIMEOUT_MS = 60 * 1000;
@@ -75,15 +79,18 @@ interface ZonedParts {
   month: number;
   day: number;
   weekday: string;
+  hour: number;
 }
 
 function partsInET(date: Date): ZonedParts {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: TZ,
+    timeZone: OUTREACH_TIME_ZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
     weekday: "short",
+    hour: "2-digit",
+    hourCycle: "h23",
   }).formatToParts(date);
   const value = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((part) => part.type === type)?.value ?? "";
@@ -92,13 +99,14 @@ function partsInET(date: Date): ZonedParts {
     month: Number(value("month")),
     day: Number(value("day")),
     weekday: value("weekday"),
+    hour: Number(value("hour")),
   };
 }
 
 function localETToUtc(year: number, month: number, day: number, hour: number): Date {
   const localAsUtc = Date.UTC(year, month - 1, day, hour);
   const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: TZ,
+    timeZone: OUTREACH_TIME_ZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -125,6 +133,22 @@ function localETToUtc(year: number, month: number, day: number, hour: number): D
 export function isWeekendET(now: Date = new Date()): boolean {
   const weekday = partsInET(now).weekday;
   return weekday === "Sat" || weekday === "Sun";
+}
+
+/** True during the weekday 09:00-09:59 outreach dispatch window in ET. */
+export function isOutreachMorningDispatchWindow(
+  now: Date = new Date(),
+): boolean {
+  const { hour, weekday } = partsInET(now);
+  return (
+    hour === OUTREACH_MORNING_DISPATCH_HOUR &&
+    weekday !== "Sat" &&
+    weekday !== "Sun"
+  );
+}
+
+export function getOutreachRecoveryCutoff(now: Date = new Date()): Date {
+  return new Date(now.getTime() - OUTREACH_RECOVERY_OVERDUE_MS);
 }
 
 /**
@@ -164,7 +188,7 @@ export function shouldContinueScheduledDispatch(
 /** Format a UTC Date as a human-readable ET string like "Mon, Jun 1 at 9:23 AM" */
 export function formatScheduledTime(utcDate: Date): string {
   return utcDate.toLocaleString("en-US", {
-    timeZone: TZ,
+    timeZone: OUTREACH_TIME_ZONE,
     weekday: "short",
     month: "short",
     day: "numeric",

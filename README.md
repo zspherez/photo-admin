@@ -500,7 +500,7 @@ so the frequent outreach dispatcher runs in GitHub Actions instead.
 | GitHub Action `/api/cron/refresh-top-playlist` | Daily at 12:30 UTC | Refresh the top-tracks playlist after listening sync. |
 | Vercel `/api/cron/contact-research` | Daily at 13:00 UTC | Queue actionable artists that still need a manager contact. |
 | GitHub Action manager research | Hourly at minute 23 | Refresh and self-drain the full upcoming-show queue using up to 10 lanes with four independent agents each. Every artist result is written immediately. |
-| GitHub Action `/api/cron/send-scheduled` | Every 15 minutes from 13:00 through 15:45 UTC on weekdays, plus every four hours at minute 17 | Dispatch due outreach and keep provider retries moving evenings and weekends. |
+| GitHub Action `/api/cron/send-scheduled` | Once each weekday at 09:00 America/New_York, plus exceptional recovery every four hours at minute 17 UTC | Dispatch morning outreach; separately recover retries, stale claims, and missed runs. |
 | Stats.fm token rotation GitHub Action | Mondays, Thursdays, and Saturdays at 03:17 UTC | Refresh the short-lived token every 2–3 days, away from listen sync. |
 
 The show and listen syncs have an empty Hobby scheduling hour between them.
@@ -521,19 +521,25 @@ The scheduled workflows require GitHub repository secrets under
 The manager-research workflow's OIDC token is refreshed for every queue API
 request, so long-running research does not depend on one expiring token.
 
-The 13:00 UTC run is 09:00 in America/New_York during EDT; the 14:00 UTC run is
-09:00 during EST. Continuing through 15:45 UTC provides recovery opportunities
-if GitHub delays a run or the endpoint has a transient failure. The minute-17
-four-hour schedule is the low-frequency safety net outside that window, so a
-retry is never intentionally left until the next weekday morning. This keeps
-retry polling well inside Resend's 24-hour idempotency retention without
-running the 15-minute cadence around the clock. The workflow concurrency group,
-the endpoint's atomic claims, and immutable provider idempotency keys make
+The normal outreach cadence is one dispatch during the weekday
+09:00-09:59 America/New_York window, intended to pick up outreach prepared the
+previous night. GitHub schedules UTC candidates at 13:00 and 14:00; an
+`America/New_York` time-zone gate selects exactly one, so the local window stays
+correct across daylight-saving changes.
+
+The minute-17 four-hour schedule is exceptional recovery, not normal outreach
+polling. It immediately handles due provider retries and stale claims, while a
+never-claimed scheduled row becomes recovery-eligible after it is two hours
+overdue. Thus a delayed or failed morning cron cannot strand a send, while new
+normal scheduled outreach is not swept up by frequent all-day polling. This
+keeps retries well inside Resend's 24-hour idempotency retention. The workflow
+concurrency group, the endpoint's Serializable atomic claims, immutable
+recipient snapshots, suppression rechecks, and provider idempotency keys make
 overlapping or duplicate invocations safe.
 
 The playlist workflow retries transport failures and retryable HTTP responses
 for up to 60 minutes. The outreach workflow uses a shorter 15-minute
-maintenance window because the four-hour schedule already keeps every retry
+maintenance window because the exceptional four-hour schedule keeps every retry
 well inside Resend's 24-hour idempotency retention. Backoff starts at one
 minute and is capped at five minutes; non-retryable responses such as
 authentication failures fail immediately. Each failed attempt retains its
@@ -546,8 +552,8 @@ minutes per wait and performs at most eight response-aware follow-up polls per
 run. Terminal per-row failures remain sticky across those polls and fail the
 workflow even if a later response has no due rows; handled automatic retries
 continue polling first. If only retryable work remains when a bound expires,
-the run exits successfully with a warning and the four-hour safety schedule
-resumes recovery.
+the run exits successfully with a warning and the exceptional recovery
+schedule resumes recovery.
 
 Each 60-second dispatcher request admits new rows only during its first 20
 seconds. The remaining 40 seconds reserve the full 30-second provider

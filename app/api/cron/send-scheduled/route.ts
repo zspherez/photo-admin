@@ -6,6 +6,8 @@ import {
   getScheduledDispatchDisposition,
   getScheduledDispatchHttpStatus,
   getScheduledDispatchState,
+  getOutreachRecoveryCutoff,
+  isOutreachMorningDispatchWindow,
   OUTREACH_CLAIM_TIMEOUT_MS,
   SCHEDULED_DISPATCH_MAX_ROWS,
   type ScheduledDispatchDisposition,
@@ -14,11 +16,47 @@ import {
 
 export const maxDuration = 60;
 
+type DispatchMode = "morning" | "recovery" | "manual";
+
+function scheduledDispatchMode(request: NextRequest): DispatchMode | null {
+  const mode = request.nextUrl.searchParams.get("mode") ?? "manual";
+  return mode === "morning" || mode === "recovery" || mode === "manual"
+    ? mode
+    : null;
+}
+
 // Invoked by the deployment scheduler. Drains due outreach in oldest-first
 // order while keeping each invocation bounded.
 export async function GET(request: NextRequest) {
   if (!(await isValidCronAuthorization(request.headers.get("authorization")))) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const mode = scheduledDispatchMode(request);
+  if (!mode) {
+    return NextResponse.json({ error: "invalid dispatch mode" }, { status: 400 });
+  }
+  if (mode === "morning" && !isOutreachMorningDispatchWindow()) {
+    return NextResponse.json({
+      ok: true,
+      complete: true,
+      state: "complete",
+      mode,
+      outsideMorningWindow: true,
+      dispatched: 0,
+      skipped: 0,
+      retriesScheduled: 0,
+      scheduledRetries: 0,
+      nextRetryAt: null,
+      pendingClaims: 0,
+      nextClaimExpiryAt: null,
+      failures: 0,
+      terminalFailures: 0,
+      retryableFailures: 0,
+      unscheduledRetryableFailures: 0,
+      bounded: false,
+      results: [],
+    });
   }
 
   const startedAt = Date.now();
@@ -37,16 +75,25 @@ export async function GET(request: NextRequest) {
   while (shouldContinueScheduledDispatch(startedAt, results.length)) {
     const now = new Date();
     const staleBefore = new Date(now.getTime() - OUTREACH_CLAIM_TIMEOUT_MS);
+    const recoveryCutoff = getOutreachRecoveryCutoff(now);
     let due: { id: string }[];
     try {
       due = await db.outreach.findMany({
         where: {
-          nextAttemptAt: { lte: now },
           OR: [
-            { status: "scheduled" },
-            { status: "retry_scheduled" },
+            {
+              status: "scheduled",
+              nextAttemptAt: {
+                lte: mode === "recovery" ? recoveryCutoff : now,
+              },
+            },
+            {
+              status: "retry_scheduled",
+              nextAttemptAt: { lte: now },
+            },
             {
               status: "queued",
+              nextAttemptAt: { lte: now },
               OR: [{ claimedAt: null }, { claimedAt: { lte: staleBefore } }],
             },
           ],
@@ -165,6 +212,7 @@ export async function GET(request: NextRequest) {
         state !== "retryable_failure",
       complete: state === "complete",
       state,
+      mode,
       dispatched: results.filter(
         (result) => result.disposition === "success",
       ).length,
