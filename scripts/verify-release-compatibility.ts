@@ -74,7 +74,16 @@ async function main(): Promise<void> {
         claimedAgentRulesVersion: true,
       },
     }),
-    db.contactResearchCandidate.count({ take: 1 }),
+    db.contactResearchCandidate.findMany({
+      take: 1,
+      select: {
+        needsApproval: true,
+        officialSourceType: true,
+        officialSourceUrl: true,
+        officialManagementLabel: true,
+        officialSourceEvidence: true,
+      },
+    }),
     db.agentRuleSet.findMany({
       take: 1,
       select: {
@@ -98,9 +107,12 @@ async function main(): Promise<void> {
         outreachAttemptProbe,
         syncLeaseProbe,
         artistClaimProbe,
-        contactResearchCandidateProbe,
       ].every(Number.isInteger) &&
-        [contactResearchJobProbe, agentRuleSetProbe].every(Array.isArray),
+        [
+          contactResearchJobProbe,
+          contactResearchCandidateProbe,
+          agentRuleSetProbe,
+        ].every(Array.isArray),
       configuredSpreadsheetId:
         values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,
       configuredSheetTab: values.get(SHEETS_TAB_SETTING) ?? null,
