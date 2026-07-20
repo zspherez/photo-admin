@@ -31,6 +31,7 @@ import {
   isProviderAcceptanceUnresolvedAttempt,
   recipientSnapshotConflict,
   protectLegacyScheduledSnapshot,
+  schedulingTimeTemplateProvenance,
   type DeliveryPolicyAttempt,
   type EvaluateOutreachDeliveryPolicyInput,
 } from "./sendOutreach";
@@ -65,7 +66,6 @@ test("historical sent attempts remain untouched by legacy pricing protection", (
       status: "sent",
       finalSubject: immutableRequest.subject,
       finalHtml: immutableRequest.html,
-      evidenceValues: ["$650"],
       immutableRequest,
     }),
     { kind: "unchanged" },
@@ -76,31 +76,54 @@ test("historical sent attempts remain untouched by legacy pricing protection", (
   });
 });
 
-test("legacy unsent scheduled snapshots normalize before their first attempt", () => {
+test("immutable scheduling-time template provenance normalizes only its rate block", () => {
+  const scheduledAt = new Date("2026-07-15T12:00:00.000Z");
+  const trustedTemplate = schedulingTimeTemplateProvenance(scheduledAt, {
+    id: "template-1",
+    subject: "{{artist}} availability",
+    htmlBody:
+      "<p>Budget: {{rate}}</p><p>Unrelated ticket price: $650.</p>",
+    updatedAt: new Date("2026-07-15T11:00:00.000Z"),
+  });
+  assert.deepEqual(trustedTemplate, {
+    templateId: "template-1",
+    subject: "{{artist}} availability",
+    html: "<p>Budget: {{rate}}</p><p>Unrelated ticket price: $650.</p>",
+  });
   assert.deepEqual(
     protectLegacyScheduledSnapshot({
       status: "scheduled",
-      finalSubject: "Quote $650 — Artist",
+      finalSubject: "Artist availability",
       finalHtml:
-        "<p>Rate: $650</p><p>Keep this unrelated ticket price: $25.</p>",
-      templateSubject: "Quote {{rate}} — {{artist}}",
-      templateHtml:
-        "<p>Rate: {{rate}}</p><p>Keep this unrelated ticket price: $25.</p>",
-      evidenceValues: ["$650"],
+        "<p>Budget: $650</p><p>Unrelated ticket price: $650.</p>",
+      trustedTemplate,
       immutableRequest: null,
     }),
     {
       kind: "normalize",
-      subject: "Quote  — Artist",
-      html: "<p>Keep this unrelated ticket price: $25.</p>",
+      subject: "Artist availability",
+      html: "<p>Unrelated ticket price: $650.</p>",
     },
+  );
+});
+
+test("later template and contact/default changes cannot hide rate-contextual snapshots", () => {
+  const scheduledAt = new Date("2026-07-15T12:00:00.000Z");
+  assert.equal(
+    schedulingTimeTemplateProvenance(scheduledAt, {
+      id: "template-1",
+      subject: "{{artist}} availability",
+      htmlBody: "<p>Current template has no pricing.</p>",
+      updatedAt: new Date("2026-07-15T13:00:00.000Z"),
+    }),
+    null,
   );
   assert.deepEqual(
     protectLegacyScheduledSnapshot({
       status: "scheduled",
       finalSubject: "Artist availability",
-      finalHtml: "<p>Budget: $650</p><p>Keep me.</p>",
-      evidenceValues: ["$650"],
+      finalHtml:
+        "<p>My standard NYC show rate is $650 for photo/video.</p><p>Keep me.</p>",
     }),
     {
       kind: "normalize",
@@ -108,6 +131,15 @@ test("legacy unsent scheduled snapshots normalize before their first attempt", (
       html: "<p>Keep me.</p>",
     },
   );
+  const ambiguous = protectLegacyScheduledSnapshot({
+    status: "scheduled",
+    finalSubject: "Artist availability",
+    finalHtml: "<p>Budget: $650</p><p>Keep me.</p>",
+  });
+  assert.equal(ambiguous.kind, "block");
+  if (ambiguous.kind === "block") {
+    assert.match(ambiguous.error, /could not be normalized safely/);
+  }
 });
 
 test("immutable retry attempts containing legacy pricing fail closed", () => {
@@ -142,7 +174,6 @@ test("ordinary unpriced scheduled and retry snapshots are unaffected", () => {
       status: "scheduled",
       finalSubject: unpriced.subject,
       finalHtml: unpriced.html,
-      evidenceValues: ["$65"],
     }),
     { kind: "unchanged" },
   );
@@ -150,8 +181,8 @@ test("ordinary unpriced scheduled and retry snapshots are unaffected", () => {
     protectLegacyScheduledSnapshot({
       status: "scheduled",
       finalSubject: unpriced.subject,
-      finalHtml: "<p>Keep this unrelated ticket price: $650.</p>",
-      evidenceValues: ["$65"],
+      finalHtml:
+        "<p>Keep this unrelated ticket price: $650.</p><p>Email response rate is 50%.</p>",
     }),
     { kind: "unchanged" },
   );
@@ -159,8 +190,11 @@ test("ordinary unpriced scheduled and retry snapshots are unaffected", () => {
     protectLegacyScheduledSnapshot({
       status: "retry_scheduled",
       finalSubject: unpriced.subject,
-      finalHtml: unpriced.html,
-      immutableRequest: unpriced,
+      finalHtml: "<p>Keep this unrelated ticket price: $650.</p>",
+      immutableRequest: {
+        subject: unpriced.subject,
+        html: "<p>Keep this unrelated ticket price: $650.</p>",
+      },
     }),
     { kind: "unchanged" },
   );
@@ -804,6 +838,8 @@ test("policy changes quarantine unresolved provider acceptance instead of cancel
     scheduledClaim,
     /snapshotProtection\.kind === "normalize"[\s\S]*finalSubject:[\s\S]*finalHtml:/,
   );
+  assert.match(scheduledClaim, /schedulingTimeTemplateProvenance/);
+  assert.doesNotMatch(scheduledClaim, /customPrice|key: "default_rate"/);
 });
 
 test("pre-submission transaction failures restore the exact claim and attempt state", () => {

@@ -14,10 +14,16 @@ const TEMPLATE_VARIABLE = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
 const LEGACY_RATE_TEMPLATE_VARIABLE_TEST = /\{\{\s*rate\s*\}\}/i;
 const HTML_PARAGRAPH =
   /<p\b[^>]*>(?:(?!<\/?p\b)[\s\S])*?<\/p\s*>/gi;
-const PRICING_LANGUAGE =
-  /\b(?:rate|rates|price|pricing|cost|fee|quote|estimate)\b/i;
-const LEGACY_RATE_LANGUAGE =
-  /\b(?:rate|rates|rate card|custom price|fee|quote|estimate)\b/i;
+const DEFINITE_RATE_CONTEXT = /\b(?:rate card|custom price)\b/i;
+const RATE_WORD = /\brates?\b/i;
+const SERVICE_RATE_CONTEXT =
+  /\b(?:my|our|standard|show|coverage|photo|video|shoot|hourly|daily|deliverables)\b.{0,40}\brates?\b|\brates?\b.{0,40}\b(?:photo|video|show|coverage|shoot|negotiable|tbd|deliverables)\b|\brates?\s*:/i;
+const AMBIGUOUS_RATE_CONTEXT =
+  /\b(?:fee|quote|estimate|budget|pricing)\b/i;
+const SERVICE_PRICE_CONTEXT =
+  /\b(?:my|our|standard|show|coverage|photo|video|shoot)\b.{0,40}\b(?:price|cost)\b|\b(?:price|cost)\b.{0,40}\b(?:my|our|standard|show|coverage|photo|video|shoot)\b/i;
+const UNRELATED_PRICE_CONTEXT =
+  /\b(?:ticket|admission|merch|travel|equipment|production)\s+(?:price|fee|cost)\b/i;
 const CURRENCY_VALUE =
   /(?:[$€£]\s*\d|\b\d+(?:\.\d{1,2})?\s*(?:USD|dollars?)\b)/i;
 const DEFAULT_DELIVERABLES_SUMMARY =
@@ -173,144 +179,134 @@ function removeRenderedTemplateParagraph(
   };
 }
 
-function hasPricingEvidence(
-  value: string,
-  evidenceValues: readonly string[],
-): boolean {
-  const containsExactValue = (candidate: string): boolean => {
-    if (!candidate) return false;
-    let offset = 0;
-    while (offset <= value.length - candidate.length) {
-      const index = value.indexOf(candidate, offset);
-      if (index < 0) return false;
-      const before = value[index - 1] ?? "";
-      const after = value[index + candidate.length] ?? "";
-      const startsWithWord = /[a-zA-Z0-9]/.test(candidate[0] ?? "");
-      const endsWithWord = /[a-zA-Z0-9]/.test(
-        candidate[candidate.length - 1] ?? "",
-      );
-      if (
-        (!startsWithWord || !/[a-zA-Z0-9]/.test(before)) &&
-        (!endsWithWord || !/[a-zA-Z0-9]/.test(after))
-      ) {
-        return true;
-      }
-      offset = index + 1;
-    }
-    return false;
-  };
-  const matchesStoredRate = evidenceValues.some((evidence) => {
-    const trimmed = evidence.trim();
-    return (
-      trimmed.length > 0 &&
-      (containsExactValue(trimmed) ||
-        containsExactValue(escapeHtml(trimmed))) &&
-      (CURRENCY_VALUE.test(trimmed) || PRICING_LANGUAGE.test(value))
-    );
-  });
-  if (matchesStoredRate) return true;
-  return (
-    PRICING_LANGUAGE.test(value) &&
-    LEGACY_RATE_LANGUAGE.test(value) &&
-    CURRENCY_VALUE.test(value)
-  );
-}
+type LegacyRateContext = "explicit" | "ambiguous" | null;
 
-function removePricingEvidenceParagraphs(
-  html: string,
-  evidenceValues: readonly string[],
-): { html: string; removed: boolean } {
-  let removed = false;
-  return {
-    html: html.replace(HTML_PARAGRAPH, (paragraph) => {
-      if (!hasPricingEvidence(paragraph, evidenceValues)) return paragraph;
-      removed = true;
-      return "";
-    }),
-    removed,
-  };
+function legacyRateContext(value: string): LegacyRateContext {
+  if (
+    DEFINITE_RATE_CONTEXT.test(value) ||
+    (RATE_WORD.test(value) &&
+      (CURRENCY_VALUE.test(value) || SERVICE_RATE_CONTEXT.test(value)))
+  ) {
+    return "explicit";
+  }
+  if (UNRELATED_PRICE_CONTEXT.test(value)) return null;
+  if (
+    CURRENCY_VALUE.test(value) &&
+    (AMBIGUOUS_RATE_CONTEXT.test(value) ||
+      SERVICE_PRICE_CONTEXT.test(value))
+  ) {
+    return "ambiguous";
+  }
+  return null;
 }
 
 export interface LegacyOutreachSnapshotInput {
   subject: string;
   html: string;
-  templateSubject?: string | null;
-  templateHtml?: string | null;
-  evidenceValues?: readonly string[];
+  trustedTemplateSubject?: string | null;
+  trustedTemplateHtml?: string | null;
 }
 
-export interface LegacyOutreachSnapshotNormalization {
-  subject: string;
-  html: string;
-  detected: boolean;
-  safe: boolean;
-}
+export type LegacyOutreachSnapshotClassification =
+  | {
+      outcome: "safe_unchanged";
+      subject: string;
+      html: string;
+    }
+  | {
+      outcome: "safely_normalized";
+      subject: string;
+      html: string;
+    }
+  | {
+      outcome: "requires_manual_review";
+      subject: string;
+      html: string;
+    };
 
 export function normalizeLegacyOutreachSnapshot(
   input: LegacyOutreachSnapshotInput,
-): LegacyOutreachSnapshotNormalization {
-  const evidenceValues = input.evidenceValues ?? [];
+): LegacyOutreachSnapshotClassification {
   let subject = normalizeLegacyRateTemplateVariable(input.subject);
   let html = normalizeLegacyRateTemplateHtml(input.html);
-  let detected = subject !== input.subject || html !== input.html;
-  let safe = true;
+  let normalized = subject !== input.subject || html !== input.html;
+  let requiresManualReview = false;
 
   if (
-    input.templateSubject &&
-    LEGACY_RATE_TEMPLATE_VARIABLE_TEST.test(input.templateSubject)
+    input.trustedTemplateSubject &&
+    LEGACY_RATE_TEMPLATE_VARIABLE_TEST.test(input.trustedTemplateSubject)
   ) {
-    detected = true;
-    const normalized = normalizeRenderedSubjectFromTemplate(
+    const normalizedSubject = normalizeRenderedSubjectFromTemplate(
       input.subject,
-      input.templateSubject,
+      input.trustedTemplateSubject,
     );
-    if (normalized === null) safe = false;
-    else subject = normalized;
+    if (normalizedSubject === null) requiresManualReview = true;
+    else {
+      subject = normalizedSubject;
+      normalized = true;
+    }
   }
 
   if (
-    input.templateHtml &&
-    LEGACY_RATE_TEMPLATE_VARIABLE_TEST.test(input.templateHtml)
+    input.trustedTemplateHtml &&
+    LEGACY_RATE_TEMPLATE_VARIABLE_TEST.test(input.trustedTemplateHtml)
   ) {
-    detected = true;
-    const paragraphs = legacyRateTemplateParagraphs(input.templateHtml);
+    const paragraphs = legacyRateTemplateParagraphs(
+      input.trustedTemplateHtml,
+    );
     const hasUnsupportedPlacement =
       LEGACY_RATE_TEMPLATE_VARIABLE_TEST.test(
-        input.templateHtml.replace(LEGACY_RATE_TEMPLATE_PARAGRAPH, ""),
+        input.trustedTemplateHtml.replace(
+          LEGACY_RATE_TEMPLATE_PARAGRAPH,
+          "",
+        ),
       );
-    if (hasUnsupportedPlacement) safe = false;
+    if (hasUnsupportedPlacement) requiresManualReview = true;
     for (const paragraph of paragraphs) {
       const result = removeRenderedTemplateParagraph(html, paragraph);
       html = result.html;
+      if (result.removed) normalized = true;
       if (
         !result.removed &&
         !LEGACY_RATE_TEMPLATE_VARIABLE_TEST.test(input.html)
       ) {
-        safe = false;
+        requiresManualReview = true;
       }
     }
   }
 
-  const pricingParagraphs = removePricingEvidenceParagraphs(
-    html,
-    evidenceValues,
-  );
-  if (pricingParagraphs.removed) {
-    detected = true;
-    html = pricingParagraphs.html;
+  html = html.replace(HTML_PARAGRAPH, (paragraph) => {
+    const context = legacyRateContext(paragraph.replace(/<[^>]*>/g, " "));
+    if (context === "explicit") {
+      normalized = true;
+      return "";
+    }
+    if (context === "ambiguous") requiresManualReview = true;
+    return paragraph;
+  });
+
+  if (legacyRateContext(subject)) requiresManualReview = true;
+  const textOutsideParagraphs = html
+    .replace(HTML_PARAGRAPH, " ")
+    .replace(/<[^>]*>/g, " ");
+  if (legacyRateContext(textOutsideParagraphs)) {
+    requiresManualReview = true;
   }
 
-  if (hasPricingEvidence(subject, evidenceValues)) {
-    detected = true;
-    safe = false;
+  if (requiresManualReview) {
+    return {
+      outcome: "requires_manual_review",
+      subject: input.subject,
+      html: input.html,
+    };
   }
-  const remainingText = html.replace(/<[^>]*>/g, " ");
-  if (hasPricingEvidence(remainingText, evidenceValues)) {
-    detected = true;
-    safe = false;
-  }
-
-  return { subject, html, detected, safe };
+  return normalized
+    ? { outcome: "safely_normalized", subject, html }
+    : {
+        outcome: "safe_unchanged",
+        subject: input.subject,
+        html: input.html,
+      };
 }
 
 export function applyHtmlTemplate(template: string, vars: TemplateVars): string {

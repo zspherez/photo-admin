@@ -320,10 +320,31 @@ export interface LegacyScheduledSnapshotProtectionInput {
   status: string;
   finalSubject: string;
   finalHtml: string;
-  templateSubject?: string | null;
-  templateHtml?: string | null;
-  evidenceValues?: readonly string[];
+  trustedTemplate?: {
+    templateId: string;
+    subject: string;
+    html: string;
+  } | null;
   immutableRequest?: { subject: string; html: string } | null;
+}
+
+export function schedulingTimeTemplateProvenance(
+  outreachCreatedAt: Date,
+  template: {
+    id: string;
+    subject: string;
+    htmlBody: string;
+    updatedAt: Date;
+  } | null,
+): { templateId: string; subject: string; html: string } | null {
+  // Template contents are only scheduling-time evidence if the row has not
+  // changed since this immutable outreach snapshot was created.
+  if (!template || template.updatedAt >= outreachCreatedAt) return null;
+  return {
+    templateId: template.id,
+    subject: template.subject,
+    html: template.htmlBody,
+  };
 }
 
 export function protectLegacyScheduledSnapshot(
@@ -340,26 +361,25 @@ export function protectLegacyScheduledSnapshot(
   const snapshot = normalizeLegacyOutreachSnapshot({
     subject: input.finalSubject,
     html: input.finalHtml,
-    templateSubject: input.templateSubject,
-    templateHtml: input.templateHtml,
-    evidenceValues: input.evidenceValues,
+    trustedTemplateSubject: input.trustedTemplate?.subject,
+    trustedTemplateHtml: input.trustedTemplate?.html,
   });
 
   if (input.immutableRequest) {
     const request = normalizeLegacyOutreachSnapshot({
       subject: input.immutableRequest.subject,
       html: input.immutableRequest.html,
-      templateSubject: input.templateSubject,
-      templateHtml: input.templateHtml,
-      evidenceValues: input.evidenceValues,
+      trustedTemplateSubject: input.trustedTemplate?.subject,
+      trustedTemplateHtml: input.trustedTemplate?.html,
     });
-    return snapshot.detected || request.detected
+    return snapshot.outcome !== "safe_unchanged" ||
+      request.outcome !== "safe_unchanged"
       ? { kind: "block", error: MANUAL_REVIEW_LEGACY_RATE_ATTEMPT }
       : { kind: "unchanged" };
   }
 
-  if (!snapshot.detected) return { kind: "unchanged" };
-  if (!snapshot.safe) {
+  if (snapshot.outcome === "safe_unchanged") return { kind: "unchanged" };
+  if (snapshot.outcome === "requires_manual_review") {
     return { kind: "block", error: MANUAL_REVIEW_LEGACY_RATE_SNAPSHOT };
   }
   return {
@@ -5492,15 +5512,16 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
             id: true,
             artistId: true,
             email: true,
-            customPrice: true,
             state: true,
             isFullTeam: true,
           },
         },
         template: {
           select: {
+            id: true,
             subject: true,
             htmlBody: true,
+            updatedAt: true,
           },
         },
       },
@@ -5703,23 +5724,18 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
       );
     }
 
-    const legacyDefaultRate = await tx.setting.findUnique({
-      where: { key: "default_rate" },
-      select: { value: true },
-    });
     const immutableRequest = attempt?.providerRequest
       ? parseResendRequestSnapshot(attempt.providerRequest)
       : null;
+    const trustedTemplate = schedulingTimeTemplateProvenance(
+      outreach.createdAt,
+      outreach.template,
+    );
     const snapshotProtection = protectLegacyScheduledSnapshot({
       status: outreach.status,
       finalSubject: outreach.finalSubject,
       finalHtml: outreach.finalHtml,
-      templateSubject: outreach.template?.subject,
-      templateHtml: outreach.template?.htmlBody,
-      evidenceValues: [
-        outreach.contact?.customPrice ?? "",
-        legacyDefaultRate?.value ?? "",
-      ],
+      trustedTemplate,
       immutableRequest,
     });
     if (snapshotProtection.kind === "block") {

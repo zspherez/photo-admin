@@ -144,13 +144,12 @@ test("ambiguous rendered rate placement fails closed instead of guessing", () =>
     normalizeLegacyOutreachSnapshot({
       subject: "$650Artist",
       html: "<p>Keep me.</p>",
-      templateSubject: "{{rate}}{{artist}}",
+      trustedTemplateSubject: "{{rate}}{{artist}}",
     }),
     {
+      outcome: "requires_manual_review",
       subject: "$650Artist",
       html: "<p>Keep me.</p>",
-      detected: true,
-      safe: false,
     },
   );
 });
