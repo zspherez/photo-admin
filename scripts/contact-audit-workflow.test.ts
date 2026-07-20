@@ -21,6 +21,13 @@ const migration = readFileSync(
   ),
   "utf8"
 );
+const resolutionMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260720120000_contact_audit_resolution/migration.sql",
+    import.meta.url
+  ),
+  "utf8"
+);
 
 test("contact audit workflow is manual, bounded, and OIDC-authenticated", () => {
   assert.match(workflow, /workflow_dispatch/);
@@ -64,4 +71,41 @@ test("contact audit migration is explicit and transactional", () => {
   assert.match(migration, /ON DELETE SET NULL/);
   assert.match(migration, /ContactAuditJob_result_consistency_check/);
   assert.match(migration, /COMMIT;\s*$/);
+});
+
+test("contact audit decisions have immutable constrained provenance", () => {
+  assert.match(resolutionMigration, /^BEGIN;/);
+  assert.match(
+    resolutionMigration,
+    /ContactAuditJob_resolution_consistency_check/
+  );
+  assert.match(
+    resolutionMigration,
+    /ContactAuditJob_selectedAlternativeId_fkey/
+  );
+  assert.match(
+    resolutionMigration,
+    /Selected contact audit alternative must belong to its job/
+  );
+  assert.match(
+    resolutionMigration,
+    /Resolved contact audit decisions and provenance are immutable/
+  );
+  assert.match(
+    resolutionMigration,
+    /Resolved contact audit alternatives are immutable/
+  );
+  assert.match(
+    resolutionMigration,
+    /Resolved contact audit history cannot be deleted/
+  );
+  assert.match(
+    resolutionMigration,
+    /"finding" IS NOT NULL[\s\S]*"verifiedAt" IS NOT NULL[\s\S]*"resolvedAt" IS NOT NULL/
+  );
+  assert.match(
+    resolutionMigration,
+    /"resolvedArtistName" IS NOT NULL[\s\S]*char_length\(btrim\("resolvedArtistName"\)\) > 0/
+  );
+  assert.match(resolutionMigration, /COMMIT;\s*$/);
 });

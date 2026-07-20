@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  AuditedContactSheetPostWriteError,
   assertExpectedPreviousSheetTarget,
+  captureAuditedContactSheetRollbackCells,
   contactSheetRowDisposition,
   configuredSheetTargetFromValues,
   isSheetSyncLeaseExpired,
@@ -11,18 +13,22 @@ import {
   makeSheetSyncLeaseKey,
   parseSheetEmails,
   parseSheetSourceKey,
+  planAuditedContactSheetCellUpdates,
   planContactSheetCellUpdates,
   reconcileSheetContactSlots,
   remainingLegacySheetAdoptions,
+  recoverAuditedContactSheetPostWriteError,
   resolveSheetBootstrapTargetFromValues,
   resolveSheetMutationTarget,
   selectLegacySheetRowAdoption,
   sheetApiRequestOptions,
   sheetDatabaseTransactionTiming,
   sheetSourceKeyBelongsToTarget,
+  shouldKeepApprovedStaleSheetContactQuarantined,
   sheetSyncDeadlineResult,
   staleOwnedSheetContactIds,
   validateSheetBootstrapTarget,
+  verifyAuditedContactSheetPostWrite,
 } from "./sheets";
 import {
   createOperationDeadline,
@@ -721,6 +727,11 @@ test("stale cleanup scopes ownership to one spreadsheet and tab", () => {
       false,
       [
         { id: "current", sourceKey: current },
+        {
+          id: "resolved-quarantine",
+          sourceKey: makeSheetSourceKey(target, "row-audit", 0),
+          preserveAuditHistory: true,
+        },
         { id: "other-spreadsheet", sourceKey: otherSpreadsheet },
         { id: "other-tab", sourceKey: otherTab },
         { id: "legacy", sourceKey: legacy },
@@ -738,6 +749,201 @@ test("stale cleanup scopes ownership to one spreadsheet and tab", () => {
     rowId: "row-legacy",
     slot: 0,
   });
+});
+
+test("approved stale Sheet identities stay quarantined until the Sheet target changes", () => {
+  const contact = {
+    auditJobs: [
+      {
+        resolution: "approved",
+        finding: "stale",
+        resolvedEmail: "old.manager@example.com",
+        resolvedDirectOutreachNote: null,
+      },
+    ],
+  };
+  assert.equal(
+    shouldKeepApprovedStaleSheetContactQuarantined(contact, {
+      email: "OLD.MANAGER@example.com",
+      directOutreachNote: null,
+    }),
+    true
+  );
+  for (const finding of ["changed", "ambiguous"]) {
+    assert.equal(
+      shouldKeepApprovedStaleSheetContactQuarantined(
+        {
+          auditJobs: [
+            {
+              resolution: "approved",
+              finding,
+              resolvedEmail: "new.manager@example.com",
+              resolvedDirectOutreachNote: null,
+            },
+          ],
+        },
+        {
+          email: "new.manager@example.com",
+          directOutreachNote: null,
+        }
+      ),
+      false
+    );
+  }
+  assert.equal(
+    shouldKeepApprovedStaleSheetContactQuarantined(contact, {
+      email: "new.manager@example.com",
+      directOutreachNote: null,
+    }),
+    false
+  );
+  assert.equal(
+    shouldKeepApprovedStaleSheetContactQuarantined(
+      {
+        auditJobs: [
+          {
+            resolution: "approved",
+            finding: "stale",
+            resolvedEmail: null,
+            resolvedDirectOutreachNote: "DM the artist",
+          },
+        ],
+      },
+      { email: null, directOutreachNote: "DM the artist" }
+    ),
+    true
+  );
+});
+
+test("audit Sheet updates and rollback capture never touch price or notes", () => {
+  const header = [
+    "artist",
+    "email",
+    "manager_name",
+    "price",
+    "role",
+    "notes",
+  ];
+  const existing = [
+    "Artist",
+    "old@example.com",
+    "Newer Sheet Name",
+    "$975",
+    "management",
+    "Newer Sheet notes",
+  ];
+  const updates = planAuditedContactSheetCellUpdates({
+    tabName: "Artists",
+    sheetRow: 2,
+    header,
+    existing,
+    contactCellValue: "new@example.com",
+    managerName: "Audited Manager",
+    role: "management",
+  });
+
+  assert.deepEqual(
+    updates.map((update) => update.columnIndex),
+    [1, 2]
+  );
+  assert.deepEqual(
+    captureAuditedContactSheetRollbackCells(existing, updates),
+    [
+      {
+        columnIndex: 1,
+        before: "old@example.com",
+        after: "new@example.com",
+      },
+      {
+        columnIndex: 2,
+        before: "Newer Sheet Name",
+        after: "Audited Manager",
+      },
+    ]
+  );
+  assert.equal(existing[3], "$975");
+  assert.equal(existing[5], "Newer Sheet notes");
+});
+
+test("post-write audit Sheet failures carry exact rollback state", async () => {
+  const rollback = {
+    sourceKey: "sheet-source",
+    rowId: "row-1",
+    cells: [
+      {
+        columnIndex: 1,
+        before: "old@example.com",
+        after: "new@example.com",
+      },
+    ],
+  };
+  const error = new AuditedContactSheetPostWriteError(
+    new Error("lease lost after write"),
+    rollback
+  );
+  await assert.rejects(
+    verifyAuditedContactSheetPostWrite(rollback, async () => {
+      throw new Error("verification read failed");
+    }),
+    (failure) => {
+      assert.ok(failure instanceof AuditedContactSheetPostWriteError);
+      assert.equal(failure.message, "verification read failed");
+      assert.deepEqual(failure.rollback, rollback);
+      return true;
+    }
+  );
+  await assert.doesNotReject(
+    verifyAuditedContactSheetPostWrite(rollback, async () => {})
+  );
+  let recoveredToken: typeof rollback | null = null;
+  assert.deepEqual(
+    await recoverAuditedContactSheetPostWriteError(
+      error,
+      async (token) => {
+        recoveredToken = token;
+      }
+    ),
+    { rolledBack: true }
+  );
+  assert.deepEqual(recoveredToken, rollback);
+  assert.deepEqual(
+    await recoverAuditedContactSheetPostWriteError(
+      error,
+      async () => {
+        throw new Error("rollback CAS failed");
+      }
+    ),
+    { rolledBack: false, rollbackError: "rollback CAS failed" }
+  );
+
+  const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /sheetWriteCompleted = true[\s\S]*verifyAuditedContactSheetPostWrite\([\s\S]*auditRollback,[\s\S]*verifyPostWrite/
+  );
+});
+
+test("Sheet reconciliation honors approved stale audit decisions", () => {
+  const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
+  assert.match(source, /resolution: \{ not: null \}/);
+  assert.match(
+    source,
+    /state: shouldKeepApprovedStaleSheetContactQuarantined/
+  );
+  assert.match(source, /preserveAuditHistory:/);
+  assert.match(source, /contact\._count\.auditJobs > 0/);
+  assert.match(
+    source,
+    /!contact\.preserveAuditHistory[\s\S]*staleOwnedSheetContactIds/
+  );
+  assert.match(
+    source,
+    /A contact audit decision is currently updating a Sheet-owned contact/
+  );
+  assert.match(
+    source,
+    /rollback\.cells\.some\([\s\S]*cell\.after[\s\S]*rollback was not applied/
+  );
 });
 
 test("Sheet target switches commit only after verified reconciliation", () => {

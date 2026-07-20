@@ -2,9 +2,13 @@ import type { Metadata } from "next";
 import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireServerActionAuth } from "@/lib/auth";
-import { markContactAuditReviewed } from "@/lib/contactAudit";
+import {
+  resolveContactAuditJob,
+  type ContactAuditResolution,
+} from "@/lib/contactAudit";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 import { positiveIntegerSearchParam } from "@/lib/searchParams";
 import { getPagination } from "@/lib/match";
@@ -19,7 +23,7 @@ export const metadata: Metadata = { title: "Contact audit" };
 const PAGE_SIZE = 50;
 const WORKFLOW_URL =
   "https://github.com/zspherez/photo-admin/actions/workflows/contact-audit.yml";
-type AuditView = "flagged" | "unreviewed" | "all";
+const FLAGGED_FINDINGS = ["changed", "stale", "ambiguous"] as const;
 
 function formatTimestamp(value: Date | null): string {
   if (!value) return "Not yet";
@@ -31,25 +35,72 @@ function formatTimestamp(value: Date | null): string {
 }
 
 function findingTone(finding: string | null): BadgeTone {
-  if (finding === "current") return "success";
-  if (finding === "changed" || finding === "ambiguous") return "warning";
   if (finding === "stale") return "danger";
-  if (finding === "unverified") return "muted";
+  if (finding === "changed" || finding === "ambiguous") return "warning";
   return "info";
 }
 
-function auditHref(runId: string, view: AuditView, page = 1): string {
-  const params = new URLSearchParams({ run: runId, view });
+function auditHref(
+  runId: string,
+  page = 1,
+  result?: {
+    resolution?: ContactAuditResolution;
+    error?: string;
+  }
+): string {
+  const params = new URLSearchParams({ run: runId });
   if (page > 1) params.set("page", String(page));
+  if (result?.resolution) params.set("resolved", result.resolution);
+  if (result?.error) params.set("error", result.error.slice(0, 300));
   return `/contact-audit?${params.toString()}`;
 }
 
-async function markReviewedAction(formData: FormData) {
+function actionContext(formData: FormData): {
+  runId: string;
+  page: number;
+} {
+  return {
+    runId: String(formData.get("runId") ?? "").trim().slice(0, 100),
+    page: positiveIntegerSearchParam(
+      String(formData.get("page") ?? "").trim()
+    ),
+  };
+}
+
+async function approveContactAuditAction(formData: FormData) {
   "use server";
   await requireServerActionAuth("/contact-audit");
-  const jobId = String(formData.get("jobId") ?? "").trim();
-  if (jobId) await markContactAuditReviewed(jobId);
+  const context = actionContext(formData);
+  const jobId = String(formData.get("jobId") ?? "").trim().slice(0, 100);
+  const alternativeId =
+    String(formData.get("alternativeId") ?? "").trim().slice(0, 100) || null;
+  const result = await resolveContactAuditJob(
+    jobId,
+    "approved",
+    alternativeId
+  );
   revalidatePath("/contact-audit");
+  redirect(
+    auditHref(context.runId, context.page, {
+      ...(result.ok ? { resolution: "approved" as const } : {}),
+      ...(!result.ok ? { error: result.error ?? "Approval failed." } : {}),
+    })
+  );
+}
+
+async function rejectContactAuditAction(formData: FormData) {
+  "use server";
+  await requireServerActionAuth("/contact-audit");
+  const context = actionContext(formData);
+  const jobId = String(formData.get("jobId") ?? "").trim().slice(0, 100);
+  const result = await resolveContactAuditJob(jobId, "rejected", null);
+  revalidatePath("/contact-audit");
+  redirect(
+    auditHref(context.runId, context.page, {
+      ...(result.ok ? { resolution: "rejected" as const } : {}),
+      ...(!result.ok ? { error: result.error ?? "Rejection failed." } : {}),
+    })
+  );
 }
 
 export default async function ContactAuditPage({
@@ -57,18 +108,20 @@ export default async function ContactAuditPage({
 }: {
   searchParams: Promise<{
     run?: SearchParamValue;
-    view?: SearchParamValue;
     page?: SearchParamValue;
+    resolved?: SearchParamValue;
+    error?: SearchParamValue;
   }>;
 }) {
   const raw = await searchParams;
   const requestedRunId = firstSearchParam(raw.run)?.slice(0, 100) ?? null;
-  const requestedView = firstSearchParam(raw.view);
-  const view: AuditView =
-    requestedView === "all" || requestedView === "unreviewed"
-      ? requestedView
-      : "flagged";
   const requestedPage = positiveIntegerSearchParam(raw.page);
+  const rawResolved = firstSearchParam(raw.resolved);
+  const resolved =
+    rawResolved === "approved" || rawResolved === "rejected"
+      ? rawResolved
+      : null;
+  const actionError = firstSearchParam(raw.error);
   const runs = await db.contactAuditRun.findMany({
     orderBy: { createdAt: "desc" },
     take: 10,
@@ -88,19 +141,12 @@ export default async function ContactAuditPage({
   const where: Prisma.ContactAuditJobWhereInput = selectedRun
     ? {
         runId: selectedRun.id,
-        ...(view === "flagged"
-          ? { finding: { in: ["changed", "stale", "ambiguous"] } }
-          : view === "unreviewed"
-            ? { status: "complete", reviewedAt: null }
-            : {}),
+        status: "complete",
+        finding: { in: [...FLAGGED_FINDINGS] },
+        resolution: null,
       }
     : { id: "__no_contact_audit_run__" };
-  const [
-    total,
-    statusCounts,
-    flaggedCount,
-    unreviewedCount,
-  ] = selectedRun
+  const [total, statusCounts] = selectedRun
     ? await Promise.all([
         db.contactAuditJob.count({ where }),
         db.contactAuditJob.groupBy({
@@ -108,35 +154,29 @@ export default async function ContactAuditPage({
           where: { runId: selectedRun.id },
           _count: { _all: true },
         }),
-        db.contactAuditJob.count({
-          where: {
-            runId: selectedRun.id,
-            finding: { in: ["changed", "stale", "ambiguous"] },
-          },
-        }),
-        db.contactAuditJob.count({
-          where: {
-            runId: selectedRun.id,
-            status: "complete",
-            reviewedAt: null,
-          },
-        }),
       ])
-    : [0, [], 0, 0];
+    : [0, []];
   const pagination = getPagination(total, requestedPage, PAGE_SIZE);
   const jobs = selectedRun
     ? await db.contactAuditJob.findMany({
         where,
-        orderBy: [
-          { reviewedAt: "asc" },
-          { verifiedAt: "desc" },
-          { createdAt: "asc" },
-        ],
+        orderBy: [{ verifiedAt: "desc" }, { createdAt: "asc" }],
         skip: (pagination.page - 1) * PAGE_SIZE,
         take: PAGE_SIZE,
         include: {
           alternatives: { orderBy: { createdAt: "asc" } },
-          contact: { select: { id: true, state: true } },
+          contact: {
+            select: {
+              id: true,
+              email: true,
+              phone: true,
+              directOutreachNote: true,
+              name: true,
+              role: true,
+              source: true,
+              state: true,
+            },
+          },
           artist: { select: { id: true } },
         },
       })
@@ -150,11 +190,11 @@ export default async function ContactAuditPage({
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
-            Contact audit
+            Contact audit decisions
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-zinc-500">
-            Agents verify active manager contacts against current public
-            sources. Findings are review-only and never change contact records.
+            Review only contacts flagged for a change, then approve the saved
+            replacement or reject the finding here.
           </p>
         </div>
         <LinkButton
@@ -166,18 +206,30 @@ export default async function ContactAuditPage({
         </LinkButton>
       </div>
 
-      <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
-        Running the GitHub workflow snapshots every active contact. Review
-        findings here; edit a contact separately only after checking the saved
-        evidence.
-      </div>
+      {resolved && (
+        <div
+          className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+          role="status"
+        >
+          Decision saved. The finding was {resolved} and removed from this
+          queue.
+        </div>
+      )}
+      {actionError && (
+        <div
+          className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+          role="alert"
+        >
+          {actionError}
+        </div>
+      )}
 
       {runs.length > 0 && (
         <div className="mt-5 flex flex-wrap gap-2" aria-label="Audit runs">
           {runs.map((run, index) => (
             <LinkButton
               key={run.id}
-              href={auditHref(run.id, view)}
+              href={auditHref(run.id)}
               variant={run.id === selectedRun?.id ? "primary" : "secondary"}
               size="sm"
             >
@@ -197,13 +249,12 @@ export default async function ContactAuditPage({
         </Card>
       ) : (
         <>
-          <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {[
-              ["Flagged", flaggedCount],
-              ["Unreviewed", unreviewedCount],
+              ["Decisions needed", total],
               ["Queued", countByStatus.get("pending") ?? 0],
               ["Researching", countByStatus.get("claimed") ?? 0],
-              ["Complete", countByStatus.get("complete") ?? 0],
+              ["Completed", countByStatus.get("complete") ?? 0],
             ].map(([label, value]) => (
               <Card key={label}>
                 <CardBody className="p-4">
@@ -215,24 +266,9 @@ export default async function ContactAuditPage({
           </div>
 
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex gap-2">
-              {(
-                [
-                  ["flagged", `Flagged (${flaggedCount})`],
-                  ["unreviewed", `Unreviewed (${unreviewedCount})`],
-                  ["all", `All (${selectedRun.contactCount})`],
-                ] as const
-              ).map(([value, label]) => (
-                <LinkButton
-                  key={value}
-                  href={auditHref(selectedRun.id, value)}
-                  variant={view === value ? "primary" : "secondary"}
-                  size="sm"
-                >
-                  {label}
-                </LinkButton>
-              ))}
-            </div>
+            <p className="text-sm font-medium">
+              Unresolved changed, stale, and ambiguous findings
+            </p>
             <p className="text-xs text-zinc-500">
               Run {selectedRun.status} · started{" "}
               {formatTimestamp(selectedRun.createdAt)}
@@ -245,7 +281,7 @@ export default async function ContactAuditPage({
           {jobs.length === 0 ? (
             <Card className="mt-3">
               <CardBody className="py-10 text-center text-sm text-zinc-500">
-                No contacts match this view.
+                No unresolved contact decisions remain for this run.
               </CardBody>
             </Card>
           ) : (
@@ -267,36 +303,55 @@ export default async function ContactAuditPage({
                             {job.snapshotArtistName}
                           </p>
                         )}
-                        <p className="mt-1 break-all text-xs text-zinc-500">
-                          {job.snapshotName
-                            ? `${job.snapshotName} · `
-                            : ""}
-                          {job.snapshotEmail ??
-                            job.snapshotPhone ??
-                            "No email or phone"}
-                          {job.snapshotRole ? ` · ${job.snapshotRole}` : ""}
-                        </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
-                        {job.finding && (
-                          <Badge tone={findingTone(job.finding)}>
-                            {job.finding}
-                          </Badge>
-                        )}
+                        <Badge tone={findingTone(job.finding)}>
+                          {job.finding}
+                        </Badge>
                         {job.confidence && (
                           <Badge tone="muted">{job.confidence}</Badge>
-                        )}
-                        {job.reviewedAt && (
-                          <Badge tone="success">reviewed</Badge>
-                        )}
-                        {!job.finding && (
-                          <Badge tone="info">{job.status}</Badge>
                         )}
                       </div>
                     </div>
 
+                    <div className="mt-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                        Current contact
+                      </p>
+                      {job.contact ? (
+                        <>
+                          <p className="mt-1 break-all text-sm font-medium">
+                            {job.contact.name
+                              ? `${job.contact.name} · `
+                              : ""}
+                            {job.contact.email ??
+                              job.contact.phone ??
+                              job.contact.directOutreachNote ??
+                              "No contact target"}
+                          </p>
+                          <p className="mt-1 text-xs text-zinc-500">
+                            {job.contact.role ?? "No role"}
+                            {job.contact.source
+                              ? ` · source: ${job.contact.source}`
+                              : ""}
+                            {` · ${job.contact.state}`}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="mt-1 text-sm text-red-700 dark:text-red-300">
+                          This contact no longer exists. Run a new audit before
+                          resolving this finding.
+                        </p>
+                      )}
+                    </div>
+
                     {job.evidence && (
-                      <p className="mt-3 text-sm">{job.evidence}</p>
+                      <div className="mt-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                          Saved evidence
+                        </p>
+                        <p className="mt-1 text-sm">{job.evidence}</p>
+                      </div>
                     )}
                     {job.sourceUrls.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
@@ -324,10 +379,11 @@ export default async function ContactAuditPage({
                       </p>
                     )}
 
-                    {job.alternatives.length > 0 && (
+                    {(job.finding === "changed" ||
+                      job.finding === "ambiguous") && (
                       <div className="mt-4">
                         <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                          Plausible current manager contacts
+                          Proposed manager contacts
                         </h2>
                         <div className="mt-2 space-y-2">
                           {job.alternatives.map((alternative) => (
@@ -364,40 +420,98 @@ export default async function ContactAuditPage({
                                   </a>
                                 ))}
                               </div>
+                              <form
+                                action={approveContactAuditAction}
+                                className="mt-3"
+                              >
+                                <input
+                                  type="hidden"
+                                  name="jobId"
+                                  value={job.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="alternativeId"
+                                  value={alternative.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="runId"
+                                  value={selectedRun.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="page"
+                                  value={pagination.page}
+                                />
+                                <PendingSubmitButton
+                                  size="sm"
+                                  pendingLabel="Applying contact…"
+                                  className="w-full sm:w-auto"
+                                  disabled={!job.contact}
+                                >
+                                  Approve and apply this contact
+                                </PendingSubmitButton>
+                              </form>
                             </div>
                           ))}
                         </div>
                       </div>
                     )}
 
-                    {job.status === "complete" && (
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {!job.reviewedAt && (
-                          <form action={markReviewedAction}>
-                            <input
-                              type="hidden"
-                              name="jobId"
-                              value={job.id}
-                            />
-                            <PendingSubmitButton
-                              size="sm"
-                              pendingLabel="Marking…"
-                            >
-                              Mark reviewed
-                            </PendingSubmitButton>
-                          </form>
-                        )}
-                        {job.contact?.state === "active" && (
-                          <LinkButton
-                            href={`/dashboard/contact/${job.contact.id}`}
-                            variant="secondary"
-                            size="sm"
-                          >
-                            Open contact
-                          </LinkButton>
-                        )}
-                      </div>
+                    {job.finding === "stale" && (
+                      <form
+                        action={approveContactAuditAction}
+                        className="mt-4"
+                      >
+                        <input type="hidden" name="jobId" value={job.id} />
+                        <input
+                          type="hidden"
+                          name="runId"
+                          value={selectedRun.id}
+                        />
+                        <input
+                          type="hidden"
+                          name="page"
+                          value={pagination.page}
+                        />
+                        <PendingSubmitButton
+                          variant="danger"
+                          size="sm"
+                          pendingLabel="Marking inactive…"
+                          className="w-full sm:w-auto"
+                          disabled={!job.contact}
+                        >
+                          Approve stale — mark contact inactive
+                        </PendingSubmitButton>
+                      </form>
                     )}
+
+                    <form
+                      action={rejectContactAuditAction}
+                      className="mt-3"
+                    >
+                      <input type="hidden" name="jobId" value={job.id} />
+                      <input
+                        type="hidden"
+                        name="runId"
+                        value={selectedRun.id}
+                      />
+                      <input
+                        type="hidden"
+                        name="page"
+                        value={pagination.page}
+                      />
+                      <PendingSubmitButton
+                        variant="secondary"
+                        size="sm"
+                        pendingLabel="Rejecting finding…"
+                        className="w-full sm:w-auto"
+                        disabled={!job.contact}
+                      >
+                        Reject finding — keep current contact active
+                      </PendingSubmitButton>
+                    </form>
                   </CardBody>
                 </Card>
               ))}
@@ -406,16 +520,12 @@ export default async function ContactAuditPage({
 
           {pagination.pageCount > 1 && (
             <nav
-              aria-label="Contact audit pages"
+              aria-label="Contact audit decision pages"
               className="mt-5 flex items-center justify-between gap-3"
             >
               {pagination.hasPrevious ? (
                 <LinkButton
-                  href={auditHref(
-                    selectedRun.id,
-                    view,
-                    pagination.page - 1
-                  )}
+                  href={auditHref(selectedRun.id, pagination.page - 1)}
                   variant="secondary"
                 >
                   Previous
@@ -428,11 +538,7 @@ export default async function ContactAuditPage({
               </span>
               {pagination.hasNext ? (
                 <LinkButton
-                  href={auditHref(
-                    selectedRun.id,
-                    view,
-                    pagination.page + 1
-                  )}
+                  href={auditHref(selectedRun.id, pagination.page + 1)}
                   variant="secondary"
                 >
                   Next
