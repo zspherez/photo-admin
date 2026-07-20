@@ -34,6 +34,8 @@ const syncResult = (fetched: number): SyncResult => ({
   cancelled: 0,
   outsideNyc: 0,
   geographyUnknown: 0,
+  leadTimeExcluded: 0,
+  leadTimeGeographyUnknown: 0,
   venuesCached: 0,
   venuesReused: 0,
   identityConflicts: [],
@@ -385,7 +387,7 @@ test("EDMTrain scope flags must be present booleans before a snapshot is complet
   }
 });
 
-test("regular shows fail closed outside NYC or with unknown geography while festivals remain allowed", () => {
+test("regular shows and near-term festivals fail closed by NYC geography", () => {
   const event = eventWithCountry("United States");
   event.festivalInd = false;
   assert.equal(edmtrainEventStatus(event, false, "inside_nyc"), "active");
@@ -399,8 +401,26 @@ test("regular shows fail closed outside NYC or with unknown geography while fest
   );
 
   event.festivalInd = true;
-  assert.equal(edmtrainEventStatus(event, false, "outside_nyc"), "active");
-  assert.equal(edmtrainEventStatus(event, false, "unknown"), "active");
+  event.date = "2026-07-26";
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  assert.equal(
+    edmtrainEventStatus(event, false, "inside_nyc", now),
+    "active"
+  );
+  assert.equal(
+    edmtrainEventStatus(event, false, "outside_nyc", now),
+    "lead_time_outside_nyc"
+  );
+  assert.equal(
+    edmtrainEventStatus(event, false, "unknown", now),
+    "lead_time_geography_unknown"
+  );
+
+  event.date = "2026-07-27";
+  assert.equal(
+    edmtrainEventStatus(event, false, "outside_nyc", now),
+    "active"
+  );
 });
 
 test("EDMTrain retry-budget failures remain structured at the provider boundary", async () => {

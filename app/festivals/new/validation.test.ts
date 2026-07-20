@@ -117,7 +117,7 @@ test("invalid submissions return feedback without a persistable payload", () => 
 
 test("manual festivals normalize explicit international country codes", () => {
   const canada = validateFestivalCreation(
-    values({ countryCode: "ca" }),
+    values({ countryCode: "ca", date: "2026-07-23" }),
     new Date("2026-07-16T16:00:00.000Z")
   );
   assert.equal(canada.ok, true);
@@ -125,4 +125,53 @@ test("manual festivals normalize explicit international country codes", () => {
     assert.equal(canada.countryCode, "CA");
     assert.equal(canada.countryName, "Canada");
   }
+});
+
+test("manual festival lead time exempts NYC and requires seven days elsewhere", () => {
+  const now = new Date("2026-07-20T16:00:00.000Z");
+  assert.equal(
+    validateFestivalCreation(values({ date: "2026-07-20" }), now).ok,
+    true
+  );
+  assert.deepEqual(
+    validateFestivalCreation(
+      values({
+        date: "2026-07-26",
+        city: "Chicago",
+        state: "IL",
+      }),
+      now
+    ),
+    {
+      ok: false,
+      message:
+        "Non-NYC festivals fewer than 7 calendar days away are not actionable.",
+    }
+  );
+  assert.equal(
+    validateFestivalCreation(
+      values({
+        date: "2026-07-27",
+        city: "Chicago",
+        state: "IL",
+      }),
+      now
+    ).ok,
+    true
+  );
+  assert.deepEqual(
+    validateFestivalCreation(
+      values({
+        date: "2026-07-26",
+        city: "Mystery City",
+        state: "",
+      }),
+      now
+    ),
+    {
+      ok: false,
+      message:
+        "Festival geography is unknown, so festivals fewer than 7 calendar days away are not actionable.",
+    }
+  );
 });

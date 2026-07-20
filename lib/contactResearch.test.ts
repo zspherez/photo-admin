@@ -164,6 +164,9 @@ test("festival enqueue preserves concurrent contact and skip terminal states", a
             findFirst: async (value: unknown) => {
               eligibilityReads += 1;
               const input = value as {
+                where?: {
+                  AND?: unknown[];
+                };
                 select?: {
                   artists?: {
                     where?: {
@@ -188,9 +191,14 @@ test("festival enqueue preserves concurrent contact and skip terminal states", a
                 input.select?.artists?.where?.artist?.researchSkips,
                 { none: { clearedAt: null } }
               );
+              assert.equal(
+                input.where?.AND?.length,
+                1,
+                "festival enqueue must apply the shared lead-time filter"
+              );
               return {
                 id: "show-1",
-                date: new Date("2026-07-25T00:00:00.000Z"),
+                date: new Date("2026-07-27T00:00:00.000Z"),
                 artists:
                   state.activeContact || state.activeSkip
                     ? []

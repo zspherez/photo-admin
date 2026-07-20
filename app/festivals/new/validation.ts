@@ -10,6 +10,11 @@ import {
   countryNameForCode,
   normalizeCountryCode,
 } from "@/lib/country";
+import { classifyVenueNycGeography } from "@/lib/edmtrainVenue";
+import {
+  festivalLeadTimeError,
+  festivalLeadTimeExclusion,
+} from "@/lib/festivalEligibility";
 import type { FestivalFormValues } from "./form-state";
 
 export type FestivalCreationValidation =
@@ -61,6 +66,26 @@ export function validateFestivalCreation(
       ok: false,
       message:
         "Festival date cannot be before the current America/New_York calendar day.",
+    };
+  }
+
+  const geography = classifyVenueNycGeography({
+    location: [values.city, values.state].filter(Boolean).join(", "),
+    state: values.state || null,
+    country: countryCode,
+  });
+  const leadTimeExclusion = festivalLeadTimeExclusion(
+    {
+      isFestival: true,
+      date,
+      venueNycStatus: geography.status,
+    },
+    now
+  );
+  if (leadTimeExclusion) {
+    return {
+      ok: false,
+      message: festivalLeadTimeError(leadTimeExclusion),
     };
   }
 

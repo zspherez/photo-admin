@@ -16,6 +16,10 @@ import { activeListenSignalWhere } from "@/lib/listenSignal";
 import { appendContactToSheet, parseSheetEmails } from "@/lib/sheets";
 import { constantTimeEqual } from "@/lib/auth";
 import { readGlobalAgentRulesInTransaction } from "@/lib/agentRules";
+import {
+  festivalLeadTimeSql,
+  festivalLeadTimeWhere,
+} from "@/lib/festivalEligibility";
 
 export const CONTACT_RESEARCH_WINDOW_DAYS = 90;
 export const CONTACT_RESEARCH_DEFAULT_CLAIM_LIMIT = 3;
@@ -1020,6 +1024,7 @@ export async function refreshContactResearchQueue(
         requestedShow: {
           date: { gte: today },
           syncStatus: "active",
+          AND: [festivalLeadTimeWhere(now)],
         },
         artist: {
           contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
@@ -1227,6 +1232,7 @@ export async function enqueueFestivalManagerResearch(
         isFestival: true,
         syncStatus: "active",
         date: { gte: today },
+        AND: [festivalLeadTimeWhere(now)],
       },
       select: {
         id: true,
@@ -1419,6 +1425,7 @@ export async function claimContactResearchJobs(
           WHERE show_artist."artistId" = job."artistId"
             AND show."date" >= ${today}
             AND show."syncStatus" = 'active'
+            AND ${festivalLeadTimeSql(now)}
             AND (
               (
                 show."isFestival" = false
@@ -1480,6 +1487,7 @@ export async function claimContactResearchJobs(
                   show: {
                     date: { gte: easternTodayStoredDate(now) },
                     syncStatus: "active",
+                    AND: [festivalLeadTimeWhere(now)],
                   },
                 },
                 select: {
@@ -2186,6 +2194,7 @@ export async function unskipContactResearchArtist(
                   show: {
                     syncStatus: "active",
                     date: { gte: today },
+                    AND: [festivalLeadTimeWhere(now)],
                   },
                 },
               ]
@@ -2278,6 +2287,7 @@ async function retryEligibleContactResearchJobs(
         WHERE show_artist."artistId" = job."artistId"
           AND show."date" >= ${today}
           AND show."syncStatus" = 'active'
+          AND ${festivalLeadTimeSql(now)}
           AND (
             (
               show."isFestival" = false

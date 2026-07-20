@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
+  festivalLeadTimeError,
+  festivalLeadTimeExclusion,
+} from "@/lib/festivalEligibility";
+import {
   applyTemplate,
   buildVarsForShow,
   ensureDefaultTemplate,
@@ -1223,12 +1227,22 @@ export function festivalOutreachBlockingReason(
     | {
         isFestival: boolean;
         dismissedAt: Date | null;
-      }
+      date: Date;
+      city?: string | null;
+      state?: string | null;
+      countryCode?: string | null;
+      edmtrainVenue?: { nycStatus: string } | null;
+      venueNycStatus?: string | null;
+    }
     | null
     | undefined,
   kind: OutreachKindValue,
+  now: Date = new Date(),
 ): string | null {
-  if (!show?.isFestival || show.dismissedAt === null) return null;
+  if (!show?.isFestival) return null;
+  const leadTimeExclusion = festivalLeadTimeExclusion(show, now);
+  if (leadTimeExclusion) return festivalLeadTimeError(leadTimeExclusion);
+  if (show.dismissedAt === null) return null;
   return kind === "follow_up"
     ? "Restore this festival before sending follow-up"
     : "Restore this festival before sending outreach";
@@ -1402,12 +1416,27 @@ async function evaluateLockedOutreachDeliveryPolicy(
       syncStatus: string;
       isFestival: boolean;
       dismissedAt: Date | null;
+      date: Date;
+      city: string;
+      state: string | null;
+      countryCode: string | null;
+      venueNycStatus: string | null;
     }>
   >(
     Prisma.sql`
-      SELECT "syncStatus", "isFestival", "dismissedAt"
-      FROM "Show"
-      WHERE "id" = ${outreach.showId}
+      SELECT
+        show."syncStatus",
+        show."isFestival",
+        show."dismissedAt",
+        show."date",
+        show."city",
+        show."state",
+        show."countryCode",
+        venue."nycStatus" AS "venueNycStatus"
+      FROM "Show" show
+      LEFT JOIN "EdmtrainVenue" venue
+        ON venue."id" = show."edmtrainVenueId"
+      WHERE show."id" = ${outreach.showId}
       FOR UPDATE
     `,
   );
@@ -1555,6 +1584,11 @@ export async function getOutreachSendabilityBatch(
         id: true,
         syncStatus: true,
         isFestival: true,
+        date: true,
+        city: true,
+        state: true,
+        countryCode: true,
+        edmtrainVenue: { select: { nycStatus: true } },
         dismissedAt: true,
         artists: { select: { artistId: true } },
       },
@@ -2071,6 +2105,11 @@ export async function getFollowUpEligibilityBatch(
         id: true,
         syncStatus: true,
         isFestival: true,
+        date: true,
+        city: true,
+        state: true,
+        countryCode: true,
+        edmtrainVenue: { select: { nycStatus: true } },
         dismissedAt: true,
         artists: { select: { artistId: true } },
       },
@@ -2322,7 +2361,12 @@ async function prepareOriginalOutreach(
   }
 
   const [show, contact, template, utmSettings] = await Promise.all([
-    db.show.findUnique({ where: { id: showId } }),
+    db.show.findUnique({
+      where: { id: showId },
+      include: {
+        edmtrainVenue: { select: { nycStatus: true } },
+      },
+    }),
     db.contact.findFirst({
       where: { id: contactId, state: "active" },
       include: { artist: true },
@@ -2414,6 +2458,10 @@ async function prepareFollowUpOutreach(
             date: true,
             syncStatus: true,
             isFestival: true,
+            city: true,
+            state: true,
+            countryCode: true,
+            edmtrainVenue: { select: { nycStatus: true } },
             dismissedAt: true,
           },
         },
@@ -2947,6 +2995,11 @@ async function preparedFollowUpBlockingReason(
       show: {
         select: {
           isFestival: true,
+          date: true,
+          city: true,
+          state: true,
+          countryCode: true,
+          edmtrainVenue: { select: { nycStatus: true } },
           dismissedAt: true,
         },
       },
@@ -2982,6 +3035,11 @@ async function preparedDeliveryPolicyBlockingReason(
         select: {
           syncStatus: true,
           isFestival: true,
+          date: true,
+          city: true,
+          state: true,
+          countryCode: true,
+          edmtrainVenue: { select: { nycStatus: true } },
           dismissedAt: true,
         },
       }),
@@ -3066,6 +3124,11 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         select: {
           syncStatus: true,
           isFestival: true,
+          date: true,
+          city: true,
+          state: true,
+          countryCode: true,
+          edmtrainVenue: { select: { nycStatus: true } },
           dismissedAt: true,
         },
       }),
@@ -4918,6 +4981,11 @@ async function schedulePreparedOutreach(
         select: {
           syncStatus: true,
           isFestival: true,
+          date: true,
+          city: true,
+          state: true,
+          countryCode: true,
+          edmtrainVenue: { select: { nycStatus: true } },
           dismissedAt: true,
         },
       }),
@@ -5504,6 +5572,11 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
           select: {
             syncStatus: true,
             isFestival: true,
+            date: true,
+            city: true,
+            state: true,
+            countryCode: true,
+            edmtrainVenue: { select: { nycStatus: true } },
             dismissedAt: true,
           },
         },

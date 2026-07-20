@@ -345,27 +345,70 @@ test("dismissed festivals block original and follow-up delivery", () => {
   const dismissedFestival = {
     isFestival: true,
     dismissedAt: NOW,
+    date: new Date("2026-08-01T00:00:00.000Z"),
+    venueNycStatus: "outside_nyc",
   };
 
   assert.equal(
-    festivalOutreachBlockingReason(dismissedFestival, "original"),
+    festivalOutreachBlockingReason(dismissedFestival, "original", NOW),
     "Restore this festival before sending outreach",
   );
   assert.equal(
-    festivalOutreachBlockingReason(dismissedFestival, "follow_up"),
+    festivalOutreachBlockingReason(dismissedFestival, "follow_up", NOW),
     "Restore this festival before sending follow-up",
   );
   assert.equal(
     festivalOutreachBlockingReason(
-      { isFestival: false, dismissedAt: NOW },
+      {
+        isFestival: false,
+        dismissedAt: NOW,
+        date: NOW,
+      },
       "original",
+      NOW,
     ),
     null,
   );
   assert.equal(
     festivalOutreachBlockingReason(
-      { isFestival: true, dismissedAt: null },
+      {
+        isFestival: true,
+        dismissedAt: null,
+        date: new Date("2026-08-01T00:00:00.000Z"),
+        venueNycStatus: "outside_nyc",
+      },
       "original",
+      NOW,
+    ),
+    null,
+  );
+});
+
+test("near-term non-NYC festivals block outreach while NYC remains actionable", () => {
+  const date = new Date("2026-07-22T00:00:00.000Z");
+  assert.equal(
+    festivalOutreachBlockingReason(
+      {
+        isFestival: true,
+        dismissedAt: null,
+        date,
+        venueNycStatus: "outside_nyc",
+      },
+      "original",
+      NOW,
+    ),
+    "Non-NYC festivals fewer than 7 calendar days away are not actionable.",
+  );
+  assert.equal(
+    festivalOutreachBlockingReason(
+      {
+        isFestival: true,
+        dismissedAt: null,
+        date,
+        venueNycStatus: "inside_nyc",
+      },
+      "original",
+      NOW,
     ),
     null,
   );

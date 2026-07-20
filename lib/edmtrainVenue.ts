@@ -3,15 +3,18 @@ import { normalizeCountry } from "@/lib/country";
 
 export type VenueNycStatus = "inside_nyc" | "outside_nyc" | "unknown";
 
-export interface EdmtrainVenueInput {
-  id: number;
-  name: string;
+export interface VenueGeographyInput {
   location?: string | null;
   state?: string | null;
   address?: string | null;
   country?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+}
+
+export interface EdmtrainVenueInput extends VenueGeographyInput {
+  id: number;
+  name: string;
 }
 
 export interface CachedEdmtrainVenue {
@@ -51,7 +54,7 @@ export interface ResolvedEdmtrainVenue {
 
 export const EDMTRAIN_VENUE_CLASSIFICATION_VERSION = 1;
 
-const NYC_LOCALITIES = new Set([
+export const NYC_LOCALITY_NAMES = [
   "astoria",
   "bronx",
   "brooklyn",
@@ -63,7 +66,9 @@ const NYC_LOCALITIES = new Set([
   "queens",
   "staten island",
   "the bronx",
-]);
+] as const;
+
+const NYC_LOCALITIES = new Set<string>(NYC_LOCALITY_NAMES);
 
 function cleanText(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -104,7 +109,7 @@ function stateFromAddress(parts: string[]): string | null {
   return cleanText(region.replace(/\b\d{5}(?:-\d{4})?\b.*$/, ""));
 }
 
-function providerGeography(venue: EdmtrainVenueInput) {
+function providerGeography(venue: VenueGeographyInput) {
   const location = cleanText(venue.location);
   const locationParts = (location ?? "")
     .split(",")
@@ -143,8 +148,8 @@ function validCoordinatePair(
   );
 }
 
-export function classifyEdmtrainVenueGeography(
-  venue: EdmtrainVenueInput
+export function classifyVenueNycGeography(
+  venue: VenueGeographyInput
 ): { status: VenueNycStatus; reason: string } {
   const geography = providerGeography(venue);
   if (geography.countryCode && geography.countryCode !== "US") {
@@ -179,6 +184,12 @@ export function classifyEdmtrainVenueGeography(
     };
   }
   return { status: "unknown", reason: "insufficient_provider_geography" };
+}
+
+export function classifyEdmtrainVenueGeography(
+  venue: EdmtrainVenueInput
+): { status: VenueNycStatus; reason: string } {
+  return classifyVenueNycGeography(venue);
 }
 
 function venueFingerprint(venue: EdmtrainVenueInput): string {

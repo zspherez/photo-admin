@@ -16,6 +16,8 @@ const synced: SyncResult = {
   cancelled: 0,
   outsideNyc: 0,
   geographyUnknown: 0,
+  leadTimeExcluded: 0,
+  leadTimeGeographyUnknown: 0,
   venuesCached: 1,
   venuesReused: 0,
   identityConflicts: [],

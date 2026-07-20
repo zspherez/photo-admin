@@ -38,6 +38,7 @@ import {
   venueTierSql,
   venueTierLabel,
 } from "@/lib/venueTier";
+import { festivalLeadTimeSql } from "@/lib/festivalEligibility";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact research" };
@@ -298,7 +299,8 @@ export default async function ContactResearchPage({
     detail: firstSearchParam(raw.detail),
     sheetError: firstSearchParam(raw.sheet_error),
   };
-  const today = easternTodayStoredDate();
+  const now = new Date();
+  const today = easternTodayStoredDate(now);
   const bestTierExpression = venueTierSql(
     Prisma.sql`show."venueName"`,
     Prisma.sql`show."eventName"`
@@ -362,6 +364,7 @@ export default async function ContactResearchPage({
         WHERE show_artist."artistId" = job."artistId"
           AND show."date" >= ${today}
           AND show."syncStatus" = 'active'
+          AND ${festivalLeadTimeSql(now)}
         ORDER BY "tier" DESC, show."date" ASC
         LIMIT 1
       ) best_show ON TRUE

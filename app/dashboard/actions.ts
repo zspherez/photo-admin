@@ -26,6 +26,10 @@ import {
 import { isWeekendET, getNextMondaySlot } from "@/lib/schedule";
 import { requireServerActionAuth } from "@/lib/auth";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
+import {
+  festivalLeadTimeError,
+  festivalLeadTimeExclusion,
+} from "@/lib/festivalEligibility";
 
 async function withSerializableRetry<T>(
   work: (tx: Prisma.TransactionClient) => Promise<T>
@@ -254,6 +258,11 @@ export async function markSentAction(formData: FormData) {
         select: {
           id: true,
           isFestival: true,
+          date: true,
+          city: true,
+          state: true,
+          countryCode: true,
+          edmtrainVenue: { select: { nycStatus: true } },
           syncStatus: true,
           dismissedAt: true,
         },
@@ -288,6 +297,13 @@ export async function markSentAction(formData: FormData) {
     if (!show) return { ok: false, error: "Show not found" };
     if (show.syncStatus !== "active") {
       return { ok: false, error: "Show is inactive" };
+    }
+    const leadTimeExclusion = festivalLeadTimeExclusion(show);
+    if (leadTimeExclusion) {
+      return {
+        ok: false,
+        error: festivalLeadTimeError(leadTimeExclusion),
+      };
     }
     if (show.isFestival && show.dismissedAt) {
       return {

@@ -4,14 +4,16 @@ import { db } from "@/lib/db";
 import { LinkButton } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { activeFestivalWhere } from "@/lib/festivalEligibility";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Overview" };
 
 export default async function Home() {
+  const now = new Date();
   const [showCount, festivalCount, artistCount, contactCount, integrations, defaultTemplate] = await Promise.all([
     db.show.count({ where: { isFestival: false, syncStatus: "active" } }),
-    db.show.count({ where: { isFestival: true } }),
+    db.show.count({ where: activeFestivalWhere(now) }),
     db.artist.count(),
     db.contact.count({ where: { state: "active" } }),
     db.integrationCredential.findMany({ select: { provider: true } }),
