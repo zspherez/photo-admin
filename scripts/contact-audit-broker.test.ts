@@ -147,6 +147,24 @@ test("audit broker isolates credentials and submits only audit results", async (
     domain: "example.com",
   });
   assert.equal(lookup.status, 200);
+  const invalidStale = await brokerRequest(socketPath, "/submit-result", {
+    jobId: "job-1",
+    claimToken: "claim-1",
+    finding: "stale",
+    sourceUrls: ["https://artist.example/contact"],
+    evidence: "The existing contact is no longer current.",
+    confidence: "medium",
+    alternatives: [
+      {
+        email: "replacement@example.com",
+        role: "management",
+        sourceUrls: ["https://agency.example/team"],
+        evidence: "A plausible replacement manager.",
+        confidence: "medium",
+      },
+    ],
+  });
+  assert.equal(invalidStale.status, 400);
   const wrongJob = await brokerRequest(socketPath, "/submit-result", {
     jobId: "contact-1",
     claimToken: "claim-1",

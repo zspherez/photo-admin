@@ -198,6 +198,9 @@ export function parseContactAuditSubmission(
       "a current contact cannot include plausible alternatives; use ambiguous"
     );
   }
+  if (finding === "stale" && alternatives.length > 0) {
+    throw new Error("a stale finding cannot include alternative contacts");
+  }
   if (
     (finding === "changed" || finding === "ambiguous") &&
     alternatives.length === 0

@@ -94,6 +94,12 @@ const schemas = {
           message: "current findings cannot include alternatives",
         });
       }
+      if (value.finding === "stale" && value.alternatives.length > 0) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "stale findings cannot include alternatives",
+        });
+      }
       if (
         (value.finding === "changed" ||
           value.finding === "ambiguous") &&

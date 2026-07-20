@@ -115,6 +115,23 @@ test("enforces finding semantics and manager-only alternatives", () => {
       }),
     /use ambiguous/
   );
+  assert.throws(
+    () =>
+      parseContactAuditSubmission({
+        ...base,
+        finding: "stale",
+        alternatives: [
+          {
+            email: "replacement@example.com",
+            role: "management",
+            sourceUrls: ["https://agency.example"],
+            evidence: "A plausible replacement manager.",
+            confidence: "medium",
+          },
+        ],
+      }),
+    /stale finding cannot include alternative contacts/
+  );
 });
 
 test("requires bounded source evidence and claim limits", () => {

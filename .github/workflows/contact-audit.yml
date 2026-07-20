@@ -65,7 +65,14 @@ jobs:
           claimable="$(jq -er '.claimable | numbers | select(. >= 0 and floor == .)' <<<"${result}")"
           run_id="$(jq -er '.runId | strings | select(length > 0)' <<<"${result}")"
           contact_count="$(jq -er '.contactCount | numbers | select(. >= 0 and floor == .)' <<<"${result}")"
-          resumed="$(jq -er '.resumed | booleans' <<<"${result}")"
+          resumed="$(
+            jq -r '
+              if (.resumed | type) == "boolean"
+              then (.resumed | tostring)
+              else error("invalid resumed boolean")
+              end
+            ' <<<"${result}"
+          )"
           lane_count="${claimable}"
           if (( lane_count > 10 )); then
             lane_count=10

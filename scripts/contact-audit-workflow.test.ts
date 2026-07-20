@@ -16,7 +16,7 @@ const broker = readFileSync(
 );
 const migration = readFileSync(
   new URL(
-    "../prisma/migrations/20260720043000_contact_audit/migration.sql",
+    "../prisma/migrations/20260720080000_contact_audit/migration.sql",
     import.meta.url
   ),
   "utf8"
@@ -35,6 +35,11 @@ test("contact audit workflow is manual, bounded, and OIDC-authenticated", () => 
   assert.match(workflow, /npm run contact-audit:agent/);
   assert.doesNotMatch(workflow, /secrets\.CRON_SECRET/);
   assert.doesNotMatch(workflow, /secrets\.CONTACT_AUDIT_AGENT_TOKEN/);
+  assert.doesNotMatch(workflow, /jq -er '\.resumed \| booleans'/);
+  assert.match(
+    workflow,
+    /if \(\.resumed \| type\) == "boolean"[\s\S]*then \(\.resumed \| tostring\)[\s\S]*else error\("invalid resumed boolean"\)/
+  );
 });
 
 test("audit agent and broker preserve review-only manager policy", () => {

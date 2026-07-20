@@ -75,7 +75,8 @@ Choose exactly one:
 - `changed`: current public evidence points to a different manager contact.
   Include at least one evidence-backed alternative.
 - `stale`: evidence indicates the existing contact is no longer a current
-  manager contact, but no defensible replacement was found.
+  manager contact, but no defensible replacement was found. Do not include
+  alternatives.
 - `ambiguous`: the existing contact and/or alternatives leave multiple
   plausible current manager contacts. Include at least one alternative and
   explain the conflict.
