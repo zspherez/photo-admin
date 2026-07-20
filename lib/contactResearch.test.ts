@@ -330,6 +330,14 @@ test("claims require current eligibility and unexpired ownership", () => {
   );
   assert.match(source, /prepareContactResearchQueue/);
   assert.match(source, /claimable/);
+  assert.match(source, /readGlobalAgentRulesInTransaction\(tx\)/);
+  assert.match(source, /claimedAgentRules: globalAgentRules\.instructions/);
+  assert.match(
+    source,
+    /claimedAgentRulesVersion: globalAgentRules\.version/
+  );
+  assert.match(source, /globalAgentRules: \{/);
+  assert.match(source, /instructions: job\.claimedAgentRules \?\? ""/);
   assert.match(source, /researchInstructions: job\.userNotes/);
   assert.match(
     source,
