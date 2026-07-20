@@ -393,7 +393,10 @@ test("arbitrary email migration is ordered, transactional, and constrained", () 
     .map((entry) => entry.name)
     .sort();
   const migrationName = "20260720190000_arbitrary_emails";
-  assert.equal(migrationNames.at(-1), migrationName);
+  assert.ok(
+    migrationNames.indexOf("20260720170000_festival_lead_time") <
+      migrationNames.indexOf(migrationName),
+  );
 
   const migration = readFileSync(
     new URL(`${migrationName}/migration.sql`, migrationsDirectory),

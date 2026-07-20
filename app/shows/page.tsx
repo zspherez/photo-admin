@@ -41,7 +41,6 @@ async function refreshShows() {
         synced: "ok",
         fetched: String(result.data.fetched),
         upserted: String(result.data.upserted),
-        skipped: String(result.data.skippedVenue),
         linked: String(result.data.artistsLinked),
         outside: String(result.data.outsideNyc),
         unknown: String(result.data.geographyUnknown),
@@ -66,7 +65,6 @@ export default async function ShowsPage({
     synced?: SearchParamValue;
     fetched?: SearchParamValue;
     upserted?: SearchParamValue;
-    skipped?: SearchParamValue;
     linked?: SearchParamValue;
     outside?: SearchParamValue;
     unknown?: SearchParamValue;
@@ -80,7 +78,6 @@ export default async function ShowsPage({
     synced: firstSearchParam(rawSearchParams.synced),
     fetched: firstSearchParam(rawSearchParams.fetched),
     upserted: firstSearchParam(rawSearchParams.upserted),
-    skipped: firstSearchParam(rawSearchParams.skipped),
     linked: firstSearchParam(rawSearchParams.linked),
     outside: firstSearchParam(rawSearchParams.outside),
     unknown: firstSearchParam(rawSearchParams.unknown),
@@ -121,7 +118,7 @@ export default async function ShowsPage({
         <SyncBanner
           tone="success"
           title="Shows refreshed."
-          detail={`${sp.fetched ?? "?"} fetched · ${sp.upserted ?? "?"} upserted · ${sp.outside ?? "?"} outside NYC · ${sp.unknown ?? "?"} geography unknown · ${sp.skipped ?? "?"} blocklisted · ${sp.venues ?? "?"} venues cached (${sp.reused ?? "?"} reused) · ${sp.linked ?? "?"} artists linked`}
+          detail={`${sp.fetched ?? "?"} fetched · ${sp.upserted ?? "?"} upserted · ${sp.outside ?? "?"} outside NYC · ${sp.unknown ?? "?"} geography unknown · ${sp.venues ?? "?"} venues cached (${sp.reused ?? "?"} reused) · ${sp.linked ?? "?"} artists linked`}
         />
       )}
       {sp.synced === "error" && (

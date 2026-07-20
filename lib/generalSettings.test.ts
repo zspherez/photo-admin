@@ -123,15 +123,22 @@ function settingsValues(
 test("general settings normalize form values and preserve explicit delivery blanks", async () => {
   const formData = new FormData();
   formData.set("sender_name", "  New Sender  ");
+  formData.set("venue_blocklist", "Surf Lodge");
   formData.set("test_override_email", "   ");
   formData.set("bcc_emails", "   ");
   const values = generalSettingsValuesFromFormData(formData);
   assert.equal(values.sender_name, "New Sender");
+  assert.equal(Object.hasOwn(values, "venue_blocklist"), false);
+  assert.equal(
+    (GENERAL_SETTING_KEYS as readonly string[]).includes("venue_blocklist"),
+    false,
+  );
 
   const store = new MemorySettingStore({
     sender_name: "Old Sender",
     sender_email: "old@example.com",
     default_rate: "$650",
+    venue_blocklist: "Surf Lodge",
     test_override_email: "test@example.com",
     bcc_emails: "audit@example.com",
     unrelated: "keep",
@@ -142,6 +149,7 @@ test("general settings normalize form values and preserve explicit delivery blan
   assert.deepEqual(store.values(), {
     sender_name: "New Sender",
     default_rate: "$650",
+    venue_blocklist: "Surf Lodge",
     test_override_email: "",
     bcc_emails: "",
     utm_source: "",

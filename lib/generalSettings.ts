@@ -41,13 +41,6 @@ export const GENERAL_SETTING_FIELDS = [
     description: "Substituted into {{portfolio_url}} in email templates.",
   },
   {
-    key: "venue_blocklist",
-    label: "Venue blocklist",
-    placeholder: "venue one, venue two",
-    description:
-      "Comma-separated substrings (case-insensitive). EDMTrain shows whose venue matches are filtered out.",
-  },
-  {
     key: "test_override_email",
     label: "Test mode — redirect all sends to",
     placeholder: "you+test@example.com",
