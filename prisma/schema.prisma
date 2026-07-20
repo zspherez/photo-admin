@@ -54,6 +54,7 @@ model Artist {
   outreaches         Outreach[]
   contactResearchJob ContactResearchJob?
   researchSkips      ArtistResearchSkip[]
+  contactAuditJobs   ContactAuditJob[]
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -86,9 +87,9 @@ enum ContactState {
 }
 
 model Contact {
-  id                 String       @id @default(cuid())
+  id                 String            @id @default(cuid())
   artistId           String
-  artist             Artist       @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  artist             Artist            @relation(fields: [artistId], references: [id], onDelete: Cascade)
   email              String?
   phone              String?
   directOutreachNote String?
@@ -98,19 +99,89 @@ model Contact {
   notes              String?
   source             String?
   /// Stable provider-owned identity. Sheet contacts use spreadsheet/tab/row/slot identity.
-  sourceKey          String?      @unique
+  sourceKey          String?           @unique
   sourceSyncedAt     DateTime?
   /// Only active contacts are eligible for normal selection; quarantined preserves unresolved legacy history.
-  state              ContactState @default(active)
-  isFullTeam         Boolean      @default(false)
+  state              ContactState      @default(active)
+  isFullTeam         Boolean           @default(false)
   outreaches         Outreach[]
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  auditJobs          ContactAuditJob[]
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
   @@unique([artistId, email])
   @@index([artistId])
   @@index([source])
   @@index([state])
+}
+
+model ContactAuditRun {
+  id           String            @id @default(cuid())
+  status       String            @default("running")
+  contactCount Int
+  completedAt  DateTime?
+  jobs         ContactAuditJob[]
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model ContactAuditJob {
+  id                 String                    @id @default(cuid())
+  runId              String
+  run                ContactAuditRun           @relation(fields: [runId], references: [id], onDelete: Cascade)
+  contactId          String?
+  contact            Contact?                  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  artistId           String?
+  artist             Artist?                   @relation(fields: [artistId], references: [id], onDelete: SetNull)
+  snapshotArtistName String
+  snapshotEmail      String?
+  snapshotPhone      String?
+  snapshotName       String?
+  snapshotRole       String?
+  snapshotSource     String?
+  snapshotNotes      String?
+  status             String                    @default("pending")
+  attemptCount       Int                       @default(0)
+  claimedAt          DateTime?
+  claimExpiresAt     DateTime?
+  claimToken         String?                   @unique
+  finding            String?
+  sourceUrls         String[]                  @default([])
+  evidence           String?
+  confidence         String?
+  agentNotes         String?
+  verifiedAt         DateTime?
+  reviewedAt         DateTime?
+  alternatives       ContactAuditAlternative[]
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+
+  @@unique([runId, contactId])
+  @@index([runId, status, createdAt])
+  @@index([status, claimExpiresAt])
+  @@index([finding, reviewedAt, verifiedAt])
+  @@index([contactId])
+  @@index([artistId])
+}
+
+model ContactAuditAlternative {
+  id              String          @id @default(cuid())
+  jobId           String
+  job             ContactAuditJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  normalizedEmail String
+  email           String
+  name            String?
+  role            String
+  sourceUrls      String[]        @default([])
+  evidence        String
+  confidence      String
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@unique([jobId, normalizedEmail])
+  @@index([jobId, createdAt])
 }
 
 model ContactResearchJob {

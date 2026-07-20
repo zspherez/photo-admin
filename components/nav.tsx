@@ -10,6 +10,7 @@ const ITEMS: { href: string; label: string; match: (p: string) => boolean }[] = 
   { href: "/new", label: "New", match: (p) => p === "/new" },
   { href: "/research", label: "Research", match: (p) => p === "/research" },
   { href: "/contacts", label: "Contacts", match: (p) => p === "/contacts" },
+  { href: "/contact-audit", label: "Audit", match: (p) => p === "/contact-audit" },
   { href: "/outreach", label: "Sent", match: (p) => p === "/outreach" || p.startsWith("/outreach/") },
   { href: "/shows", label: "All shows", match: (p) => p === "/shows" },
   { href: "/settings", label: "Settings", match: (p) => p === "/settings" || p.startsWith("/settings/") },

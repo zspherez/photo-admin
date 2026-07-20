@@ -107,9 +107,14 @@ export default async function ContactsPage({
             {total === 1 ? "" : "s"}
           </p>
         </div>
-        <LinkButton href="/settings/contacts" variant="secondary">
-          Sheet sync
-        </LinkButton>
+        <div className="flex gap-2">
+          <LinkButton href="/contact-audit" variant="secondary">
+            Audit contacts
+          </LinkButton>
+          <LinkButton href="/settings/contacts" variant="secondary">
+            Sheet sync
+          </LinkButton>
+        </div>
       </div>
 
       <form action="/contacts" className="mt-5 flex gap-2">
