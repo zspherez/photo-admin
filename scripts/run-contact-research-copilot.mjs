@@ -21,6 +21,15 @@ import {
 
 const prompt = process.argv.slice(2).join(" ").trim();
 if (!prompt) throw new Error("A Copilot prompt is required");
+const agentName =
+  process.env.CONTACT_RESEARCH_AGENT_NAME?.trim() || "contact-research";
+const agentTool =
+  process.env.CONTACT_RESEARCH_AGENT_TOOL?.trim() ||
+  "contact-research-agent-tool";
+const allowTool =
+  agentTool === "contact-research-agent-tool"
+    ? "--allow-tool=shell(contact-research-agent-tool)"
+    : `--allow-tool=shell(${agentTool})`;
 const telemetryDirectory = mkdtempSync(
   join(tmpdir(), "contact-research-otel-")
 );
@@ -30,10 +39,10 @@ const child = spawn(
   "copilot",
   [
     "--agent",
-    "contact-research",
+    agentName,
     "--available-tools=bash",
-    "--allow-tool=shell(contact-research-agent-tool)",
-    "--secret-env-vars=GITHUB_TOKEN,ACTIONS_ID_TOKEN_REQUEST_URL,ACTIONS_ID_TOKEN_REQUEST_TOKEN,CONTACT_RESEARCH_AGENT_TOKEN",
+    allowTool,
+    "--secret-env-vars=GITHUB_TOKEN,ACTIONS_ID_TOKEN_REQUEST_URL,ACTIONS_ID_TOKEN_REQUEST_TOKEN,CONTACT_RESEARCH_AGENT_TOKEN,CONTACT_AUDIT_AGENT_TOKEN",
     "--no-ask-user",
     "--no-auto-update",
     "--no-remote",
@@ -112,9 +121,13 @@ try {
 }
 rmSync(telemetryDirectory, { recursive: true, force: true });
 totalNanoAiu = otelNanoAiu ?? totalNanoAiu;
-const sessionId = process.env.CONTACT_RESEARCH_AGENT_SESSION ?? "";
+const sessionId =
+  process.env.CONTACT_AGENT_SESSION ??
+  process.env.CONTACT_RESEARCH_AGENT_SESSION ??
+  "";
 const artist = readArtistForSession(
-  process.env.CONTACT_RESEARCH_BROKER_METRICS_FILE,
+  process.env.CONTACT_AGENT_BROKER_METRICS_FILE ??
+    process.env.CONTACT_RESEARCH_BROKER_METRICS_FILE,
   sessionId
 );
 
@@ -123,7 +136,10 @@ if (artist && totalNanoAiu !== null) {
   process.stdout.write(
     `AI credits for ${artist}: ${credits.toFixed(3)} AIC\n`
   );
-  const usageFile = process.env.CONTACT_RESEARCH_USAGE_FILE?.trim();
+  const usageFile = (
+    process.env.CONTACT_AGENT_USAGE_FILE ??
+    process.env.CONTACT_RESEARCH_USAGE_FILE
+  )?.trim();
   if (usageFile) {
     appendUsageRecord(usageFile, {
       artist,

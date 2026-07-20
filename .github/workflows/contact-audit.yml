@@ -1,0 +1,143 @@
+name: Audit existing manager contacts
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  copilot-requests: write
+  id-token: write
+
+concurrency:
+  group: photo-admin-contact-audit
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      claimable: ${{ steps.queue.outputs.claimable }}
+      workers: ${{ steps.queue.outputs.workers }}
+      run_id: ${{ steps.queue.outputs.run_id }}
+    steps:
+      - name: Snapshot active contacts for audit
+        id: queue
+        shell: bash
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${APP_BASE_URL}" ]]; then
+            echo "::error::APP_BASE_URL repository secret is required"
+            exit 1
+          fi
+
+          oidc_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="?"
+          if [[ "${oidc_url}" == *"?"* ]]; then
+            separator="&"
+          fi
+          oidc_token="$(
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              --header "Accept: application/json" \
+              "${oidc_url}${separator}audience=photo-admin-contact-audit" |
+              jq -er '.value | select(type == "string" and length > 0)'
+          )"
+          echo "::add-mask::${oidc_token}"
+
+          result="$(
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --connect-timeout 15 \
+              --max-time 120 \
+              --request POST \
+              --header "Authorization: Bear""er ${oidc_token}" \
+              --header "Accept: application/json" \
+              "${APP_BASE_URL%/}/api/contact-audit/prepare"
+          )"
+          claimable="$(jq -er '.claimable | numbers | select(. >= 0 and floor == .)' <<<"${result}")"
+          run_id="$(jq -er '.runId | strings | select(length > 0)' <<<"${result}")"
+          contact_count="$(jq -er '.contactCount | numbers | select(. >= 0 and floor == .)' <<<"${result}")"
+          resumed="$(jq -er '.resumed | booleans' <<<"${result}")"
+          lane_count="${claimable}"
+          if (( lane_count > 10 )); then
+            lane_count=10
+          fi
+          lanes="$(jq -cn --argjson count "${lane_count}" '[range(0; $count)]')"
+          echo "claimable=${claimable}" >> "${GITHUB_OUTPUT}"
+          echo "workers=${lanes}" >> "${GITHUB_OUTPUT}"
+          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+          echo "Audit ${run_id}: ${contact_count} contact(s), ${claimable} claimable, resumed=${resumed}"
+
+  audit:
+    name: Audit contacts ${{ matrix.lane }}
+    needs: prepare
+    if: ${{ needs.prepare.outputs.claimable != '0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJSON(needs.prepare.outputs.workers) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install worker dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install Copilot CLI
+        run: npm install --global @github/copilot@latest --no-audit --no-fund
+
+      - name: Drain contact audit queue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          CONTACT_AUDIT_WORKERS: "4"
+          CONTACT_AUDIT_LANE: ${{ matrix.lane }}
+          CONTACT_AUDIT_USAGE_DIR: ${{ runner.temp }}/contact-audit-usage-${{ matrix.lane }}
+        run: npm run contact-audit:agent
+
+      - name: Upload AI-credit usage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: contact-audit-usage-${{ github.run_id }}-${{ matrix.lane }}
+          path: ${{ runner.temp }}/contact-audit-usage-${{ matrix.lane }}/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  usage:
+    name: Summarize contact audit AI credits
+    needs: [prepare, audit]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.prepare.outputs.claimable != '0' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create AI-credit directory
+        run: mkdir -p "${RUNNER_TEMP}/contact-audit-usage"
+
+      - name: Download AI-credit usage
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: contact-audit-usage-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/contact-audit-usage
+
+      - name: Print AI-credit summary
+        run: node scripts/summarize-contact-research-usage.mjs "${RUNNER_TEMP}/contact-audit-usage"

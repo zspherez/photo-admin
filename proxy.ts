@@ -18,6 +18,7 @@ const PUBLIC_PATHS = new Set([
 ]);
 
 const PUBLIC_PREFIXES = [
+  "/api/contact-audit/",
   "/api/contact-research/",
   "/api/cron/",
   "/_next/",
