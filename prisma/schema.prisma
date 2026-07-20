@@ -297,7 +297,7 @@ model Show {
   festivalNycStatus   String?
   eventName           String?
   source              String?
-  /// active, cancelled, blocked, or missing for provider-managed events.
+  /// Provider status; blocked is retained only for legacy compatibility.
   syncStatus          String               @default("active")
   sourceLastSeenAt    DateTime?
   sourceGeneration    String?

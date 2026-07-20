@@ -10,7 +10,6 @@ import { edmtrainCompletion } from "./route";
 const synced: SyncResult = {
   fetched: 1,
   upserted: 1,
-  skippedVenue: 0,
   artistsLinked: 0,
   missing: 0,
   cancelled: 0,

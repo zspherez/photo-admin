@@ -27,7 +27,7 @@ export default async function SettingsIndex() {
         syncStatus: "active",
       },
     }),
-    db.setting.findMany({ where: { key: { in: ["portfolio_url", "venue_blocklist"] } } }),
+    db.setting.findMany({ where: { key: "portfolio_url" } }),
     db.agentRuleSet.findUnique({ where: { scope: "global" } }),
   ]);
   const settingMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
@@ -36,9 +36,9 @@ export default async function SettingsIndex() {
     {
       title: "General",
       href: "/settings/general",
-      status: `${Object.keys(settingMap).length}/2 set`,
-      ok: Object.keys(settingMap).length === 2,
-      description: "Portfolio URL and venue blocklist.",
+      status: `${Object.keys(settingMap).length}/1 set`,
+      ok: Object.keys(settingMap).length === 1,
+      description: "Portfolio URL for email templates.",
     },
     {
       title: "Agent rules",

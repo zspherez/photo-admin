@@ -72,6 +72,13 @@ After first boot, visit **Settings → General** to fill in your name, email,
 phone, city, and portfolio URL — these are substituted into the default email
 template (see below).
 
+EDMTrain eligibility is geography-based, not venue-name-based. Regular shows
+must resolve inside NYC; unknown geography fails closed. Festivals outside NYC
+remain eligible at least seven calendar days before the event, while past or
+near-term non-NYC/unknown festivals are non-actionable. The venue-blocklist
+removal migration deletes its obsolete setting and reclassifies legacy
+EDMTrain `blocked` rows from cached geography and those same festival rules.
+
 ## Required vs optional env
 
 The full list is in `.env.example`. Minimum to boot:

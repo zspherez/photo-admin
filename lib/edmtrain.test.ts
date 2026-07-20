@@ -28,7 +28,6 @@ import {
 const syncResult = (fetched: number): SyncResult => ({
   fetched,
   upserted: fetched,
-  skippedVenue: 0,
   artistsLinked: 0,
   missing: 0,
   cancelled: 0,
@@ -387,16 +386,19 @@ test("EDMTrain scope flags must be present booleans before a snapshot is complet
   }
 });
 
-test("regular shows and near-term festivals fail closed by NYC geography", () => {
+test("formerly blocklisted venues follow cancellation, geography, and festival lead-time rules", () => {
   const event = eventWithCountry("United States");
+  event.venue.name = "The Surf Lodge";
+  event.venue.location = "Montauk, NY";
+  event.venue.state = "NY";
   event.festivalInd = false;
-  assert.equal(edmtrainEventStatus(event, false, "inside_nyc"), "active");
+  assert.equal(edmtrainEventStatus(event, "inside_nyc"), "active");
   assert.equal(
-    edmtrainEventStatus(event, false, "outside_nyc"),
+    edmtrainEventStatus(event, "outside_nyc"),
     "outside_nyc"
   );
   assert.equal(
-    edmtrainEventStatus(event, false, "unknown"),
+    edmtrainEventStatus(event, "unknown"),
     "geography_unknown"
   );
 
@@ -404,27 +406,32 @@ test("regular shows and near-term festivals fail closed by NYC geography", () =>
   event.date = "2026-07-26";
   const now = new Date("2026-07-20T12:00:00.000Z");
   assert.equal(
-    edmtrainEventStatus(event, false, "inside_nyc", now),
+    edmtrainEventStatus(event, "inside_nyc", now),
     "active"
   );
   assert.equal(
-    edmtrainEventStatus(event, false, "outside_nyc", now),
+    edmtrainEventStatus(event, "outside_nyc", now),
     "lead_time_outside_nyc"
   );
   assert.equal(
-    edmtrainEventStatus(event, false, "unknown", now),
+    edmtrainEventStatus(event, "unknown", now),
     "lead_time_geography_unknown"
   );
 
   event.date = "2026-07-27";
   assert.equal(
-    edmtrainEventStatus(event, false, "outside_nyc", now),
+    edmtrainEventStatus(event, "outside_nyc", now),
     "active"
   );
   event.date = "2026-07-19";
   assert.equal(
-    edmtrainEventStatus(event, false, "inside_nyc", now),
+    edmtrainEventStatus(event, "inside_nyc", now),
     "festival_past"
+  );
+  event.cancelledInd = true;
+  assert.equal(
+    edmtrainEventStatus(event, "outside_nyc", now),
+    "cancelled"
   );
 
   const source = readFileSync(new URL("./edmtrain.ts", import.meta.url), "utf8");
@@ -434,7 +441,7 @@ test("regular shows and near-term festivals fail closed by NYC geography", () =>
   );
 });
 
-test("festival migration permits every emitted sync status and rejects unrelated values", () => {
+test("festival migration permits every emitted sync status and retains blocked only for legacy rows", () => {
   const migration = readFileSync(
     new URL(
       "../prisma/migrations/20260720170000_festival_lead_time/migration.sql",
@@ -467,27 +474,23 @@ test("festival migration permits every emitted sync status and rejects unrelated
   active.date = "2026-07-20";
   const cancelled = { ...active, cancelledInd: true };
   const festival = { ...active, festivalInd: true };
-  const emitted = new Set([
-    edmtrainEventStatus(active, false, "inside_nyc", now),
-    edmtrainEventStatus(cancelled, false, "inside_nyc", now),
-    edmtrainEventStatus(active, true, "inside_nyc", now),
-    edmtrainEventStatus(active, false, "outside_nyc", now),
-    edmtrainEventStatus(active, false, "unknown", now),
+  const emitted = new Set<string>([
+    edmtrainEventStatus(active, "inside_nyc", now),
+    edmtrainEventStatus(cancelled, "inside_nyc", now),
+    edmtrainEventStatus(active, "outside_nyc", now),
+    edmtrainEventStatus(active, "unknown", now),
     edmtrainEventStatus(
       { ...festival, date: "2026-07-19" },
-      false,
       "inside_nyc",
       now
     ),
     edmtrainEventStatus(
       { ...festival, date: "2026-07-26" },
-      false,
       "outside_nyc",
       now
     ),
     edmtrainEventStatus(
       { ...festival, date: "2026-07-26" },
-      false,
       "unknown",
       now
     ),
@@ -495,7 +498,6 @@ test("festival migration permits every emitted sync status and rejects unrelated
   assert.deepEqual(emitted, new Set([
     "active",
     "cancelled",
-    "blocked",
     "outside_nyc",
     "geography_unknown",
     "festival_past",
@@ -503,6 +505,8 @@ test("festival migration permits every emitted sync status and rejects unrelated
     "lead_time_geography_unknown",
   ]));
   for (const status of emitted) assert.ok(allowed.has(status));
+  assert.equal(emitted.has("blocked"), false);
+  assert.equal(allowed.has("blocked"), true);
   assert.equal(allowed.has("lead_time_unknown"), false);
 
   const begin = migration.indexOf("BEGIN;");

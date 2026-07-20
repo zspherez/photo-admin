@@ -28,10 +28,11 @@ test("EDMTrain provider locality identifies an NYC venue", () => {
   });
 });
 
-test("EDMTrain provider locality excludes a non-NYC New York venue", () => {
+test("Surf Lodge in Montauk is outside NYC by provider geography", () => {
   assert.deepEqual(
     classifyEdmtrainVenueGeography(
       venue({
+        name: "The Surf Lodge",
         address: "183 Edgemere St, Montauk, NY 11954",
         location: "Montauk, NY",
         latitude: 41.0359,

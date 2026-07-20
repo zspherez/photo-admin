@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
-import { db } from "@/lib/db";
 import {
   easternDateRange,
   parseDateOnly,
@@ -43,7 +42,6 @@ import {
 
 const EDMTRAIN_BASE = "https://edmtrain.com/api/events";
 const NYC_LOCATION_ID = 38;
-const DEFAULT_VENUE_BLOCKLIST = ["montauk", "surf lodge"];
 const EDMTRAIN_CHUNK_DAYS = 30;
 const EDMTRAIN_MAX_ATTEMPTS = 4;
 const EDMTRAIN_DEFAULT_OPERATION_MS = 5 * 60 * 1_000;
@@ -258,31 +256,13 @@ export async function fetchEdmtrainEvents(
   return (await fetchEdmtrainSnapshot(daysAhead, locationIds, deadline)).events;
 }
 
-export async function getVenueBlocklist(): Promise<string[]> {
-  const setting = await db.setting.findUnique({
-    where: { key: "venue_blocklist" },
-  });
-  const raw = setting?.value ?? DEFAULT_VENUE_BLOCKLIST.join(",");
-  return raw
-    .split(",")
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-export function isBlocked(venueName: string, blocklist: string[]): boolean {
-  const lower = venueName.toLowerCase();
-  return blocklist.some((term) => lower.includes(term));
-}
-
 export function edmtrainEventStatus(
   event: EdmtrainEvent,
-  blocked: boolean,
   venueNycStatus: VenueNycStatus = "inside_nyc",
   now: Date = new Date()
 ):
   | "active"
   | "cancelled"
-  | "blocked"
   | "outside_nyc"
   | "geography_unknown"
   | "festival_past"
@@ -295,7 +275,6 @@ export function edmtrainEventStatus(
   ) {
     return "cancelled";
   }
-  if (blocked) return "blocked";
   if (event.festivalInd) {
     return (
       festivalLeadTimeExclusion(
@@ -320,13 +299,11 @@ interface ScopedSnapshot {
   range: DateOnlyRange;
   events: EdmtrainEvent[];
   complete: true;
-  blocklist: string[];
 }
 
 export interface SyncResult {
   fetched: number;
   upserted: number;
-  skippedVenue: number;
   artistsLinked: number;
   missing: number;
   cancelled: number;
@@ -537,7 +514,6 @@ async function reconcileEdmtrainSnapshots(
         }
 
         const rows = snapshot.events.map((event) => {
-          const blocked = isBlocked(event.venue.name, snapshot.blocklist);
           const venue = resolvedVenueById.get(event.venue.id);
           if (!venue) {
             throw new Error(`EDMTrain venue was not resolved: ${event.venue.id}`);
@@ -551,7 +527,7 @@ async function reconcileEdmtrainSnapshots(
             state: venue.state,
             countryCode: venue.countryCode,
             countryName: venue.countryName,
-            status: edmtrainEventStatus(event, blocked, venue.nycStatus, now),
+            status: edmtrainEventStatus(event, venue.nycStatus, now),
           };
         });
 
@@ -687,7 +663,6 @@ async function reconcileEdmtrainSnapshots(
           },
         });
 
-        const blockedCount = rows.filter((row) => row.status === "blocked").length;
         const cancelledCount = rows.filter(
           (row) => row.status === "cancelled"
         ).length;
@@ -715,7 +690,6 @@ async function reconcileEdmtrainSnapshots(
         result[snapshot.scope] = {
           fetched: snapshot.events.length,
           upserted: rows.length,
-          skippedVenue: blockedCount,
           artistsLinked: lineupRows.length,
           missing: missing.count,
           cancelled: cancelledCount,
@@ -747,8 +721,7 @@ function edmtrainReconciliationTransaction(
 
 async function makeScopedSnapshot(
   scope: EdmtrainScope,
-  snapshot: EdmtrainSnapshot,
-  blocklist: string[]
+  snapshot: EdmtrainSnapshot
 ): Promise<ScopedSnapshot> {
   if (!snapshot.events.every(isValidEdmtrainSnapshotEvent)) {
     throw new Error(
@@ -760,7 +733,6 @@ async function makeScopedSnapshot(
     range: snapshot.range,
     events: scopedEvents(scope, snapshot.events),
     complete: true,
-    blocklist,
   };
 }
 
@@ -776,11 +748,12 @@ async function fetchScopedEdmtrainSnapshot(
     minimumDeadlineTransactionRemainingMs(transactionPolicy),
     `${scope} EDMTrain synchronization`
   );
-  const [snapshot, blocklist] = await Promise.all([
-    fetchEdmtrainSnapshot(daysAhead, locationIds, deadline),
-    getVenueBlocklist(),
-  ]);
-  return makeScopedSnapshot(scope, snapshot, blocklist);
+  const snapshot = await fetchEdmtrainSnapshot(
+    daysAhead,
+    locationIds,
+    deadline
+  );
+  return makeScopedSnapshot(scope, snapshot);
 }
 
 async function reconcileScopedEdmtrainSnapshot(
