@@ -7,6 +7,7 @@ import {
   contactResearchPriority,
   CONTACT_RESEARCH_OIDC_AUDIENCE,
   CONTACT_RESEARCH_WORKFLOW_REF,
+  enqueueFestivalManagerResearch,
   festivalManagerResearchJobDisposition,
   isValidContactResearchAuthorization,
   isManagerContact,
@@ -128,6 +129,123 @@ test("festival manager research requests are idempotent across job states", () =
       festivalManagerResearchJobDisposition(status),
       "requeue",
       `${status} jobs should reuse the existing artist job`
+    );
+  }
+});
+
+test("festival enqueue preserves concurrent contact and skip terminal states", async () => {
+  const now = new Date("2026-07-20T12:00:00.000Z");
+
+  for (const blocker of ["active contact", "intentional skip"] as const) {
+    const state = {
+      activeContact: false,
+      activeSkip: false,
+      jobStatus: "exhausted",
+    };
+    let eligibilityReads = 0;
+    let jobMutations = 0;
+    let enterTransaction!: () => void;
+    let releaseTransaction!: () => void;
+    const transactionEntered = new Promise<void>((resolve) => {
+      enterTransaction = resolve;
+    });
+    const transactionRelease = new Promise<void>((resolve) => {
+      releaseTransaction = resolve;
+    });
+
+    const enqueue = enqueueFestivalManagerResearch(
+      "show-1",
+      now,
+      async (work) => {
+        enterTransaction();
+        await transactionRelease;
+        return work({
+          show: {
+            findFirst: async (value: unknown) => {
+              eligibilityReads += 1;
+              const input = value as {
+                select?: {
+                  artists?: {
+                    where?: {
+                      artist?: {
+                        contacts?: unknown;
+                        researchSkips?: unknown;
+                      };
+                    };
+                  };
+                };
+              };
+              assert.deepEqual(
+                input.select?.artists?.where?.artist?.contacts,
+                {
+                  none: {
+                    state: "active",
+                    email: { not: null },
+                  },
+                }
+              );
+              assert.deepEqual(
+                input.select?.artists?.where?.artist?.researchSkips,
+                { none: { clearedAt: null } }
+              );
+              return {
+                id: "show-1",
+                date: new Date("2026-07-25T00:00:00.000Z"),
+                artists:
+                  state.activeContact || state.activeSkip
+                    ? []
+                    : [
+                        {
+                          artistId: "artist-1",
+                          artist: {
+                            popularity: 50,
+                            listenSignals: [],
+                          },
+                        },
+                      ],
+              };
+            },
+          },
+          contactResearchJob: {
+            create: async () => {
+              jobMutations += 1;
+              state.jobStatus = "pending";
+              return {};
+            },
+            update: async () => {
+              jobMutations += 1;
+              state.jobStatus = "pending";
+              return {};
+            },
+          },
+        } as unknown as Prisma.TransactionClient);
+      }
+    );
+
+    await transactionEntered;
+    assert.equal(
+      eligibilityReads,
+      0,
+      `${blocker} eligibility must be read inside the transaction`
+    );
+    if (blocker === "active contact") {
+      state.activeContact = true;
+      state.jobStatus = "complete";
+    } else {
+      state.activeSkip = true;
+      state.jobStatus = "skipped";
+    }
+    releaseTransaction();
+
+    assert.deepEqual(await enqueue, {
+      eligible: 0,
+      enqueued: 0,
+      alreadyQueued: 0,
+    });
+    assert.equal(jobMutations, 0);
+    assert.equal(
+      state.jobStatus,
+      blocker === "active contact" ? "complete" : "skipped"
     );
   }
 });
@@ -1157,7 +1275,7 @@ test("claims require current eligibility and unexpired ownership", () => {
   );
   assert.match(
     source,
-    /return withSerializableRetry\(async \(tx\) => \{[\s\S]*claimExpiresAt: \{ gt: now \}/
+    /submitContactResearchResult[\s\S]*await runTransaction\(async \(tx\) => \{[\s\S]*claimExpiresAt: \{ gt: now \}/
   );
   assert.match(source, /prepareContactResearchQueue/);
   assert.match(source, /claimable/);
