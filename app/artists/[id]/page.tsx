@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect, RedirectType } from "next/navigation";
 import { cache } from "react";
 import { db } from "@/lib/db";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Card, CardBody } from "@/components/ui/card";
+import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { formatShowDate } from "@/lib/formatDate";
 import {
   cancelScheduledAction,
@@ -28,8 +28,12 @@ import {
   getFollowUpEligibilityBatch,
   getOutreachSendabilityBatch,
 } from "@/lib/sendOutreach";
-import { workflowReturnPath } from "@/lib/dashboardReturnUrl";
-import { withWorkflowReturnTo } from "@/lib/workflowLinks";
+import {
+  artistWorkflowPath,
+  workflowFestivalShowId,
+  workflowReturnPath,
+  withWorkflowReturnTo,
+} from "@/lib/dashboardReturnUrl";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 import { isCancellableOutreachStatus } from "@/lib/outreachStatus";
 import { satisfiesFestivalLeadTime } from "@/lib/festivalEligibility";
@@ -39,8 +43,167 @@ import {
   hasDirectOutreachNote,
   isDirectOutreachOnly,
 } from "@/lib/contactDisplay";
+import {
+  CONTACT_RESEARCH_WINDOW_DAYS,
+  skipContactResearchArtistByArtistId,
+  unskipContactResearchArtistByArtistId,
+  updateContactResearchArtistUserNotes,
+  type ArtistContactResearchMutationFailure,
+} from "@/lib/contactResearch";
+import { requireServerActionAuth } from "@/lib/auth";
+import { refreshWorkflowViews } from "@/lib/workflowRefresh";
+import { ContactResearchControls } from "@/components/contact-research-controls";
+import {
+  researchStatusHref,
+  type ResearchStatusFilter,
+} from "@/lib/researchStatusFilter";
 
 export const dynamic = "force-dynamic";
+
+function researchMutationFailureMessage(
+  reason: ArtistContactResearchMutationFailure
+): string {
+  if (reason === "artist_not_found") return "Artist could not be found.";
+  if (reason === "active_contact") {
+    return "This artist already has an active email contact, so a new research job was not created.";
+  }
+  if (reason === "ineligible") {
+    return "This artist has no eligible upcoming show context for durable manager research state.";
+  }
+  if (reason === "empty_instructions") {
+    return "Enter research instructions before creating a new research record.";
+  }
+  if (reason === "already_skipped") {
+    return "This artist is already intentionally skipped.";
+  }
+  if (reason === "not_skipped") {
+    return "This artist is not currently intentionally skipped.";
+  }
+  return "The artist research job could not be found.";
+}
+
+function researchActionError(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 180);
+}
+
+async function handleSaveArtistResearchNotes(
+  artistId: string,
+  returnTo: string,
+  formData: FormData
+) {
+  const currentArtistPath = artistWorkflowPath(artistId, returnTo);
+
+  let result:
+    | Awaited<ReturnType<typeof updateContactResearchArtistUserNotes>>
+    | null = null;
+  let error: string | null = null;
+  try {
+    result = await updateContactResearchArtistUserNotes(
+      artistId,
+      formData.get("userNotes"),
+      { requestedShowId: workflowFestivalShowId(returnTo) }
+    );
+  } catch (caught) {
+    error = researchActionError(caught);
+  }
+
+  if (result?.ok) {
+    refreshWorkflowViews(returnTo, [currentArtistPath, "/research", "/settings"]);
+  }
+  const failureMessage =
+    error ??
+    (result && !result.ok
+      ? researchMutationFailureMessage(result.reason)
+      : "Manager research instructions could not be saved.");
+  redirect(
+    artistWorkflowPath(artistId, returnTo, {
+      ...(result?.ok ? { research_saved: "1" } : {}),
+      ...(!result?.ok ? { research_error: failureMessage } : {}),
+    }),
+    RedirectType.replace
+  );
+}
+
+async function handleSkipArtistResearch(
+  artistId: string,
+  returnTo: string,
+  formData: FormData
+) {
+  const currentArtistPath = artistWorkflowPath(artistId, returnTo);
+
+  let result:
+    | Awaited<ReturnType<typeof skipContactResearchArtistByArtistId>>
+    | null = null;
+  let error: string | null = null;
+  try {
+    result = await skipContactResearchArtistByArtistId(
+      artistId,
+      formData.get("reason"),
+      { requestedShowId: workflowFestivalShowId(returnTo) }
+    );
+  } catch (caught) {
+    error = researchActionError(caught);
+  }
+
+  if (result?.ok) {
+    refreshWorkflowViews(returnTo, [currentArtistPath, "/research", "/settings"]);
+  }
+  const failureMessage =
+    error ??
+    (result && !result.ok
+      ? researchMutationFailureMessage(result.reason)
+      : "Artist could not be intentionally skipped.");
+  redirect(
+    artistWorkflowPath(artistId, returnTo, {
+      ...(result?.ok ? { research_skipped: "1" } : {}),
+      ...(!result?.ok ? { research_error: failureMessage } : {}),
+    }),
+    RedirectType.replace
+  );
+}
+
+async function handleUnskipArtistResearch(
+  artistId: string,
+  returnTo: string
+) {
+  const currentArtistPath = artistWorkflowPath(artistId, returnTo);
+
+  let result:
+    | Awaited<ReturnType<typeof unskipContactResearchArtistByArtistId>>
+    | null = null;
+  let error: string | null = null;
+  try {
+    result = await unskipContactResearchArtistByArtistId(artistId, {
+      requestedShowId: workflowFestivalShowId(returnTo),
+    });
+  } catch (caught) {
+    error = researchActionError(caught);
+  }
+
+  if (result?.ok) {
+    refreshWorkflowViews(returnTo, [currentArtistPath, "/research", "/settings"]);
+  }
+  const failureMessage =
+    error ??
+    (result && !result.ok
+      ? researchMutationFailureMessage(result.reason)
+      : "Artist could not be restored to normal research eligibility.");
+  redirect(
+    artistWorkflowPath(artistId, returnTo, {
+      ...(result?.ok ? { research_unskipped: "1" } : {}),
+      ...(!result?.ok ? { research_error: failureMessage } : {}),
+    }),
+    RedirectType.replace
+  );
+}
+
+function researchStatusTone(status: string): BadgeTone {
+  if (status === "review" || status === "skipped") return "warning";
+  if (status === "claimed") return "info";
+  if (status === "pending") return "accent";
+  if (status === "inactive" || status === "exhausted") return "muted";
+  return "default";
+}
 
 interface ExternalLink {
   label: string;
@@ -101,6 +264,33 @@ const getArtistPageData = cache(async (id: string) => {
           where: { state: "active" },
           orderBy: { updatedAt: "desc" },
         },
+        contactResearchJob: {
+          select: {
+            id: true,
+            status: true,
+            priority: true,
+            nextShowAt: true,
+            attemptCount: true,
+            claimedAt: true,
+            claimExpiresAt: true,
+            userNotes: true,
+            agentNotes: true,
+            requestedShowId: true,
+            requestedShow: {
+              select: {
+                id: true,
+                date: true,
+                eventName: true,
+                venueName: true,
+              },
+            },
+          },
+        },
+        researchSkips: {
+          where: { clearedAt: null },
+          orderBy: { setAt: "desc" },
+          take: 1,
+        },
         playlists: { include: { playlist: true } },
         shows: {
           include: { show: true },
@@ -141,6 +331,10 @@ export default async function ArtistPage({
     followup_scheduled?: SearchParamValue;
     cancelled?: SearchParamValue;
     error?: SearchParamValue;
+    research_saved?: SearchParamValue;
+    research_skipped?: SearchParamValue;
+    research_unskipped?: SearchParamValue;
+    research_error?: SearchParamValue;
   }>;
 }) {
   const { id } = await params;
@@ -149,8 +343,15 @@ export default async function ArtistPage({
   const followUpScheduled = firstSearchParam(search.followup_scheduled);
   const actionError = firstSearchParam(search.error);
   const cancelled = firstSearchParam(search.cancelled);
+  const researchSaved = firstSearchParam(search.research_saved);
+  const researchSkipped = firstSearchParam(search.research_skipped);
+  const researchUnskipped = firstSearchParam(search.research_unskipped);
+  const researchError = firstSearchParam(search.research_error);
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
-  const currentReturnTo = withWorkflowReturnTo(`/artists/${id}`, safeReturnTo);
+  const currentReturnTo = withWorkflowReturnTo(
+    `/artists/${id}`,
+    safeReturnTo
+  );
   const { artist, outreaches, now } = await getArtistPageData(id);
   const today = easternTodayStoredDate(now);
   if (!artist) return notFound();
@@ -210,9 +411,69 @@ export default async function ArtistPage({
       result,
     ]),
   );
+  const researchJob = artist.contactResearchJob;
+  const activeResearchSkip = artist.researchSkips[0] ?? null;
+  const festivalContextShowId = workflowFestivalShowId(safeReturnTo);
+  const hasActiveEmailContact = artist.contacts.some((contact) =>
+    Boolean(contact.email?.trim())
+  );
+  const researchWindowEnd = new Date(
+    today.getTime() + CONTACT_RESEARCH_WINDOW_DAYS * 86_400_000
+  );
+  const hasEligibleRegularShow = upcomingShows.some(
+    (show) => !show.isFestival && show.date <= researchWindowEnd
+  );
+  const hasEligibleFestivalContext = upcomingShows.some(
+    (show) => show.id === festivalContextShowId && show.isFestival
+  );
+  const canManageResearch =
+    researchJob !== null ||
+    (!hasActiveEmailContact &&
+      (hasEligibleRegularShow || hasEligibleFestivalContext));
+  const researchUnavailableMessage = hasActiveEmailContact
+    ? "This artist already has an active email contact. A new manager-research job will not be created, but any existing research record remains available above."
+    : "This artist has no eligible upcoming regular show or current festival context, so a durable manager-research record will not be created yet.";
+  const visibleResearchFilter: ResearchStatusFilter | null = activeResearchSkip
+    ? "skipped"
+    : researchJob &&
+        [
+          "pending",
+          "claimed",
+          "review",
+          "complete",
+          "exhausted",
+        ].includes(researchJob.status)
+      ? (researchJob.status as ResearchStatusFilter)
+      : null;
+  async function saveArtistResearchNotesAction(formData: FormData) {
+    "use server";
+    await requireServerActionAuth(
+      artistWorkflowPath(id, formData.get("returnTo"))
+    );
+    const actionReturnTo = workflowReturnPath(formData.get("returnTo"));
+    await handleSaveArtistResearchNotes(id, actionReturnTo, formData);
+  }
+
+  async function skipArtistResearchAction(formData: FormData) {
+    "use server";
+    await requireServerActionAuth(
+      artistWorkflowPath(id, formData.get("returnTo"))
+    );
+    const actionReturnTo = workflowReturnPath(formData.get("returnTo"));
+    await handleSkipArtistResearch(id, actionReturnTo, formData);
+  }
+
+  async function unskipArtistResearchAction(formData: FormData) {
+    "use server";
+    await requireServerActionAuth(
+      artistWorkflowPath(id, formData.get("returnTo"))
+    );
+    const actionReturnTo = workflowReturnPath(formData.get("returnTo"));
+    await handleUnskipArtistResearch(id, actionReturnTo);
+  }
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
+    <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
       <Link href={safeReturnTo} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Back</Link>
 
       {(followUpSent || followUpScheduled || cancelled || actionError) && (
@@ -235,6 +496,27 @@ export default async function ArtistPage({
           {actionError && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
               Action failed: {actionError}
+            </div>
+          )}
+        </div>
+      )}
+
+      {(researchSaved ||
+        researchSkipped ||
+        researchUnskipped ||
+        researchError) && (
+        <div className="mt-4">
+          {researchError ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+              Manager research update failed: {researchError}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+              {researchSkipped
+                ? "Artist intentionally skipped from manager research."
+                : researchUnskipped
+                  ? "Intentional skip cleared and normal eligibility restored."
+                  : "Research instructions saved."}
             </div>
           )}
         </div>
@@ -278,6 +560,114 @@ export default async function ArtistPage({
             </a>
           ))}
         </div>
+      </section>
+
+      <section className="mt-6">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+              Manager research
+            </h2>
+            <p className="mt-1 text-xs text-zinc-500">
+              Artist-specific instructions and intentional skip state shared
+              with the contact-research workflow.
+            </p>
+          </div>
+          {researchJob && visibleResearchFilter && (
+            <Link
+              href={`${researchStatusHref(visibleResearchFilter)}#job-${researchJob.id}`}
+              className="text-xs font-medium text-blue-700 hover:underline dark:text-blue-300"
+            >
+              Open research card ↗
+            </Link>
+          )}
+        </div>
+        <Card className="mt-2">
+          <CardBody>
+            {researchJob ? (
+              <div className="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium">Current research job</p>
+                  <Badge tone={researchStatusTone(researchJob.status)}>
+                    {researchJob.status}
+                  </Badge>
+                </div>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Attempt {researchJob.attemptCount}
+                  {researchJob.nextShowAt
+                    ? ` · next show ${formatShowDate(researchJob.nextShowAt, {})}`
+                    : " · no next show date"}
+                  {researchJob.priority
+                    ? ` · priority ${researchJob.priority}`
+                    : ""}
+                </p>
+                {researchJob.status === "claimed" && (
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Claimed{" "}
+                    {researchJob.claimedAt
+                      ? researchJob.claimedAt.toLocaleString("en-US", {
+                          timeZone: "America/New_York",
+                        })
+                      : "without a recorded timestamp"}
+                    {researchJob.claimExpiresAt
+                      ? ` · expires ${researchJob.claimExpiresAt.toLocaleString(
+                          "en-US",
+                          { timeZone: "America/New_York" }
+                        )}`
+                      : ""}
+                  </p>
+                )}
+                {researchJob.requestedShow && (
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Festival request:{" "}
+                    <Link
+                      href={withWorkflowReturnTo(
+                        `/festivals/${researchJob.requestedShow.id}`,
+                        currentReturnTo
+                      )}
+                      className="hover:underline"
+                    >
+                      {researchJob.requestedShow.eventName ||
+                        researchJob.requestedShow.venueName}
+                    </Link>
+                    {" · "}
+                    {formatShowDate(researchJob.requestedShow.date, {})}
+                  </p>
+                )}
+                {researchJob.agentNotes && (
+                  <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
+                    Agent context: {researchJob.agentNotes}
+                  </p>
+                )}
+              </div>
+            ) : canManageResearch ? (
+              <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-950 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-100">
+                No research job exists yet. Saving instructions creates an
+                inactive durable record without queueing research. The normal
+                research refresh or festival enqueue can queue it later;
+                intentional skip takes effect immediately.
+              </div>
+            ) : null}
+
+            <ContactResearchControls
+              idPrefix={`artist-${artist.id}-research`}
+              userNotes={researchJob?.userNotes ?? null}
+              activeSkip={activeResearchSkip}
+              saveAction={saveArtistResearchNotesAction}
+              skipAction={skipArtistResearchAction}
+              unskipAction={unskipArtistResearchAction}
+              hiddenFields={[{ name: "returnTo", value: safeReturnTo }]}
+              canManage={canManageResearch}
+              hasJob={researchJob !== null}
+              unavailableMessage={researchUnavailableMessage}
+              notesDescription={
+                researchJob?.status === "claimed"
+                  ? "Saving changes invalidates the current claim and safely returns this job to pending so the agent cannot submit against stale instructions."
+                  : "Trusted artist-specific context for the research agent. Saving instructions alone does not queue a new job."
+              }
+            />
+          </CardBody>
+        </Card>
       </section>
 
       {artist.listenSignals.length > 0 && (

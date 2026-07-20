@@ -23,7 +23,7 @@ import { Card, CardBody } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/button";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
-import { TextArea } from "@/components/ui/field";
+import { ContactResearchControls } from "@/components/contact-research-controls";
 import { AutoDismissStatus } from "./auto-dismiss-status";
 import { easternTodayStoredDate } from "@/lib/calendarDate";
 import {
@@ -408,15 +408,15 @@ export default async function ContactResearchPage({
           id: true,
           name: true,
           popularity: true,
+          researchSkips: {
+            where: { clearedAt: null },
+            orderBy: { setAt: "desc" },
+            take: 1,
+          },
         },
       },
       candidates: {
         orderBy: [{ status: "asc" }, { createdAt: "asc" }],
-      },
-      researchSkips: {
-        where: { clearedAt: null },
-        orderBy: { setAt: "desc" },
-        take: 1,
       },
     },
   });
@@ -612,7 +612,7 @@ export default async function ContactResearchPage({
             const candidates = job.candidates.filter(
               (candidate) => candidate.status === "pending"
             );
-            const activeSkip = job.researchSkips[0] ?? null;
+            const activeSkip = job.artist.researchSkips[0] ?? null;
             return (
               <Card key={job.id} id={`job-${job.id}`}>
                 <CardBody>
@@ -646,99 +646,20 @@ export default async function ContactResearchPage({
                     </p>
                   )}
 
-                  {activeSkip && (
-                    <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-                      <p className="text-xs font-semibold uppercase tracking-wide">
-                        Intentionally skipped
-                      </p>
-                      <p className="mt-1 text-sm font-medium">
-                        {activeSkip.reason}
-                      </p>
-                      <p className="mt-2 text-xs text-amber-800 dark:text-amber-300">
-                        {activeSkip.source === "agent"
-                          ? `Set by contact-research agent from trusted global rules version ${activeSkip.agentRuleVersion}`
-                          : "Set manually"}
-                        {" · "}
-                        {activeSkip.setAt.toLocaleString("en-US", {
-                          timeZone: "America/New_York",
-                        })}
-                      </p>
-                      {activeSkip.agentRuleText && (
-                        <p className="mt-2 border-l-2 border-amber-400 pl-2 text-xs">
-                          Rule: {activeSkip.agentRuleText}
-                        </p>
-                      )}
-                      <form action={unskipArtistAction} className="mt-3">
-                        <input type="hidden" name="jobId" value={job.id} />
-                        <input
-                          type="hidden"
-                          name="status"
-                          value={activeFilter}
-                        />
-                        <PendingSubmitButton
-                          variant="secondary"
-                          size="sm"
-                          pendingLabel="Restoring…"
-                        >
-                          Unskip and restore eligibility
-                        </PendingSubmitButton>
-                      </form>
-                    </div>
-                  )}
-
-                  {!activeSkip && (
-                    <>
-                      <form action={saveResearchNotesAction} className="mt-3">
-                        <input type="hidden" name="jobId" value={job.id} />
-                        <input
-                          type="hidden"
-                          name="status"
-                          value={activeFilter}
-                        />
-                        <TextArea
-                          name="userNotes"
-                          label="Research instructions"
-                          description="Trusted artist-specific context for the research agent. Use the intentional skip control below when research must stop until you explicitly restore it."
-                          rows={2}
-                          defaultValue={job.userNotes ?? ""}
-                          placeholder="Example: Prioritize the management team listed on the official website."
-                        />
-                        <PendingSubmitButton
-                          variant="secondary"
-                          size="sm"
-                          pendingLabel="Saving…"
-                          className="mt-2"
-                        >
-                          Save instructions
-                        </PendingSubmitButton>
-                      </form>
-                      <form action={skipArtistAction} className="mt-3">
-                        <input type="hidden" name="jobId" value={job.id} />
-                        <input
-                          type="hidden"
-                          name="status"
-                          value={activeFilter}
-                        />
-                        <TextArea
-                          name="reason"
-                          label="Intentional skip reason"
-                          description="Required audit note. This suppresses queue refreshes, requeues, and agent claims until you explicitly unskip the artist."
-                          rows={2}
-                          maxLength={4_000}
-                          required
-                          placeholder="Example: Existing relationship — do not research automatically."
-                        />
-                        <PendingSubmitButton
-                          variant="secondary"
-                          size="sm"
-                          pendingLabel="Skipping…"
-                          className="mt-2"
-                        >
-                          Intentionally skip artist
-                        </PendingSubmitButton>
-                      </form>
-                    </>
-                  )}
+                  <div className="mt-3">
+                    <ContactResearchControls
+                      idPrefix={`research-${job.id}`}
+                      userNotes={job.userNotes}
+                      activeSkip={activeSkip}
+                      saveAction={saveResearchNotesAction}
+                      skipAction={skipArtistAction}
+                      unskipAction={unskipArtistAction}
+                      hiddenFields={[
+                        { name: "jobId", value: job.id },
+                        { name: "status", value: activeFilter },
+                      ]}
+                    />
+                  </div>
 
                   {candidates.length > 0 && (
                     <div className="mt-4 space-y-3">

@@ -217,6 +217,11 @@ export function workflowReturnPath(value: unknown): string {
   );
 }
 
+export function workflowFestivalShowId(value: unknown): string | null {
+  const url = new URL(workflowReturnPath(value), DASHBOARD_ORIGIN);
+  return FESTIVAL_PATH.exec(url.pathname)?.[1] ?? null;
+}
+
 export function appendWorkflowResult(
   returnTo: unknown,
   entries: Readonly<Record<string, string>>
@@ -243,4 +248,18 @@ export function withWorkflowReturnTo(path: string, returnTo: unknown): string {
   }
   url.searchParams.set("returnTo", workflowReturnPath(returnTo));
   return `${url.pathname}${url.search}`;
+}
+
+export function artistWorkflowPath(
+  artistId: string,
+  returnTo: unknown,
+  entries: Readonly<Record<string, string>> = {}
+): string {
+  return appendWorkflowResult(
+    withWorkflowReturnTo(
+      `/artists/${encodeURIComponent(artistId)}`,
+      returnTo
+    ),
+    entries
+  );
 }

@@ -43,6 +43,7 @@ export function Field({
 }
 
 export function TextArea({
+  id,
   name,
   label,
   description,
@@ -54,6 +55,7 @@ export function TextArea({
   maxLength,
   required,
 }: {
+  id?: string;
   name: string;
   label: string;
   description?: string;
@@ -65,11 +67,12 @@ export function TextArea({
   maxLength?: number;
   required?: boolean;
 }) {
+  const fieldId = id ?? name;
   return (
     <div className={className}>
-      <label htmlFor={name} className="text-sm font-medium">{label}</label>
+      <label htmlFor={fieldId} className="text-sm font-medium">{label}</label>
       <textarea
-        id={name}
+        id={fieldId}
         name={name}
         rows={rows}
         placeholder={placeholder}

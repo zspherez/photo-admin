@@ -10,6 +10,10 @@ const dismissSource = readFileSync(
   new URL("./auto-dismiss-status.tsx", import.meta.url),
   "utf8"
 );
+const controlsSource = readFileSync(
+  new URL("../../components/contact-research-controls.tsx", import.meta.url),
+  "utf8"
+);
 
 function actionSource(name: string, nextName: string): string {
   return source.slice(
@@ -142,14 +146,19 @@ test("intentional skips have a URL-backed count and dedicated view", () => {
 test("research cards support explicit skip and unskip with audit context", () => {
   assert.match(source, /skipContactResearchArtist/);
   assert.match(source, /unskipContactResearchArtist/);
-  assert.match(source, /label="Intentional skip reason"/);
-  assert.match(source, /required/);
-  assert.match(source, /Intentionally skip artist/);
-  assert.match(source, /Unskip and restore eligibility/);
-  assert.match(source, /Intentionally skipped/);
-  assert.match(source, /activeSkip\.reason/);
-  assert.match(source, /trusted global rules version/);
-  assert.match(source, /Rule: \{activeSkip\.agentRuleText\}/);
+  assert.match(source, /ContactResearchControls/);
+  assert.match(
+    source,
+    /const activeSkip = job\.artist\.researchSkips\[0\] \?\? null/
+  );
+  assert.match(controlsSource, /label="Intentional skip reason"/);
+  assert.match(controlsSource, /required/);
+  assert.match(controlsSource, /Intentionally skip artist/);
+  assert.match(controlsSource, /Unskip and restore eligibility/);
+  assert.match(controlsSource, /Intentionally skipped/);
+  assert.match(controlsSource, /activeSkip\.reason/);
+  assert.match(controlsSource, /trusted global rules version/);
+  assert.match(controlsSource, /Rule: \{activeSkip\.agentRuleText\}/);
 });
 
 test("research actions preserve the active status URL", () => {
@@ -165,11 +174,14 @@ test("research actions preserve the active status URL", () => {
     source,
     /researchStatusHref\(filter, \{ error: "unskip_failed" \}\)/
   );
+  assert.match(
+    source,
+    /hiddenFields=\{\[[\s\S]*name: "jobId", value: job\.id[\s\S]*name: "status", value: activeFilter/
+  );
   assert.ok(
-    (source.match(
-      /<input[\s\S]{0,120}type="hidden"[\s\S]{0,120}name="status"[\s\S]{0,120}value=\{activeFilter\}/g
-    )?.length ?? 0) >= 9,
-    "expected every research action form to submit the active status filter"
+    (source.match(/name="status"[\s\S]{0,80}value=\{activeFilter\}/g)
+      ?.length ?? 0) >= 6,
+    "expected non-card research actions to submit the active status filter"
   );
 });
 
