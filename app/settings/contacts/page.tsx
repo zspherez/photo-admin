@@ -119,7 +119,15 @@ export default async function ContactsSettingsPage({
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
       <Link href="/settings" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Settings</Link>
-      <h1 className="mt-2 text-2xl font-semibold tracking-tight">Contacts</h1>
+      <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
+        <h1 className="text-2xl font-semibold tracking-tight">Contacts</h1>
+        <Link
+          href="/contacts"
+          className="text-sm text-blue-700 hover:underline dark:text-blue-300"
+        >
+          View all contacts
+        </Link>
+      </div>
       <p className="mt-1 text-sm text-zinc-500">
         Sync writes stable <code>photo_admin_id</code> values to the Sheet, so
         the service account needs Editor access.

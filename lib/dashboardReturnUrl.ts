@@ -135,6 +135,19 @@ function outreachReturnPath(url: URL): string {
   return query ? `/outreach?${query}` : "/outreach";
 }
 
+function contactsReturnPath(url: URL): string {
+  const params = new URLSearchParams();
+  const search = validatedTrimmedSearchParam(
+    url.searchParams.get("search"),
+    { maxLength: 200 }
+  );
+  if (search) params.set("search", search);
+  const page = positiveIntegerSearchParam(url.searchParams.get("page"));
+  if (page > 1) params.set("page", String(page));
+  const query = params.toString();
+  return query ? `/contacts?${query}` : "/contacts";
+}
+
 function nestedWorkflowReturnPath(value: unknown): string {
   const nested = parsedLocalUrl(value);
   if (
@@ -151,6 +164,7 @@ export function workflowReturnPath(value: unknown): string {
   const url = parsedLocalUrl(value);
   if (!url) return "/dashboard";
   if (url.pathname === "/dashboard") return dashboardReturnPath(value);
+  if (url.pathname === "/contacts") return contactsReturnPath(url);
   if (url.pathname === "/outreach") return outreachReturnPath(url);
   if (url.pathname === "/festivals") {
     return festivalListPath(

@@ -19,8 +19,8 @@ export async function acquireOutreachRecipientPolicyLocks(
         SELECT 1 AS "locked"
         FROM (
           SELECT pg_advisory_xact_lock(
-            ${OUTREACH_RECIPIENT_POLICY_LOCK_CLASS},
-            hashtext(${email})
+            CAST(${OUTREACH_RECIPIENT_POLICY_LOCK_CLASS} AS INTEGER),
+            CAST(hashtext(${email}) AS INTEGER)
           )
         ) AS "outreachRecipientPolicyLock"
       `,

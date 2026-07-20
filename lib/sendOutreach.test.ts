@@ -1192,6 +1192,7 @@ test("recipient policy advisory locks serialize send claims and suppressions", a
         queued.push(resolve);
         this.waiters.set(key, queued);
       });
+
       return () => this.release(key);
     }
 
@@ -1257,6 +1258,36 @@ test("recipient policy advisory locks serialize send claims and suppressions", a
   releaseSend();
   await Promise.all([send, suppression]);
   assert.equal(suppressionAcquired, true);
+});
+
+test("recipient policy lock parameters use PostgreSQL integer overloads", async () => {
+  let query:
+    | {
+        text: string;
+        values: unknown[];
+      }
+    | undefined;
+  const tx = {
+    $queryRaw: async (value: {
+      text: string;
+      values: unknown[];
+    }) => {
+      query = value;
+      return [{ locked: 1 }];
+    },
+  } as unknown as Parameters<typeof acquireOutreachRecipientPolicyLocks>[0];
+
+  await acquireOutreachRecipientPolicyLocks(tx, ["manager@example.com"]);
+
+  assert.ok(query);
+  assert.match(
+    query.text,
+    /pg_advisory_xact_lock\(\s*CAST\(\$1 AS INTEGER\),\s*CAST\(hashtext\(\$2\) AS INTEGER\)\s*\)/
+  );
+  assert.deepEqual(query.values, [
+    1_330_072_011,
+    "manager@example.com",
+  ]);
 });
 
 test("sending transition revalidates and holds policy locks through provider submission", () => {

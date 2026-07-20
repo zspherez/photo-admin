@@ -81,6 +81,12 @@ test("workflow returns allow exact workflow routes and preserve their filters", 
   );
   assert.equal(
     workflowReturnPath(
+      "/contacts?search=Palm%20Artists&page=3&updated=old"
+    ),
+    "/contacts?search=Palm+Artists&page=3"
+  );
+  assert.equal(
+    workflowReturnPath(
       "/artists/artist_123?returnTo=%2Foutreach%3Fstatus%3Dsent%26page%3D2&error=old",
     ),
     "/artists/artist_123?returnTo=%2Foutreach%3Fstatus%3Dsent%26page%3D2",
