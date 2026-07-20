@@ -43,6 +43,10 @@ import {
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
 import {
+  customizeRecipientIdentityError,
+  type CustomizeRecipientIdentity,
+} from "@/lib/customizeRecipients";
+import {
   CANCELLABLE_OUTREACH_STATUSES,
   isCancellableOutreachStatus,
 } from "@/lib/outreachStatus";
@@ -60,6 +64,7 @@ export interface SendOutreachInput {
   subjectOverride?: string;
   htmlOverride?: string;
   singleRecipient?: boolean;
+  expectedRecipientIdentity?: CustomizeRecipientIdentity;
 }
 
 export type OutreachKindValue = "original" | "follow_up";
@@ -179,6 +184,7 @@ interface PreparedOutreach {
   fullTeamSend: boolean;
   subject: string;
   html: string;
+  expectedRecipientIdentity: CustomizeRecipientIdentity | null;
 }
 
 interface StoredAttempt {
@@ -241,6 +247,7 @@ interface ClaimedOutreach {
   automaticRetry: boolean;
   preparationRetryCount: number;
   claimRecovery: OutreachClaimRecoveryState;
+  expectedRecipientIdentity: CustomizeRecipientIdentity | null;
   contact: {
     id: string;
     artistId: string;
@@ -1387,6 +1394,7 @@ interface LockedPolicyOutreach extends DeliveryPolicySnapshot {
   artistId: string;
   contactId: string | null;
   finalSubject: string;
+  expectedRecipientIdentity?: CustomizeRecipientIdentity | null;
 }
 
 interface LockedOutreachDeliveryPolicy {
@@ -1472,14 +1480,17 @@ async function evaluateLockedOutreachDeliveryPolicy(
       FOR UPDATE
     `,
   );
-  const artistContacts = await tx.$queryRaw<DeliveryPolicyContact[]>(
+  const artistContacts = await tx.$queryRaw<
+    Array<DeliveryPolicyContact & { updatedAt: Date }>
+  >(
     Prisma.sql`
       SELECT
         "id",
         "artistId",
         "email",
         "state",
-        "isFullTeam"
+        "isFullTeam",
+        "updatedAt"
       FROM "Contact"
       WHERE "artistId" = ${outreach.artistId}
       ORDER BY "id"
@@ -1501,6 +1512,9 @@ async function evaluateLockedOutreachDeliveryPolicy(
   const storedRequest = parseResendRequestSnapshot(attempt.providerRequest);
   const policyEmails = normalizeEmails([
     ...intendedRecipients,
+    ...(outreach.expectedRecipientIdentity
+      ? [outreach.expectedRecipientIdentity.normalizedEmail]
+      : []),
     ...bccEmails,
     ...(testOverride ? [testOverride] : []),
     ...(storedRequest?.to ?? []),
@@ -1509,6 +1523,22 @@ async function evaluateLockedOutreachDeliveryPolicy(
     ...(storedRequest?.replyTo ?? []),
   ]);
   await acquireOutreachRecipientPolicyLocks(tx, policyEmails);
+  const identityError = outreach.expectedRecipientIdentity
+    ? customizeRecipientIdentityError(
+        contact,
+        outreach.expectedRecipientIdentity,
+      )
+    : null;
+  if (identityError) {
+    return {
+      decision: {
+        ok: false,
+        state: "cancelled",
+        error: identityError,
+      },
+      submissionCredential: null,
+    };
+  }
   const suppressions =
     policyEmails.length === 0
       ? []
@@ -2001,6 +2031,8 @@ export async function getOutreachSendabilityBatch(
       sendable: true,
       mode: "retry",
       reason: null,
+      blockingOutreachId: candidate.id,
+      blockingStatus: candidate.status,
     };
   });
 }
@@ -2366,6 +2398,7 @@ async function prepareOriginalOutreach(
     subjectOverride,
     htmlOverride,
     singleRecipient,
+    expectedRecipientIdentity,
   } = input;
   const [sendability] = await getOutreachSendabilityBatch([
     { showId, contactId, singleRecipient },
@@ -2376,8 +2409,8 @@ async function prepareOriginalOutreach(
 
   const [show, contact, template, utmSettings] = await Promise.all([
     db.show.findUnique({ where: { id: showId } }),
-    db.contact.findFirst({
-      where: { id: contactId, state: "active" },
+    db.contact.findUnique({
+      where: { id: contactId },
       include: { artist: true },
     }),
     ensureDefaultTemplate(),
@@ -2390,6 +2423,13 @@ async function prepareOriginalOutreach(
   const festivalBlocked = festivalOutreachBlockingReason(show, "original");
   if (festivalBlocked) return { error: festivalBlocked };
   if (!contact) return { error: "Contact not found" };
+  if (contact.state !== "active") {
+    return { error: "Selected contact is quarantined" };
+  }
+  const identityError = expectedRecipientIdentity
+    ? customizeRecipientIdentityError(contact, expectedRecipientIdentity)
+    : null;
+  if (identityError) return { error: identityError };
   const association = await db.showArtist.findUnique({
     where: {
       showId_artistId: { showId, artistId: contact.artistId },
@@ -2435,6 +2475,7 @@ async function prepareOriginalOutreach(
           contact.artist.name,
           utmSettings,
         ),
+    expectedRecipientIdentity: expectedRecipientIdentity ?? null,
   };
 }
 
@@ -2541,6 +2582,7 @@ async function prepareFollowUpOutreach(
       parent.contact.artist.name,
       utmSettings,
     ),
+    expectedRecipientIdentity: null,
   };
 }
 
@@ -2581,6 +2623,7 @@ function claimedOutreach(
   automaticRetry: boolean,
   claimRecovery: OutreachClaimRecoveryState,
   preparationRetryCount = 0,
+  expectedRecipientIdentity: CustomizeRecipientIdentity | null = null,
 ): ClaimedOutreach {
   if (!row.claimToken) throw new Error("Claim token was not persisted");
   return {
@@ -2604,6 +2647,7 @@ function claimedOutreach(
     automaticRetry,
     preparationRetryCount,
     claimRecovery,
+    expectedRecipientIdentity,
     contact: row.contact ?? null,
   };
 }
@@ -3031,8 +3075,7 @@ async function preparedDeliveryPolicyBlockingReason(
   tx: Prisma.TransactionClient,
   prep: PreparedOutreach,
 ): Promise<string | null> {
-  const [show, association, artistContacts, deliverySettings] =
-    await Promise.all([
+  const [show, association] = await Promise.all([
       tx.show.findUnique({
         where: { id: prep.showId },
         select: {
@@ -3052,18 +3095,25 @@ async function preparedDeliveryPolicyBlockingReason(
         },
         select: { showId: true },
       }),
-      tx.contact.findMany({
-        where: { artistId: prep.artistId },
-        select: {
-          id: true,
-          artistId: true,
-          email: true,
-          state: true,
-          isFullTeam: true,
-        },
-      }),
-      getResendDeliverySettingsSnapshot(tx),
     ]);
+  const artistContacts = await tx.$queryRaw<
+    Array<DeliveryPolicyContact & { updatedAt: Date }>
+  >(
+    Prisma.sql`
+      SELECT
+        "id",
+        "artistId",
+        "email",
+        "state",
+        "isFullTeam",
+        "updatedAt"
+      FROM "Contact"
+      WHERE "artistId" = ${prep.artistId}
+      ORDER BY "id"
+      FOR UPDATE
+    `,
+  );
+  const deliverySettings = await getResendDeliverySettingsSnapshot(tx);
   const festivalBlocked = festivalOutreachBlockingReason(show, prep.kind);
   if (festivalBlocked) return festivalBlocked;
   const contact =
@@ -3078,8 +3128,18 @@ async function preparedDeliveryPolicyBlockingReason(
     ...(deliverySettings.testOverride
       ? [deliverySettings.testOverride]
       : []),
+    ...(prep.expectedRecipientIdentity
+      ? [prep.expectedRecipientIdentity.normalizedEmail]
+      : []),
   ]);
   await acquireOutreachRecipientPolicyLocks(tx, policyEmails);
+  const identityError = prep.expectedRecipientIdentity
+    ? customizeRecipientIdentityError(
+        contact,
+        prep.expectedRecipientIdentity,
+      )
+    : null;
+  if (identityError) return identityError;
   const suppressions =
     policyEmails.length === 0
       ? []
@@ -4076,7 +4136,10 @@ async function claimAttemptForSending(
 
           const lockedPolicy = await evaluateLockedOutreachDeliveryPolicy(
             tx,
-            current,
+            {
+              ...current,
+              expectedRecipientIdentity: outreach.expectedRecipientIdentity,
+            },
             attempt,
           );
           const policy = lockedPolicy.decision;
@@ -4326,7 +4389,10 @@ async function submitClaimedAttempt(
 
           const lockedPolicy = await evaluateLockedOutreachDeliveryPolicy(
             tx,
-            current,
+            {
+              ...current,
+              expectedRecipientIdentity: outreach.expectedRecipientIdentity,
+            },
             attempt,
           );
           const policy = lockedPolicy.decision;
@@ -4947,6 +5013,7 @@ export async function sendOutreach(
   if ("error" in prep) return { ok: false, error: prep.error };
   const claim = await claimImmediateOutreach(prep);
   if (claim.kind === "complete") return claim.result;
+  claim.outreach.expectedRecipientIdentity = prep.expectedRecipientIdentity;
   return executeClaimedSend(claim.outreach);
 }
 

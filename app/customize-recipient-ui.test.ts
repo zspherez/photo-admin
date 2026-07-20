@@ -19,17 +19,40 @@ test("Customize defaults to the URL contact and preserves editor navigation stat
   assert.match(page, /singleRecipient: true/);
   assert.match(page, /eligibleCustomizeRecipientContacts\(/);
   assert.match(form, /useState\(contextContactId\)/);
+  assert.match(form, /const \[drafts, setDrafts\]/);
   assert.match(form, /name="selectedContactId"/);
   assert.match(form, /value=\{selectedContactId\}/);
+  assert.match(form, /name="expectedRecipientEmail"/);
+  assert.match(form, /name="expectedRecipientArtistId"/);
+  assert.match(form, /name="expectedRecipientUpdatedAt"/);
   assert.match(form, /useActionState\(action, initialState\)/);
   assert.match(page, /action=\{sendCustom\.bind\(null,/);
   assert.match(page, /returnTo: safeReturnTo/);
   assert.match(form, /<LinkButton href=\{returnTo\}/);
   assert.match(form, /<TemplateEditor[\s\S]*disabled=\{isRetry\}/);
+  assert.match(form, /subjectValue=\{selectedDraft\.subject\}/);
+  assert.match(form, /htmlValue=\{selectedDraft\.html\}/);
   assert.match(
     form,
     /state\.selectedContactId === selectedContactId/,
   );
+});
+
+test("Customize renders and preserves a separate personalized draft per contact", () => {
+  const page = source(
+    "app/dashboard/customize/[showId]/[contactId]/page.tsx",
+  );
+  const form = source(
+    "app/dashboard/customize/[showId]/[contactId]/customize-form.tsx",
+  );
+
+  assert.match(
+    page,
+    /eligibleContacts\.map\(async \(candidate\)[\s\S]*managerName: candidate\.name/,
+  );
+  assert.match(page, /renderCustomizeRecipientContent\(template, vars\)/);
+  assert.match(form, /initializeCustomizeRecipientDrafts\(recipientOptions\)/);
+  assert.match(form, /updateCustomizeRecipientDraft\(/);
 });
 
 test("Customize actions validate the selected contact and preserve failures in place", () => {
@@ -41,7 +64,9 @@ test("Customize actions validate the selected contact and preserve failures in p
   assert.match(actions, /selectedContactId/);
   assert.match(actions, /workflowReturnPath\(context\.returnTo\)/);
   assert.match(actions, /customizeRecipientSelectionError\(/);
+  assert.match(actions, /customizeRecipientIdentityError\(/);
   assert.match(actions, /emailSuppression\.findUnique/);
+  assert.match(actions, /expectedRecipientIdentity/);
   assert.match(
     actions,
     /getOutreachSendabilityBatch\(\[[\s\S]*singleRecipient: true/,
@@ -53,6 +78,26 @@ test("Customize actions validate the selected contact and preserve failures in p
     actions,
     /dashboardResultHref\(returnTo, "error"/,
   );
+});
+
+test("immutable retries load their stored preview and lock recipient selection", () => {
+  const page = source(
+    "app/dashboard/customize/[showId]/[contactId]/page.tsx",
+  );
+  const form = source(
+    "app/dashboard/customize/[showId]/[contactId]/customize-form.tsx",
+  );
+
+  assert.match(page, /retryOutreachIds/);
+  assert.match(page, /finalSubject: true/);
+  assert.match(page, /finalHtml: true/);
+  assert.match(page, /recipientEmails: true/);
+  assert.match(page, /recipientSnapshotState === "verified"/);
+  assert.match(page, /subject: validRetrySnapshot\.finalSubject/);
+  assert.match(page, /html: validRetrySnapshot\.finalHtml/);
+  assert.match(page, /retryContactId:/);
+  assert.match(form, /disabled=\{isRetry\}/);
+  assert.match(form, /immutable retry content is unavailable/);
 });
 
 test("immediate, scheduled, and retry delivery use the selected immutable snapshot", () => {
@@ -83,6 +128,24 @@ test("immediate, scheduled, and retry delivery use the selected immutable snapsh
   assert.match(schedule, /fullTeamSend: prep\.fullTeamSend/);
   assert.match(locked, /outreach\.fullTeamSend/);
   assert.match(locked, /stored: outreach/);
+  assert.match(locked, /"updatedAt"/);
+  assert.match(locked, /customizeRecipientIdentityError/);
+  assert.match(
+    send,
+    /preparedDeliveryPolicyBlockingReason[\s\S]*FROM "Contact"[\s\S]*FOR UPDATE/,
+  );
+  const preparedPolicy = send.slice(
+    send.indexOf("async function preparedDeliveryPolicyBlockingReason"),
+    send.indexOf("async function claimImmediateOutreach"),
+  );
+  assert.ok(
+    preparedPolicy.indexOf('FOR UPDATE') <
+      preparedPolicy.indexOf("getResendDeliverySettingsSnapshot(tx)"),
+  );
+  assert.match(
+    send,
+    /expectedRecipientIdentity: outreach\.expectedRecipientIdentity/,
+  );
   assert.match(
     send,
     /recipients: currentPolicy\.currentRecipients,[\s\S]*fullTeamSend: currentPolicy\.fullTeamSend,[\s\S]*mode: "retry"/,

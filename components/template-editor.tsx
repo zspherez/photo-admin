@@ -13,6 +13,10 @@ interface Props {
   initialHtml: string;
   variables: string[];
   disabled?: boolean;
+  subjectValue?: string;
+  htmlValue?: string;
+  onSubjectChange?: (value: string) => void;
+  onHtmlChange?: (value: string) => void;
 }
 
 export function TemplateEditor({
@@ -20,21 +24,45 @@ export function TemplateEditor({
   initialHtml,
   variables,
   disabled = false,
+  subjectValue,
+  htmlValue,
+  onSubjectChange,
+  onHtmlChange,
 }: Props) {
-  const [subject, setSubject] = useState(initialSubject);
-  const [html, setHtml] = useState(initialHtml);
+  const [internalSubject, setInternalSubject] = useState(initialSubject);
+  const [internalHtml, setInternalHtml] = useState(initialHtml);
+  const subject = subjectValue ?? internalSubject;
+  const html = htmlValue ?? internalHtml;
   const [view, setView] = useState<View>("visual");
   const htmlTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const onHtmlChangeRef = useRef(onHtmlChange);
+
+  useEffect(() => {
+    onHtmlChangeRef.current = onHtmlChange;
+  }, [onHtmlChange]);
+
+  const setSubject = (value: string) => {
+    if (onSubjectChange) onSubjectChange(value);
+    else setInternalSubject(value);
+  };
+  const setHtml = (value: string) => {
+    if (onHtmlChange) onHtmlChange(value);
+    else setInternalHtml(value);
+  };
 
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
       Link.configure({ openOnClick: false, autolink: true }),
     ],
-    content: initialHtml,
+    content: htmlValue ?? initialHtml,
     immediatelyRender: false,
     editable: !disabled,
-    onUpdate: ({ editor }) => setHtml(editor.getHTML()),
+    onUpdate: ({ editor }) => {
+      const value = editor.getHTML();
+      if (onHtmlChangeRef.current) onHtmlChangeRef.current(value);
+      else setInternalHtml(value);
+    },
     editorProps: {
       attributes: {
         "aria-label": "Email template visual editor",

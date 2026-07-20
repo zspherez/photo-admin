@@ -7,8 +7,6 @@ import { workflowReturnPath } from "@/lib/dashboardReturnUrl";
 import { getOutreachSendabilityBatch } from "@/lib/sendOutreach";
 import { isWeekendET } from "@/lib/schedule";
 import {
-  applyHtmlTemplate,
-  applyTemplate,
   buildVarsForShow,
   ensureDefaultTemplate,
 } from "@/lib/template";
@@ -21,7 +19,9 @@ import {
   isDirectOutreachOnly,
 } from "@/lib/contactDisplay";
 import {
+  customizeRecipientIdentity,
   eligibleCustomizeRecipientContacts,
+  renderCustomizeRecipientContent,
 } from "@/lib/customizeRecipients";
 import { normalizeEmail, normalizeEmails } from "@/lib/resend";
 import {
@@ -103,6 +103,7 @@ export default async function CustomizePage({
       state: true,
       isFullTeam: true,
       createdAt: true,
+      updatedAt: true,
     },
   });
   const candidateEmails = normalizeEmails(
@@ -135,19 +136,94 @@ export default async function CustomizePage({
   const sendabilityByContact = new Map(
     sendabilityRows.map((row) => [row.contactId, row]),
   );
+  const retryOutreachIds = sendabilityRows.flatMap((row) =>
+    row.mode === "retry" && row.blockingOutreachId
+      ? [row.blockingOutreachId]
+      : [],
+  );
+  const retrySnapshots =
+    retryOutreachIds.length === 0
+      ? []
+      : await db.outreach.findMany({
+          where: { id: { in: retryOutreachIds } },
+          select: {
+            id: true,
+            contactId: true,
+            finalSubject: true,
+            finalHtml: true,
+            recipientEmails: true,
+            recipientSnapshotState: true,
+          },
+        });
+  const retrySnapshotById = new Map(
+    retrySnapshots.map((snapshot) => [snapshot.id, snapshot]),
+  );
+  const renderedContentByContact = new Map(
+    await Promise.all(
+      eligibleContacts.map(async (candidate) => {
+        const vars = await buildVarsForShow({
+          artistName: contact.artist.name,
+          venueName: show.venueName,
+          showDate: show.date,
+          managerName: candidate.name,
+        });
+        return [
+          candidate.id,
+          renderCustomizeRecipientContent(template, vars),
+        ] as const;
+      }),
+    ),
+  );
   const recipientOptions: CustomizeRecipientOption[] = eligibleContacts.map(
     (candidate) => {
       const sendability = sendabilityByContact.get(candidate.id);
+      const identity = customizeRecipientIdentity(candidate)!;
+      const retrySnapshot =
+        sendability?.mode === "retry" && sendability.blockingOutreachId
+          ? retrySnapshotById.get(sendability.blockingOutreachId)
+          : null;
+      const validRetrySnapshot =
+        retrySnapshot?.contactId === candidate.id &&
+        retrySnapshot.recipientSnapshotState === "verified"
+          ? retrySnapshot
+          : null;
+      const retrySelectable =
+        sendability?.mode !== "retry" || candidate.id === contactId;
+      const content =
+        sendability?.mode === "retry"
+          ? validRetrySnapshot
+            ? {
+                subject: validRetrySnapshot.finalSubject,
+                html: validRetrySnapshot.finalHtml,
+              }
+            : null
+          : renderedContentByContact.get(candidate.id) ?? null;
       return {
         id: candidate.id,
-        email: normalizeEmail(candidate.email ?? "")!,
+        artistId: identity.artistId,
+        email: identity.normalizedEmail,
+        updatedAt: identity.updatedAt,
         label: recipientLabel(candidate),
         eligible: true,
-        sendable: sendability?.sendable === true,
+        selectable: retrySelectable,
+        sendable:
+          sendability?.sendable === true &&
+          retrySelectable &&
+          content !== null,
         mode: sendability?.mode ?? null,
-        reason: sendability?.reason ?? null,
-        recipients: sendability?.recipients ?? [],
+        reason:
+          !retrySelectable
+            ? "Open Customize from this contact to retry its immutable outreach."
+            : sendability?.mode === "retry" && !validRetrySnapshot
+              ? "The immutable retry snapshot is unavailable."
+              : sendability?.reason ?? null,
+        recipients:
+          validRetrySnapshot?.recipientEmails ??
+          sendability?.recipients ??
+          [],
         isFullTeam: candidate.isFullTeam,
+        subject: content?.subject ?? null,
+        html: content?.html ?? null,
       };
     },
   );
@@ -155,9 +231,12 @@ export default async function CustomizePage({
     const normalizedContextEmail = normalizeEmail(contact.email ?? "");
     recipientOptions.unshift({
       id: contactId,
+      artistId: contact.artistId,
       email: normalizedContextEmail ?? contactDisplayValue(contact),
+      updatedAt: contact.updatedAt.toISOString(),
       label: `${recipientLabel(contact)} · Unavailable`,
       eligible: false,
+      selectable: false,
       sendable: false,
       mode: null,
       reason: normalizedContextEmail
@@ -167,17 +246,11 @@ export default async function CustomizePage({
           : "This contact has no valid email action.",
       recipients: [],
       isFullTeam: contact.isFullTeam,
+      subject: null,
+      html: null,
     });
   }
-
-  const vars = await buildVarsForShow({
-    artistName: contact.artist.name,
-    venueName: show.venueName,
-    showDate: show.date,
-    managerName: contact.name,
-  });
-  const subject = applyTemplate(template.subject, vars);
-  const html = applyHtmlTemplate(template.htmlBody, vars);
+  const routeSendability = sendabilityByContact.get(contactId);
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
@@ -197,14 +270,15 @@ export default async function CustomizePage({
           <CustomizeForm
             contextContactId={contactId}
             returnTo={safeReturnTo}
-            initialSubject={subject}
-            initialHtml={html}
             recipientOptions={recipientOptions}
             weekend={isWeekendET()}
             action={sendCustom.bind(null, {
               showId,
               contextContactId: contactId,
+              contextArtistId: contact.artistId,
               returnTo: safeReturnTo,
+              retryContactId:
+                routeSendability?.mode === "retry" ? contactId : null,
             })}
           />
         </CardBody>

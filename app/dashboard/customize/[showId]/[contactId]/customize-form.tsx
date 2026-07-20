@@ -4,33 +4,39 @@ import { useActionState, useState } from "react";
 import { LinkButton } from "@/components/ui/button";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { TemplateEditor } from "@/components/template-editor";
+import {
+  initializeCustomizeRecipientDrafts,
+  updateCustomizeRecipientDraft,
+  type CustomizeRecipientDrafts,
+} from "@/lib/customizeRecipientDrafts";
 import type { CustomizeActionState } from "./actions";
 
 export interface CustomizeRecipientOption {
   id: string;
+  artistId: string;
   email: string;
+  updatedAt: string;
   label: string;
   eligible: boolean;
+  selectable: boolean;
   sendable: boolean;
   mode: "new" | "retry" | null;
   reason: string | null;
   recipients: string[];
   isFullTeam: boolean;
+  subject: string | null;
+  html: string | null;
 }
 
 export function CustomizeForm({
   contextContactId,
   returnTo,
-  initialSubject,
-  initialHtml,
   recipientOptions,
   weekend,
   action,
 }: {
   contextContactId: string;
   returnTo: string;
-  initialSubject: string;
-  initialHtml: string;
   recipientOptions: CustomizeRecipientOption[];
   weekend: boolean;
   action: (
@@ -40,6 +46,9 @@ export function CustomizeForm({
 }) {
   const [selectedContactId, setSelectedContactId] =
     useState(contextContactId);
+  const [drafts, setDrafts] = useState<CustomizeRecipientDrafts>(() =>
+    initializeCustomizeRecipientDrafts(recipientOptions),
+  );
   const initialState: CustomizeActionState = {
     error: null,
     selectedContactId: contextContactId,
@@ -48,6 +57,7 @@ export function CustomizeForm({
   const selected =
     recipientOptions.find((option) => option.id === selectedContactId) ?? null;
   const isRetry = selected?.mode === "retry";
+  const selectedDraft = selected ? drafts[selected.id] ?? null : null;
   const visibleError =
     state.error && state.selectedContactId === selectedContactId
       ? state.error
@@ -55,22 +65,42 @@ export function CustomizeForm({
 
   return (
     <form action={formAction} className="space-y-4">
+      <input
+        type="hidden"
+        name="selectedContactId"
+        value={selectedContactId}
+      />
+      <input
+        type="hidden"
+        name="expectedRecipientEmail"
+        value={selected?.email ?? ""}
+      />
+      <input
+        type="hidden"
+        name="expectedRecipientArtistId"
+        value={selected?.artistId ?? ""}
+      />
+      <input
+        type="hidden"
+        name="expectedRecipientUpdatedAt"
+        value={selected?.updatedAt ?? ""}
+      />
       <div>
         <label htmlFor="selected-contact" className="text-sm font-medium">
           Email recipient
         </label>
         <select
           id="selected-contact"
-          name="selectedContactId"
           value={selectedContactId}
           onChange={(event) => setSelectedContactId(event.target.value)}
+          disabled={isRetry}
           className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
         >
           {recipientOptions.map((option) => (
             <option
               key={option.id}
               value={option.id}
-              disabled={!option.eligible}
+              disabled={!option.selectable}
             >
               {option.label}
             </option>
@@ -116,17 +146,50 @@ export function CustomizeForm({
         </div>
       )}
 
-      <TemplateEditor
-        initialSubject={initialSubject}
-        initialHtml={initialHtml}
-        variables={[]}
-        disabled={isRetry}
-      />
+      {selectedDraft ? (
+        <TemplateEditor
+          initialSubject={selectedDraft.subject}
+          initialHtml={selectedDraft.html}
+          subjectValue={selectedDraft.subject}
+          htmlValue={selectedDraft.html}
+          onSubjectChange={(subject) =>
+            setDrafts((current) =>
+              updateCustomizeRecipientDraft(
+                current,
+                selectedContactId,
+                selectedDraft,
+                { subject },
+              ),
+            )
+          }
+          onHtmlChange={(html) =>
+            setDrafts((current) =>
+              updateCustomizeRecipientDraft(
+                current,
+                selectedContactId,
+                selectedDraft,
+                { html },
+              ),
+            )
+          }
+          variables={[]}
+          disabled={isRetry}
+        />
+      ) : (
+        <div
+          role="alert"
+          className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+        >
+          {isRetry
+            ? "The immutable retry content is unavailable. Sending is disabled."
+            : "Email content is unavailable. Sending is disabled."}
+        </div>
+      )}
 
       <div className="flex gap-2">
         <PendingSubmitButton
           variant="primary"
-          disabled={!selected?.sendable}
+          disabled={!selected?.sendable || !selectedDraft}
           pendingLabel={
             isRetry
               ? weekend

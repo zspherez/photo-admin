@@ -1,4 +1,9 @@
 import { normalizeEmail, normalizeEmails } from "@/lib/resend";
+import {
+  applyHtmlTemplate,
+  applyTemplate,
+  type TemplateVars,
+} from "@/lib/template";
 
 export interface CustomizeRecipientContact {
   id: string;
@@ -6,6 +11,68 @@ export interface CustomizeRecipientContact {
   email: string | null;
   state: "active" | "quarantined";
   createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CustomizeRecipientIdentity {
+  contactId: string;
+  artistId: string;
+  normalizedEmail: string;
+  updatedAt: string;
+}
+
+export function customizeRecipientIdentity(
+  contact: Pick<
+    CustomizeRecipientContact,
+    "id" | "artistId" | "email" | "updatedAt"
+  >,
+): CustomizeRecipientIdentity | null {
+  const normalizedEmail = normalizeEmail(contact.email ?? "");
+  return normalizedEmail
+    ? {
+        contactId: contact.id,
+        artistId: contact.artistId,
+        normalizedEmail,
+        updatedAt: contact.updatedAt.toISOString(),
+      }
+    : null;
+}
+
+export function customizeRecipientIdentityError(
+  contact: Pick<
+    CustomizeRecipientContact,
+    "id" | "artistId" | "email" | "updatedAt"
+  > | null,
+  expected: CustomizeRecipientIdentity | null,
+): string | null {
+  if (!contact || !expected) {
+    return "Selected recipient identity is missing or invalid";
+  }
+  const current = customizeRecipientIdentity(contact);
+  if (!current) return "Selected recipient has no valid email address";
+  if (current.contactId !== expected.contactId) {
+    return "Selected recipient changed since this page loaded";
+  }
+  if (current.artistId !== expected.artistId) {
+    return "Selected recipient artist changed since this page loaded";
+  }
+  if (current.normalizedEmail !== expected.normalizedEmail) {
+    return "Selected recipient email changed since this page loaded";
+  }
+  if (current.updatedAt !== expected.updatedAt) {
+    return "Selected recipient was updated since this page loaded";
+  }
+  return null;
+}
+
+export function renderCustomizeRecipientContent(
+  template: { subject: string; htmlBody: string },
+  vars: TemplateVars,
+): { subject: string; html: string } {
+  return {
+    subject: applyTemplate(template.subject, vars),
+    html: applyHtmlTemplate(template.htmlBody, vars),
+  };
 }
 
 function orderedContacts<T extends CustomizeRecipientContact>(
