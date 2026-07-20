@@ -72,9 +72,7 @@ function encodeUrlHtmlAttribute(value: string, quote: "'" | '"'): string {
 function trackedHref(
   href: string,
   quote: "'" | '"',
-  kind: EmailUtmKind,
-  artistName: string,
-  settings: EmailUtmSettings,
+  parameters: readonly (readonly [string, string])[],
 ): string {
   const decodedHref = decodeUrlHtmlEntities(href);
   if (!/^https?:\/\//i.test(decodedHref)) return href;
@@ -92,18 +90,6 @@ function trackedHref(
     return href;
   }
 
-  const campaign =
-    kind === "original"
-      ? settings.utm_campaign_original
-      : settings.utm_campaign_follow_up;
-  const artistContent = normalizeArtistUtmContent(artistName);
-  const parameters = [
-    ["utm_source", settings.utm_source.trim()],
-    ["utm_medium", settings.utm_medium.trim()],
-    ["utm_campaign", campaign.trim()],
-    ["utm_content", artistContent],
-  ] as const;
-
   let changed = false;
   for (const [key, value] of parameters) {
     if (value && !url.searchParams.has(key)) {
@@ -117,9 +103,7 @@ function trackedHref(
 
 function transformTagHrefs(
   tag: string,
-  kind: EmailUtmKind,
-  artistName: string,
-  settings: EmailUtmSettings,
+  parameters: readonly (readonly [string, string])[],
 ): string {
   const opening = tag.match(/^<\s*[A-Za-z][^\s/>]*/);
   if (!opening) return tag;
@@ -166,9 +150,7 @@ function transformTagHrefs(
       const transformed = trackedHref(
         value,
         '"',
-        kind,
-        artistName,
-        settings,
+        parameters,
       );
       output += transformed === value ? value : `"${transformed}"`;
       continue;
@@ -185,9 +167,7 @@ function transformTagHrefs(
         ? trackedHref(
             value,
             quote as "'" | '"',
-            kind,
-            artistName,
-            settings,
+            parameters,
           )
         : value;
     output += quote;
@@ -203,6 +183,22 @@ export function appendEmailUtmToHtml(
   kind: EmailUtmKind,
   artistName: string,
   settings: EmailUtmSettings,
+): string {
+  const campaign =
+    kind === "original"
+      ? settings.utm_campaign_original
+      : settings.utm_campaign_follow_up;
+  return appendUtmParametersToHtml(html, [
+    ["utm_source", settings.utm_source.trim()],
+    ["utm_medium", settings.utm_medium.trim()],
+    ["utm_campaign", campaign.trim()],
+    ["utm_content", normalizeArtistUtmContent(artistName)],
+  ]);
+}
+
+export function appendUtmParametersToHtml(
+  html: string,
+  parameters: readonly (readonly [string, string])[],
 ): string {
   let cursor = 0;
   let output = "";
@@ -235,7 +231,7 @@ export function appendEmailUtmToHtml(
     if (tagEnd >= html.length || quote) return output + html.slice(tagStart);
 
     const tag = html.slice(tagStart, tagEnd + 1);
-    output += transformTagHrefs(tag, kind, artistName, settings);
+    output += transformTagHrefs(tag, parameters);
     cursor = tagEnd + 1;
   }
 

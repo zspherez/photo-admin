@@ -10,6 +10,7 @@ import {
   shouldMirrorResendAttempt,
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
+import { arbitraryEmailEventUpdate } from "@/lib/arbitraryEmail";
 
 interface ResendEvent {
   type: string;
@@ -51,6 +52,13 @@ function findAttemptId(evt: ResendEvent): string | null {
   return (
     findTag(evt, "outreach_attempt_id") ??
     findHeader(evt, "x-outreach-attempt-id")
+  );
+}
+
+function findArbitraryEmailId(evt: ResendEvent): string | null {
+  return (
+    findTag(evt, "arbitrary_email_id") ??
+    findHeader(evt, "x-arbitrary-email-id")
   );
 }
 
@@ -141,8 +149,97 @@ async function processEvent(
         async (tx) => {
           const attemptId = findAttemptId(parsed);
           const outreachId = findOutreachId(parsed);
+          const arbitraryEmailId = findArbitraryEmailId(parsed);
           const messageId = parsed.data.email_id ?? null;
           const providerCreatedAt = eventDate(parsed);
+
+          const [taggedArbitraryEmail, messageArbitraryEmail] =
+            await Promise.all([
+              arbitraryEmailId
+                ? tx.arbitraryEmail.findUnique({
+                    where: { id: arbitraryEmailId },
+                  })
+                : Promise.resolve(null),
+              messageId
+                ? tx.arbitraryEmail.findUnique({
+                    where: { providerMessageId: messageId },
+                  })
+                : Promise.resolve(null),
+            ]);
+          if (arbitraryEmailId || messageArbitraryEmail) {
+            const arbitraryEmail =
+              taggedArbitraryEmail ?? messageArbitraryEmail;
+            const conflict =
+              !arbitraryEmail
+                ? "arbitrary email not found"
+                : taggedArbitraryEmail &&
+                    messageArbitraryEmail &&
+                    taggedArbitraryEmail.id !== messageArbitraryEmail.id
+                  ? "arbitrary email tag conflicts with provider message"
+                  : messageId &&
+                      arbitraryEmail.providerMessageId &&
+                      arbitraryEmail.providerMessageId !== messageId
+                    ? "provider message conflicts with arbitrary email"
+                    : null;
+            if (!arbitraryEmail || conflict) {
+              await tx.resendWebhookEvent.create({
+                data: {
+                  eventId,
+                  type: parsed.type,
+                  providerMessageId: messageId,
+                  recipientEmails: normalizeEmails(parsed.data.to ?? []),
+                  providerCreatedAt,
+                  correlationStatus: "conflict",
+                  correlationError: conflict ?? "arbitrary email not found",
+                },
+              });
+              return {
+                note: `conflict webhook quarantined: ${
+                  conflict ?? "arbitrary email not found"
+                }`,
+              };
+            }
+
+            if (messageId && !arbitraryEmail.providerMessageId) {
+              await tx.arbitraryEmail.update({
+                where: { id: arbitraryEmail.id },
+                data: { providerMessageId: messageId },
+              });
+            }
+            await tx.resendWebhookEvent.create({
+              data: {
+                eventId,
+                type: parsed.type,
+                providerMessageId: messageId,
+                recipientEmails: normalizeEmails(parsed.data.to ?? []),
+                providerCreatedAt,
+                arbitraryEmailId: arbitraryEmail.id,
+                correlationStatus: "matched",
+              },
+            });
+            if (!arbitraryEmail.testSend) {
+              await applySuppression(tx, eventId, parsed, providerCreatedAt);
+            }
+            const update = arbitraryEmailEventUpdate(
+              arbitraryEmail,
+              parsed.type,
+              providerCreatedAt,
+              isDeliveryProblemEvent(parsed.type)
+                ? parsed.type === "email.bounced" ||
+                  parsed.type === "email.complained" ||
+                  parsed.type === "email.suppressed"
+                  ? suppressionReason(parsed)
+                  : parsed.type
+                : undefined,
+            ) as Prisma.ArbitraryEmailUpdateInput;
+            if (Object.keys(update).length > 0) {
+              await tx.arbitraryEmail.update({
+                where: { id: arbitraryEmail.id },
+                data: update,
+              });
+            }
+            return {};
+          }
 
           const [
             taggedAttempt,

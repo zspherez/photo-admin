@@ -123,6 +123,14 @@ export interface PrepareResendRequestArgs {
   idempotencyKey: string;
 }
 
+export interface PrepareArbitraryResendRequestArgs {
+  to: string[];
+  subject: string;
+  html: string;
+  arbitraryEmailId: string;
+  idempotencyKey: string;
+}
+
 export type ResendPreparationDisposition = "retryable" | "permanent";
 
 export type PrepareResendRequestResult =
@@ -627,6 +635,46 @@ export async function prepareResendRequest({
     attachments: [],
   };
 
+  return {
+    ok: true,
+    request,
+    requestHash: hashResendRequestSnapshot(request),
+    testSend: policy.testSend,
+    attachmentBlobs: [],
+    warnings: [],
+    rateCardAttachmentOmitted: false,
+  };
+}
+
+export async function prepareArbitraryResendRequest({
+  to,
+  subject,
+  html,
+  arbitraryEmailId,
+  idempotencyKey,
+}: PrepareArbitraryResendRequestArgs): Promise<PrepareResendRequestResult> {
+  const resolvedPolicy = await resolveResendDeliveryPolicy(to, subject);
+  if (!resolvedPolicy.ok) {
+    return {
+      ...resolvedPolicy,
+      preparationDisposition: "permanent",
+    };
+  }
+  const { policy } = resolvedPolicy;
+  const request: ResendRequestSnapshot = {
+    version: 1,
+    idempotencyKey,
+    from: policy.from,
+    to: policy.to,
+    cc: [],
+    bcc: policy.bcc,
+    replyTo: [],
+    subject: policy.subject,
+    html,
+    headers: { "X-Arbitrary-Email-Id": arbitraryEmailId },
+    tags: [{ name: "arbitrary_email_id", value: arbitraryEmailId }],
+    attachments: [],
+  };
   return {
     ok: true,
     request,
