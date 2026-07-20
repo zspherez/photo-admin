@@ -227,6 +227,23 @@ test("contact audit resolution reserves before Sheet work and rolls back failed 
     source.indexOf("} catch (error)", sheetUpdate)
   );
   assert.doesNotMatch(auditSheetUpdate, /customPrice|notes/);
+  const postWriteRecovery = source.slice(
+    source.indexOf(
+      "if (error instanceof AuditedContactSheetPostWriteError)"
+    ),
+    source.indexOf(
+      "await releaseContactAuditResolutionClaim(",
+      source.indexOf(
+        "if (error instanceof AuditedContactSheetPostWriteError)"
+      )
+    ) + "await releaseContactAuditResolutionClaim(".length
+  );
+  assert.match(
+    postWriteRecovery,
+    /recoverAuditedContactSheetPostWriteError/
+  );
+  assert.match(source, /Original error: \$\{originalDetail\}/);
+  assert.match(source, /Rollback error: \$\{recovery\.rollbackError/);
 });
 
 test("reject resolution does not mutate the contact", () => {

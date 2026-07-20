@@ -1187,6 +1187,7 @@ export function shouldKeepApprovedStaleSheetContactQuarantined(
   contact: {
     auditJobs: readonly {
       resolution: string | null;
+      finding: string | null;
       resolvedEmail: string | null;
       resolvedDirectOutreachNote: string | null;
     }[];
@@ -1200,7 +1201,9 @@ export function shouldKeepApprovedStaleSheetContactQuarantined(
   const incomingDirectOutreachNote =
     incoming.directOutreachNote?.trim() || null;
   return contact.auditJobs.some((job) => {
-    if (job.resolution !== "approved") return false;
+    if (job.resolution !== "approved" || job.finding !== "stale") {
+      return false;
+    }
     const resolvedEmail = normalizeEmail(job.resolvedEmail ?? "");
     const resolvedDirectOutreachNote =
       job.resolvedDirectOutreachNote?.trim() || null;
@@ -1690,6 +1693,7 @@ async function syncContactsAtTarget(
             },
             select: {
               resolution: true,
+              finding: true,
               resolvedEmail: true,
               resolvedDirectOutreachNote: true,
               resolutionClaimToken: true,
@@ -2230,6 +2234,36 @@ export interface AuditedContactSheetRollback {
   }>;
 }
 
+export class AuditedContactSheetPostWriteError extends Error {
+  readonly rollback: AuditedContactSheetRollback;
+  readonly originalError: unknown;
+
+  constructor(
+    originalError: unknown,
+    rollback: AuditedContactSheetRollback
+  ) {
+    super(
+      originalError instanceof Error
+        ? originalError.message
+        : String(originalError)
+    );
+    this.name = "AuditedContactSheetPostWriteError";
+    this.rollback = rollback;
+    this.originalError = originalError;
+  }
+}
+
+export async function verifyAuditedContactSheetPostWrite(
+  rollback: AuditedContactSheetRollback,
+  verify: () => Promise<void>
+): Promise<void> {
+  try {
+    await verify();
+  } catch (error) {
+    throw new AuditedContactSheetPostWriteError(error, rollback);
+  }
+}
+
 export function captureAuditedContactSheetRollbackCells(
   existing: readonly string[],
   updates: readonly ContactSheetCellUpdate[]
@@ -2485,6 +2519,14 @@ async function updateContactInSheetInternal(
           customPrice: data.customPrice ?? "",
           notes: data.notes ?? "",
         });
+    const auditRollback = auditOnly
+      ? {
+          sourceKey: matchedSourceKey,
+          rowId,
+          cells: captureAuditedContactSheetRollbackCells(existing, updates),
+        }
+      : null;
+    let sheetWriteCompleted = false;
     if (updates.length > 0) {
       await sheet.sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: sheet.spreadsheetId,
@@ -2493,37 +2535,48 @@ async function updateContactInSheetInternal(
           data: updates.map(({ range, values }) => ({ range, values })),
         },
       });
+      sheetWriteCompleted = true;
     }
-    await lease.assertOwned();
-    const finalSheet = requireStableRowIds(await readRawSheet(target));
-    const finalRow = finalSheet.rows.find(
-      (row) => (row[finalSheet.sourceIdColumn] ?? "").trim() === rowId
-    );
-    const finalContactCell = finalRow
-      ? (finalRow[emailColumn] ?? "").trim()
-      : "";
-    const persistedEmails = finalRow
-      ? parseSheetEmails(finalContactCell).emails
-      : [];
-    const updatedTargetPersisted =
-      newTarget.kind === "email"
-        ? persistedEmails.includes(newTarget.email)
-        : persistedEmails.length === 0 &&
-          finalContactCell === newTarget.directOutreachNote;
-    const oldEmailRemoved =
-      oldTarget.kind !== "email" ||
-      (newTarget.kind === "email" &&
-        newTarget.email === oldTarget.email) ||
-      !persistedEmails.includes(oldTarget.email);
-    if (
-      !finalRow ||
-      updates.some(
-        (update) => (finalRow[update.columnIndex] ?? "") !== update.value
-      ) ||
-      !updatedTargetPersisted ||
-      !oldEmailRemoved
-    ) {
-      throw new Error("The Sheet contact update could not be verified");
+    const verifyPostWrite = async () => {
+      await lease.assertOwned();
+      const finalSheet = requireStableRowIds(await readRawSheet(target));
+      const finalRow = finalSheet.rows.find(
+        (row) => (row[finalSheet.sourceIdColumn] ?? "").trim() === rowId
+      );
+      const finalContactCell = finalRow
+        ? (finalRow[emailColumn] ?? "").trim()
+        : "";
+      const persistedEmails = finalRow
+        ? parseSheetEmails(finalContactCell).emails
+        : [];
+      const updatedTargetPersisted =
+        newTarget.kind === "email"
+          ? persistedEmails.includes(newTarget.email)
+          : persistedEmails.length === 0 &&
+            finalContactCell === newTarget.directOutreachNote;
+      const oldEmailRemoved =
+        oldTarget.kind !== "email" ||
+        (newTarget.kind === "email" &&
+          newTarget.email === oldTarget.email) ||
+        !persistedEmails.includes(oldTarget.email);
+      if (
+        !finalRow ||
+        updates.some(
+          (update) => (finalRow[update.columnIndex] ?? "") !== update.value
+        ) ||
+        !updatedTargetPersisted ||
+        !oldEmailRemoved
+      ) {
+        throw new Error("The Sheet contact update could not be verified");
+      }
+    };
+    if (auditRollback && sheetWriteCompleted) {
+      await verifyAuditedContactSheetPostWrite(
+        auditRollback,
+        verifyPostWrite
+      );
+    } else {
+      await verifyPostWrite();
     }
     const result: SheetContactUpdateResult = {
       updated: true,
@@ -2533,11 +2586,7 @@ async function updateContactInSheetInternal(
     if (!auditOnly) return result;
     return {
       ...result,
-      rollback: {
-        sourceKey: matchedSourceKey,
-        rowId,
-        cells: captureAuditedContactSheetRollbackCells(existing, updates),
-      },
+      rollback: auditRollback!,
     };
     }
   );
@@ -2596,6 +2645,7 @@ export async function rollbackAuditedContactInSheet(
           "The audited Sheet fields changed after approval; rollback was not applied"
         );
       }
+
       if (rollback.cells.length > 0) {
         await sheet.sheets.spreadsheets.values.batchUpdate({
           spreadsheetId: sheet.spreadsheetId,
@@ -2627,4 +2677,24 @@ export async function rollbackAuditedContactInSheet(
       }
     }
   );
+}
+
+export async function recoverAuditedContactSheetPostWriteError(
+  error: AuditedContactSheetPostWriteError,
+  rollback: (
+    token: AuditedContactSheetRollback
+  ) => Promise<void> = rollbackAuditedContactInSheet
+): Promise<{ rolledBack: true } | { rolledBack: false; rollbackError: string }> {
+  try {
+    await rollback(error.rollback);
+    return { rolledBack: true };
+  } catch (rollbackFailure) {
+    return {
+      rolledBack: false,
+      rollbackError:
+        rollbackFailure instanceof Error
+          ? rollbackFailure.message
+          : String(rollbackFailure),
+    };
+  }
 }

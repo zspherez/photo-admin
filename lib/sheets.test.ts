@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  AuditedContactSheetPostWriteError,
   assertExpectedPreviousSheetTarget,
   captureAuditedContactSheetRollbackCells,
   contactSheetRowDisposition,
@@ -16,6 +17,7 @@ import {
   planContactSheetCellUpdates,
   reconcileSheetContactSlots,
   remainingLegacySheetAdoptions,
+  recoverAuditedContactSheetPostWriteError,
   resolveSheetBootstrapTargetFromValues,
   resolveSheetMutationTarget,
   selectLegacySheetRowAdoption,
@@ -26,6 +28,7 @@ import {
   sheetSyncDeadlineResult,
   staleOwnedSheetContactIds,
   validateSheetBootstrapTarget,
+  verifyAuditedContactSheetPostWrite,
 } from "./sheets";
 import {
   createOperationDeadline,
@@ -753,6 +756,7 @@ test("approved stale Sheet identities stay quarantined until the Sheet target ch
     auditJobs: [
       {
         resolution: "approved",
+        finding: "stale",
         resolvedEmail: "old.manager@example.com",
         resolvedDirectOutreachNote: null,
       },
@@ -765,6 +769,27 @@ test("approved stale Sheet identities stay quarantined until the Sheet target ch
     }),
     true
   );
+  for (const finding of ["changed", "ambiguous"]) {
+    assert.equal(
+      shouldKeepApprovedStaleSheetContactQuarantined(
+        {
+          auditJobs: [
+            {
+              resolution: "approved",
+              finding,
+              resolvedEmail: "new.manager@example.com",
+              resolvedDirectOutreachNote: null,
+            },
+          ],
+        },
+        {
+          email: "new.manager@example.com",
+          directOutreachNote: null,
+        }
+      ),
+      false
+    );
+  }
   assert.equal(
     shouldKeepApprovedStaleSheetContactQuarantined(contact, {
       email: "new.manager@example.com",
@@ -778,6 +803,7 @@ test("approved stale Sheet identities stay quarantined until the Sheet target ch
         auditJobs: [
           {
             resolution: "approved",
+            finding: "stale",
             resolvedEmail: null,
             resolvedDirectOutreachNote: "DM the artist",
           },
@@ -815,6 +841,7 @@ test("audit Sheet updates and rollback capture never touch price or notes", () =
     managerName: "Audited Manager",
     role: "management",
   });
+
   assert.deepEqual(
     updates.map((update) => update.columnIndex),
     [1, 2]
@@ -836,6 +863,64 @@ test("audit Sheet updates and rollback capture never touch price or notes", () =
   );
   assert.equal(existing[3], "$975");
   assert.equal(existing[5], "Newer Sheet notes");
+});
+
+test("post-write audit Sheet failures carry exact rollback state", async () => {
+  const rollback = {
+    sourceKey: "sheet-source",
+    rowId: "row-1",
+    cells: [
+      {
+        columnIndex: 1,
+        before: "old@example.com",
+        after: "new@example.com",
+      },
+    ],
+  };
+  const error = new AuditedContactSheetPostWriteError(
+    new Error("lease lost after write"),
+    rollback
+  );
+  await assert.rejects(
+    verifyAuditedContactSheetPostWrite(rollback, async () => {
+      throw new Error("verification read failed");
+    }),
+    (failure) => {
+      assert.ok(failure instanceof AuditedContactSheetPostWriteError);
+      assert.equal(failure.message, "verification read failed");
+      assert.deepEqual(failure.rollback, rollback);
+      return true;
+    }
+  );
+  await assert.doesNotReject(
+    verifyAuditedContactSheetPostWrite(rollback, async () => {})
+  );
+  let recoveredToken: typeof rollback | null = null;
+  assert.deepEqual(
+    await recoverAuditedContactSheetPostWriteError(
+      error,
+      async (token) => {
+        recoveredToken = token;
+      }
+    ),
+    { rolledBack: true }
+  );
+  assert.deepEqual(recoveredToken, rollback);
+  assert.deepEqual(
+    await recoverAuditedContactSheetPostWriteError(
+      error,
+      async () => {
+        throw new Error("rollback CAS failed");
+      }
+    ),
+    { rolledBack: false, rollbackError: "rollback CAS failed" }
+  );
+
+  const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /sheetWriteCompleted = true[\s\S]*verifyAuditedContactSheetPostWrite\([\s\S]*auditRollback,[\s\S]*verifyPostWrite/
+  );
 });
 
 test("Sheet reconciliation honors approved stale audit decisions", () => {

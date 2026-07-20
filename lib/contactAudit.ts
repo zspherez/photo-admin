@@ -13,6 +13,8 @@ import {
   normalizeResearchSourceUrl,
 } from "@/lib/contactResearch";
 import {
+  AuditedContactSheetPostWriteError,
+  recoverAuditedContactSheetPostWriteError,
   rollbackAuditedContactInSheet,
   updateAuditedContactInSheet,
 } from "@/lib/sheets";
@@ -1071,6 +1073,36 @@ export async function resolveContactAuditJob(
         role: "management",
       });
     } catch (error) {
+      if (error instanceof AuditedContactSheetPostWriteError) {
+        const recovery = await recoverAuditedContactSheetPostWriteError(
+          error,
+          sheetMutations.rollback
+        );
+        await releaseContactAuditResolutionClaim(
+          reservation.jobId,
+          reservation.claimToken
+        );
+        const originalDetail = error.message.slice(0, 180);
+        if (!recovery.rolledBack) {
+          console.error(
+            JSON.stringify({
+              event: "contact_audit_sheet_post_write_rollback_failed",
+              jobId: reservation.jobId,
+              contactId: reservation.contact.id,
+              sheetError: error.message,
+              rollbackError: recovery.rollbackError,
+            })
+          );
+          return {
+            ok: false,
+            error: `Google Sheet update verification failed after the write, and rollback failed. Reconcile the Sheet before retrying. Original error: ${originalDetail}. Rollback error: ${recovery.rollbackError.slice(0, 180)}`,
+          };
+        }
+        return {
+          ok: false,
+          error: `Google Sheet update verification failed after the write; the exact Sheet changes were rolled back and the database decision was not saved. ${originalDetail}`,
+        };
+      }
       await releaseContactAuditResolutionClaim(
         reservation.jobId,
         reservation.claimToken
