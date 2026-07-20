@@ -79,6 +79,11 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
                     id: "job-1",
                     claimToken: "claim-1",
                     priority: 10,
+                    globalAgentRules: {
+                      scope: "global",
+                      version: 4,
+                      instructions: "Prefer official sources.",
+                    },
                     artist: {
                       id: "artist-1",
                       name: "Example Artist",
@@ -152,6 +157,11 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
         jobId: "job-1",
         claimToken: "claim-1",
         priority: 10,
+        globalAgentRules: {
+          scope: "global",
+          version: 4,
+          instructions: "Prefer official sources.",
+        },
         artist: { name: "Example Artist" },
       },
     ],

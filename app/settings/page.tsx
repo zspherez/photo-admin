@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Settings" };
 
 export default async function SettingsIndex() {
-  const [spotify, statsfm, contactCount, researchReviewCount, template, showCount, settings] = await Promise.all([
+  const [spotify, statsfm, contactCount, researchReviewCount, template, showCount, settings, agentRules] = await Promise.all([
     db.integrationCredential.findUnique({ where: { provider: "spotify" } }),
     db.integrationCredential.findUnique({ where: { provider: "statsfm" } }),
     db.contact.count({ where: { state: "active" } }),
@@ -22,6 +22,7 @@ export default async function SettingsIndex() {
       },
     }),
     db.setting.findMany({ where: { key: { in: ["portfolio_url", "default_rate", "venue_blocklist"] } } }),
+    db.agentRuleSet.findUnique({ where: { scope: "global" } }),
   ]);
   const settingMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
 
@@ -32,6 +33,13 @@ export default async function SettingsIndex() {
       status: `${Object.keys(settingMap).length}/3 set`,
       ok: Object.keys(settingMap).length === 3,
       description: "Portfolio URL, default rate, venue blocklist.",
+    },
+    {
+      title: "Agent rules",
+      href: "/settings/agents",
+      status: agentRules ? `Version ${agentRules.version}` : "Not configured",
+      ok: Boolean(agentRules?.instructions),
+      description: "Trusted global instructions for research and other agents.",
     },
     {
       title: "Spotify",

@@ -15,6 +15,7 @@ import {
 import { activeListenSignalWhere } from "@/lib/listenSignal";
 import { appendContactToSheet, parseSheetEmails } from "@/lib/sheets";
 import { constantTimeEqual } from "@/lib/auth";
+import { readGlobalAgentRulesInTransaction } from "@/lib/agentRules";
 
 export const CONTACT_RESEARCH_WINDOW_DAYS = 90;
 export const CONTACT_RESEARCH_DEFAULT_CLAIM_LIMIT = 3;
@@ -1091,6 +1092,8 @@ export async function claimContactResearchJobs(
   );
   return db.$transaction(
     async (tx) => {
+      const globalAgentRules =
+        await readGlobalAgentRulesInTransaction(tx);
       const selected = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT job."id"
         FROM "ContactResearchJob" job
@@ -1148,6 +1151,8 @@ export async function claimContactResearchJobs(
             claimedAt: now,
             claimExpiresAt,
             attemptCount: { increment: 1 },
+            claimedAgentRules: globalAgentRules.instructions,
+            claimedAgentRulesVersion: globalAgentRules.version,
           },
         });
       }
@@ -1214,6 +1219,11 @@ export async function claimContactResearchJobs(
             claimExpiresAt,
             attemptCount: job.attemptCount,
             priority: job.priority,
+            globalAgentRules: {
+              scope: globalAgentRules.scope,
+              version: job.claimedAgentRulesVersion ?? 0,
+              instructions: job.claimedAgentRules ?? "",
+            },
             researchInstructions: job.userNotes,
             artist: {
               id: job.artist.id,
