@@ -38,6 +38,11 @@ Run them from the current repository root without `cd`. Only this exact command
 is permitted; no general shell, Node, network, or filesystem command is
 permitted.
 
+Do not test or invoke generic shell commands, direct `curl`, file inspection,
+Google URLs, or any other command outside `contact-research-agent-tool`. If an
+off-policy command is denied, do not retry it or try an alternate shell
+command; continue using only the approved search/fetch/submit operations.
+
 The runner passes one already-claimed job in the initial prompt. This session
 handles that artist only. Never call `claim`. The claimed object exposes
 `jobId`; use that exact top-level value for submission. The artist object

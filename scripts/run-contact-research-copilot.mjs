@@ -14,6 +14,10 @@ import {
   parseUsageEvent,
   readArtistForSession,
 } from "./contact-research-usage.mjs";
+import {
+  formatToolFailure,
+  toolStartLabel,
+} from "./contact-research-tool-log.mjs";
 
 const prompt = process.argv.slice(2).join(" ").trim();
 if (!prompt) throw new Error("A Copilot prompt is required");
@@ -51,6 +55,7 @@ const child = spawn(
 
 let totalNanoAiu = null;
 let resultExitCode = null;
+const startedTools = new Map();
 const output = createInterface({ input: child.stdout });
 output.on("line", (line) => {
   let event;
@@ -63,19 +68,20 @@ output.on("line", (line) => {
 
   totalNanoAiu = parseUsageEvent(event, totalNanoAiu);
   if (event.type === "tool.execution_start") {
-    const summary =
-      event.data?.arguments?.description ??
-      event.data?.toolName ??
-      "tool";
-    process.stdout.write(`→ ${summary}\n`);
+    const label = toolStartLabel(event);
+    if (typeof event.data?.toolCallId === "string") {
+      startedTools.set(event.data.toolCallId, {
+        label,
+        toolName: event.data?.toolName ?? null,
+      });
+    }
+    process.stdout.write(`→ ${label}\n`);
   }
   if (
     event.type === "tool.execution_complete" &&
     event.data?.success === false
   ) {
-    process.stdout.write(
-      `Tool failed: ${event.data?.toolName ?? "unknown"}\n`
-    );
+    process.stdout.write(`${formatToolFailure(event, startedTools)}\n`);
   }
   if (
     event.type === "assistant.message" &&
