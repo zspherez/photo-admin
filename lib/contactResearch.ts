@@ -154,6 +154,26 @@ export function isManagerContact(contact: {
   );
 }
 
+export function needsManagerContactResearch(
+  contacts: Array<{
+    email: string | null;
+    role: string | null;
+    state?: "active" | "quarantined";
+  }>
+): boolean {
+  return !contacts.some(isManagerContact);
+}
+
+export function festivalManagerResearchJobDisposition(
+  status: string | null
+): "create" | "requeue" | "existing" {
+  if (status === null) return "create";
+  if (["complete", "exhausted", "inactive"].includes(status)) {
+    return "requeue";
+  }
+  return "existing";
+}
+
 export function normalizeManagerRole(value: unknown): "management" {
   const role = requiredString(value, 100, "role").toLowerCase();
   if (role !== "manager" && role !== "management") {
@@ -1139,17 +1159,19 @@ export async function enqueueFestivalManagerResearch(
       id: true,
       date: true,
       artists: {
-        where: {
-          artist: {
-            contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
-            listenSignals: { some: activeListenSignalWhere(now) },
-          },
-        },
         select: {
           artistId: true,
           artist: {
             select: {
               popularity: true,
+              contacts: {
+                where: ACTIVE_EMAIL_CONTACT_WHERE,
+                select: {
+                  email: true,
+                  role: true,
+                  state: true,
+                },
+              },
               listenSignals: {
                 where: activeListenSignalWhere(now),
                 take: 1,
@@ -1164,7 +1186,10 @@ export async function enqueueFestivalManagerResearch(
   if (!festival) throw new Error("Festival is inactive or unavailable");
 
   return withSerializableRetry(async (tx) => {
-    const artistIds = festival.artists.map((row) => row.artistId);
+    const eligibleArtists = festival.artists.filter((row) =>
+      needsManagerContactResearch(row.artist.contacts)
+    );
+    const artistIds = eligibleArtists.map((row) => row.artistId);
     const existing =
       artistIds.length === 0
         ? []
@@ -1178,7 +1203,7 @@ export async function enqueueFestivalManagerResearch(
     let enqueued = 0;
     let alreadyQueued = 0;
 
-    for (const row of festival.artists) {
+    for (const row of eligibleArtists) {
       const priority =
         2_000 +
         contactResearchPriority({
@@ -1193,7 +1218,8 @@ export async function enqueueFestivalManagerResearch(
           ),
         });
       const status = existingByArtist.get(row.artistId);
-      if (!status) {
+      const disposition = festivalManagerResearchJobDisposition(status ?? null);
+      if (disposition === "create") {
         await tx.contactResearchJob.create({
           data: {
             artistId: row.artistId,
@@ -1205,7 +1231,7 @@ export async function enqueueFestivalManagerResearch(
         enqueued += 1;
         continue;
       }
-      if (["complete", "exhausted", "inactive"].includes(status)) {
+      if (disposition === "requeue") {
         await tx.contactResearchJob.update({
           where: { artistId: row.artistId },
           data: {
@@ -1235,7 +1261,7 @@ export async function enqueueFestivalManagerResearch(
     }
 
     return {
-      eligible: festival.artists.length,
+      eligible: eligibleArtists.length,
       enqueued,
       alreadyQueued,
     };

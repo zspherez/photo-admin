@@ -74,7 +74,7 @@ import {
 } from "@/lib/manualOutreach";
 import {
   enqueueFestivalManagerResearch,
-  isManagerContact,
+  needsManagerContactResearch,
 } from "@/lib/contactResearch";
 
 export const dynamic = "force-dynamic";
@@ -534,7 +534,7 @@ export default async function FestivalDetailPage({
       directOutreachContact ??
       a.contacts[0] ??
       null;
-    const managerContact = a.contacts.find(isManagerContact) ?? null;
+    const managerResearchEligible = needsManagerContactResearch(a.contacts);
     const genres: string[] = (() => {
       try {
         return a.genres ? (JSON.parse(a.genres) as string[]).filter((g) => typeof g === "string") : [];
@@ -566,7 +566,7 @@ export default async function FestivalDetailPage({
       matched,
       contact,
       displayContact,
-      managerContact,
+      managerResearchEligible,
       hasAnyContact: a.contacts.length > 0,
       genres,
       manualMarker,
@@ -668,7 +668,7 @@ export default async function FestivalDetailPage({
       ).length
     : 0;
   const managerResearchCount = rows.filter(
-    (row) => row.matched && !row.managerContact
+    (row) => row.managerResearchEligible
   ).length;
   const bulkFormId = "festival-bulk-outreach";
 
@@ -1020,7 +1020,7 @@ export default async function FestivalDetailPage({
                         hasDirectOutreachNote(r.displayContact) && (
                           <Badge tone="warning">Direct outreach</Badge>
                         )}
-                      {r.matched && !r.managerContact && (
+                      {r.managerResearchEligible && (
                         <Badge tone="warning">Manager needed</Badge>
                       )}
                     </div>
