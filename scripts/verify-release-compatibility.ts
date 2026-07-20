@@ -34,6 +34,7 @@ async function main(): Promise<void> {
     artistClaimProbe,
     contactResearchJobProbe,
     contactResearchCandidateProbe,
+    agentRuleSetProbe,
   ] = await Promise.all([
     db.setting.findMany({
       where: {
@@ -66,8 +67,24 @@ async function main(): Promise<void> {
     db.outreachSendAttempt.count({ take: 1 }),
     db.integrationSyncLease.count({ take: 1 }),
     db.artistIdentityNameClaim.count({ take: 1 }),
-    db.contactResearchJob.count({ take: 1 }),
+    db.contactResearchJob.findMany({
+      take: 1,
+      select: {
+        claimedAgentRules: true,
+        claimedAgentRulesVersion: true,
+      },
+    }),
     db.contactResearchCandidate.count({ take: 1 }),
+    db.agentRuleSet.findMany({
+      take: 1,
+      select: {
+        scope: true,
+        instructions: true,
+        version: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
   ]);
   const values = new Map(settings.map((setting) => [setting.key, setting.value]));
 
@@ -81,9 +98,9 @@ async function main(): Promise<void> {
         outreachAttemptProbe,
         syncLeaseProbe,
         artistClaimProbe,
-        contactResearchJobProbe,
         contactResearchCandidateProbe,
-      ].every(Number.isInteger),
+      ].every(Number.isInteger) &&
+        [contactResearchJobProbe, agentRuleSetProbe].every(Array.isArray),
       configuredSpreadsheetId:
         values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,
       configuredSheetTab: values.get(SHEETS_TAB_SETTING) ?? null,

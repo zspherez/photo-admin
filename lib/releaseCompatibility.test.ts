@@ -76,7 +76,7 @@ test("required schema probes fail closed", () => {
   );
 });
 
-test("release probe exercises new festival and outreach schema surfaces", () => {
+test("release probe exercises new festival, outreach, and agent schema surfaces", () => {
   const source = readFileSync(
     new URL("../scripts/verify-release-compatibility.ts", import.meta.url),
     "utf8",
@@ -94,4 +94,17 @@ test("release probe exercises new festival and outreach schema surfaces", () => 
     /contactProbe,\s*directOutreachNoteProbe,\s*festivalGeographyProbe,\s*outreachKindProbe,\s*outreachAttemptProbe/,
   );
   assert.match(source, /directOutreachNote: \{ not: null \}/);
+  assert.match(
+    source,
+    /db\.contactResearchJob\.findMany\(\{[\s\S]*claimedAgentRules: true,[\s\S]*claimedAgentRulesVersion: true/,
+  );
+  assert.doesNotMatch(source, /db\.contactResearchJob\.count/);
+  assert.match(
+    source,
+    /db\.agentRuleSet\.findMany\(\{[\s\S]*scope: true,[\s\S]*instructions: true,[\s\S]*version: true,[\s\S]*createdAt: true,[\s\S]*updatedAt: true/,
+  );
+  assert.match(
+    source,
+    /\[contactResearchJobProbe, agentRuleSetProbe\]\.every\(Array\.isArray\)/,
+  );
 });
