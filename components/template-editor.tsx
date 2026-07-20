@@ -12,22 +12,57 @@ interface Props {
   initialSubject: string;
   initialHtml: string;
   variables: string[];
+  disabled?: boolean;
+  subjectValue?: string;
+  htmlValue?: string;
+  onSubjectChange?: (value: string) => void;
+  onHtmlChange?: (value: string) => void;
 }
 
-export function TemplateEditor({ initialSubject, initialHtml, variables }: Props) {
-  const [subject, setSubject] = useState(initialSubject);
-  const [html, setHtml] = useState(initialHtml);
+export function TemplateEditor({
+  initialSubject,
+  initialHtml,
+  variables,
+  disabled = false,
+  subjectValue,
+  htmlValue,
+  onSubjectChange,
+  onHtmlChange,
+}: Props) {
+  const [internalSubject, setInternalSubject] = useState(initialSubject);
+  const [internalHtml, setInternalHtml] = useState(initialHtml);
+  const subject = subjectValue ?? internalSubject;
+  const html = htmlValue ?? internalHtml;
   const [view, setView] = useState<View>("visual");
   const htmlTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const onHtmlChangeRef = useRef(onHtmlChange);
+
+  useEffect(() => {
+    onHtmlChangeRef.current = onHtmlChange;
+  }, [onHtmlChange]);
+
+  const setSubject = (value: string) => {
+    if (onSubjectChange) onSubjectChange(value);
+    else setInternalSubject(value);
+  };
+  const setHtml = (value: string) => {
+    if (onHtmlChange) onHtmlChange(value);
+    else setInternalHtml(value);
+  };
 
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
       Link.configure({ openOnClick: false, autolink: true }),
     ],
-    content: initialHtml,
+    content: htmlValue ?? initialHtml,
     immediatelyRender: false,
-    onUpdate: ({ editor }) => setHtml(editor.getHTML()),
+    editable: !disabled,
+    onUpdate: ({ editor }) => {
+      const value = editor.getHTML();
+      if (onHtmlChangeRef.current) onHtmlChangeRef.current(value);
+      else setInternalHtml(value);
+    },
     editorProps: {
       attributes: {
         "aria-label": "Email template visual editor",
@@ -43,6 +78,10 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
       editor.commands.setContent(html, { emitUpdate: false });
     }
   }, [view, editor, html]);
+
+  useEffect(() => {
+    editor?.setEditable(!disabled);
+  }, [disabled, editor]);
 
   const insertVar = (v: string) => {
     const insertion = `{{${v}}}`;
@@ -90,6 +129,7 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
           id="subject-input"
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
+          disabled={disabled}
           className="mt-1 block w-full rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
         />
       </div>
@@ -107,6 +147,7 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
           <>
             <ToolbarBtn
               active={editor.isActive("bold")}
+              disabled={disabled}
               onClick={() => editor.chain().focus().toggleBold().run()}
               title="Bold"
             >
@@ -114,6 +155,7 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
             </ToolbarBtn>
             <ToolbarBtn
               active={editor.isActive("italic")}
+              disabled={disabled}
               onClick={() => editor.chain().focus().toggleItalic().run()}
               title="Italic"
             >
@@ -121,6 +163,7 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
             </ToolbarBtn>
             <ToolbarBtn
               active={editor.isActive("strike")}
+              disabled={disabled}
               onClick={() => editor.chain().focus().toggleStrike().run()}
               title="Strikethrough"
             >
@@ -128,6 +171,7 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
             </ToolbarBtn>
             <ToolbarBtn
               active={editor.isActive("bulletList")}
+              disabled={disabled}
               onClick={() => editor.chain().focus().toggleBulletList().run()}
               title="Bulleted list"
             >
@@ -135,12 +179,18 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
             </ToolbarBtn>
             <ToolbarBtn
               active={editor.isActive("orderedList")}
+              disabled={disabled}
               onClick={() => editor.chain().focus().toggleOrderedList().run()}
               title="Numbered list"
             >
               1.
             </ToolbarBtn>
-            <ToolbarBtn active={editor.isActive("link")} onClick={setLink} title="Link">
+            <ToolbarBtn
+              active={editor.isActive("link")}
+              disabled={disabled}
+              onClick={setLink}
+              title="Link"
+            >
               🔗
             </ToolbarBtn>
           </>
@@ -158,6 +208,7 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
               }}
               className="rounded border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
               defaultValue=""
+              disabled={disabled}
             >
               <option value="" disabled>Insert variable…</option>
               {variables.map((v) => (
@@ -176,6 +227,7 @@ export function TemplateEditor({ initialSubject, initialHtml, variables }: Props
           aria-label="Email template HTML"
           value={html}
           onChange={(e) => setHtml(e.target.value)}
+          disabled={disabled}
           rows={20}
           className="block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
         />
@@ -212,11 +264,13 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
 
 function ToolbarBtn({
   active,
+  disabled,
   onClick,
   title,
   children,
 }: {
   active: boolean;
+  disabled?: boolean;
   onClick: () => void;
   title: string;
   children: React.ReactNode;
@@ -226,6 +280,7 @@ function ToolbarBtn({
       type="button"
       aria-label={title}
       aria-pressed={active}
+      disabled={disabled}
       onClick={onClick}
       title={title}
       className={`rounded px-2 py-1 text-xs ${
