@@ -7,6 +7,7 @@ import {
   approveContactResearchCandidate,
   refreshContactResearchQueue,
   rejectContactResearchCandidate,
+  retryAllContactResearchJobs,
   retryContactResearchJob,
   updateContactResearchJobUserNotes,
 } from "@/lib/contactResearch";
@@ -127,6 +128,14 @@ async function saveResearchNotesAction(formData: FormData) {
   if (!updated) redirect(researchHref({ error: "notes_failed" }));
 }
 
+async function retryAllJobsAction() {
+  "use server";
+  await requireServerActionAuth("/research");
+  await retryAllContactResearchJobs();
+  revalidatePath("/research");
+  revalidatePath("/settings");
+}
+
 function statusTone(status: string): BadgeTone {
   if (status === "review") return "warning";
   if (status === "claimed") return "info";
@@ -241,6 +250,9 @@ export default async function ContactResearchPage({
     (counts.get("pending") ?? 0) +
     (counts.get("claimed") ?? 0) +
     (counts.get("review") ?? 0);
+  const retryAllCount =
+    (counts.get("review") ?? 0) +
+    (counts.get("exhausted") ?? 0);
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-10">
@@ -254,14 +266,25 @@ export default async function ContactResearchPage({
             you approve it.
           </p>
         </div>
-        <form action={refreshQueueAction}>
-          <PendingSubmitButton
-            variant="secondary"
-            pendingLabel="Refreshing…"
-          >
-            Refresh queue
-          </PendingSubmitButton>
-        </form>
+        <div className="flex flex-wrap gap-2">
+          <form action={retryAllJobsAction}>
+            <PendingSubmitButton
+              variant="secondary"
+              pendingLabel="Requeueing…"
+              disabled={retryAllCount === 0}
+            >
+              Requeue all review/exhausted ({retryAllCount})
+            </PendingSubmitButton>
+          </form>
+          <form action={refreshQueueAction}>
+            <PendingSubmitButton
+              variant="secondary"
+              pendingLabel="Refreshing…"
+            >
+              Refresh queue
+            </PendingSubmitButton>
+          </form>
+        </div>
       </div>
 
       <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">

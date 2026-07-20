@@ -30,8 +30,9 @@ test("successful research actions revalidate without redirecting to the top", ()
   const retry = actionSource("retryJobAction", "saveResearchNotesAction");
   const notes = actionSource(
     "saveResearchNotesAction",
-    "statusTone"
+    "retryAllJobsAction"
   );
+  const retryAll = actionSource("retryAllJobsAction", "statusTone");
 
   assert.match(approve, /if \(!result\.ok\)[\s\S]*redirect/);
   assert.match(approve, /if \(result\.sheetError\)[\s\S]*redirect/);
@@ -42,6 +43,16 @@ test("successful research actions revalidate without redirecting to the top", ()
   assert.doesNotMatch(retry, /retried: "1"/);
   assert.match(notes, /if \(!updated\) redirect/);
   assert.doesNotMatch(notes, /notes_saved: "1"/);
+  assert.match(retryAll, /retryAllContactResearchJobs/);
+  assert.doesNotMatch(retryAll, /redirect\(/);
+});
+
+test("all review and exhausted jobs can be requeued together", () => {
+  assert.match(
+    source,
+    /Requeue all review\/exhausted \(\{retryAllCount\}\)/
+  );
+  assert.match(source, /disabled=\{retryAllCount === 0\}/);
 });
 
 test("review and exhausted jobs can be requeued", () => {
