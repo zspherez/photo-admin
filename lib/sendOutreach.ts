@@ -6,6 +6,9 @@ import {
   buildVarsForShow,
   ensureDefaultTemplate,
   ensureFollowUpTemplate,
+  normalizeLegacyRateTemplateHtml,
+  normalizeLegacyOutreachSnapshot,
+  normalizeLegacyRateTemplateVariable,
 } from "@/lib/template";
 import {
   appendEmailUtmToHtml,
@@ -289,6 +292,10 @@ const MANUAL_REVIEW_IN_FLIGHT_EXPIRED =
   "Resend idempotency retention expired while provider acceptance remained unresolved; reconcile provider or webhook state before replacing the immutable request";
 const MANUAL_REVIEW_SNAPSHOT =
   "Current active contact membership, recipient addresses, or suppressions conflict with the verified outreach snapshot; review manually";
+const MANUAL_REVIEW_LEGACY_RATE_SNAPSHOT =
+  "Scheduled outreach contains legacy rate/custom-price content that could not be normalized safely; review manually before sending";
+const MANUAL_REVIEW_LEGACY_RATE_ATTEMPT =
+  "Immutable provider request contains legacy rate/custom-price content; review manually and do not resend this request";
 const MANUAL_REVIEW_CREDENTIAL_SCOPE_MISSING =
   "Provider attempt has no provable Resend credential scope; reconcile provider or webhook state before retrying";
 const MANUAL_REVIEW_CREDENTIAL_SCOPE_CHANGED =
@@ -303,6 +310,84 @@ export const DEFINITIVELY_UNSENT_CANCELLATION_ERROR =
 export const OUTREACH_MAX_SEND_ATTEMPTS = 5;
 export const OUTREACH_RETRY_BASE_DELAY_MS = 60 * 1000;
 export const OUTREACH_RETRY_MAX_DELAY_MS = 30 * 60 * 1000;
+
+export type LegacyScheduledSnapshotProtection =
+  | { kind: "unchanged" }
+  | { kind: "normalize"; subject: string; html: string }
+  | { kind: "block"; error: string };
+
+export interface LegacyScheduledSnapshotProtectionInput {
+  status: string;
+  finalSubject: string;
+  finalHtml: string;
+  trustedTemplate?: {
+    templateId: string;
+    subject: string;
+    html: string;
+  } | null;
+  immutableRequest?: { subject: string; html: string } | null;
+}
+
+export function schedulingTimeTemplateProvenance(
+  outreachCreatedAt: Date,
+  template: {
+    id: string;
+    subject: string;
+    htmlBody: string;
+    updatedAt: Date;
+  } | null,
+): { templateId: string; subject: string; html: string } | null {
+  // Template contents are only scheduling-time evidence if the row has not
+  // changed since this immutable outreach snapshot was created.
+  if (!template || template.updatedAt >= outreachCreatedAt) return null;
+  return {
+    templateId: template.id,
+    subject: template.subject,
+    html: template.htmlBody,
+  };
+}
+
+export function protectLegacyScheduledSnapshot(
+  input: LegacyScheduledSnapshotProtectionInput,
+): LegacyScheduledSnapshotProtection {
+  if (
+    input.status !== "scheduled" &&
+    input.status !== "retry_scheduled" &&
+    input.status !== "queued"
+  ) {
+    return { kind: "unchanged" };
+  }
+
+  const snapshot = normalizeLegacyOutreachSnapshot({
+    subject: input.finalSubject,
+    html: input.finalHtml,
+    trustedTemplateSubject: input.trustedTemplate?.subject,
+    trustedTemplateHtml: input.trustedTemplate?.html,
+  });
+
+  if (input.immutableRequest) {
+    const request = normalizeLegacyOutreachSnapshot({
+      subject: input.immutableRequest.subject,
+      html: input.immutableRequest.html,
+      trustedTemplateSubject: input.trustedTemplate?.subject,
+      trustedTemplateHtml: input.trustedTemplate?.html,
+    });
+    return snapshot.outcome !== "safe_unchanged" ||
+      request.outcome !== "safe_unchanged"
+      ? { kind: "block", error: MANUAL_REVIEW_LEGACY_RATE_ATTEMPT }
+      : { kind: "unchanged" };
+  }
+
+  if (snapshot.outcome === "safe_unchanged") return { kind: "unchanged" };
+  if (snapshot.outcome === "requires_manual_review") {
+    return { kind: "block", error: MANUAL_REVIEW_LEGACY_RATE_SNAPSHOT };
+  }
+  return {
+    kind: "normalize",
+    subject: snapshot.subject,
+    html: snapshot.html,
+  };
+}
 
 export function getOutreachRetryDelayMs(completedAttempts: number): number {
   const exponent = Math.max(0, completedAttempts - 1);
@@ -2264,9 +2349,14 @@ async function prepareOriginalOutreach(
     artistName: contact.artist.name,
     venueName: show.venueName,
     showDate: show.date,
-    customPrice: contact.customPrice,
     managerName: contact.name,
   });
+  const normalizedSubjectOverride = normalizeLegacyRateTemplateVariable(
+    subjectOverride?.trim() ?? "",
+  );
+  const normalizedHtmlOverride = normalizeLegacyRateTemplateHtml(
+    htmlOverride?.trim() ?? "",
+  );
 
   return {
     kind: "original",
@@ -2277,10 +2367,10 @@ async function prepareOriginalOutreach(
     templateId: template.id,
     recipients: sendability.recipients,
     fullTeamSend: contact.isFullTeam,
-    subject: subjectOverride?.trim() || applyTemplate(template.subject, vars),
-    html: htmlOverride?.trim()
+    subject: normalizedSubjectOverride || applyTemplate(template.subject, vars),
+    html: normalizedHtmlOverride
       ? appendEmailUtmToHtml(
-          htmlOverride.trim(),
+          normalizedHtmlOverride,
           "original",
           contact.artist.name,
           utmSettings,
@@ -2332,7 +2422,6 @@ async function prepareFollowUpOutreach(
             id: true,
             artistId: true,
             name: true,
-            customPrice: true,
             state: true,
             artist: { select: { name: true } },
           },
@@ -2379,7 +2468,6 @@ async function prepareFollowUpOutreach(
     artistName: parent.contact.artist.name,
     venueName: parent.show.venueName,
     showDate: parent.show.date,
-    customPrice: parent.contact.customPrice,
     managerName: parent.contact.name,
   });
   return {
@@ -5428,6 +5516,14 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
             isFullTeam: true,
           },
         },
+        template: {
+          select: {
+            id: true,
+            subject: true,
+            htmlBody: true,
+            updatedAt: true,
+          },
+        },
       },
     });
     if (!outreach) {
@@ -5628,6 +5724,29 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
       );
     }
 
+    const immutableRequest = attempt?.providerRequest
+      ? parseResendRequestSnapshot(attempt.providerRequest)
+      : null;
+    const trustedTemplate = schedulingTimeTemplateProvenance(
+      outreach.createdAt,
+      outreach.template,
+    );
+    const snapshotProtection = protectLegacyScheduledSnapshot({
+      status: outreach.status,
+      finalSubject: outreach.finalSubject,
+      finalHtml: outreach.finalHtml,
+      trustedTemplate,
+      immutableRequest,
+    });
+    if (snapshotProtection.kind === "block") {
+      return markManualReview(
+        tx,
+        outreach.id,
+        snapshotProtection.error,
+        attempt?.id,
+      );
+    }
+
     const preparationRetryCount =
       getOutreachPreparationRetryCount(outreach.error) ?? 0;
     if (attempt) {
@@ -5657,6 +5776,12 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
         lastAttemptAt: now,
         error: null,
         idempotencyKey,
+        ...(snapshotProtection.kind === "normalize"
+          ? {
+              finalSubject: snapshotProtection.subject,
+              finalHtml: snapshotProtection.html,
+            }
+          : {}),
       },
       include: {
         contact: {

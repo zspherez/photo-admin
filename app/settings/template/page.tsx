@@ -11,6 +11,8 @@ import {
   ensureDefaultTemplate,
   ensureFollowUpTemplate,
   extractVars,
+  normalizeDefaultTemplateContent,
+  SUPPORTED_TEMPLATE_VARS,
 } from "@/lib/template";
 import { renderTrackedEmailHtml } from "@/lib/emailUtm";
 import { readEmailUtmSettingsSnapshot } from "@/lib/generalSettings";
@@ -29,19 +31,6 @@ import {
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Email template" };
-
-const KNOWN_VARS = [
-  "artist",
-  "venue",
-  "date",
-  "rate",
-  "portfolio_url",
-  "sender_name",
-  "sender_email",
-  "sender_phone",
-  "sender_city",
-  "manager_name",
-];
 
 type TemplateKind = "original" | "follow_up";
 
@@ -70,8 +59,11 @@ async function saveTemplate(formData: FormData) {
   "use server";
   await requireServerActionAuth("/settings/template");
   const kind = requiredTemplateKind(formData.get("kind"));
-  const subject = (formData.get("subject") as string)?.trim() ?? "";
-  const htmlBody = (formData.get("html") as string) ?? "";
+  const content = normalizeDefaultTemplateContent({
+    subject: (formData.get("subject") as string)?.trim() ?? "",
+    htmlBody: (formData.get("html") as string) ?? "",
+  });
+  const { subject, htmlBody } = content;
   if (!subject || !htmlBody) return;
   const existing = await ensureTemplate(kind);
   await db.emailTemplate.update({
@@ -148,7 +140,7 @@ export default async function TemplateSettingsPage({
     readEmailUtmSettingsSnapshot(),
   ]);
   const usedVars = extractVars(template.subject + " " + template.htmlBody);
-  const allVars = Array.from(new Set([...KNOWN_VARS, ...usedVars])).sort();
+  const allVars = [...SUPPORTED_TEMPLATE_VARS].sort();
 
   let previewSubject = template.subject;
   let previewHtml = template.htmlBody;
@@ -167,7 +159,6 @@ export default async function TemplateSettingsPage({
         artistName: matched.artist.name,
         venueName: sample.venueName,
         showDate: sample.date,
-        customPrice: contact.customPrice,
         managerName: contact.name,
       });
       previewSubject = applyTemplate(template.subject, sampleVars);

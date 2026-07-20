@@ -131,6 +131,7 @@ test("general settings normalize form values and preserve explicit delivery blan
   const store = new MemorySettingStore({
     sender_name: "Old Sender",
     sender_email: "old@example.com",
+    default_rate: "$650",
     test_override_email: "test@example.com",
     bcc_emails: "audit@example.com",
     unrelated: "keep",
@@ -140,6 +141,7 @@ test("general settings normalize form values and preserve explicit delivery blan
 
   assert.deepEqual(store.values(), {
     sender_name: "New Sender",
+    default_rate: "$650",
     test_override_email: "",
     bcc_emails: "",
     utm_source: "",
@@ -149,6 +151,10 @@ test("general settings normalize form values and preserve explicit delivery blan
     unrelated: "keep",
   });
   assert.deepEqual(store.lockModes, ["write"]);
+  assert.equal(
+    (GENERAL_SETTING_KEYS as readonly string[]).includes("default_rate"),
+    false,
+  );
 });
 
 test("UTM settings default when missing and preserve intentional blanks", async () => {

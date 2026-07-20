@@ -139,7 +139,6 @@ export default async function CustomizePage({
     artistName: contact.artist.name,
     venueName: show.venueName,
     showDate: show.date,
-    customPrice: contact.customPrice,
     managerName: contact.name,
   });
   const subject = applyTemplate(template.subject, vars);
