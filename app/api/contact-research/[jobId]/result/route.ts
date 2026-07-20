@@ -47,7 +47,21 @@ export async function POST(
         { status: 409 }
       );
     }
-    return NextResponse.json({ ok: true, status: result.status });
+    if (result.sheetErrors.length > 0) {
+      console.error(
+        JSON.stringify({
+          event: "contact_research_auto_approval_sheet_errors",
+          jobId,
+          errors: result.sheetErrors,
+        })
+      );
+    }
+    return NextResponse.json({
+      ok: true,
+      status: result.status,
+      autoApproved: result.autoApproved,
+      sheetErrors: result.sheetErrors,
+    });
   } catch (error) {
     console.error(
       JSON.stringify({
