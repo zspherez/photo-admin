@@ -30,6 +30,13 @@ export const CONTACT_RESEARCH_WORKFLOW_REF =
 
 const EMAIL_PATTERN = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
 const CONFIDENCE_VALUES = new Set(["high", "medium", "low"]);
+const OFFICIAL_SOURCE_TYPES = new Set([
+  "website",
+  "instagram",
+  "facebook",
+  "soundcloud",
+]);
+const OFFICIAL_MANAGEMENT_LABELS = new Set(["mgmt", "management"]);
 const githubActionsJwks = createRemoteJWKSet(
   new URL(`${CONTACT_RESEARCH_OIDC_ISSUER}/.well-known/jwks`)
 );
@@ -42,6 +49,16 @@ export interface ContactResearchCandidateInput {
   sourceUrls: string[];
   evidence: string;
   confidence: "high" | "medium" | "low";
+  needsApproval: boolean;
+  officialSourceType:
+    | "website"
+    | "instagram"
+    | "facebook"
+    | "soundcloud"
+    | null;
+  officialSourceUrl: string | null;
+  officialManagementLabel: "mgmt" | "management" | null;
+  officialSourceEvidence: string | null;
 }
 
 export type ContactResearchSubmission =
@@ -149,6 +166,7 @@ export function normalizeResearchSourceUrl(value: unknown): string {
   } catch {
     throw new Error("source URL is invalid");
   }
+
   if (
     (url.protocol !== "https:" && url.protocol !== "http:") ||
     url.username ||
@@ -158,6 +176,126 @@ export function normalizeResearchSourceUrl(value: unknown): string {
   }
   url.hash = "";
   return url.toString();
+}
+
+interface OfficialManagementSource {
+  officialSourceType: ContactResearchCandidateInput["officialSourceType"];
+  officialSourceUrl: string | null;
+  officialManagementLabel:
+    | ContactResearchCandidateInput["officialManagementLabel"];
+  officialSourceEvidence: string | null;
+}
+
+function officialSourceHostAllowed(
+  type: NonNullable<ContactResearchCandidateInput["officialSourceType"]>,
+  url: string
+): boolean {
+  if (type === "website") return true;
+  const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  if (type === "instagram") {
+    return host === "instagram.com" || host.endsWith(".instagram.com");
+  }
+  if (type === "facebook") {
+    return host === "facebook.com" || host.endsWith(".facebook.com");
+  }
+  return host === "soundcloud.com" || host.endsWith(".soundcloud.com");
+}
+
+export function normalizeOfficialManagementSource(
+  value: unknown,
+  candidateEmail: string,
+  sourceUrls: readonly string[]
+): OfficialManagementSource {
+  if (value == null) {
+    return {
+      officialSourceType: null,
+      officialSourceUrl: null,
+      officialManagementLabel: null,
+      officialSourceEvidence: null,
+    };
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("officialSource must be an object");
+  }
+  const source = value as Record<string, unknown>;
+  const type = requiredString(
+    source.type,
+    30,
+    "official source type"
+  ).toLowerCase();
+  if (!OFFICIAL_SOURCE_TYPES.has(type)) {
+    throw new Error("official source type is invalid");
+  }
+  const url = normalizeResearchSourceUrl(source.url);
+  if (!sourceUrls.includes(url)) {
+    throw new Error(
+      "official source URL must be included in sourceUrls"
+    );
+  }
+  if (
+    !officialSourceHostAllowed(
+      type as NonNullable<
+        ContactResearchCandidateInput["officialSourceType"]
+      >,
+      url
+    )
+  ) {
+    throw new Error("official source URL does not match its source type");
+  }
+  const label = requiredString(
+    source.managementLabel,
+    20,
+    "official management label"
+  ).toLowerCase();
+  if (!OFFICIAL_MANAGEMENT_LABELS.has(label)) {
+    throw new Error(
+      "official management label must be MGMT or management"
+    );
+  }
+  const evidence = requiredString(
+    source.evidence,
+    4_000,
+    "official source evidence"
+  );
+  const escapedCandidateEmail = candidateEmail.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&"
+  );
+  const mailboxPrefixCharacters =
+    "A-Z0-9.!#$%&'*+/=?^_`{|}~@-";
+  const exactEmailPattern = new RegExp(
+    `(?<![${mailboxPrefixCharacters}])${escapedCandidateEmail}(?![A-Z0-9_@+-]|\\.[A-Z0-9])`,
+    "i"
+  );
+  if (!exactEmailPattern.test(evidence)) {
+    throw new Error(
+      "official source evidence must contain the exact candidate email"
+    );
+  }
+  return {
+    officialSourceType:
+      type as NonNullable<
+        ContactResearchCandidateInput["officialSourceType"]
+      >,
+    officialSourceUrl: url,
+    officialManagementLabel:
+      label as NonNullable<
+        ContactResearchCandidateInput["officialManagementLabel"]
+      >,
+    officialSourceEvidence: evidence,
+  };
+}
+
+export function isOfficialManagementAutoApprovalEligible(
+  candidate: ContactResearchCandidateInput
+): boolean {
+  return (
+    candidate.needsApproval === false &&
+    candidate.officialSourceType !== null &&
+    candidate.officialSourceUrl !== null &&
+    candidate.officialManagementLabel !== null &&
+    candidate.officialSourceEvidence !== null
+  );
 }
 
 export function normalizeContactResearchUserNotes(
@@ -603,6 +741,26 @@ export function parseContactResearchSubmission(
     if (!CONFIDENCE_VALUES.has(confidence)) {
       throw new Error("confidence must be high, medium, or low");
     }
+    const officialSource = normalizeOfficialManagementSource(
+      candidate.officialSource,
+      normalizedEmail,
+      sourceUrls
+    );
+    if (
+      candidate.needsApproval !== undefined &&
+      typeof candidate.needsApproval !== "boolean"
+    ) {
+      throw new Error("needsApproval must be a boolean");
+    }
+    const needsApproval = candidate.needsApproval ?? true;
+    if (
+      needsApproval === false &&
+      officialSource.officialSourceType === null
+    ) {
+      throw new Error(
+        "needsApproval may be false only for a directly published MGMT/management email"
+      );
+    }
     candidatesByEmail.set(normalizedEmail, {
       email: normalizedEmail,
       normalizedEmail,
@@ -611,6 +769,8 @@ export function parseContactResearchSubmission(
       sourceUrls,
       evidence: requiredString(candidate.evidence, 4_000, "evidence"),
       confidence: confidence as ContactResearchCandidateInput["confidence"],
+      needsApproval,
+      ...officialSource,
     });
   }
 
@@ -1245,11 +1405,15 @@ export async function claimContactResearchJobs(
 
 export async function submitContactResearchResult(
   jobId: string,
-  value: unknown,
+  submission: ContactResearchSubmission,
   now: Date = new Date()
-): Promise<{ accepted: boolean; status: "review" | "exhausted" | "conflict" }> {
-  const submission = parseContactResearchSubmission(value);
-  return withSerializableRetry(async (tx) => {
+): Promise<{
+  accepted: boolean;
+  status: "review" | "exhausted" | "complete" | "conflict";
+  autoApproved: number;
+  sheetErrors: string[];
+}> {
+  const stored = await withSerializableRetry(async (tx) => {
     const job = await tx.contactResearchJob.findFirst({
       where: {
         id: jobId,
@@ -1257,9 +1421,19 @@ export async function submitContactResearchResult(
         claimToken: submission.claimToken,
         claimExpiresAt: { gt: now },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        artistId: true,
+        artist: { select: { name: true } },
+      },
     });
-    if (!job) return { accepted: false, status: "conflict" as const };
+    if (!job) {
+      return {
+        accepted: false,
+        status: "conflict" as const,
+        autoApprovals: [] as ApprovedResearchContact[],
+      };
+    }
 
     if (submission.outcome === "exhausted") {
       await tx.contactResearchJob.update({
@@ -1272,11 +1446,22 @@ export async function submitContactResearchResult(
           claimExpiresAt: null,
         },
       });
-      return { accepted: true, status: "exhausted" as const };
+      return {
+        accepted: true,
+        status: "exhausted" as const,
+        autoApprovals: [] as ApprovedResearchContact[],
+      };
     }
 
+    const autoApproveCandidates: Array<{
+      id: string;
+      input: ContactResearchCandidateInput;
+      stored: {
+        sourceUrls: string[];
+      };
+    }> = [];
     for (const candidate of submission.candidates) {
-      await tx.contactResearchCandidate.upsert({
+      const storedCandidate = await tx.contactResearchCandidate.upsert({
         where: {
           jobId_normalizedEmail: {
             jobId,
@@ -1294,10 +1479,93 @@ export async function submitContactResearchResult(
           sourceUrls: candidate.sourceUrls,
           evidence: candidate.evidence,
           confidence: candidate.confidence,
+          needsApproval: candidate.needsApproval,
+          officialSourceType: candidate.officialSourceType,
+          officialSourceUrl: candidate.officialSourceUrl,
+          officialManagementLabel: candidate.officialManagementLabel,
+          officialSourceEvidence: candidate.officialSourceEvidence,
           status: "pending",
           reviewedAt: null,
         },
       });
+      if (isOfficialManagementAutoApprovalEligible(candidate)) {
+        autoApproveCandidates.push({
+          id: storedCandidate.id,
+          input: candidate,
+          stored: storedCandidate,
+        });
+      }
+    }
+    if (autoApproveCandidates.length > 0) {
+      const approvals: ApprovedResearchContact[] = [];
+      for (const candidate of autoApproveCandidates) {
+        const existing = await tx.contact.findUnique({
+          where: {
+            artistId_email: {
+              artistId: job.artistId,
+              email: candidate.input.normalizedEmail,
+            },
+          },
+        });
+        const contact = existing
+          ? await tx.contact.update({
+              where: { id: existing.id },
+              data: {
+                state: "active",
+                name: existing.name ?? candidate.input.name,
+                role: "management",
+              },
+            })
+          : await tx.contact.create({
+              data: {
+                artistId: job.artistId,
+                email: candidate.input.normalizedEmail,
+                name: candidate.input.name,
+                role: "management",
+                source: "research",
+                state: "active",
+              },
+            });
+        approvals.push({
+          contact,
+          artistName: job.artist.name,
+          candidate: candidate.stored,
+          shouldAppendToSheet: !existing,
+        });
+      }
+      const approvedIds = autoApproveCandidates.map(
+        (candidate) => candidate.id
+      );
+      await Promise.all([
+        tx.contactResearchCandidate.updateMany({
+          where: { id: { in: approvedIds } },
+          data: { status: "approved", reviewedAt: now },
+        }),
+        tx.contactResearchCandidate.updateMany({
+          where: {
+            jobId,
+            id: { notIn: approvedIds },
+            status: "pending",
+          },
+          data: { status: "rejected", reviewedAt: now },
+        }),
+        tx.contactResearchJob.update({
+          where: { id: jobId },
+          data: {
+            status: "complete",
+            agentNotes: submission.notes,
+            completedAt: now,
+            claimToken: null,
+            claimedAt: null,
+            claimExpiresAt: null,
+          },
+        }),
+      ]);
+      return {
+        accepted: true,
+        status: "complete" as const,
+        autoApprovals: approvals,
+      };
     }
     await tx.contactResearchJob.update({
       where: { id: jobId },
@@ -1309,8 +1577,31 @@ export async function submitContactResearchResult(
         claimExpiresAt: null,
       },
     });
-    return { accepted: true, status: "review" as const };
+    return {
+      accepted: true,
+      status: "review" as const,
+      autoApprovals: [] as ApprovedResearchContact[],
+    };
   });
+  if (!stored.accepted) {
+    return {
+      accepted: false,
+      status: stored.status,
+      autoApproved: 0,
+      sheetErrors: [],
+    };
+  }
+  const sheetErrors = await appendApprovedResearchContactsToSheet(
+    stored.autoApprovals,
+    now
+  );
+  return {
+    accepted: true,
+    status:
+      stored.autoApprovals.length > 0 ? "complete" : stored.status,
+    autoApproved: stored.autoApprovals.length,
+    sheetErrors,
+  };
 }
 
 async function withSerializableRetry<T>(
@@ -1335,13 +1626,94 @@ async function withSerializableRetry<T>(
   throw new Error("Unable to complete serializable transaction");
 }
 
-export async function approveContactResearchCandidate(
-  candidateId: string,
+interface ApprovedResearchContact {
+  contact: {
+    id: string;
+    email: string | null;
+    name: string | null;
+    role: string | null;
+    customPrice: string | null;
+  };
+  candidate: {
+    sourceUrls: string[];
+  };
+  artistName: string;
+  shouldAppendToSheet: boolean;
+}
+
+async function appendApprovedResearchContactsToSheet(
+  approvals: readonly ApprovedResearchContact[],
+  now: Date
+): Promise<string[]> {
+  const sheetErrors: string[] = [];
+  for (const approval of approvals) {
+    if (!approval.shouldAppendToSheet) continue;
+    try {
+      const source = approval.candidate.sourceUrls.join(" ");
+      const notes = `Research source: ${source}`.slice(0, 1_000);
+      const appended = await appendContactToSheet({
+        artistName: approval.artistName,
+        email: approval.contact.email!,
+        managerName: approval.contact.name,
+        role: approval.contact.role,
+        customPrice: approval.contact.customPrice,
+        notes,
+      });
+      const updated = await db.contact.updateMany({
+        where: {
+          id: approval.contact.id,
+          source: "research",
+        },
+        data: {
+          source: "sheet",
+          sourceKey: appended.sourceKey,
+          sourceSyncedAt: now,
+        },
+      });
+      if (updated.count === 1) continue;
+      console.error(
+        JSON.stringify({
+          event: "contact_research_sheet_ownership_pending",
+          contactId: approval.contact.id,
+          sourceKey: appended.sourceKey,
+        })
+      );
+      sheetErrors.push(
+        `${approval.contact.email}: Sheet ownership needs reconciliation.`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        JSON.stringify({
+          event: "contact_research_sheet_append_failed",
+          contactId: approval.contact.id,
+          error: message,
+        })
+      );
+      sheetErrors.push(
+        `${approval.contact.email}: ${message.slice(0, 160)}`
+      );
+    }
+  }
+  return sheetErrors;
+}
+
+export async function approveContactResearchCandidates(
+  candidateIds: readonly string[],
   now: Date = new Date()
-): Promise<{ ok: boolean; error?: string; sheetError?: string }> {
+): Promise<{
+  ok: boolean;
+  approvedCount?: number;
+  error?: string;
+  sheetErrors?: string[];
+}> {
+  const uniqueCandidateIds = Array.from(new Set(candidateIds));
+  if (uniqueCandidateIds.length === 0) {
+    return { ok: false, error: "No candidates were selected" };
+  }
   const approved = await withSerializableRetry(async (tx) => {
-    const candidate = await tx.contactResearchCandidate.findUnique({
-      where: { id: candidateId },
+    const candidates = await tx.contactResearchCandidate.findMany({
+      where: { id: { in: uniqueCandidateIds } },
       include: {
         job: {
           include: {
@@ -1351,31 +1723,46 @@ export async function approveContactResearchCandidate(
       },
     });
     if (
-      !candidate ||
-      candidate.status !== "pending" ||
-      candidate.job.status !== "review"
+      candidates.length !== uniqueCandidateIds.length ||
+      candidates.some(
+        (candidate) =>
+          candidate.status !== "pending" ||
+          candidate.job.status !== "review"
+      )
     ) {
       return { ok: false as const, error: "Candidate is no longer reviewable" };
     }
-
-    const existing = await tx.contact.findUnique({
-      where: {
-        artistId_email: {
-          artistId: candidate.job.artistId,
-          email: candidate.normalizedEmail,
-        },
-      },
-    });
-    const contact = existing
-      ? await tx.contact.update({
-          where: { id: existing.id },
-          data: {
-            state: "active",
-            name: existing.name ?? candidate.name,
-            role: "management",
+    const jobIds = new Set(candidates.map((candidate) => candidate.jobId));
+    if (jobIds.size !== 1) {
+      return {
+        ok: false as const,
+        error: "Candidates must belong to the same research job",
+      };
+    }
+    const candidateById = new Map(
+      candidates.map((candidate) => [candidate.id, candidate])
+    );
+    const approvals: ApprovedResearchContact[] = [];
+    for (const candidateId of uniqueCandidateIds) {
+      const candidate = candidateById.get(candidateId)!;
+      const existing = await tx.contact.findUnique({
+        where: {
+          artistId_email: {
+            artistId: candidate.job.artistId,
+            email: candidate.normalizedEmail,
           },
-        })
-      : await tx.contact.create({
+        },
+      });
+      const contact = existing
+        ? await tx.contact.update({
+            where: { id: existing.id },
+            data: {
+              state: "active",
+              name: existing.name ?? candidate.name,
+              role: "management",
+            },
+          })
+        : await tx.contact.create({
           data: {
             artistId: candidate.job.artistId,
             email: candidate.normalizedEmail,
@@ -1385,22 +1772,29 @@ export async function approveContactResearchCandidate(
             state: "active",
           },
         });
+      approvals.push({
+        contact,
+        artistName: candidate.job.artist.name,
+        candidate,
+        shouldAppendToSheet: !existing,
+      });
+    }
 
     await Promise.all([
-      tx.contactResearchCandidate.update({
-        where: { id: candidate.id },
+      tx.contactResearchCandidate.updateMany({
+        where: { id: { in: uniqueCandidateIds } },
         data: { status: "approved", reviewedAt: now },
       }),
       tx.contactResearchCandidate.updateMany({
         where: {
-          jobId: candidate.jobId,
-          id: { not: candidate.id },
+          jobId: candidates[0].jobId,
+          id: { notIn: uniqueCandidateIds },
           status: "pending",
         },
         data: { status: "rejected", reviewedAt: now },
       }),
       tx.contactResearchJob.update({
-        where: { id: candidate.jobId },
+        where: { id: candidates[0].jobId },
         data: {
           status: "complete",
           completedAt: now,
@@ -1413,69 +1807,37 @@ export async function approveContactResearchCandidate(
 
     return {
       ok: true as const,
-      contact,
-      artistName: candidate.job.artist.name,
-      candidate,
-      shouldAppendToSheet: !existing,
+      approvals,
     };
   });
   if (!approved.ok) return approved;
-  if (!approved.shouldAppendToSheet) return { ok: true };
 
-  try {
-    const source = approved.candidate.sourceUrls.join(" ");
-    const notes = `Research source: ${source}`.slice(0, 1_000);
-    const appended = await appendContactToSheet({
-      artistName: approved.artistName,
-      email: approved.contact.email!,
-      managerName: approved.contact.name,
-      role: approved.contact.role,
-      customPrice: approved.contact.customPrice,
-      notes,
-    });
-    const updated = await db.contact.updateMany({
-      where: {
-        id: approved.contact.id,
-        source: "research",
-      },
-      data: {
-        source: "sheet",
-        sourceKey: appended.sourceKey,
-        sourceSyncedAt: now,
-      },
-    });
-    if (updated.count !== 1) {
-      console.error(
-        JSON.stringify({
-          event: "contact_research_sheet_ownership_pending",
-          contactId: approved.contact.id,
-          sourceKey: appended.sourceKey,
-        })
-      );
-      return {
-        ok: true,
-        sheetError:
-          "Contact approved, but Sheet ownership will need reconciliation.",
-      };
-    }
-    return { ok: true };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(
-      JSON.stringify({
-        event: "contact_research_sheet_append_failed",
-        contactId: approved.contact.id,
-        error: message,
-      })
-    );
-    return {
-      ok: true,
-      sheetError: `Contact approved, but Sheet append failed: ${message.slice(
-        0,
-        160
-      )}`,
-    };
-  }
+  const sheetErrors = await appendApprovedResearchContactsToSheet(
+    approved.approvals,
+    now
+  );
+  return {
+    ok: true,
+    approvedCount: approved.approvals.length,
+    ...(sheetErrors.length > 0 ? { sheetErrors } : {}),
+  };
+}
+
+export async function approveContactResearchCandidate(
+  candidateId: string,
+  now: Date = new Date()
+): Promise<{ ok: boolean; error?: string; sheetError?: string }> {
+  const result = await approveContactResearchCandidates(
+    [candidateId],
+    now
+  );
+  return {
+    ok: result.ok,
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.sheetErrors?.length
+      ? { sheetError: result.sheetErrors.join(" ") }
+      : {}),
+  };
 }
 
 export async function rejectContactResearchCandidate(

@@ -11,12 +11,14 @@ import {
   normalizeManagerRole,
   normalizeContactResearchUserNotes,
   normalizeContactResearchDomain,
+  normalizeOfficialManagementSource,
   normalizeResearchEmail,
   normalizeResearchSourceUrl,
   parseContactResearchClaimLimit,
   parseKnownContactLookup,
   parseContactResearchSubmission,
   rankKnownContactEmails,
+  isOfficialManagementAutoApprovalEligible,
 } from "./contactResearch";
 
 test("normalizes research emails and rejects malformed values", () => {
@@ -107,6 +109,230 @@ test("normalizes known-contact company domains", () => {
   assert.throws(
     () => normalizeContactResearchDomain("localhost"),
     /company domain is invalid/
+  );
+});
+
+test("official artist management sources are strictly normalized", () => {
+  const official = normalizeOfficialManagementSource(
+    {
+      type: "instagram",
+      url: "https://www.instagram.com/exampleartist/",
+      managementLabel: "MGMT",
+      evidence: "Official Instagram bio: MGMT manager@example.com",
+    },
+    "manager@example.com",
+    ["https://www.instagram.com/exampleartist/"]
+  );
+  assert.deepEqual(official, {
+    officialSourceType: "instagram",
+    officialSourceUrl: "https://www.instagram.com/exampleartist/",
+    officialManagementLabel: "mgmt",
+    officialSourceEvidence:
+      "Official Instagram bio: MGMT manager@example.com",
+  });
+  assert.equal(
+    isOfficialManagementAutoApprovalEligible({
+      email: "manager@example.com",
+      normalizedEmail: "manager@example.com",
+      name: "Manager",
+      role: "management",
+      sourceUrls: ["https://www.instagram.com/exampleartist/"],
+      evidence: "Official Instagram publishes the address.",
+      confidence: "high",
+      needsApproval: false,
+      ...official,
+    }),
+    true
+  );
+  assert.throws(
+    () =>
+      normalizeOfficialManagementSource(
+        {
+          type: "instagram",
+          url: "https://example.com/profile",
+          managementLabel: "mgmt",
+          evidence: "MGMT manager@example.com",
+        },
+        "manager@example.com",
+        ["https://example.com/profile"]
+      ),
+    /does not match its source type/
+  );
+  assert.deepEqual(
+    normalizeOfficialManagementSource(
+      {
+        type: "facebook",
+        url: "https://facebook.com/exampleartist",
+        managementLabel: "mgmt",
+        evidence: "Booking manager@example.com",
+      },
+      "manager@example.com",
+      ["https://facebook.com/exampleartist"]
+    ),
+    {
+      officialSourceType: "facebook",
+      officialSourceUrl: "https://facebook.com/exampleartist",
+      officialManagementLabel: "mgmt",
+      officialSourceEvidence: "Booking manager@example.com",
+    }
+  );
+  assert.throws(
+    () =>
+      normalizeOfficialManagementSource(
+        {
+          type: "website",
+          url: "https://exampleartist.com/contact",
+          managementLabel: "management",
+          evidence: "manager@example.com-management",
+        },
+        "manager@example.com",
+        ["https://exampleartist.com/contact"]
+      ),
+    /contain the exact candidate email/
+  );
+  assert.throws(
+    () =>
+      normalizeOfficialManagementSource(
+        {
+          type: "website",
+          url: "https://exampleartist.com/contact",
+          managementLabel: "management",
+          evidence: "MANAGEMENT !manager@example.com",
+        },
+        "manager@example.com",
+        ["https://exampleartist.com/contact"]
+      ),
+    /contain the exact candidate email/
+  );
+  assert.throws(
+    () =>
+      normalizeOfficialManagementSource(
+        {
+          type: "website",
+          url: "https://exampleartist.com/contact",
+          managementLabel: "management",
+          evidence: "MANAGEMENT booking@manager@example.com",
+        },
+        "manager@example.com",
+        ["https://exampleartist.com/contact"]
+      ),
+    /contain the exact candidate email/
+  );
+  assert.throws(
+    () =>
+      normalizeOfficialManagementSource(
+        {
+          type: "website",
+          url: "https://exampleartist.com/contact",
+          managementLabel: "management",
+          evidence: "manager@example.com_management",
+        },
+        "manager@example.com",
+        ["https://exampleartist.com/contact"]
+      ),
+    /contain the exact candidate email/
+  );
+  assert.deepEqual(
+    normalizeOfficialManagementSource(
+      {
+        type: "website",
+        url: "https://exampleartist.com/contact",
+        managementLabel: "management",
+        evidence:
+          "MANAGEMENT manager@example.com. Please use this address.",
+      },
+      "manager@example.com",
+      ["https://exampleartist.com/contact"]
+    ),
+    {
+      officialSourceType: "website",
+      officialSourceUrl: "https://exampleartist.com/contact",
+      officialManagementLabel: "management",
+      officialSourceEvidence:
+        "MANAGEMENT manager@example.com. Please use this address.",
+    }
+  );
+  assert.throws(
+    () =>
+      normalizeOfficialManagementSource(
+        {
+          type: "website",
+          url: "https://exampleartist.com/contact",
+          managementLabel: "management",
+          evidence: "MGMT notmanager@example.com",
+        },
+        "manager@example.com",
+        ["https://exampleartist.com/contact"]
+      ),
+    /contain the exact candidate email/
+  );
+  assert.deepEqual(
+    normalizeOfficialManagementSource(
+      {
+        type: "website",
+        url: "https://exampleartist.com/contact",
+        managementLabel: "management",
+        evidence: "management@example.com",
+      },
+      "management@example.com",
+      ["https://exampleartist.com/contact"]
+    ),
+    {
+      officialSourceType: "website",
+      officialSourceUrl: "https://exampleartist.com/contact",
+      officialManagementLabel: "management",
+      officialSourceEvidence: "management@example.com",
+    }
+  );
+  assert.deepEqual(
+    normalizeOfficialManagementSource(
+      {
+        type: "website",
+        url: "https://exampleartist.com/contact",
+        managementLabel: "management",
+        evidence:
+          "BOOKING booking@example.com | MANAGEMENT manager@example.com",
+      },
+      "manager@example.com",
+      ["https://exampleartist.com/contact"]
+    ),
+    {
+      officialSourceType: "website",
+      officialSourceUrl: "https://exampleartist.com/contact",
+      officialManagementLabel: "management",
+      officialSourceEvidence:
+        "BOOKING booking@example.com | MANAGEMENT manager@example.com",
+    }
+  );
+});
+
+test("direct publication is eligible while inferred sources remain review-only", () => {
+  const candidate = {
+    email: "manager@example.com",
+    normalizedEmail: "manager@example.com",
+    name: "Manager",
+    role: "management" as const,
+    sourceUrls: ["https://soundcloud.com/exampleartist"],
+    evidence: "Official profile publishes the address.",
+    confidence: "high" as const,
+    needsApproval: false,
+    officialSourceType: "soundcloud" as const,
+    officialSourceUrl: "https://soundcloud.com/exampleartist",
+    officialManagementLabel: "management" as const,
+    officialSourceEvidence:
+      "Official SoundCloud: management manager@example.com",
+  };
+  assert.equal(isOfficialManagementAutoApprovalEligible(candidate), true);
+  assert.equal(
+    isOfficialManagementAutoApprovalEligible({
+      ...candidate,
+      officialSourceType: null,
+      officialSourceUrl: null,
+      officialManagementLabel: null,
+      officialSourceEvidence: null,
+      needsApproval: true,
+    }),
+    false
   );
 });
 
@@ -204,6 +430,30 @@ test("parses and deduplicates evidence-backed candidate submissions", () => {
     "https://agency.example/team",
   ]);
   assert.equal(submission.candidates[0].role, "management");
+  assert.equal(submission.candidates[0].needsApproval, true);
+  assert.equal(submission.candidates[0].officialSourceType, null);
+});
+
+test("approval flag requires direct official-source evidence", () => {
+  assert.throws(
+    () =>
+      parseContactResearchSubmission({
+        outcome: "candidates",
+        claimToken: "claim-1",
+        candidates: [
+          {
+            email: "manager@example.com",
+            role: "management",
+            sourceUrls: ["https://example.com/press"],
+            evidence: "A press article inferred this address.",
+            confidence: "medium",
+            needsApproval: false,
+            officialSource: null,
+          },
+        ],
+      }),
+    /needsApproval may be false only/
+  );
 });
 
 test("requires evidence and bounded claim limits", () => {

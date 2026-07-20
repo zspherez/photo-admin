@@ -217,10 +217,35 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
     }
   );
   assert.equal(wrongId.status, 409);
-  const submitted = await brokerRequest(socketPath, "/submit-exhausted", {
+  const submitted = await brokerRequest(socketPath, "/submit-candidates", {
     jobId: "job-1",
     claimToken: "claim-1",
-    notes: "Checked the bounded public sources.",
+    notes: "Official Instagram explicitly labels the manager.",
+    candidates: [
+      {
+        email: "manager@example.com",
+        name: "Manager Name",
+        sourceUrls: ["https://instagram.com/exampleartist"],
+        evidence: "Official Instagram publishes MGMT manager@example.com.",
+        confidence: "high",
+        needsApproval: false,
+        officialSource: {
+          type: "instagram",
+          url: "https://instagram.com/exampleartist",
+          managementLabel: "mgmt",
+          evidence:
+            "Official Instagram bio: MGMT manager@example.com",
+        },
+      },
+    ],
+    reviewedEmails: [
+      {
+        email: "manager@example.com",
+        classification: "named_manager",
+        personName: "Manager Name",
+        reason: "Official artist Instagram labels this address MGMT.",
+      },
+    ],
   });
   assert.equal(submitted.status, 200);
   assert.deepEqual(submitted.value, { ok: true, status: "exhausted" });
@@ -233,9 +258,28 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
       domain: "palmartists.com",
     },
     {
-      outcome: "exhausted",
+      outcome: "candidates",
       claimToken: "claim-1",
-      notes: "Checked the bounded public sources.",
+      notes: "Official Instagram explicitly labels the manager.",
+      candidates: [
+        {
+          email: "manager@example.com",
+          name: "Manager Name",
+          sourceUrls: ["https://instagram.com/exampleartist"],
+          evidence:
+            "Official Instagram publishes MGMT manager@example.com.",
+          confidence: "high",
+          needsApproval: false,
+          officialSource: {
+            type: "instagram",
+            url: "https://instagram.com/exampleartist",
+            managementLabel: "mgmt",
+            evidence:
+              "Official Instagram bio: MGMT manager@example.com",
+          },
+          role: "management",
+        },
+      ],
     },
   ]);
   assert.deepEqual(JSON.parse(readFileSync(metricsFile, "utf8")), {

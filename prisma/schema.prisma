@@ -150,6 +150,11 @@ model ContactResearchCandidate {
   sourceUrls      String[]           @default([])
   evidence        String
   confidence      String
+  needsApproval   Boolean            @default(true)
+  officialSourceType                String?
+  officialSourceUrl                 String?
+  officialManagementLabel           String?
+  officialSourceEvidence            String?
   status          String             @default("pending")
   reviewedAt      DateTime?
   createdAt       DateTime           @default(now())

@@ -66,7 +66,7 @@ The submit commands take one compact JSON argument; use valid JSON inside shell
 single quotes and avoid apostrophes in prose.
 
 Candidate submission JSON must be exactly:
-`{"jobId":"...","claimToken":"...","notes":"...","candidates":[{"email":"...","name":"...","sourceUrls":["https://..."],"evidence":"...","confidence":"high|medium|low"}],"reviewedEmails":[{"email":"...","classification":"named_manager|management_fallback|excluded_non_manager","personName":"... or null","reason":"..."}]}`.
+`{"jobId":"...","claimToken":"...","notes":"...","candidates":[{"email":"...","name":"...","sourceUrls":["https://..."],"evidence":"...","confidence":"high|medium|low","needsApproval":true|false,"officialSource":null|{"type":"website|instagram|facebook|soundcloud","url":"https://...","managementLabel":"mgmt|management","evidence":"exact published text containing the email and its MGMT/management label"}}],"reviewedEmails":[{"email":"...","classification":"named_manager|management_fallback|excluded_non_manager","personName":"... or null","reason":"..."}]}`.
 Exhausted submission JSON must be exactly:
 `{"jobId":"...","claimToken":"...","notes":"sources checked and why no manager email was defensible"}`.
 
@@ -154,6 +154,27 @@ submitting, inventory every discovered email in `reviewedEmails`:
   management inbox. It may be included after direct named-manager addresses.
 - `excluded_non_manager`: booking, publicist, label, press, venue, or other
   non-manager address. It must not be submitted.
+
+## Official-source auto-approval
+
+Set `officialSource` only when all of these are true:
+
+- The exact candidate email is visibly published on a website, Instagram,
+  Facebook, or SoundCloud.
+- That same source explicitly labels that exact email as `MGMT` or
+  `management`.
+- The source URL is included in `sourceUrls`.
+
+Set `needsApproval: false` exactly when `officialSource` is present and valid.
+Set `needsApproval: true` for every inferred, reconstructed, reused, ambiguous,
+or otherwise non-direct address.
+
+Use `officialSource: null` for Booking Agent Info, directories, press articles,
+known-contact reuse, email-pattern inference, reverse engineering, or any
+source where the exact email and management label are not both explicit.
+Directly published and explicitly labeled candidates are automatically
+approved and added to the contact list; only inferred or reconstructed
+candidates require human review.
 
 Do not stop at a generic, company-wide, or artist-named inbox. Continue
 searching for a named manager and direct address first. Submit a fallback inbox

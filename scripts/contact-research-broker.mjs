@@ -45,6 +45,22 @@ const candidateSchema = z.object({
   sourceUrls: z.array(z.string().url()).min(1).max(5),
   evidence: z.string().min(1).max(4_000),
   confidence: z.enum(["high", "medium", "low"]),
+  needsApproval: z.boolean(),
+  officialSource: z
+    .object({
+      type: z.enum([
+        "website",
+        "instagram",
+        "facebook",
+        "soundcloud",
+      ]),
+      url: z.string().url(),
+      managementLabel: z.enum(["mgmt", "management"]),
+      evidence: z.string().min(1).max(4_000),
+    })
+    .strict()
+    .nullable()
+    .optional(),
 }).strict();
 const reviewedEmailSchema = z
   .object({
