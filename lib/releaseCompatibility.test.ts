@@ -76,7 +76,7 @@ test("required schema probes fail closed", () => {
   );
 });
 
-test("release probe exercises new festival, outreach, research, and agent schema surfaces", () => {
+test("release probe exercises festival, venue-cache, outreach, research, and agent schema surfaces", () => {
   const source = readFileSync(
     new URL("../scripts/verify-release-compatibility.ts", import.meta.url),
     "utf8",
@@ -111,5 +111,9 @@ test("release probe exercises new festival, outreach, research, and agent schema
   assert.match(
     source,
     /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*agentRuleSetProbe,\s*\]\.every\(Array\.isArray\)/,
+  );
+  assert.match(
+    source,
+    /db\.edmtrainVenue\.count\(\{[\s\S]*nycStatus: \{ in: \["inside_nyc", "outside_nyc", "unknown"\] \}/
   );
 });

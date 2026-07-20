@@ -43,6 +43,10 @@ async function refreshShows() {
         upserted: String(result.data.upserted),
         skipped: String(result.data.skippedVenue),
         linked: String(result.data.artistsLinked),
+        outside: String(result.data.outsideNyc),
+        unknown: String(result.data.geographyUnknown),
+        venues: String(result.data.venuesCached),
+        reused: String(result.data.venuesReused),
       });
       redirectTo = `/shows?${params.toString()}`;
     }
@@ -64,6 +68,10 @@ export default async function ShowsPage({
     upserted?: SearchParamValue;
     skipped?: SearchParamValue;
     linked?: SearchParamValue;
+    outside?: SearchParamValue;
+    unknown?: SearchParamValue;
+    venues?: SearchParamValue;
+    reused?: SearchParamValue;
     detail?: SearchParamValue;
   }>;
 }) {
@@ -74,6 +82,10 @@ export default async function ShowsPage({
     upserted: firstSearchParam(rawSearchParams.upserted),
     skipped: firstSearchParam(rawSearchParams.skipped),
     linked: firstSearchParam(rawSearchParams.linked),
+    outside: firstSearchParam(rawSearchParams.outside),
+    unknown: firstSearchParam(rawSearchParams.unknown),
+    venues: firstSearchParam(rawSearchParams.venues),
+    reused: firstSearchParam(rawSearchParams.reused),
     detail: firstSearchParam(rawSearchParams.detail),
   };
   const today = easternTodayStoredDate();
@@ -109,7 +121,7 @@ export default async function ShowsPage({
         <SyncBanner
           tone="success"
           title="Shows refreshed."
-          detail={`${sp.fetched ?? "?"} fetched · ${sp.upserted ?? "?"} upserted · ${sp.skipped ?? "?"} venue-skipped · ${sp.linked ?? "?"} artists linked`}
+          detail={`${sp.fetched ?? "?"} fetched · ${sp.upserted ?? "?"} upserted · ${sp.outside ?? "?"} outside NYC · ${sp.unknown ?? "?"} geography unknown · ${sp.skipped ?? "?"} blocklisted · ${sp.venues ?? "?"} venues cached (${sp.reused ?? "?"} reused) · ${sp.linked ?? "?"} artists linked`}
         />
       )}
       {sp.synced === "error" && (
