@@ -5,9 +5,11 @@ import {
   contactResearchPriority,
   CONTACT_RESEARCH_OIDC_AUDIENCE,
   CONTACT_RESEARCH_WORKFLOW_REF,
+  festivalManagerResearchJobDisposition,
   isValidContactResearchAuthorization,
   isManagerContact,
   isTrustedContactResearchOidcClaims,
+  needsManagerContactResearch,
   normalizeManagerRole,
   normalizeContactResearchUserNotes,
   normalizeContactResearchDomain,
@@ -68,6 +70,52 @@ test("treats every active email as an existing manager contact", () => {
     }),
     false
   );
+});
+
+test("festival manager research includes unmatched artists without active email contacts", () => {
+  const lineup = [
+    {
+      matched: false,
+      popularity: null,
+      contacts: [],
+    },
+    {
+      matched: true,
+      popularity: 100,
+      contacts: [
+        {
+          email: "booking@example.com",
+          role: "legacy booking",
+          state: "active" as const,
+        },
+      ],
+    },
+  ];
+
+  assert.deepEqual(
+    lineup
+      .filter((artist) => needsManagerContactResearch(artist.contacts))
+      .map((artist) => artist.matched),
+    [false]
+  );
+});
+
+test("festival manager research requests are idempotent across job states", () => {
+  assert.equal(festivalManagerResearchJobDisposition(null), "create");
+  for (const status of ["pending", "claimed", "review"]) {
+    assert.equal(
+      festivalManagerResearchJobDisposition(status),
+      "existing",
+      `${status} jobs must not be duplicated`
+    );
+  }
+  for (const status of ["complete", "exhausted", "inactive"]) {
+    assert.equal(
+      festivalManagerResearchJobDisposition(status),
+      "requeue",
+      `${status} jobs should reuse the existing artist job`
+    );
+  }
 });
 
 test("accepts only public HTTP(S) evidence URLs", () => {

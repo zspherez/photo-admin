@@ -120,3 +120,23 @@ test("festival outreach forms are valid and explicitly associated", () => {
     "Festival pages need an independent manager-research action",
   );
 });
+
+test("festival manager research UI reflects the full eligible lineup", () => {
+  assert.match(
+    source,
+    /const managerResearchCount = rows\.filter\(\s*\(row\) => row\.managerResearchEligible\s*\)\.length;/
+  );
+  assert.match(source, /Research managers \(\{managerResearchCount\}\)/);
+  assert.match(
+    source,
+    /disabled=\{!festivalActive \|\| managerResearchCount === 0\}/
+  );
+  assert.match(
+    source,
+    /\{r\.managerResearchEligible && \(\s*<Badge tone="warning">Manager needed<\/Badge>/
+  );
+  assert.doesNotMatch(
+    source,
+    /managerResearchCount = rows\.filter\([\s\S]{0,100}\.matched/
+  );
+});
