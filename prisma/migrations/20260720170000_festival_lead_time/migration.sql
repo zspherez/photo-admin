@@ -1,6 +1,25 @@
 BEGIN;
 
 ALTER TABLE "Show"
+  DROP CONSTRAINT "Show_syncStatus_check";
+
+ALTER TABLE "Show"
+  ADD CONSTRAINT "Show_syncStatus_check"
+  CHECK (
+    "syncStatus" IN (
+      'active',
+      'cancelled',
+      'blocked',
+      'missing',
+      'outside_nyc',
+      'geography_unknown',
+      'festival_past',
+      'lead_time_outside_nyc',
+      'lead_time_geography_unknown'
+    )
+  );
+
+ALTER TABLE "Show"
   ADD COLUMN "festivalNycStatus" TEXT;
 
 ALTER TABLE "Show"

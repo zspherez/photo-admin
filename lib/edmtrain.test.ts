@@ -434,6 +434,84 @@ test("regular shows and near-term festivals fail closed by NYC geography", () =>
   );
 });
 
+test("festival migration permits every emitted sync status and rejects unrelated values", () => {
+  const migration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260720170000_festival_lead_time/migration.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  const constraint = /ADD CONSTRAINT "Show_syncStatus_check"[\s\S]*?CHECK \(\s*"syncStatus" IN \(([\s\S]*?)\)\s*\);/.exec(
+    migration
+  );
+  assert.ok(constraint, "sync status constraint must be recreated");
+  const allowed = new Set(
+    [...constraint[1].matchAll(/'([^']+)'/g)].map((match) => match[1])
+  );
+  assert.deepEqual(allowed, new Set([
+    "active",
+    "cancelled",
+    "blocked",
+    "missing",
+    "outside_nyc",
+    "geography_unknown",
+    "festival_past",
+    "lead_time_outside_nyc",
+    "lead_time_geography_unknown",
+  ]));
+
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const active = eventWithCountry("United States");
+  active.festivalInd = false;
+  active.date = "2026-07-20";
+  const cancelled = { ...active, cancelledInd: true };
+  const festival = { ...active, festivalInd: true };
+  const emitted = new Set([
+    edmtrainEventStatus(active, false, "inside_nyc", now),
+    edmtrainEventStatus(cancelled, false, "inside_nyc", now),
+    edmtrainEventStatus(active, true, "inside_nyc", now),
+    edmtrainEventStatus(active, false, "outside_nyc", now),
+    edmtrainEventStatus(active, false, "unknown", now),
+    edmtrainEventStatus(
+      { ...festival, date: "2026-07-19" },
+      false,
+      "inside_nyc",
+      now
+    ),
+    edmtrainEventStatus(
+      { ...festival, date: "2026-07-26" },
+      false,
+      "outside_nyc",
+      now
+    ),
+    edmtrainEventStatus(
+      { ...festival, date: "2026-07-26" },
+      false,
+      "unknown",
+      now
+    ),
+  ]);
+  assert.deepEqual(emitted, new Set([
+    "active",
+    "cancelled",
+    "blocked",
+    "outside_nyc",
+    "geography_unknown",
+    "festival_past",
+    "lead_time_outside_nyc",
+    "lead_time_geography_unknown",
+  ]));
+  for (const status of emitted) assert.ok(allowed.has(status));
+  assert.equal(allowed.has("lead_time_unknown"), false);
+
+  const begin = migration.indexOf("BEGIN;");
+  const drop = migration.indexOf('DROP CONSTRAINT "Show_syncStatus_check"');
+  const add = migration.indexOf('ADD CONSTRAINT "Show_syncStatus_check"');
+  const commit = migration.lastIndexOf("COMMIT;");
+  assert.ok(begin >= 0 && begin < drop && drop < add && add < commit);
+});
+
 test("EDMTrain retry-budget failures remain structured at the provider boundary", async () => {
   const deadline = createOperationDeadline(10_000, { now: () => 0 });
   const result = await runIndependentEdmtrainSyncs(
