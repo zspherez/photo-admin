@@ -6,6 +6,19 @@ import {
   ReleaseCompatibilityError,
 } from "./releaseCompatibility";
 
+function selectedScalarFields(source: string, model: string): string[] {
+  const probe = source.match(
+    new RegExp(
+      String.raw`db\.${model}\.findMany\(\{\s*take: 1,\s*select: \{([\s\S]*?)\s*\},\s*\}\),`,
+    ),
+  );
+  assert.ok(probe, `${model} release probe is missing`);
+  return Array.from(
+    probe[1].matchAll(/^\s+([A-Za-z]\w*): true,\s*$/gm),
+    (match) => match[1],
+  );
+}
+
 test("schema compatibility can be verified before Sheet ownership cutover", () => {
   assert.doesNotThrow(() =>
     assertReleaseCompatibility(
@@ -76,7 +89,7 @@ test("required schema probes fail closed", () => {
   );
 });
 
-test("release probe exercises festival, venue-cache, outreach, research, and agent schema surfaces", () => {
+test("release probe exercises all release-critical runtime schema surfaces", () => {
   const source = readFileSync(
     new URL("../scripts/verify-release-compatibility.ts", import.meta.url),
     "utf8",
@@ -104,16 +117,88 @@ test("release probe exercises festival, venue-cache, outreach, research, and age
     /db\.contactResearchCandidate\.findMany\(\{[\s\S]*needsApproval: true,[\s\S]*officialSourceType: true,[\s\S]*officialSourceUrl: true,[\s\S]*officialManagementLabel: true,[\s\S]*officialSourceEvidence: true/,
   );
   assert.doesNotMatch(source, /db\.contactResearchCandidate\.count/);
+  assert.deepEqual(
+    selectedScalarFields(source, "artistResearchSkip"),
+    [
+      "id",
+      "artistId",
+      "source",
+      "reason",
+      "sourceJobId",
+      "agentRuleVersion",
+      "agentRuleText",
+      "setAt",
+      "clearedAt",
+      "clearedBy",
+      "createdAt",
+      "updatedAt",
+    ],
+  );
+  assert.doesNotMatch(source, /db\.artistResearchSkip\.count/);
   assert.match(
     source,
     /db\.agentRuleSet\.findMany\(\{[\s\S]*scope: true,[\s\S]*instructions: true,[\s\S]*version: true,[\s\S]*createdAt: true,[\s\S]*updatedAt: true/,
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*agentRuleSetProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,
     /db\.edmtrainVenue\.count\(\{[\s\S]*nycStatus: \{ in: \["inside_nyc", "outside_nyc", "unknown"\] \}/
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "contactAuditRun"),
+    ["id", "status", "contactCount", "completedAt", "createdAt", "updatedAt"],
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "contactAuditJob"),
+    [
+      "id",
+      "runId",
+      "contactId",
+      "artistId",
+      "snapshotArtistName",
+      "snapshotEmail",
+      "snapshotPhone",
+      "snapshotName",
+      "snapshotRole",
+      "snapshotSource",
+      "snapshotNotes",
+      "status",
+      "attemptCount",
+      "claimedAt",
+      "claimExpiresAt",
+      "claimToken",
+      "finding",
+      "sourceUrls",
+      "evidence",
+      "confidence",
+      "agentNotes",
+      "verifiedAt",
+      "reviewedAt",
+      "createdAt",
+      "updatedAt",
+    ],
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "contactAuditAlternative"),
+    [
+      "id",
+      "jobId",
+      "normalizedEmail",
+      "email",
+      "name",
+      "role",
+      "sourceUrls",
+      "evidence",
+      "confidence",
+      "createdAt",
+      "updatedAt",
+    ],
+  );
+  assert.match(
+    source,
+    /addedRuntimeRoleProbes: \[\s*"ArtistResearchSkip",\s*"ContactAuditRun",\s*"ContactAuditJob",\s*"ContactAuditAlternative",\s*\]/,
   );
 });

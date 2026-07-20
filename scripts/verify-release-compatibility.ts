@@ -34,8 +34,12 @@ async function main(): Promise<void> {
     artistClaimProbe,
     contactResearchJobProbe,
     contactResearchCandidateProbe,
+    artistResearchSkipProbe,
     agentRuleSetProbe,
     edmtrainVenueProbe,
+    contactAuditRunProbe,
+    contactAuditJobProbe,
+    contactAuditAlternativeProbe,
   ] = await Promise.all([
     db.setting.findMany({
       where: {
@@ -85,6 +89,23 @@ async function main(): Promise<void> {
         officialSourceEvidence: true,
       },
     }),
+    db.artistResearchSkip.findMany({
+      take: 1,
+      select: {
+        id: true,
+        artistId: true,
+        source: true,
+        reason: true,
+        sourceJobId: true,
+        agentRuleVersion: true,
+        agentRuleText: true,
+        setAt: true,
+        clearedAt: true,
+        clearedBy: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
     db.agentRuleSet.findMany({
       take: 1,
       select: {
@@ -100,6 +121,63 @@ async function main(): Promise<void> {
         nycStatus: { in: ["inside_nyc", "outside_nyc", "unknown"] },
       },
       take: 1,
+    }),
+    db.contactAuditRun.findMany({
+      take: 1,
+      select: {
+        id: true,
+        status: true,
+        contactCount: true,
+        completedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+    db.contactAuditJob.findMany({
+      take: 1,
+      select: {
+        id: true,
+        runId: true,
+        contactId: true,
+        artistId: true,
+        snapshotArtistName: true,
+        snapshotEmail: true,
+        snapshotPhone: true,
+        snapshotName: true,
+        snapshotRole: true,
+        snapshotSource: true,
+        snapshotNotes: true,
+        status: true,
+        attemptCount: true,
+        claimedAt: true,
+        claimExpiresAt: true,
+        claimToken: true,
+        finding: true,
+        sourceUrls: true,
+        evidence: true,
+        confidence: true,
+        agentNotes: true,
+        verifiedAt: true,
+        reviewedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+    db.contactAuditAlternative.findMany({
+      take: 1,
+      select: {
+        id: true,
+        jobId: true,
+        normalizedEmail: true,
+        email: true,
+        name: true,
+        role: true,
+        sourceUrls: true,
+        evidence: true,
+        confidence: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     }),
   ]);
   const values = new Map(settings.map((setting) => [setting.key, setting.value]));
@@ -119,7 +197,11 @@ async function main(): Promise<void> {
         [
           contactResearchJobProbe,
           contactResearchCandidateProbe,
+          artistResearchSkipProbe,
           agentRuleSetProbe,
+          contactAuditRunProbe,
+          contactAuditJobProbe,
+          contactAuditAlternativeProbe,
         ].every(Array.isArray),
       configuredSpreadsheetId:
         values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,
@@ -132,6 +214,12 @@ async function main(): Promise<void> {
     JSON.stringify({
       event: "release_compatibility_verified",
       sheetAdoptionRequired: requireSheetAdoption,
+      addedRuntimeRoleProbes: [
+        "ArtistResearchSkip",
+        "ContactAuditRun",
+        "ContactAuditJob",
+        "ContactAuditAlternative",
+      ],
     })
   );
 }
