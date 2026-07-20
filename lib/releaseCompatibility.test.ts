@@ -6,6 +6,19 @@ import {
   ReleaseCompatibilityError,
 } from "./releaseCompatibility";
 
+function selectedScalarFields(source: string, model: string): string[] {
+  const probe = source.match(
+    new RegExp(
+      String.raw`db\.${model}\.findMany\(\{\s*take: 1,\s*select: \{([\s\S]*?)\s*\},\s*\}\),`,
+    ),
+  );
+  assert.ok(probe, `${model} release probe is missing`);
+  return Array.from(
+    probe[1].matchAll(/^\s+([A-Za-z]\w*): true,\s*$/gm),
+    (match) => match[1],
+  );
+}
+
 test("schema compatibility can be verified before Sheet ownership cutover", () => {
   assert.doesNotThrow(() =>
     assertReleaseCompatibility(
@@ -104,9 +117,22 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
     /db\.contactResearchCandidate\.findMany\(\{[\s\S]*needsApproval: true,[\s\S]*officialSourceType: true,[\s\S]*officialSourceUrl: true,[\s\S]*officialManagementLabel: true,[\s\S]*officialSourceEvidence: true/,
   );
   assert.doesNotMatch(source, /db\.contactResearchCandidate\.count/);
-  assert.match(
-    source,
-    /db\.artistResearchSkip\.findMany\(\{[\s\S]*artistId: true,[\s\S]*source: true,[\s\S]*reason: true,[\s\S]*sourceJobId: true,[\s\S]*agentRuleVersion: true,[\s\S]*agentRuleText: true,[\s\S]*clearedAt: true/,
+  assert.deepEqual(
+    selectedScalarFields(source, "artistResearchSkip"),
+    [
+      "id",
+      "artistId",
+      "source",
+      "reason",
+      "sourceJobId",
+      "agentRuleVersion",
+      "agentRuleText",
+      "setAt",
+      "clearedAt",
+      "clearedBy",
+      "createdAt",
+      "updatedAt",
+    ],
   );
   assert.doesNotMatch(source, /db\.artistResearchSkip\.count/);
   assert.match(
@@ -121,17 +147,55 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
     source,
     /db\.edmtrainVenue\.count\(\{[\s\S]*nycStatus: \{ in: \["inside_nyc", "outside_nyc", "unknown"\] \}/
   );
-  assert.match(
-    source,
-    /db\.contactAuditRun\.findMany\(\{[\s\S]*status: true,[\s\S]*contactCount: true,[\s\S]*completedAt: true,[\s\S]*createdAt: true/,
+  assert.deepEqual(
+    selectedScalarFields(source, "contactAuditRun"),
+    ["id", "status", "contactCount", "completedAt", "createdAt", "updatedAt"],
   );
-  assert.match(
-    source,
-    /db\.contactAuditJob\.findMany\(\{[\s\S]*runId: true,[\s\S]*snapshotArtistName: true,[\s\S]*snapshotEmail: true,[\s\S]*status: true,[\s\S]*claimExpiresAt: true,[\s\S]*finding: true,[\s\S]*sourceUrls: true,[\s\S]*evidence: true,[\s\S]*confidence: true,[\s\S]*verifiedAt: true,[\s\S]*reviewedAt: true/,
+  assert.deepEqual(
+    selectedScalarFields(source, "contactAuditJob"),
+    [
+      "id",
+      "runId",
+      "contactId",
+      "artistId",
+      "snapshotArtistName",
+      "snapshotEmail",
+      "snapshotPhone",
+      "snapshotName",
+      "snapshotRole",
+      "snapshotSource",
+      "snapshotNotes",
+      "status",
+      "attemptCount",
+      "claimedAt",
+      "claimExpiresAt",
+      "claimToken",
+      "finding",
+      "sourceUrls",
+      "evidence",
+      "confidence",
+      "agentNotes",
+      "verifiedAt",
+      "reviewedAt",
+      "createdAt",
+      "updatedAt",
+    ],
   );
-  assert.match(
-    source,
-    /db\.contactAuditAlternative\.findMany\(\{[\s\S]*jobId: true,[\s\S]*normalizedEmail: true,[\s\S]*email: true,[\s\S]*role: true,[\s\S]*sourceUrls: true,[\s\S]*evidence: true,[\s\S]*confidence: true/,
+  assert.deepEqual(
+    selectedScalarFields(source, "contactAuditAlternative"),
+    [
+      "id",
+      "jobId",
+      "normalizedEmail",
+      "email",
+      "name",
+      "role",
+      "sourceUrls",
+      "evidence",
+      "confidence",
+      "createdAt",
+      "updatedAt",
+    ],
   );
   assert.match(
     source,
