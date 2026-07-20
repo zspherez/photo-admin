@@ -66,6 +66,16 @@ test("review and exhausted jobs have separate bulk requeue actions", () => {
   assert.match(source, /disabled=\{retryExhaustedCount === 0\}/);
 });
 
+test("research page links to the trusted queue-draining workflow", () => {
+  assert.match(
+    source,
+    /actions\/workflows\/contact-research\.yml/
+  );
+  assert.match(source, /Run queued research/);
+  assert.match(source, /target="_blank"/);
+  assert.match(source, /rel="noopener noreferrer"/);
+});
+
 test("research jobs are ranked by the best upcoming venue tier", () => {
   assert.match(source, /venueTierSql/);
   assert.match(source, /LEFT JOIN LATERAL/);

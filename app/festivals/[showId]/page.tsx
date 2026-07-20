@@ -967,6 +967,10 @@ export default async function FestivalDetailPage({
                 outreachEnabled &&
                 r.matched &&
                 r.sendability?.sendable === true;
+              const canCustomize =
+                outreachEnabled &&
+                !!r.contact &&
+                r.sendability?.mode !== "retry";
               const checkboxId = `festival-outreach-${r.artist.id}`;
               const reasonId = `${checkboxId}-reason`;
               const disabledReason = !r.matched
@@ -1075,10 +1079,7 @@ export default async function FestivalDetailPage({
                       </p>
                     )}
                   </div>
-                  {outreachEnabled &&
-                    canSend &&
-                    r.contact &&
-                    r.sendability?.mode !== "retry" && (
+                  {canCustomize && r.contact && (
                     <LinkButton
                       href={withWorkflowReturnTo(
                         `/dashboard/customize/${showId}/${r.contact.id}`,

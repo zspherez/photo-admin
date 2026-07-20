@@ -21,6 +21,7 @@ import { parseContactResearchView } from "@/lib/contactResearchView";
 import { formatShowDate } from "@/lib/formatDate";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { LinkButton } from "@/components/ui/button";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { TextArea } from "@/components/ui/field";
 import { AutoDismissStatus } from "./auto-dismiss-status";
@@ -42,6 +43,8 @@ import { festivalLeadTimeSql } from "@/lib/festivalEligibility";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact research" };
+const WORKFLOW_URL =
+  "https://github.com/zspherez/photo-admin/actions/workflows/contact-research.yml";
 
 function actionResearchFilter(formData: FormData) {
   return parseResearchStatusFilter(formData.get("status"));
@@ -457,6 +460,13 @@ export default async function ContactResearchPage({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <LinkButton
+            href={WORKFLOW_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Run queued research ↗
+          </LinkButton>
           <form action={retryAllReviewJobsAction}>
             <input type="hidden" name="status" value={activeFilter} />
             <PendingSubmitButton

@@ -140,3 +140,15 @@ test("festival manager research UI reflects the full eligible lineup", () => {
     /managerResearchCount = rows\.filter\([\s\S]{0,100}\.matched/
   );
 });
+
+test("festival customize links do not require a listening signal", () => {
+  assert.match(
+    source,
+    /const canCustomize =\s*outreachEnabled &&\s*!!r\.contact &&\s*r\.sendability\?\.mode !== "retry";/
+  );
+  assert.match(source, /\{canCustomize && r\.contact && \(/);
+  assert.doesNotMatch(
+    source,
+    /canCustomize[\s\S]{0,100}r\.matched/
+  );
+});
