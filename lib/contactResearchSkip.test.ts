@@ -41,6 +41,22 @@ test("intentional skip migration is transactional and constrained", () => {
     migration,
     /ArtistResearchSkip_clear_audit_check[\s\S]*"clearedBy" = 'manual'/
   );
+  assert.match(
+    migration,
+    /CREATE FUNCTION "guard_artist_research_skip_update"\(\)[\s\S]*NEW\."artistId" IS DISTINCT FROM OLD\."artistId"[\s\S]*NEW\."source" IS DISTINCT FROM OLD\."source"[\s\S]*NEW\."reason" IS DISTINCT FROM OLD\."reason"[\s\S]*NEW\."sourceJobId" IS DISTINCT FROM OLD\."sourceJobId"[\s\S]*NEW\."agentRuleVersion" IS DISTINCT FROM OLD\."agentRuleVersion"[\s\S]*NEW\."agentRuleText" IS DISTINCT FROM OLD\."agentRuleText"[\s\S]*NEW\."setAt" IS DISTINCT FROM OLD\."setAt"/
+  );
+  assert.match(
+    migration,
+    /IF OLD\."clearedAt" IS NOT NULL THEN[\s\S]*Cleared ArtistResearchSkip audit rows are immutable/
+  );
+  assert.match(
+    migration,
+    /NEW\."clearedAt" IS NULL[\s\S]*NEW\."clearedBy" IS DISTINCT FROM 'manual'[\s\S]*permits only a one-way valid manual clear/
+  );
+  assert.match(
+    migration,
+    /CREATE TRIGGER "ArtistResearchSkip_immutable_audit"[\s\S]*BEFORE UPDATE ON "ArtistResearchSkip"/
+  );
 });
 
 test("invalid rule provenance is rejected without being treated as stale", () => {

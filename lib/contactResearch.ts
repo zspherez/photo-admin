@@ -969,124 +969,128 @@ export function contactResearchPriority(
 }
 
 export async function refreshContactResearchQueue(
-  now: Date = new Date()
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work, { timeout: 30_000 })
 ): Promise<ContactResearchQueueResult> {
   const today = easternTodayStoredDate(now);
   const end = parseDateOnly(
     addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
   );
   const activeSignalWhere = activeListenSignalWhere(now);
-  const rows = await db.showArtist.findMany({
-    where: {
-      show: {
-        date: { gte: today, lte: end },
-        isFestival: false,
-        syncStatus: "active",
-      },
-      artist: {
-        contacts: {
-          none: ACTIVE_EMAIL_CONTACT_WHERE,
+  return runTransaction(async (tx) => {
+    const rows = await tx.showArtist.findMany({
+      where: {
+        show: {
+          date: { gte: today, lte: end },
+          isFestival: false,
+          syncStatus: "active",
         },
-        researchSkips: {
-          none: { clearedAt: null },
-        },
-      },
-    },
-    select: {
-      artistId: true,
-      show: {
-        select: {
-          date: true,
-          interestedAt: true,
-        },
-      },
-      artist: {
-        select: {
-          popularity: true,
-          listenSignals: {
-            where: activeSignalWhere,
-            take: 1,
-            select: { id: true },
+        artist: {
+          contacts: {
+            none: ACTIVE_EMAIL_CONTACT_WHERE,
+          },
+          researchSkips: {
+            none: { clearedAt: null },
           },
         },
       },
-    },
-  });
-  const requestedRows = await db.contactResearchJob.findMany({
-    where: {
-      requestedShow: {
-        date: { gte: today },
-        syncStatus: "active",
-      },
-      artist: {
-        contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
-        researchSkips: { none: { clearedAt: null } },
-      },
-    },
-    select: {
-      artistId: true,
-      priority: true,
-      nextShowAt: true,
-      requestedShow: {
-        select: {
-          date: true,
-          artists: { select: { artistId: true } },
+      select: {
+        artistId: true,
+        show: {
+          select: {
+            date: true,
+            interestedAt: true,
+          },
+        },
+        artist: {
+          select: {
+            popularity: true,
+            listenSignals: {
+              where: activeSignalWhere,
+              take: 1,
+              select: { id: true },
+            },
+          },
         },
       },
-    },
-  });
-
-  const eligible = new Map<
-    string,
-    { priority: number; nextShowAt: Date }
-  >();
-  for (const row of rows) {
-    const daysUntilShow = Math.max(
-      0,
-      Math.round((row.show.date.getTime() - today.getTime()) / 86_400_000)
-    );
-    const priority = contactResearchPriority({
-      interested: row.show.interestedAt !== null,
-      hasActiveSignal: row.artist.listenSignals.length > 0,
-      popularity: row.artist.popularity,
-      daysUntilShow,
     });
-    const current = eligible.get(row.artistId);
-    if (
-      !current ||
-      priority > current.priority ||
-      row.show.date < current.nextShowAt
-    ) {
+    const requestedRows = await tx.contactResearchJob.findMany({
+      where: {
+        requestedShow: {
+          date: { gte: today },
+          syncStatus: "active",
+        },
+        artist: {
+          contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
+          researchSkips: { none: { clearedAt: null } },
+        },
+      },
+      select: {
+        artistId: true,
+        priority: true,
+        nextShowAt: true,
+        requestedShow: {
+          select: {
+            date: true,
+            artists: { select: { artistId: true } },
+          },
+        },
+      },
+    });
+
+    const eligible = new Map<
+      string,
+      { priority: number; nextShowAt: Date }
+    >();
+    for (const row of rows) {
+      const daysUntilShow = Math.max(
+        0,
+        Math.round(
+          (row.show.date.getTime() - today.getTime()) / 86_400_000
+        )
+      );
+      const priority = contactResearchPriority({
+        interested: row.show.interestedAt !== null,
+        hasActiveSignal: row.artist.listenSignals.length > 0,
+        popularity: row.artist.popularity,
+        daysUntilShow,
+      });
+      const current = eligible.get(row.artistId);
+      if (
+        !current ||
+        priority > current.priority ||
+        row.show.date < current.nextShowAt
+      ) {
+        eligible.set(row.artistId, {
+          priority: Math.max(priority, current?.priority ?? 0),
+          nextShowAt:
+            !current || row.show.date < current.nextShowAt
+              ? row.show.date
+              : current.nextShowAt,
+        });
+      }
+    }
+    for (const row of requestedRows) {
+      if (!row.requestedShow) continue;
+      if (
+        !row.requestedShow.artists.some(
+          (showArtist) => showArtist.artistId === row.artistId
+        )
+      ) {
+        continue;
+      }
+      const current = eligible.get(row.artistId);
       eligible.set(row.artistId, {
-        priority: Math.max(priority, current?.priority ?? 0),
+        priority: Math.max(2_000, row.priority, current?.priority ?? 0),
         nextShowAt:
-          !current || row.show.date < current.nextShowAt
-            ? row.show.date
-            : current.nextShowAt,
+          current && current.nextShowAt < row.requestedShow.date
+            ? current.nextShowAt
+            : row.requestedShow.date,
       });
     }
-  }
-  for (const row of requestedRows) {
-    if (!row.requestedShow) continue;
-    if (
-      !row.requestedShow.artists.some(
-        (showArtist) => showArtist.artistId === row.artistId
-      )
-    ) {
-      continue;
-    }
-    const current = eligible.get(row.artistId);
-    eligible.set(row.artistId, {
-      priority: Math.max(2_000, row.priority, current?.priority ?? 0),
-      nextShowAt:
-        current && current.nextShowAt < row.requestedShow.date
-          ? current.nextShowAt
-          : row.requestedShow.date,
-    });
-  }
 
-  const artistIds = [...eligible.keys()];
-  return withSerializableRetry(async (tx) => {
+    const artistIds = [...eligible.keys()];
     const completed = await tx.contactResearchJob.updateMany({
       where: {
         status: { in: ["pending", "claimed", "review", "exhausted"] },
@@ -1202,7 +1206,7 @@ export async function refreshContactResearchQueue(
       completed: completed.count,
       inactivated: inactivated.count,
     };
-  }, { timeout: 30_000 });
+  });
 }
 
 export async function enqueueFestivalManagerResearch(

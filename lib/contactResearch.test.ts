@@ -25,6 +25,7 @@ import {
   parseContactResearchSubmission,
   rankKnownContactEmails,
   isOfficialManagementAutoApprovalEligible,
+  refreshContactResearchQueue,
   skipContactResearchArtist,
   submitContactResearchResult,
   unskipContactResearchArtist,
@@ -785,6 +786,132 @@ test("manual skip and explicit unskip preserve one job and audit history", async
   ]);
 });
 
+test("queue refresh evaluates eligibility after a concurrent explicit unskip", async () => {
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const state = {
+    activeSkip: true,
+    jobStatus: "skipped",
+  };
+  let eligibilityReads = 0;
+  let enterRefreshTransaction!: () => void;
+  let releaseRefreshTransaction!: () => void;
+  const refreshTransactionEntered = new Promise<void>((resolve) => {
+    enterRefreshTransaction = resolve;
+  });
+  const refreshTransactionRelease = new Promise<void>((resolve) => {
+    releaseRefreshTransaction = resolve;
+  });
+
+  const refresh = refreshContactResearchQueue(
+    now,
+    async (work) => {
+      enterRefreshTransaction();
+      await refreshTransactionRelease;
+      return work({
+        showArtist: {
+          findMany: async () => {
+            eligibilityReads += 1;
+            return state.activeSkip
+              ? []
+              : [
+                  {
+                    artistId: "artist-1",
+                    show: {
+                      date: new Date("2026-07-25T00:00:00.000Z"),
+                      interestedAt: null,
+                    },
+                    artist: {
+                      popularity: 50,
+                      listenSignals: [],
+                    },
+                  },
+                ];
+          },
+        },
+        contactResearchJob: {
+          findMany: async (value: unknown) => {
+            const input = value as {
+              where?: {
+                requestedShow?: unknown;
+                artistId?: { in?: string[] };
+              };
+            };
+            if (input.where?.requestedShow) return [];
+            return input.where?.artistId?.in?.includes("artist-1")
+              ? [{ artistId: "artist-1", status: state.jobStatus }]
+              : [];
+          },
+          updateMany: async (value: unknown) => {
+            const input = value as {
+              where?: { artistId?: { notIn?: string[] } };
+              data?: { status?: string };
+            };
+            if (
+              input.data?.status === "inactive" &&
+              state.jobStatus === "pending" &&
+              !input.where?.artistId?.notIn?.includes("artist-1")
+            ) {
+              state.jobStatus = "inactive";
+              return { count: 1 };
+            }
+            return { count: 0 };
+          },
+        },
+        $executeRaw: async () => {
+          state.jobStatus = "pending";
+          return 1;
+        },
+      } as unknown as Prisma.TransactionClient);
+    }
+  );
+
+  await refreshTransactionEntered;
+  assert.equal(
+    eligibilityReads,
+    0,
+    "eligibility must not be read before the serializable transaction starts"
+  );
+
+  const unskipped = await unskipContactResearchArtist(
+    "job-1",
+    now,
+    runWithTransaction({
+      contactResearchJob: {
+        findUnique: async () => ({
+          id: "job-1",
+          artistId: "artist-1",
+          requestedShowId: null,
+          artist: { contacts: [] },
+        }),
+        update: async (value: unknown) => {
+          const input = value as { data: { status: string } };
+          state.jobStatus = input.data.status;
+          return {};
+        },
+      },
+      artistResearchSkip: {
+        findFirst: async () =>
+          state.activeSkip ? { id: "skip-1" } : null,
+        update: async () => {
+          state.activeSkip = false;
+          return {};
+        },
+      },
+      showArtist: {
+        findFirst: async () => ({ showId: "show-1" }),
+      },
+    })
+  );
+  assert.equal(unskipped, true);
+  assert.equal(state.jobStatus, "pending");
+
+  releaseRefreshTransaction();
+  const refreshed = await refresh;
+  assert.equal(eligibilityReads, 1);
+  assert.equal(refreshed.eligible, 1);
+  assert.equal(state.jobStatus, "pending");
+});
+
 test("agent-rule skip is atomic, creates no contact, and rejects stale claims", async () => {
   const now = new Date("2026-07-20T12:00:00.000Z");
   const skipCreates: unknown[] = [];
@@ -822,7 +949,12 @@ test("agent-rule skip is atomic, creates no contact, and rejects stale claims", 
       },
     })
   );
-  assert.deepEqual(result, { accepted: true, status: "skipped" });
+  assert.deepEqual(result, {
+    accepted: true,
+    status: "skipped",
+    autoApproved: 0,
+    sheetErrors: [],
+  });
   assert.deepEqual(skipCreates, [
     {
       data: {
@@ -870,7 +1002,12 @@ test("agent-rule skip is atomic, creates no contact, and rejects stale claims", 
       },
     })
   );
-  assert.deepEqual(stale, { accepted: false, status: "conflict" });
+  assert.deepEqual(stale, {
+    accepted: false,
+    status: "conflict",
+    autoApproved: 0,
+    sheetErrors: [],
+  });
   assert.equal(wroteStaleResult, false);
 });
 
@@ -909,6 +1046,8 @@ test("agent skip rejects provenance outside the claim snapshot without writes", 
   assert.deepEqual(result, {
     accepted: false,
     status: "invalid_rule_provenance",
+    autoApproved: 0,
+    sheetErrors: [],
   });
   assert.equal(wroteResult, false);
 });

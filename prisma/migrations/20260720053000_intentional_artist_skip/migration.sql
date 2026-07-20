@@ -80,4 +80,41 @@ ALTER TABLE "ArtistResearchSkip"
   FOREIGN KEY ("sourceJobId") REFERENCES "ContactResearchJob"("id")
   ON DELETE NO ACTION ON UPDATE CASCADE;
 
+CREATE FUNCTION "guard_artist_research_skip_update"()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW."id" IS DISTINCT FROM OLD."id"
+    OR NEW."artistId" IS DISTINCT FROM OLD."artistId"
+    OR NEW."source" IS DISTINCT FROM OLD."source"
+    OR NEW."reason" IS DISTINCT FROM OLD."reason"
+    OR NEW."sourceJobId" IS DISTINCT FROM OLD."sourceJobId"
+    OR NEW."agentRuleVersion" IS DISTINCT FROM OLD."agentRuleVersion"
+    OR NEW."agentRuleText" IS DISTINCT FROM OLD."agentRuleText"
+    OR NEW."setAt" IS DISTINCT FROM OLD."setAt"
+    OR NEW."createdAt" IS DISTINCT FROM OLD."createdAt"
+  THEN
+    RAISE EXCEPTION 'ArtistResearchSkip audit identity is immutable';
+  END IF;
+
+  IF OLD."clearedAt" IS NOT NULL THEN
+    RAISE EXCEPTION 'Cleared ArtistResearchSkip audit rows are immutable';
+  END IF;
+
+  IF NEW."clearedAt" IS NULL
+    OR NEW."clearedBy" IS DISTINCT FROM 'manual'
+    OR NEW."clearedAt" < OLD."setAt"
+  THEN
+    RAISE EXCEPTION
+      'ArtistResearchSkip permits only a one-way valid manual clear';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "ArtistResearchSkip_immutable_audit"
+BEFORE UPDATE ON "ArtistResearchSkip"
+FOR EACH ROW
+EXECUTE FUNCTION "guard_artist_research_skip_update"();
+
 COMMIT;
