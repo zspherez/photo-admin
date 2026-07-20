@@ -1545,3 +1545,18 @@ export async function retryContactResearchJob(
   });
   return result.count === 1;
 }
+
+export async function retryAllContactResearchJobs(): Promise<number> {
+  const result = await db.contactResearchJob.updateMany({
+    where: {
+      status: { in: ["exhausted", "review"] },
+      artist: {
+        contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
+      },
+    },
+    data: {
+      status: "pending",
+    },
+  });
+  return result.count;
+}

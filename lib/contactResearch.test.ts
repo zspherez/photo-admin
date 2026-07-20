@@ -335,4 +335,8 @@ test("claims require current eligibility and unexpired ownership", () => {
     source,
     /retryContactResearchJob[\s\S]*contacts: \{ none: ACTIVE_EMAIL_CONTACT_WHERE \}/
   );
+  assert.match(
+    source,
+    /retryAllContactResearchJobs[\s\S]*status: \{ in: \["exhausted", "review"\] \}[\s\S]*data: \{\s*status: "pending"/
+  );
 });
