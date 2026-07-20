@@ -71,7 +71,7 @@ test("research page links to the trusted queue-draining workflow", () => {
     source,
     /actions\/workflows\/contact-research\.yml/
   );
-  assert.match(source, /Run queued research/);
+  assert.match(source, /Open research workflow/);
   assert.match(source, /target="_blank"/);
   assert.match(source, /rel="noopener noreferrer"/);
 });

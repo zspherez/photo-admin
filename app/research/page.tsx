@@ -465,7 +465,7 @@ export default async function ContactResearchPage({
             target="_blank"
             rel="noopener noreferrer"
           >
-            Run queued research ↗
+            Open research workflow ↗
           </LinkButton>
           <form action={retryAllReviewJobsAction}>
             <input type="hidden" name="status" value={activeFilter} />
