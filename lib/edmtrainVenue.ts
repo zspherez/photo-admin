@@ -54,7 +54,7 @@ export interface ResolvedEdmtrainVenue {
 
 export const EDMTRAIN_VENUE_CLASSIFICATION_VERSION = 1;
 
-export const NYC_LOCALITY_NAMES = [
+const NYC_LOCALITIES = new Set([
   "astoria",
   "bronx",
   "brooklyn",
@@ -66,9 +66,7 @@ export const NYC_LOCALITY_NAMES = [
   "queens",
   "staten island",
   "the bronx",
-] as const;
-
-const NYC_LOCALITIES = new Set<string>(NYC_LOCALITY_NAMES);
+]);
 
 function cleanText(value: unknown): string | null {
   if (typeof value !== "string") return null;

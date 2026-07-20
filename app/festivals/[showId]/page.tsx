@@ -98,7 +98,7 @@ const getFestivalDetails = cache(async (showId: string) =>
       countryName: true,
       ticketUrl: true,
       isFestival: true,
-      edmtrainVenue: { select: { nycStatus: true } },
+      festivalNycStatus: true,
       eventName: true,
       syncStatus: true,
       dismissedAt: true,
@@ -228,10 +228,7 @@ async function festivalBulkCandidates(
     select: {
       isFestival: true,
       date: true,
-      city: true,
-      state: true,
-      countryCode: true,
-      edmtrainVenue: { select: { nycStatus: true } },
+      festivalNycStatus: true,
       syncStatus: true,
       dismissedAt: true,
       artists: {

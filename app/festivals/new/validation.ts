@@ -24,6 +24,7 @@ export type FestivalCreationValidation =
       entries: FestivalLineupEntry[];
       countryCode: string;
       countryName: string;
+      festivalNycStatus: "inside_nyc" | "outside_nyc" | "unknown";
     }
   | {
       ok: false;
@@ -78,7 +79,7 @@ export function validateFestivalCreation(
     {
       isFestival: true,
       date,
-      venueNycStatus: geography.status,
+      festivalNycStatus: geography.status,
     },
     now
   );
@@ -106,5 +107,6 @@ export function validateFestivalCreation(
     entries: lineup.entries,
     countryCode,
     countryName,
+    festivalNycStatus: geography.status,
   };
 }

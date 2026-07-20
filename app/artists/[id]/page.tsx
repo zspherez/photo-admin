@@ -103,13 +103,7 @@ const getArtistPageData = cache(async (id: string) => {
         },
         playlists: { include: { playlist: true } },
         shows: {
-          include: {
-            show: {
-              include: {
-                edmtrainVenue: { select: { nycStatus: true } },
-              },
-            },
-          },
+          include: { show: true },
           orderBy: { show: { date: "asc" } },
         },
       },

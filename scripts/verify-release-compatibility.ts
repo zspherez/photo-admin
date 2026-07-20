@@ -61,7 +61,15 @@ async function main(): Promise<void> {
     }),
     db.show.count({
       where: {
-        OR: [{ countryCode: "US" }, { countryName: { not: null } }],
+        OR: [
+          { countryCode: "US" },
+          { countryName: { not: null } },
+          {
+            festivalNycStatus: {
+              in: ["inside_nyc", "outside_nyc", "unknown"],
+            },
+          },
+        ],
       },
       take: 1,
     }),

@@ -33,15 +33,7 @@ const getArtistForContact = cache(async (artistId: string) =>
     where: { id: artistId },
     include: {
       contacts: { where: { state: "active" } },
-      shows: {
-        include: {
-          show: {
-            include: {
-              edmtrainVenue: { select: { nycStatus: true } },
-            },
-          },
-        },
-      },
+      shows: { include: { show: true } },
     },
   }),
 );

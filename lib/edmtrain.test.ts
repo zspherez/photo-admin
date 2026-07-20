@@ -421,6 +421,17 @@ test("regular shows and near-term festivals fail closed by NYC geography", () =>
     edmtrainEventStatus(event, false, "outside_nyc", now),
     "active"
   );
+  event.date = "2026-07-19";
+  assert.equal(
+    edmtrainEventStatus(event, false, "inside_nyc", now),
+    "festival_past"
+  );
+
+  const source = readFileSync(new URL("./edmtrain.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /event\.festivalInd \? venue\.nycStatus : null[\s\S]*"festivalNycStatus"/
+  );
 });
 
 test("EDMTrain retry-budget failures remain structured at the provider boundary", async () => {

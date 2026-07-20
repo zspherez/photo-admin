@@ -175,3 +175,17 @@ test("manual festival lead time exempts NYC and requires seven days elsewhere", 
     }
   );
 });
+
+test("manual NYC geography canonicalizes whitespace and punctuation", () => {
+  const now = new Date("2026-07-20T16:00:00.000Z");
+  for (const city of ["New   York", "New---York", "--New---York--"]) {
+    const result = validateFestivalCreation(
+      values({ date: "2026-07-20", city }),
+      now
+    );
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.festivalNycStatus, "inside_nyc");
+    }
+  }
+});

@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   festivalLeadTimeCutoff,
   festivalLeadTimeExclusion,
-  festivalNycStatus,
   festivalLeadTimeWhere,
   satisfiesFestivalLeadTime,
 } from "./festivalEligibility";
 
 function festival(
   date: string,
-  venueNycStatus: string | null
+  festivalNycStatus: string | null
 ) {
   return {
     isFestival: true,
@@ -18,7 +18,7 @@ function festival(
     city: "Chicago",
     state: "IL",
     countryCode: "US",
-    venueNycStatus,
+    festivalNycStatus,
   };
 }
 
@@ -46,27 +46,20 @@ test("festival lead time allows NYC and excludes only non-NYC days zero through 
   );
 });
 
-test("NYC is derived from cached venue geography or manual festival fields", () => {
+test("NYC is exempt from lead time but not from being in the past", () => {
   const now = new Date("2026-07-20T12:00:00.000Z");
   assert.equal(
-    satisfiesFestivalLeadTime(
-      {
-        ...festival("2026-07-20", null),
-        edmtrainVenue: { nycStatus: "inside_nyc" },
-      },
-      now
-    ),
+    festivalLeadTimeExclusion(festival("2026-07-19", "inside_nyc"), now),
+    "festival_past"
+  );
+  assert.equal(
+    satisfiesFestivalLeadTime(festival("2026-07-20", "inside_nyc"), now),
     true
   );
-  const manualNycFestival = {
-    isFestival: true,
-    date: new Date("2026-07-20T00:00:00.000Z"),
-    city: "Brooklyn",
-    state: "NY",
-    countryCode: "US",
-  };
-  assert.equal(festivalNycStatus(manualNycFestival), "inside_nyc");
-  assert.equal(satisfiesFestivalLeadTime(manualNycFestival, now), true);
+  assert.equal(
+    satisfiesFestivalLeadTime(festival("2026-07-21", "inside_nyc"), now),
+    true
+  );
 });
 
 test("unknown near-term geography fails conservatively and explicitly", () => {
@@ -75,9 +68,7 @@ test("unknown near-term geography fails conservatively and explicitly", () => {
       {
         isFestival: true,
         date: new Date("2026-07-26T00:00:00.000Z"),
-        city: "Mystery City",
-        state: null,
-        countryCode: null,
+        festivalNycStatus: "unknown",
       },
       new Date("2026-07-20T12:00:00.000Z")
     ),
@@ -116,44 +107,47 @@ test("database eligibility preserves regular shows and the exact seven-day bound
   const where = festivalLeadTimeWhere(
     new Date("2026-07-20T12:00:00.000Z")
   );
-  assert.deepEqual(where.OR?.slice(0, 3), [
+  assert.deepEqual(where.OR, [
     { isFestival: false },
-    { date: { gte: new Date("2026-07-27T00:00:00.000Z") } },
-    { edmtrainVenue: { is: { nycStatus: "inside_nyc" } } },
+    {
+      isFestival: true,
+      date: { gte: new Date("2026-07-20T00:00:00.000Z") },
+      OR: [
+        { festivalNycStatus: "inside_nyc" },
+        { date: { gte: new Date("2026-07-27T00:00:00.000Z") } },
+      ],
+    },
   ]);
-  assert.deepEqual(where.OR?.[3], {
-    AND: [
-      { edmtrainVenueId: null },
-      { countryCode: { equals: "US", mode: "insensitive" } },
-      { state: { in: ["NY", "New York"], mode: "insensitive" } },
-      {
-        city: {
-          in: [
-            "astoria",
-            "bronx",
-            "brooklyn",
-            "flushing",
-            "long island city",
-            "manhattan",
-            "new york",
-            "new york city",
-            "queens",
-            "staten island",
-            "the bronx",
-          ],
-          mode: "insensitive",
-        },
-      },
-    ],
-  });
   assert.equal(
     satisfiesFestivalLeadTime(
       {
         isFestival: false,
         date: new Date("2026-07-20T00:00:00.000Z"),
+        festivalNycStatus: null,
       },
       new Date("2026-07-20T12:00:00.000Z")
     ),
     true
   );
+});
+
+test("migration persists canonical geography without changing historical rows", () => {
+  const migration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260720170000_festival_lead_time/migration.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  assert.match(migration, /^BEGIN;/);
+  assert.match(
+    migration,
+    /SET "festivalNycStatus" = venue\."nycStatus"[\s\S]*"edmtrainVenueId"/
+  );
+  assert.match(
+    migration,
+    /regexp_replace\([\s\S]*lower\(trim\("city"\)\)[\s\S]*'\[\^a-z0-9\]\+'[\s\S]*'new york'/
+  );
+  assert.doesNotMatch(migration, /DELETE FROM "Show"|SET "syncStatus"/);
+  assert.match(migration, /COMMIT;\s*$/);
 });

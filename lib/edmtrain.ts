@@ -285,6 +285,7 @@ export function edmtrainEventStatus(
   | "blocked"
   | "outside_nyc"
   | "geography_unknown"
+  | "festival_past"
   | "lead_time_outside_nyc"
   | "lead_time_geography_unknown" {
   if (
@@ -301,7 +302,7 @@ export function edmtrainEventStatus(
         {
           isFestival: true,
           date: parseDateOnly(event.date),
-          venueNycStatus,
+          festivalNycStatus: venueNycStatus,
         },
         now
       ) ?? "active"
@@ -582,6 +583,7 @@ async function reconcileEdmtrainSnapshots(
                     ${event.ages},
                     ${event.electronicGenreInd ? "electronic" : "other"},
                     ${event.festivalInd},
+                    ${event.festivalInd ? venue.nycStatus : null},
                     ${event.name},
                     ${"edmtrain"},
                     ${status},
@@ -598,7 +600,7 @@ async function reconcileEdmtrainSnapshots(
                 INSERT INTO "Show" (
                   "id", "edmtrainId", "edmtrainVenueId", "date", "venueName", "city", "state",
                   "countryCode", "countryName", "ticketUrl", "ages",
-                  "electronicGenre", "isFestival", "eventName", "source",
+                  "electronicGenre", "isFestival", "festivalNycStatus", "eventName", "source",
                   "syncStatus", "sourceLastSeenAt", "sourceGeneration", "raw",
                   "createdAt", "updatedAt"
                 )
@@ -615,6 +617,7 @@ async function reconcileEdmtrainSnapshots(
                   "ages" = EXCLUDED."ages",
                   "electronicGenre" = EXCLUDED."electronicGenre",
                   "isFestival" = EXCLUDED."isFestival",
+                  "festivalNycStatus" = EXCLUDED."festivalNycStatus",
                   "eventName" = EXCLUDED."eventName",
                   "source" = EXCLUDED."source",
                   "syncStatus" = EXCLUDED."syncStatus",

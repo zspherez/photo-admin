@@ -4,26 +4,19 @@ import {
   easternDateOnly,
   parseDateOnly,
 } from "@/lib/calendarDate";
-import {
-  classifyVenueNycGeography,
-  NYC_LOCALITY_NAMES,
-  type VenueNycStatus,
-} from "@/lib/edmtrainVenue";
+import type { VenueNycStatus } from "@/lib/edmtrainVenue";
 
 export const FESTIVAL_MINIMUM_LEAD_DAYS = 7;
 
 export type FestivalLeadTimeExclusion =
+  | "festival_past"
   | "lead_time_outside_nyc"
   | "lead_time_geography_unknown";
 
 export interface FestivalLeadTimeInput {
   isFestival: boolean;
   date: Date;
-  city?: string | null;
-  state?: string | null;
-  countryCode?: string | null;
-  edmtrainVenue?: { nycStatus: string } | null;
-  venueNycStatus?: string | null;
+  festivalNycStatus: string | null;
 }
 
 export function festivalLeadTimeCutoff(now: Date = new Date()): Date {
@@ -41,15 +34,7 @@ function validVenueNycStatus(value: string | null | undefined): VenueNycStatus |
 export function festivalNycStatus(
   show: FestivalLeadTimeInput
 ): VenueNycStatus {
-  const venueStatus = validVenueNycStatus(
-    show.edmtrainVenue?.nycStatus ?? show.venueNycStatus
-  );
-  if (venueStatus) return venueStatus;
-  return classifyVenueNycGeography({
-    location: show.city ?? null,
-    state: show.state ?? null,
-    country: show.countryCode ?? null,
-  }).status;
+  return validVenueNycStatus(show.festivalNycStatus) ?? "unknown";
 }
 
 export function festivalLeadTimeExclusion(
@@ -57,6 +42,9 @@ export function festivalLeadTimeExclusion(
   now: Date = new Date()
 ): FestivalLeadTimeExclusion | null {
   if (!show.isFestival) return null;
+  if (show.date < parseDateOnly(easternDateOnly(now))) {
+    return "festival_past";
+  }
   const nycStatus = festivalNycStatus(show);
   if (nycStatus === "inside_nyc") return null;
   if (show.date >= festivalLeadTimeCutoff(now)) return null;
@@ -75,36 +63,16 @@ export function satisfiesFestivalLeadTime(
 export function festivalLeadTimeWhere(
   now: Date = new Date()
 ): Prisma.ShowWhereInput {
+  const today = parseDateOnly(easternDateOnly(now));
   return {
     OR: [
       { isFestival: false },
-      { date: { gte: festivalLeadTimeCutoff(now) } },
       {
-        edmtrainVenue: {
-          is: { nycStatus: "inside_nyc" },
-        },
-      },
-      {
-        AND: [
-          { edmtrainVenueId: null },
-          {
-            countryCode: {
-              equals: "US",
-              mode: "insensitive",
-            },
-          },
-          {
-            state: {
-              in: ["NY", "New York"],
-              mode: "insensitive",
-            },
-          },
-          {
-            city: {
-              in: [...NYC_LOCALITY_NAMES],
-              mode: "insensitive",
-            },
-          },
+        isFestival: true,
+        date: { gte: today },
+        OR: [
+          { festivalNycStatus: "inside_nyc" },
+          { date: { gte: festivalLeadTimeCutoff(now) } },
         ],
       },
     ],
@@ -114,22 +82,18 @@ export function festivalLeadTimeWhere(
 export function festivalLeadTimeSql(
   now: Date = new Date()
 ): Prisma.Sql {
+  const today = parseDateOnly(easternDateOnly(now));
   const cutoff = festivalLeadTimeCutoff(now);
   return Prisma.sql`
     (
       show."isFestival" = false
-      OR show."date" >= ${cutoff}
-      OR EXISTS (
-        SELECT 1
-        FROM "EdmtrainVenue" festival_venue
-        WHERE festival_venue."id" = show."edmtrainVenueId"
-          AND festival_venue."nycStatus" = 'inside_nyc'
-      )
       OR (
-        show."edmtrainVenueId" IS NULL
-        AND upper(trim(COALESCE(show."countryCode", ''))) = 'US'
-        AND lower(trim(COALESCE(show."state", ''))) IN ('ny', 'new york')
-        AND lower(trim(show."city")) IN (${Prisma.join(NYC_LOCALITY_NAMES)})
+        show."isFestival" = true
+        AND show."date" >= ${today}
+        AND (
+          show."festivalNycStatus" = 'inside_nyc'
+          OR show."date" >= ${cutoff}
+        )
       )
     )
   `;
@@ -141,7 +105,6 @@ export function activeFestivalWhere(
   return {
     isFestival: true,
     syncStatus: "active",
-    date: { gte: parseDateOnly(easternDateOnly(now)) },
     AND: [festivalLeadTimeWhere(now)],
   };
 }
@@ -149,6 +112,9 @@ export function activeFestivalWhere(
 export function festivalLeadTimeError(
   exclusion: FestivalLeadTimeExclusion
 ): string {
+  if (exclusion === "festival_past") {
+    return "Past festivals are not actionable.";
+  }
   return exclusion === "lead_time_geography_unknown"
     ? "Festival geography is unknown, so festivals fewer than 7 calendar days away are not actionable."
     : "Non-NYC festivals fewer than 7 calendar days away are not actionable.";
