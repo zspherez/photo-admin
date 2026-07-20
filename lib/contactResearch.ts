@@ -1541,11 +1541,6 @@ export async function retryContactResearchJob(
     },
     data: {
       status: "pending",
-      claimToken: null,
-      claimedAt: null,
-      claimExpiresAt: null,
-      agentNotes: null,
-      completedAt: null,
     },
   });
   return result.count === 1;
