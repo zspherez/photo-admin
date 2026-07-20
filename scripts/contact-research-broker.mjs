@@ -115,6 +115,13 @@ const schemas = {
     claimToken: z.string().min(1),
     notes: z.string().min(1).max(4_000),
   }).strict(),
+  "submit-skipped": z.object({
+    jobId: z.string().min(1),
+    claimToken: z.string().min(1),
+    notes: z.string().min(1).max(4_000),
+    ruleVersion: z.number().int().min(1),
+    ruleText: z.string().min(1).max(8_000),
+  }).strict(),
 };
 
 class BrokerConflictError extends Error {}
@@ -222,7 +229,8 @@ function recordSuccessfulTool(name, value) {
   }
   if (
     name === "submit-candidates" ||
-    name === "submit-exhausted"
+    name === "submit-exhausted" ||
+    name === "submit-skipped"
   ) {
     metrics.submissions += 1;
   }
@@ -405,6 +413,36 @@ async function runTool(name, input, sessionId) {
             outcome: "exhausted",
             claimToken: input.claimToken,
             notes: input.notes,
+          }
+        );
+      } catch (error) {
+        if (
+          error instanceof PhotoAdminRequestError &&
+          error.status === 409
+        ) {
+          state.completed = true;
+          metrics.sessions[sessionId].completed = true;
+          metrics.sessions[sessionId].stale = true;
+          persistMetrics();
+        }
+        throw error;
+      }
+      state.completed = true;
+      metrics.sessions[sessionId].completed = true;
+      return result;
+    }
+    case "submit-skipped": {
+      requireSessionClaim(state, input);
+      let result;
+      try {
+        result = await photoAdminRequest(
+          `/api/contact-research/${encodeURIComponent(input.jobId)}/result`,
+          {
+            outcome: "skipped",
+            claimToken: input.claimToken,
+            notes: input.notes,
+            ruleVersion: input.ruleVersion,
+            ruleText: input.ruleText,
           }
         );
       } catch (error) {

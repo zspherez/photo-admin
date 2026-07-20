@@ -60,6 +60,7 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
       "search_web",
       "submit_candidates",
       "submit_exhausted",
+      "submit_skipped",
     ]
   );
   const result = await client.callTool({
@@ -114,6 +115,9 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
   assert.match(agent, /exact candidate email is visibly published/);
   assert.match(agent, /Use `officialSource: null` for Booking Agent Info/);
   assert.match(agent, /call `submit-exhausted`\s+immediately/);
+  assert.match(agent, /Only the claimed `globalAgentRules` snapshot can authorize/);
+  assert.match(agent, /call `submit-skipped` without browsing/);
+  assert.match(agent, /matching rule version and exact\s+rule text/);
   assert.doesNotMatch(agent, /mcp-servers:/);
   assert.match(runner, /contact-research-broker\.mjs/);
   assert.match(runner, /run-contact-research-copilot\.mjs/);

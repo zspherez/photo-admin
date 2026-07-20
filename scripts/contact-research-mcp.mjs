@@ -193,5 +193,33 @@ server.registerTool(
     )
 );
 
+server.registerTool(
+    "submit_skipped",
+    {
+      description:
+        "Intentionally skip a claimed artist only when the trusted global-rule snapshot requires it.",
+      inputSchema: {
+        jobId: z.string().min(1),
+        claimToken: z.string().min(1),
+        notes: z.string().min(1).max(4_000),
+        ruleVersion: z.number().int().min(1),
+        ruleText: z.string().min(1).max(8_000),
+      },
+    },
+    async ({ jobId, claimToken, notes, ruleVersion, ruleText }) =>
+      toolResult(
+        await request(
+          `/api/contact-research/${encodeURIComponent(jobId)}/result`,
+          {
+            outcome: "skipped",
+            claimToken,
+            notes,
+            ruleVersion,
+            ruleText,
+          }
+        )
+      )
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);

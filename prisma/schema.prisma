@@ -53,6 +53,7 @@ model Artist {
   playlists          ArtistPlaylist[]
   outreaches         Outreach[]
   contactResearchJob ContactResearchJob?
+  researchSkips      ArtistResearchSkip[]
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -131,12 +132,33 @@ model ContactResearchJob {
   agentNotes               String?
   completedAt              DateTime?
   candidates               ContactResearchCandidate[]
+  researchSkips            ArtistResearchSkip[]
   createdAt                DateTime                   @default(now())
   updatedAt                DateTime                   @updatedAt
 
   @@index([status, priority, nextShowAt, createdAt])
   @@index([claimExpiresAt])
   @@index([requestedShowId])
+}
+
+model ArtistResearchSkip {
+  id               String              @id @default(cuid())
+  artistId         String
+  artist           Artist              @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  source           String
+  reason           String
+  sourceJobId      String?
+  sourceJob        ContactResearchJob? @relation(fields: [sourceJobId], references: [id], onDelete: NoAction)
+  agentRuleVersion Int?
+  agentRuleText    String?
+  setAt            DateTime            @default(now())
+  clearedAt        DateTime?
+  clearedBy        String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([artistId, clearedAt])
+  @@index([sourceJobId])
 }
 
 model ContactResearchCandidate {

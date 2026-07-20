@@ -11,12 +11,19 @@ import {
   retryAllExhaustedContactResearchJobs,
   retryAllReviewContactResearchJobs,
   retryContactResearchJob,
+  skipContactResearchArtist,
+  unskipContactResearchArtist,
   updateContactResearchJobUserNotes,
 } from "@/lib/contactResearch";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
+import {
+  contactResearchHref,
+  contactResearchViewFromForm,
+  parseContactResearchView,
+} from "@/lib/contactResearchView";
 import { formatShowDate } from "@/lib/formatDate";
-import { Card, CardBody } from "@/components/ui/card";
+import { Card, CardBody, CardLink } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { TextArea } from "@/components/ui/field";
@@ -31,24 +38,20 @@ import {
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact research" };
 
-function researchHref(values: Record<string, string>): string {
-  const params = new URLSearchParams(values);
-  return `/research?${params.toString()}`;
-}
-
-async function refreshQueueAction() {
+async function refreshQueueAction(formData: FormData) {
   "use server";
   await requireServerActionAuth("/research");
+  const view = contactResearchViewFromForm(formData);
   let destination: string;
   try {
     const result = await refreshContactResearchQueue();
-    destination = researchHref({
+    destination = contactResearchHref(view, {
       refreshed: "1",
       eligible: String(result.eligible),
       enqueued: String(result.enqueued),
     });
   } catch (error) {
-    destination = researchHref({
+    destination = contactResearchHref(view, {
       error: "queue_refresh",
       detail: (error instanceof Error ? error.message : String(error)).slice(
         0,
@@ -64,9 +67,10 @@ async function refreshQueueAction() {
 async function approveCandidateAction(formData: FormData) {
   "use server";
   await requireServerActionAuth("/research");
+  const view = contactResearchViewFromForm(formData);
   const candidateId = String(formData.get("candidateId") ?? "").trim();
   if (!candidateId) {
-    redirect(researchHref({ error: "missing_candidate" }));
+    redirect(contactResearchHref(view, { error: "missing_candidate" }));
   }
   const result = await approveContactResearchCandidate(candidateId);
   revalidatePath("/research");
@@ -75,46 +79,57 @@ async function approveCandidateAction(formData: FormData) {
   revalidatePath("/settings/contacts");
   if (!result.ok) {
     redirect(
-      researchHref({
+      contactResearchHref(view, {
         error: "approve_failed",
         detail: result.error ?? "Candidate could not be approved",
       })
     );
   }
   if (result.sheetError) {
-    redirect(researchHref({ sheet_error: result.sheetError }));
+    redirect(contactResearchHref(view, { sheet_error: result.sheetError }));
   }
 }
 
 async function rejectCandidateAction(formData: FormData) {
   "use server";
   await requireServerActionAuth("/research");
+  const view = contactResearchViewFromForm(formData);
   const candidateId = String(formData.get("candidateId") ?? "").trim();
   if (!candidateId) {
-    redirect(researchHref({ error: "missing_candidate" }));
+    redirect(contactResearchHref(view, { error: "missing_candidate" }));
   }
   const result = await rejectContactResearchCandidate(candidateId);
   revalidatePath("/research");
   revalidatePath("/settings");
-  if (!result.ok) redirect(researchHref({ error: "reject_failed" }));
+  if (!result.ok) {
+    redirect(contactResearchHref(view, { error: "reject_failed" }));
+  }
 }
 
 async function retryJobAction(formData: FormData) {
   "use server";
   await requireServerActionAuth("/research");
+  const view = contactResearchViewFromForm(formData);
   const jobId = String(formData.get("jobId") ?? "").trim();
-  if (!jobId) redirect(researchHref({ error: "missing_job" }));
+  if (!jobId) {
+    redirect(contactResearchHref(view, { error: "missing_job" }));
+  }
   const retried = await retryContactResearchJob(jobId);
   revalidatePath("/research");
   revalidatePath("/settings");
-  if (!retried) redirect(researchHref({ error: "retry_failed" }));
+  if (!retried) {
+    redirect(contactResearchHref(view, { error: "retry_failed" }));
+  }
 }
 
 async function saveResearchNotesAction(formData: FormData) {
   "use server";
   await requireServerActionAuth("/research");
+  const view = contactResearchViewFromForm(formData);
   const jobId = String(formData.get("jobId") ?? "").trim();
-  if (!jobId) redirect(researchHref({ error: "missing_job" }));
+  if (!jobId) {
+    redirect(contactResearchHref(view, { error: "missing_job" }));
+  }
   let updated = false;
   try {
     updated = await updateContactResearchJobUserNotes(
@@ -123,7 +138,7 @@ async function saveResearchNotesAction(formData: FormData) {
     );
   } catch (error) {
     redirect(
-      researchHref({
+      contactResearchHref(view, {
         error: "notes_failed",
         detail: (error instanceof Error ? error.message : String(error)).slice(
           0,
@@ -133,7 +148,9 @@ async function saveResearchNotesAction(formData: FormData) {
     );
   }
   revalidatePath("/research");
-  if (!updated) redirect(researchHref({ error: "notes_failed" }));
+  if (!updated) {
+    redirect(contactResearchHref(view, { error: "notes_failed" }));
+  }
 }
 
 async function retryAllExhaustedJobsAction() {
@@ -152,10 +169,59 @@ async function retryAllReviewJobsAction() {
   revalidatePath("/settings");
 }
 
+async function skipArtistAction(formData: FormData) {
+  "use server";
+  await requireServerActionAuth("/research");
+  const view = contactResearchViewFromForm(formData);
+  const jobId = String(formData.get("jobId") ?? "").trim();
+  if (!jobId) {
+    redirect(contactResearchHref(view, { error: "missing_job" }));
+  }
+  let skipped = false;
+  try {
+    skipped = await skipContactResearchArtist(
+      jobId,
+      formData.get("reason")
+    );
+  } catch (error) {
+    redirect(
+      contactResearchHref(view, {
+        error: "skip_failed",
+        detail: (error instanceof Error ? error.message : String(error)).slice(
+          0,
+          180
+        ),
+      })
+    );
+  }
+  revalidatePath("/research");
+  revalidatePath("/settings");
+  if (!skipped) {
+    redirect(contactResearchHref(view, { error: "skip_failed" }));
+  }
+}
+
+async function unskipArtistAction(formData: FormData) {
+  "use server";
+  await requireServerActionAuth("/research");
+  const view = contactResearchViewFromForm(formData);
+  const jobId = String(formData.get("jobId") ?? "").trim();
+  if (!jobId) {
+    redirect(contactResearchHref(view, { error: "missing_job" }));
+  }
+  const unskipped = await unskipContactResearchArtist(jobId);
+  revalidatePath("/research");
+  revalidatePath("/settings");
+  if (!unskipped) {
+    redirect(contactResearchHref(view, { error: "unskip_failed" }));
+  }
+}
+
 function statusTone(status: string): BadgeTone {
   if (status === "review") return "warning";
   if (status === "claimed") return "info";
   if (status === "pending") return "accent";
+  if (status === "skipped") return "warning";
   if (status === "exhausted") return "muted";
   return "default";
 }
@@ -180,9 +246,11 @@ export default async function ContactResearchPage({
     error?: SearchParamValue;
     detail?: SearchParamValue;
     sheet_error?: SearchParamValue;
+    view?: SearchParamValue;
   }>;
 }) {
   const raw = await searchParams;
+  const researchView = parseContactResearchView(raw.view);
   const status = {
     refreshed: firstSearchParam(raw.refreshed),
     eligible: firstSearchParam(raw.eligible),
@@ -200,10 +268,33 @@ export default async function ContactResearchPage({
     Prisma.sql`show."venueName"`,
     Prisma.sql`show."eventName"`
   );
-  const [groupedCounts, rankedSummaries] = await Promise.all([
+  const visibleStatusWhere =
+    researchView === "skipped"
+      ? Prisma.sql`
+          job."status" = 'skipped'
+          AND EXISTS (
+            SELECT 1
+            FROM "ArtistResearchSkip" research_skip
+            WHERE research_skip."artistId" = job."artistId"
+              AND research_skip."clearedAt" IS NULL
+          )
+        `
+      : Prisma.sql`
+          job."status" IN ('pending', 'claimed', 'review', 'exhausted')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "ArtistResearchSkip" research_skip
+            WHERE research_skip."artistId" = job."artistId"
+              AND research_skip."clearedAt" IS NULL
+          )
+        `;
+  const [groupedCounts, skippedCount, rankedSummaries] = await Promise.all([
     db.contactResearchJob.groupBy({
       by: ["status"],
       _count: { _all: true },
+    }),
+    db.artistResearchSkip.count({
+      where: { clearedAt: null },
     }),
     db.$queryRaw<
       Array<{
@@ -236,7 +327,7 @@ export default async function ContactResearchPage({
         ORDER BY "tier" DESC, show."date" ASC
         LIMIT 1
       ) best_show ON TRUE
-      WHERE job."status" IN ('pending', 'claimed', 'review', 'exhausted')
+      WHERE ${visibleStatusWhere}
       ORDER BY
         CASE WHEN job."status" = 'exhausted' THEN 1 ELSE 0 END,
         COALESCE(best_show."tier", 0) DESC,
@@ -268,6 +359,11 @@ export default async function ContactResearchPage({
       },
       candidates: {
         orderBy: [{ status: "asc" }, { createdAt: "asc" }],
+      },
+      researchSkips: {
+        where: { clearedAt: null },
+        orderBy: { setAt: "desc" },
+        take: 1,
       },
     },
   });
@@ -312,6 +408,7 @@ export default async function ContactResearchPage({
         </div>
         <div className="flex flex-wrap gap-2">
           <form action={retryAllReviewJobsAction}>
+            <input type="hidden" name="view" value={researchView} />
             <PendingSubmitButton
               variant="secondary"
               pendingLabel="Requeueing…"
@@ -321,6 +418,7 @@ export default async function ContactResearchPage({
             </PendingSubmitButton>
           </form>
           <form action={retryAllExhaustedJobsAction}>
+            <input type="hidden" name="view" value={researchView} />
             <PendingSubmitButton
               variant="secondary"
               pendingLabel="Requeueing…"
@@ -330,6 +428,7 @@ export default async function ContactResearchPage({
             </PendingSubmitButton>
           </form>
           <form action={refreshQueueAction}>
+            <input type="hidden" name="view" value={researchView} />
             <PendingSubmitButton
               variant="secondary"
               pendingLabel="Refreshing…"
@@ -340,7 +439,7 @@ export default async function ContactResearchPage({
         </div>
       </div>
 
-      <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-5">
         {[
           ["To review", counts.get("review") ?? 0],
           ["Researching", counts.get("claimed") ?? 0],
@@ -354,6 +453,20 @@ export default async function ContactResearchPage({
             </CardBody>
           </Card>
         ))}
+        <CardLink
+          href={contactResearchHref("skipped")}
+          aria-current={researchView === "skipped" ? "page" : undefined}
+          className={
+            researchView === "skipped"
+              ? "border-amber-400 ring-2 ring-amber-200 dark:border-amber-700 dark:ring-amber-950"
+              : undefined
+          }
+        >
+          <CardBody className="p-4">
+            <p className="text-xs text-zinc-500">Skipped</p>
+            <p className="mt-1 text-xl font-semibold">{skippedCount}</p>
+          </CardBody>
+        </CardLink>
       </div>
 
       {status.refreshed && (
@@ -409,7 +522,15 @@ export default async function ContactResearchPage({
       )}
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
-        <span>{activeCount} active jobs</span>
+        <span>
+          {researchView === "skipped" ? (
+            <Link href="/research" className="font-medium hover:underline">
+              ← All research jobs
+            </Link>
+          ) : (
+            `${activeCount} active jobs`
+          )}
+        </span>
         <span>
           Run locally with <code>npm run contact-research:agent</code>
         </span>
@@ -418,7 +539,9 @@ export default async function ContactResearchPage({
       {jobs.length === 0 ? (
         <Card className="mt-3">
           <CardBody className="py-12 text-center text-sm text-zinc-500">
-            No contact research jobs. Refresh after show and listen syncs.
+            {researchView === "skipped"
+              ? "No artists are intentionally skipped."
+              : "No contact research jobs. Refresh after show and listen syncs."}
           </CardBody>
         </Card>
       ) : (
@@ -427,6 +550,7 @@ export default async function ContactResearchPage({
             const candidates = job.candidates.filter(
               (candidate) => candidate.status === "pending"
             );
+            const activeSkip = job.researchSkips[0] ?? null;
             return (
               <Card key={job.id} id={`job-${job.id}`}>
                 <CardBody>
@@ -460,25 +584,99 @@ export default async function ContactResearchPage({
                     </p>
                   )}
 
-                  <form action={saveResearchNotesAction} className="mt-3">
-                    <input type="hidden" name="jobId" value={job.id} />
-                    <TextArea
-                      name="userNotes"
-                      label="Research instructions"
-                      description="Trusted context for the research agent. Say “skip this artist” or “do not research” to stop without browsing."
-                      rows={2}
-                      defaultValue={job.userNotes ?? ""}
-                      placeholder="Example: Skip this artist — I already know the team personally."
-                    />
-                    <PendingSubmitButton
-                      variant="secondary"
-                      size="sm"
-                      pendingLabel="Saving…"
-                      className="mt-2"
-                    >
-                      Save instructions
-                    </PendingSubmitButton>
-                  </form>
+                  {activeSkip && (
+                    <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+                      <p className="text-xs font-semibold uppercase tracking-wide">
+                        Intentionally skipped
+                      </p>
+                      <p className="mt-1 text-sm font-medium">
+                        {activeSkip.reason}
+                      </p>
+                      <p className="mt-2 text-xs text-amber-800 dark:text-amber-300">
+                        {activeSkip.source === "agent"
+                          ? `Set by contact-research agent from trusted global rules version ${activeSkip.agentRuleVersion}`
+                          : "Set manually"}
+                        {" · "}
+                        {activeSkip.setAt.toLocaleString("en-US", {
+                          timeZone: "America/New_York",
+                        })}
+                      </p>
+                      {activeSkip.agentRuleText && (
+                        <p className="mt-2 border-l-2 border-amber-400 pl-2 text-xs">
+                          Rule: {activeSkip.agentRuleText}
+                        </p>
+                      )}
+                      <form action={unskipArtistAction} className="mt-3">
+                        <input type="hidden" name="jobId" value={job.id} />
+                        <input
+                          type="hidden"
+                          name="view"
+                          value={researchView}
+                        />
+                        <PendingSubmitButton
+                          variant="secondary"
+                          size="sm"
+                          pendingLabel="Restoring…"
+                        >
+                          Unskip and restore eligibility
+                        </PendingSubmitButton>
+                      </form>
+                    </div>
+                  )}
+
+                  {!activeSkip && (
+                    <>
+                      <form action={saveResearchNotesAction} className="mt-3">
+                        <input type="hidden" name="jobId" value={job.id} />
+                        <input
+                          type="hidden"
+                          name="view"
+                          value={researchView}
+                        />
+                        <TextArea
+                          name="userNotes"
+                          label="Research instructions"
+                          description="Trusted artist-specific context for the research agent. Use the intentional skip control below when research must stop until you explicitly restore it."
+                          rows={2}
+                          defaultValue={job.userNotes ?? ""}
+                          placeholder="Example: Prioritize the management team listed on the official website."
+                        />
+                        <PendingSubmitButton
+                          variant="secondary"
+                          size="sm"
+                          pendingLabel="Saving…"
+                          className="mt-2"
+                        >
+                          Save instructions
+                        </PendingSubmitButton>
+                      </form>
+                      <form action={skipArtistAction} className="mt-3">
+                        <input type="hidden" name="jobId" value={job.id} />
+                        <input
+                          type="hidden"
+                          name="view"
+                          value={researchView}
+                        />
+                        <TextArea
+                          name="reason"
+                          label="Intentional skip reason"
+                          description="Required audit note. This suppresses queue refreshes, requeues, and agent claims until you explicitly unskip the artist."
+                          rows={2}
+                          maxLength={4_000}
+                          required
+                          placeholder="Example: Existing relationship — do not research automatically."
+                        />
+                        <PendingSubmitButton
+                          variant="secondary"
+                          size="sm"
+                          pendingLabel="Skipping…"
+                          className="mt-2"
+                        >
+                          Intentionally skip artist
+                        </PendingSubmitButton>
+                      </form>
+                    </>
+                  )}
 
                   {candidates.length > 0 && (
                     <div className="mt-4 space-y-3">
@@ -514,35 +712,47 @@ export default async function ContactResearchPage({
                               </a>
                             ))}
                           </div>
-                          <div className="mt-3 flex gap-2">
-                            <form action={approveCandidateAction}>
-                              <input
-                                type="hidden"
-                                name="candidateId"
-                                value={candidate.id}
-                              />
-                              <PendingSubmitButton
-                                size="sm"
-                                pendingLabel="Approving…"
-                              >
-                                Approve
-                              </PendingSubmitButton>
-                            </form>
-                            <form action={rejectCandidateAction}>
-                              <input
-                                type="hidden"
-                                name="candidateId"
-                                value={candidate.id}
-                              />
-                              <PendingSubmitButton
-                                variant="secondary"
-                                size="sm"
-                                pendingLabel="Rejecting…"
-                              >
-                                Reject
-                              </PendingSubmitButton>
-                            </form>
-                          </div>
+                          {!activeSkip && (
+                            <div className="mt-3 flex gap-2">
+                              <form action={approveCandidateAction}>
+                                <input
+                                  type="hidden"
+                                  name="candidateId"
+                                  value={candidate.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="view"
+                                  value={researchView}
+                                />
+                                <PendingSubmitButton
+                                  size="sm"
+                                  pendingLabel="Approving…"
+                                >
+                                  Approve
+                                </PendingSubmitButton>
+                              </form>
+                              <form action={rejectCandidateAction}>
+                                <input
+                                  type="hidden"
+                                  name="candidateId"
+                                  value={candidate.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="view"
+                                  value={researchView}
+                                />
+                                <PendingSubmitButton
+                                  variant="secondary"
+                                  size="sm"
+                                  pendingLabel="Rejecting…"
+                                >
+                                  Reject
+                                </PendingSubmitButton>
+                              </form>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -552,6 +762,11 @@ export default async function ContactResearchPage({
                     job.status === "review") && (
                     <form action={retryJobAction} className="mt-3">
                       <input type="hidden" name="jobId" value={job.id} />
+                      <input
+                        type="hidden"
+                        name="view"
+                        value={researchView}
+                      />
                       <PendingSubmitButton
                         variant="secondary"
                         size="sm"

@@ -42,6 +42,15 @@ export async function POST(
   try {
     const result = await submitContactResearchResult(jobId, submission);
     if (!result.accepted) {
+      if (result.status === "invalid_rule_provenance") {
+        return NextResponse.json(
+          {
+            error:
+              "skip rule provenance does not match the trusted claim snapshot",
+          },
+          { status: 400 }
+        );
+      }
       return NextResponse.json(
         { error: "claim is stale or no longer owned" },
         { status: 409 }
