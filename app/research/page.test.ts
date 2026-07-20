@@ -39,3 +39,11 @@ test("successful research actions revalidate without redirecting to the top", ()
   assert.match(notes, /if \(!updated\) redirect/);
   assert.doesNotMatch(notes, /notes_saved: "1"/);
 });
+
+test("review and exhausted jobs can be requeued", () => {
+  assert.match(
+    source,
+    /job\.status === "exhausted" \|\|\s*job\.status === "review"/
+  );
+  assert.match(source, />\s*Requeue research\s*</);
+});

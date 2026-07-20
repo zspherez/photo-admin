@@ -456,7 +456,8 @@ export default async function ContactResearchPage({
                     </div>
                   )}
 
-                  {job.status === "exhausted" && (
+                  {(job.status === "exhausted" ||
+                    job.status === "review") && (
                     <form action={retryJobAction} className="mt-3">
                       <input type="hidden" name="jobId" value={job.id} />
                       <PendingSubmitButton
@@ -464,7 +465,7 @@ export default async function ContactResearchPage({
                         size="sm"
                         pendingLabel="Queueing…"
                       >
-                        Research again
+                        Requeue research
                       </PendingSubmitButton>
                     </form>
                   )}
