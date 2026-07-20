@@ -38,17 +38,17 @@ test("successful research actions revalidate without redirecting to the top", ()
   );
   const retryReview = actionSource(
     "retryAllReviewJobsAction",
-    "statusTone"
+    "skipArtistAction"
   );
 
   assert.match(approve, /if \(!result\.ok\)[\s\S]*redirect/);
   assert.match(approve, /if \(result\.sheetError\)[\s\S]*redirect/);
   assert.doesNotMatch(approve, /approved: "1"/);
-  assert.match(reject, /if \(!result\.ok\) redirect/);
+  assert.match(reject, /if \(!result\.ok\) \{[\s\S]*redirect/);
   assert.doesNotMatch(reject, /rejected: "1"/);
-  assert.match(retry, /if \(!retried\) redirect/);
+  assert.match(retry, /if \(!retried\) \{[\s\S]*redirect/);
   assert.doesNotMatch(retry, /retried: "1"/);
-  assert.match(notes, /if \(!updated\) redirect/);
+  assert.match(notes, /if \(!updated\) \{[\s\S]*redirect/);
   assert.doesNotMatch(notes, /notes_saved: "1"/);
   assert.match(retryExhausted, /retryAllExhaustedContactResearchJobs/);
   assert.match(retryReview, /retryAllReviewContactResearchJobs/);
@@ -84,6 +84,44 @@ test("review and exhausted jobs can be requeued", () => {
     /job\.status === "exhausted" \|\|\s*job\.status === "review"/
   );
   assert.match(source, />\s*Requeue research\s*</);
+});
+
+test("intentional skips have a URL-backed count and dedicated view", () => {
+  assert.match(source, /parseContactResearchView\(raw\.view\)/);
+  assert.match(source, /db\.artistResearchSkip\.count/);
+  assert.match(source, /contactResearchHref\("skipped"\)/);
+  assert.match(source, /aria-current=\{researchView === "skipped"/);
+  assert.match(source, />Skipped</);
+  assert.match(source, /← All research jobs/);
+  assert.match(
+    source,
+    /researchView === "skipped"[\s\S]*job\."status" = 'skipped'/
+  );
+});
+
+test("research cards support explicit skip and unskip with audit context", () => {
+  assert.match(source, /skipContactResearchArtist/);
+  assert.match(source, /unskipContactResearchArtist/);
+  assert.match(source, /label="Intentional skip reason"/);
+  assert.match(source, /required/);
+  assert.match(source, /Intentionally skip artist/);
+  assert.match(source, /Unskip and restore eligibility/);
+  assert.match(source, /Intentionally skipped/);
+  assert.match(source, /activeSkip\.reason/);
+  assert.match(source, /trusted global rules version/);
+  assert.match(source, /Rule: \{activeSkip\.agentRuleText\}/);
+});
+
+test("research mutations preserve the skipped view URL", () => {
+  assert.match(source, /contactResearchViewFromForm\(formData\)/);
+  assert.match(
+    source,
+    /name="view"\s*value=\{researchView\}/
+  );
+  assert.match(
+    source,
+    /contactResearchHref\(view, \{ error: "skip_failed" \}\)/
+  );
 });
 
 test("research status banners clear after three seconds without navigation", () => {

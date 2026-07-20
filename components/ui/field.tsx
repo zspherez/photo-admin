@@ -52,6 +52,7 @@ export function TextArea({
   className,
   mono,
   maxLength,
+  required,
 }: {
   name: string;
   label: string;
@@ -62,6 +63,7 @@ export function TextArea({
   className?: string;
   mono?: boolean;
   maxLength?: number;
+  required?: boolean;
 }) {
   return (
     <div className={className}>
@@ -73,6 +75,7 @@ export function TextArea({
         placeholder={placeholder}
         defaultValue={defaultValue}
         maxLength={maxLength}
+        required={required}
         className={cn(
           "mt-1",
           INPUT_CLASS,

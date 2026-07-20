@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import type { Prisma } from "@prisma/client";
 import {
+  type ContactResearchTransactionRunner,
   contactResearchPriority,
   CONTACT_RESEARCH_OIDC_AUDIENCE,
   CONTACT_RESEARCH_WORKFLOW_REF,
   festivalManagerResearchJobDisposition,
   isValidContactResearchAuthorization,
   isManagerContact,
+  isTrustedAgentSkipRuleProvenance,
   isTrustedContactResearchOidcClaims,
   needsManagerContactResearch,
+  normalizeArtistResearchSkipReason,
   normalizeManagerRole,
   normalizeContactResearchUserNotes,
   normalizeContactResearchDomain,
@@ -21,7 +25,16 @@ import {
   parseContactResearchSubmission,
   rankKnownContactEmails,
   isOfficialManagementAutoApprovalEligible,
+  skipContactResearchArtist,
+  submitContactResearchResult,
+  unskipContactResearchArtist,
 } from "./contactResearch";
+
+function runWithTransaction(
+  tx: unknown
+): ContactResearchTransactionRunner {
+  return async (work) => work(tx as Prisma.TransactionClient);
+}
 
 test("normalizes research emails and rejects malformed values", () => {
   assert.equal(normalizeResearchEmail(" Manager@Example.COM "), "manager@example.com");
@@ -142,6 +155,21 @@ test("normalizes bounded owner research notes", () => {
   assert.throws(
     () => normalizeContactResearchUserNotes("x".repeat(4_001)),
     /research notes must be at most 4000 characters/
+  );
+});
+
+test("requires a human-readable intentional skip reason", () => {
+  assert.equal(
+    normalizeArtistResearchSkipReason("  Metatone artist  "),
+    "Metatone artist"
+  );
+  assert.throws(
+    () => normalizeArtistResearchSkipReason("   "),
+    /skip reason is required/
+  );
+  assert.throws(
+    () => normalizeArtistResearchSkipReason("x".repeat(4_001)),
+    /skip reason must be at most 4000 characters/
   );
 });
 
@@ -571,6 +599,320 @@ test("requires evidence and bounded claim limits", () => {
   );
 });
 
+test("parses agent-rule skip outcomes with required provenance", () => {
+  assert.deepEqual(
+    parseContactResearchSubmission({
+      outcome: "skipped",
+      claimToken: "claim-1",
+      notes: "Metatone artist",
+      ruleVersion: 7,
+      ruleText: "Skip artists managed by a Metatone manager.",
+    }),
+    {
+      outcome: "skipped",
+      claimToken: "claim-1",
+      notes: "Metatone artist",
+      ruleVersion: 7,
+      ruleText: "Skip artists managed by a Metatone manager.",
+      candidates: [],
+    }
+  );
+  assert.throws(
+    () =>
+      parseContactResearchSubmission({
+        outcome: "skipped",
+        claimToken: "claim-1",
+        notes: "Metatone artist",
+        ruleText: "Skip artists managed by a Metatone manager.",
+      }),
+    /ruleVersion/
+  );
+  assert.throws(
+    () =>
+      parseContactResearchSubmission({
+        outcome: "skipped",
+        claimToken: "claim-1",
+        notes: "Metatone artist",
+        ruleVersion: 7,
+        ruleText: "",
+      }),
+    /ruleText is required/
+  );
+  assert.throws(
+    () =>
+      parseContactResearchSubmission({
+        outcome: "skipped",
+        claimToken: "claim-1",
+        notes: "Metatone artist",
+        ruleVersion: 7,
+        ruleText: "Skip artists managed by a Metatone manager.",
+        candidates: [{ email: "manager@example.com" }],
+      }),
+    /cannot include candidates/
+  );
+});
+
+test("accepts only exact rules from the trusted claim snapshot", () => {
+  const rules = [
+    "Prefer official sources.",
+    "Skip artists managed by a Metatone manager.",
+  ].join("\n");
+  assert.equal(
+    isTrustedAgentSkipRuleProvenance(
+      7,
+      rules,
+      7,
+      "Skip artists managed by a Metatone manager."
+    ),
+    true
+  );
+  assert.equal(
+    isTrustedAgentSkipRuleProvenance(
+      7,
+      rules,
+      6,
+      "Skip artists managed by a Metatone manager."
+    ),
+    false
+  );
+  assert.equal(
+    isTrustedAgentSkipRuleProvenance(7, rules, 7, "Metatone"),
+    false
+  );
+  assert.equal(
+    isTrustedAgentSkipRuleProvenance(0, "", 1, "Skip this artist."),
+    false
+  );
+});
+
+test("manual skip and explicit unskip preserve one job and audit history", async () => {
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const skipCreates: unknown[] = [];
+  const jobUpdates: unknown[] = [];
+  const skipped = await skipContactResearchArtist(
+    "job-1",
+    " Existing relationship ",
+    now,
+    runWithTransaction({
+      contactResearchJob: {
+        findUnique: async () => ({ id: "job-1", artistId: "artist-1" }),
+        update: async (value: unknown) => {
+          jobUpdates.push(value);
+          return {};
+        },
+      },
+      artistResearchSkip: {
+        findFirst: async () => null,
+        create: async (value: unknown) => {
+          skipCreates.push(value);
+          return {};
+        },
+      },
+    })
+  );
+  assert.equal(skipped, true);
+  assert.deepEqual(skipCreates, [
+    {
+      data: {
+        artistId: "artist-1",
+        source: "manual",
+        reason: "Existing relationship",
+        setAt: now,
+      },
+    },
+  ]);
+  assert.deepEqual(jobUpdates, [
+    {
+      where: { id: "job-1" },
+      data: {
+        status: "skipped",
+        claimToken: null,
+        claimedAt: null,
+        claimExpiresAt: null,
+        completedAt: null,
+      },
+    },
+  ]);
+
+  const clearUpdates: unknown[] = [];
+  const restoredJobUpdates: unknown[] = [];
+  const unskipped = await unskipContactResearchArtist(
+    "job-1",
+    now,
+    runWithTransaction({
+      contactResearchJob: {
+        findUnique: async () => ({
+          id: "job-1",
+          artistId: "artist-1",
+          requestedShowId: null,
+          artist: { contacts: [] },
+        }),
+        update: async (value: unknown) => {
+          restoredJobUpdates.push(value);
+          return {};
+        },
+      },
+      artistResearchSkip: {
+        findFirst: async () => ({ id: "skip-1" }),
+        update: async (value: unknown) => {
+          clearUpdates.push(value);
+          return {};
+        },
+      },
+      showArtist: {
+        findFirst: async () => ({ showId: "show-1" }),
+      },
+    })
+  );
+  assert.equal(unskipped, true);
+  assert.deepEqual(clearUpdates, [
+    {
+      where: { id: "skip-1" },
+      data: { clearedAt: now, clearedBy: "manual" },
+    },
+  ]);
+  assert.deepEqual(restoredJobUpdates, [
+    {
+      where: { id: "job-1" },
+      data: {
+        status: "pending",
+        completedAt: null,
+        claimToken: null,
+        claimedAt: null,
+        claimExpiresAt: null,
+      },
+    },
+  ]);
+});
+
+test("agent-rule skip is atomic, creates no contact, and rejects stale claims", async () => {
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const skipCreates: unknown[] = [];
+  const jobUpdates: unknown[] = [];
+  const submission = {
+    outcome: "skipped",
+    claimToken: "claim-1",
+    notes: "Metatone artist",
+    ruleVersion: 4,
+    ruleText: "Skip artists managed by a Metatone manager.",
+  };
+  const result = await submitContactResearchResult(
+    "job-1",
+    submission,
+    now,
+    runWithTransaction({
+      contactResearchJob: {
+        findFirst: async () => ({
+          id: "job-1",
+          artistId: "artist-1",
+          claimedAgentRules:
+            "Skip artists managed by a Metatone manager.",
+          claimedAgentRulesVersion: 4,
+        }),
+        update: async (value: unknown) => {
+          jobUpdates.push(value);
+          return {};
+        },
+      },
+      artistResearchSkip: {
+        create: async (value: unknown) => {
+          skipCreates.push(value);
+          return {};
+        },
+      },
+    })
+  );
+  assert.deepEqual(result, { accepted: true, status: "skipped" });
+  assert.deepEqual(skipCreates, [
+    {
+      data: {
+        artistId: "artist-1",
+        source: "agent",
+        reason: "Metatone artist",
+        sourceJobId: "job-1",
+        agentRuleVersion: 4,
+        agentRuleText:
+          "Skip artists managed by a Metatone manager.",
+        setAt: now,
+      },
+    },
+  ]);
+  assert.deepEqual(jobUpdates, [
+    {
+      where: { id: "job-1" },
+      data: {
+        status: "skipped",
+        agentNotes: "Metatone artist",
+        claimToken: null,
+        claimedAt: null,
+        claimExpiresAt: null,
+        completedAt: null,
+      },
+    },
+  ]);
+
+  let wroteStaleResult = false;
+  const stale = await submitContactResearchResult(
+    "job-1",
+    submission,
+    now,
+    runWithTransaction({
+      contactResearchJob: {
+        findFirst: async () => null,
+        update: async () => {
+          wroteStaleResult = true;
+        },
+      },
+      artistResearchSkip: {
+        create: async () => {
+          wroteStaleResult = true;
+        },
+      },
+    })
+  );
+  assert.deepEqual(stale, { accepted: false, status: "conflict" });
+  assert.equal(wroteStaleResult, false);
+});
+
+test("agent skip rejects provenance outside the claim snapshot without writes", async () => {
+  let wroteResult = false;
+  const result = await submitContactResearchResult(
+    "job-1",
+    {
+      outcome: "skipped",
+      claimToken: "claim-1",
+      notes: "Metatone artist",
+      ruleVersion: 5,
+      ruleText: "Skip all artists.",
+    },
+    new Date("2026-07-20T12:00:00.000Z"),
+    runWithTransaction({
+      contactResearchJob: {
+        findFirst: async () => ({
+          id: "job-1",
+          artistId: "artist-1",
+          claimedAgentRules:
+            "Skip artists managed by a Metatone manager.",
+          claimedAgentRulesVersion: 4,
+        }),
+        update: async () => {
+          wroteResult = true;
+        },
+      },
+      artistResearchSkip: {
+        create: async () => {
+          wroteResult = true;
+        },
+      },
+    })
+  );
+  assert.deepEqual(result, {
+    accepted: false,
+    status: "invalid_rule_provenance",
+  });
+  assert.equal(wroteResult, false);
+});
+
 test("prioritizes interested, matched, popular, and imminent artists", () => {
   const routine = contactResearchPriority({
     interested: false,
@@ -658,6 +1000,14 @@ test("claims require current eligibility and unexpired ownership", () => {
   );
 
   assert.match(source, /claimExpiresAt: \{ gt: now \}/);
+  assert.match(
+    source,
+    /ArtistResearchSkip[\s\S]*research_skip\."clearedAt" IS NULL/
+  );
+  assert.ok(
+    (source.match(/researchSkips: \{\s*none: \{ clearedAt: null \}/g) ?? [])
+      .length >= 3
+  );
   assert.match(source, /show\."syncStatus" = 'active'/);
   assert.match(source, /status: "inactive"/);
   assert.match(source, /job\."requestedShowId" = show\."id"/);
@@ -683,6 +1033,30 @@ test("claims require current eligibility and unexpired ownership", () => {
   assert.match(source, /researchInstructions: job\.userNotes/);
   assert.match(
     source,
+    /submission\.outcome === "skipped"[\s\S]*artistResearchSkip\.create[\s\S]*status: "skipped"[\s\S]*claimToken: null/
+  );
+  assert.match(
+    source,
+    /skipContactResearchArtist[\s\S]*source: "manual"[\s\S]*status: "skipped"/
+  );
+  assert.match(
+    source,
+    /unskipContactResearchArtist[\s\S]*clearedBy: "manual"[\s\S]*status: hasActiveContact[\s\S]*"pending"[\s\S]*"inactive"/
+  );
+  const unskipSource = source.slice(
+    source.indexOf("export async function unskipContactResearchArtist"),
+    source.indexOf("export async function retryContactResearchJob")
+  );
+  assert.doesNotMatch(unskipSource, /contactResearchJob\.create/);
+  assert.doesNotMatch(
+    source.slice(
+      source.indexOf('if (submission.outcome === "skipped")'),
+      source.indexOf('if (submission.outcome === "exhausted")')
+    ),
+    /contactResearchCandidate\.(create|upsert)|contact\.(create|upsert)/
+  );
+  assert.match(
+    source,
     /retryContactResearchJob[\s\S]*retryEligibleContactResearchJobs/
   );
   assert.match(
@@ -696,5 +1070,9 @@ test("claims require current eligibility and unexpired ownership", () => {
   assert.match(
     source,
     /retryEligibleContactResearchJobs[\s\S]*show\."syncStatus" = 'active'[\s\S]*show\."date" <= \$\{end\}[\s\S]*job\."requestedShowId" = show\."id"/
+  );
+  assert.match(
+    source,
+    /retryEligibleContactResearchJobs[\s\S]*ArtistResearchSkip[\s\S]*research_skip\."clearedAt" IS NULL/
   );
 });

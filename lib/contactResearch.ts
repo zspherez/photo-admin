@@ -77,6 +77,14 @@ export type ContactResearchSubmission =
       claimToken: string;
       notes: string | null;
       candidates: [];
+    }
+  | {
+      outcome: "skipped";
+      claimToken: string;
+      notes: string;
+      ruleVersion: number;
+      ruleText: string;
+      candidates: [];
     };
 
 export interface ContactResearchQueueResult {
@@ -91,6 +99,10 @@ export interface ContactResearchPreparationResult
   extends ContactResearchQueueResult {
   claimable: number;
 }
+
+export type ContactResearchTransactionRunner = <T>(
+  work: (tx: Prisma.TransactionClient) => Promise<T>
+) => Promise<T>;
 
 export interface ContactResearchPriorityInput {
   interested: boolean;
@@ -357,6 +369,10 @@ export function normalizeContactResearchUserNotes(
   value: unknown
 ): string | null {
   return optionalString(value, 4_000, "research notes");
+}
+
+export function normalizeArtistResearchSkipReason(value: unknown): string {
+  return requiredString(value, 4_000, "skip reason");
 }
 
 export function normalizeContactResearchDomain(value: unknown): string {
@@ -752,13 +768,37 @@ export function parseContactResearchSubmission(
   }
   const input = value as Record<string, unknown>;
   const outcome = input.outcome;
-  if (outcome !== "candidates" && outcome !== "exhausted") {
-    throw new Error("outcome must be candidates or exhausted");
+  if (
+    outcome !== "candidates" &&
+    outcome !== "exhausted" &&
+    outcome !== "skipped"
+  ) {
+    throw new Error("outcome must be candidates, exhausted, or skipped");
   }
   const claimToken = requiredString(input.claimToken, 200, "claimToken");
   const notes = optionalString(input.notes, 4_000, "notes");
   if (outcome === "exhausted") {
     return { outcome, claimToken, notes, candidates: [] };
+  }
+  if (outcome === "skipped") {
+    if (Array.isArray(input.candidates) && input.candidates.length > 0) {
+      throw new Error("skipped outcomes cannot include candidates");
+    }
+    if (
+      typeof input.ruleVersion !== "number" ||
+      !Number.isSafeInteger(input.ruleVersion) ||
+      input.ruleVersion < 1
+    ) {
+      throw new Error("ruleVersion must be a positive integer");
+    }
+    return {
+      outcome,
+      claimToken,
+      notes: normalizeArtistResearchSkipReason(notes),
+      ruleVersion: input.ruleVersion,
+      ruleText: requiredString(input.ruleText, 8_000, "ruleText"),
+      candidates: [],
+    };
   }
   if (!Array.isArray(input.candidates) || input.candidates.length === 0) {
     throw new Error("at least one candidate is required");
@@ -835,6 +875,28 @@ export function parseContactResearchSubmission(
     notes,
     candidates: [...candidatesByEmail.values()],
   };
+}
+
+export function isTrustedAgentSkipRuleProvenance(
+  claimedRuleVersion: number | null,
+  claimedRules: string | null,
+  ruleVersion: number,
+  ruleText: string
+): boolean {
+  const snapshot = claimedRules?.trim() ?? "";
+  const matchingRule = ruleText.trim();
+  const snapshotLines = snapshot
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return (
+    claimedRuleVersion !== null &&
+    claimedRuleVersion >= 1 &&
+    claimedRuleVersion === ruleVersion &&
+    snapshot.length > 0 &&
+    matchingRule.length > 0 &&
+    (snapshot === matchingRule || snapshotLines.includes(matchingRule))
+  );
 }
 
 export async function isValidContactResearchAuthorization(
@@ -925,6 +987,9 @@ export async function refreshContactResearchQueue(
         contacts: {
           none: ACTIVE_EMAIL_CONTACT_WHERE,
         },
+        researchSkips: {
+          none: { clearedAt: null },
+        },
       },
     },
     select: {
@@ -955,6 +1020,7 @@ export async function refreshContactResearchQueue(
       },
       artist: {
         contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
+        researchSkips: { none: { clearedAt: null } },
       },
     },
     select: {
@@ -1159,6 +1225,11 @@ export async function enqueueFestivalManagerResearch(
       id: true,
       date: true,
       artists: {
+        where: {
+          artist: {
+            researchSkips: { none: { clearedAt: null } },
+          },
+        },
         select: {
           artistId: true,
           artist: {
@@ -1242,8 +1313,8 @@ export async function enqueueFestivalManagerResearch(
             claimToken: null,
             claimedAt: null,
             claimExpiresAt: null,
-            agentNotes: null,
             completedAt: null,
+            agentNotes: null,
           },
         });
         enqueued += 1;
@@ -1274,6 +1345,9 @@ export async function prepareContactResearchQueue(
   const refreshed = await refreshContactResearchQueue(now);
   const claimable = await db.contactResearchJob.count({
     where: {
+      artist: {
+        researchSkips: { none: { clearedAt: null } },
+      },
       OR: [
         { status: "pending" },
         {
@@ -1334,6 +1408,12 @@ export async function claimContactResearchJobs(
           WHERE contact."artistId" = job."artistId"
             AND contact."state" = 'active'
             AND contact."email" IS NOT NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "ArtistResearchSkip" research_skip
+          WHERE research_skip."artistId" = job."artistId"
+            AND research_skip."clearedAt" IS NULL
         )
         AND EXISTS (
           SELECT 1
@@ -1466,15 +1546,24 @@ export async function claimContactResearchJobs(
 
 export async function submitContactResearchResult(
   jobId: string,
-  submission: ContactResearchSubmission,
-  now: Date = new Date()
+  value: unknown,
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work)
 ): Promise<{
   accepted: boolean;
-  status: "review" | "exhausted" | "complete" | "conflict";
+  status:
+    | "review"
+    | "exhausted"
+    | "complete"
+    | "skipped"
+    | "conflict"
+    | "invalid_rule_provenance";
   autoApproved: number;
   sheetErrors: string[];
 }> {
-  const stored = await withSerializableRetry(async (tx) => {
+  const submission = parseContactResearchSubmission(value);
+  const stored = await runTransaction(async (tx) => {
     const job = await tx.contactResearchJob.findFirst({
       where: {
         id: jobId,
@@ -1486,12 +1575,58 @@ export async function submitContactResearchResult(
         id: true,
         artistId: true,
         artist: { select: { name: true } },
+        claimedAgentRules: true,
+        claimedAgentRulesVersion: true,
       },
     });
     if (!job) {
       return {
         accepted: false,
         status: "conflict" as const,
+        autoApprovals: [] as ApprovedResearchContact[],
+      };
+    }
+
+    if (submission.outcome === "skipped") {
+      if (
+        !isTrustedAgentSkipRuleProvenance(
+          job.claimedAgentRulesVersion,
+          job.claimedAgentRules,
+          submission.ruleVersion,
+          submission.ruleText
+        )
+      ) {
+        return {
+          accepted: false,
+          status: "invalid_rule_provenance" as const,
+          autoApprovals: [] as ApprovedResearchContact[],
+        };
+      }
+      await tx.artistResearchSkip.create({
+        data: {
+          artistId: job.artistId,
+          source: "agent",
+          reason: submission.notes,
+          sourceJobId: job.id,
+          agentRuleVersion: submission.ruleVersion,
+          agentRuleText: submission.ruleText,
+          setAt: now,
+        },
+      });
+      await tx.contactResearchJob.update({
+        where: { id: jobId },
+        data: {
+          status: "skipped",
+          agentNotes: submission.notes,
+          claimToken: null,
+          claimedAt: null,
+          claimExpiresAt: null,
+          completedAt: null,
+        },
+      });
+      return {
+        accepted: true,
+        status: "skipped" as const,
         autoApprovals: [] as ApprovedResearchContact[],
       };
     }
@@ -1961,6 +2096,134 @@ export async function updateContactResearchJobUserNotes(
   });
 }
 
+export async function skipContactResearchArtist(
+  jobId: string,
+  value: unknown,
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work)
+): Promise<boolean> {
+  const reason = normalizeArtistResearchSkipReason(value);
+  return runTransaction(async (tx) => {
+    const job = await tx.contactResearchJob.findUnique({
+      where: { id: jobId },
+      select: { id: true, artistId: true },
+    });
+    if (!job) return false;
+    const activeSkip = await tx.artistResearchSkip.findFirst({
+      where: { artistId: job.artistId, clearedAt: null },
+      select: { id: true },
+    });
+    if (activeSkip) return false;
+    await tx.artistResearchSkip.create({
+      data: {
+        artistId: job.artistId,
+        source: "manual",
+        reason,
+        setAt: now,
+      },
+    });
+    await tx.contactResearchJob.update({
+      where: { id: job.id },
+      data: {
+        status: "skipped",
+        claimToken: null,
+        claimedAt: null,
+        claimExpiresAt: null,
+        completedAt: null,
+      },
+    });
+    return true;
+  });
+}
+
+export async function unskipContactResearchArtist(
+  jobId: string,
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work)
+): Promise<boolean> {
+  const today = easternTodayStoredDate(now);
+  const end = parseDateOnly(
+    addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
+  );
+  return runTransaction(async (tx) => {
+    const job = await tx.contactResearchJob.findUnique({
+      where: { id: jobId },
+      select: {
+        id: true,
+        artistId: true,
+        requestedShowId: true,
+        artist: {
+          select: {
+            contacts: {
+              where: ACTIVE_EMAIL_CONTACT_WHERE,
+              take: 1,
+              select: { id: true },
+            },
+          },
+        },
+      },
+    });
+    if (!job) return false;
+    const activeSkip = await tx.artistResearchSkip.findFirst({
+      where: { artistId: job.artistId, clearedAt: null },
+      select: { id: true },
+    });
+    if (!activeSkip) return false;
+
+    const eligibleShow = await tx.showArtist.findFirst({
+      where: {
+        artistId: job.artistId,
+        OR: [
+          {
+            show: {
+              isFestival: false,
+              syncStatus: "active",
+              date: { gte: today, lte: end },
+            },
+          },
+          ...(job.requestedShowId
+            ? [
+                {
+                  showId: job.requestedShowId,
+                  show: {
+                    syncStatus: "active",
+                    date: { gte: today },
+                  },
+                },
+              ]
+            : []),
+        ],
+      },
+      select: { showId: true },
+    });
+    await tx.artistResearchSkip.update({
+      where: { id: activeSkip.id },
+      data: {
+        clearedAt: now,
+        clearedBy: "manual",
+      },
+    });
+    const hasActiveContact = job.artist.contacts.length > 0;
+    await tx.contactResearchJob.update({
+      where: { id: job.id },
+      data: {
+        status: hasActiveContact
+          ? "complete"
+          : eligibleShow
+            ? "pending"
+            : "inactive",
+        completedAt: hasActiveContact ? now : null,
+        claimToken: null,
+        claimedAt: null,
+        claimExpiresAt: null,
+      },
+    });
+    return true;
+  });
+}
+
 export async function retryContactResearchJob(
   jobId: string,
   now: Date = new Date()
@@ -2004,6 +2267,12 @@ async function retryEligibleContactResearchJobs(
         WHERE contact."artistId" = job."artistId"
           AND contact."state" = 'active'
           AND contact."email" IS NOT NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "ArtistResearchSkip" research_skip
+        WHERE research_skip."artistId" = job."artistId"
+          AND research_skip."clearedAt" IS NULL
       )
       AND EXISTS (
         SELECT 1

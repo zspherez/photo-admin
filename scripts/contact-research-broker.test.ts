@@ -7,7 +7,6 @@ import {
   rmSync,
 } from "node:fs";
 import { createServer, request } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -68,7 +67,8 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
     const chunks: Buffer[] = [];
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
     request.on("end", () => {
-      bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      bodies.push(body);
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
         JSON.stringify(
@@ -82,7 +82,8 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
                     globalAgentRules: {
                       scope: "global",
                       version: 4,
-                      instructions: "Prefer official sources.",
+                      instructions:
+                        "Skip artists managed by a Metatone manager.",
                     },
                     artist: {
                       id: "artist-1",
@@ -117,10 +118,15 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
                     },
                   ],
                 }
-              : { ok: true, status: "exhausted" }
+              : {
+                  ok: true,
+                  status:
+                    body.outcome === "skipped" ? "skipped" : "exhausted",
+                }
         )
       );
     });
+
   });
   api.listen(0, "127.0.0.1");
   await once(api, "listening");
@@ -128,7 +134,7 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
   const apiAddress = api.address();
   assert.ok(apiAddress && typeof apiAddress === "object");
 
-  const directory = mkdtempSync(join(tmpdir(), "contact-research-broker-"));
+  const directory = mkdtempSync(join(process.cwd(), ".broker-test-"));
   const socketPath = join(directory, "broker.sock");
   const metricsFile = join(directory, "metrics.json");
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -160,12 +166,13 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
         globalAgentRules: {
           scope: "global",
           version: 4,
-          instructions: "Prefer official sources.",
+          instructions: "Skip artists managed by a Metatone manager.",
         },
         artist: { name: "Example Artist" },
       },
     ],
   });
+
   const duplicateClaim = await brokerRequest(
     socketPath,
     "/claim",
@@ -249,6 +256,27 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
   });
   assert.equal(submitted.status, 200);
   assert.deepEqual(submitted.value, { ok: true, status: "exhausted" });
+  const secondClaim = await brokerRequest(
+    socketPath,
+    "/claim",
+    { limit: 1 },
+    "session-2"
+  );
+  assert.equal(secondClaim.status, 200);
+  const skipped = await brokerRequest(
+    socketPath,
+    "/submit-skipped",
+    {
+      jobId: "job-1",
+      claimToken: "claim-1",
+      notes: "Metatone artist",
+      ruleVersion: 4,
+      ruleText: "Skip artists managed by a Metatone manager.",
+    },
+    "session-2"
+  );
+  assert.equal(skipped.status, 200);
+  assert.deepEqual(skipped.value, { ok: true, status: "skipped" });
   assert.equal(authorization, "Bearer app-secret");
   assert.deepEqual(bodies, [
     { limit: 1 },
@@ -281,13 +309,22 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
         },
       ],
     },
+    { limit: 1 },
+    {
+      outcome: "skipped",
+      claimToken: "claim-1",
+      notes: "Metatone artist",
+      ruleVersion: 4,
+      ruleText: "Skip artists managed by a Metatone manager.",
+    },
   ]);
   assert.deepEqual(JSON.parse(readFileSync(metricsFile, "utf8")), {
-    claimCalls: 1,
-    claimedJobs: 1,
-    submissions: 1,
+    claimCalls: 2,
+    claimedJobs: 2,
+    submissions: 2,
     artistBySession: {
       "session-1": "Example Artist",
+      "session-2": "Example Artist",
     },
     sessions: {
       "session-1": {
@@ -297,6 +334,32 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
         empty: false,
         stale: false,
       },
+      "session-2": {
+        artist: "Example Artist",
+        claimed: true,
+        completed: true,
+        empty: false,
+        stale: false,
+      },
     },
   });
+});
+
+test("agent skip submissions are schema and claim-token protected", () => {
+  const source = readFileSync(
+    new URL("./contact-research-broker.mjs", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    source,
+    /"submit-skipped": z\.object\(\{[\s\S]*jobId: z\.string\(\)\.min\(1\)[\s\S]*claimToken: z\.string\(\)\.min\(1\)[\s\S]*notes: z\.string\(\)\.min\(1\)\.max\(4_000\)[\s\S]*ruleVersion: z\.number\(\)\.int\(\)\.min\(1\)[\s\S]*ruleText: z\.string\(\)\.min\(1\)\.max\(8_000\)/
+  );
+  assert.match(
+    source,
+    /case "submit-skipped": \{[\s\S]*requireSessionClaim\(state, input\)[\s\S]*outcome: "skipped"[\s\S]*claimToken: input\.claimToken/
+  );
+  assert.match(
+    source,
+    /error\.status === 409[\s\S]*metrics\.sessions\[sessionId\]\.stale = true/
+  );
 });
