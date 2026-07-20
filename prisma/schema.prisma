@@ -38,12 +38,12 @@ model ArtistIdentityNameClaim {
 }
 
 model Artist {
-  id                 String              @id @default(cuid())
+  id                 String               @id @default(cuid())
   name               String
   normalizedName     String
-  spotifyId          String?             @unique
-  statsfmId          String?             @unique
-  edmtrainId         Int?                @unique
+  spotifyId          String?              @unique
+  statsfmId          String?              @unique
+  edmtrainId         Int?                 @unique
   genres             String?
   popularity         Int?
   imageUrl           String?
@@ -55,8 +55,8 @@ model Artist {
   contactResearchJob ContactResearchJob?
   researchSkips      ArtistResearchSkip[]
   contactAuditJobs   ContactAuditJob[]
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
 
   @@index([normalizedName])
 }
@@ -128,38 +128,56 @@ model ContactAuditRun {
 }
 
 model ContactAuditJob {
-  id                 String                    @id @default(cuid())
-  runId              String
-  run                ContactAuditRun           @relation(fields: [runId], references: [id], onDelete: Cascade)
-  contactId          String?
-  contact            Contact?                  @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  artistId           String?
-  artist             Artist?                   @relation(fields: [artistId], references: [id], onDelete: SetNull)
-  snapshotArtistName String
-  snapshotEmail      String?
-  snapshotPhone      String?
-  snapshotName       String?
-  snapshotRole       String?
-  snapshotSource     String?
-  snapshotNotes      String?
-  status             String                    @default("pending")
-  attemptCount       Int                       @default(0)
-  claimedAt          DateTime?
-  claimExpiresAt     DateTime?
-  claimToken         String?                   @unique
-  finding            String?
-  sourceUrls         String[]                  @default([])
-  evidence           String?
-  confidence         String?
-  agentNotes         String?
-  verifiedAt         DateTime?
-  reviewedAt         DateTime?
-  alternatives       ContactAuditAlternative[]
-  createdAt          DateTime                  @default(now())
-  updatedAt          DateTime                  @updatedAt
+  id                         String                    @id @default(cuid())
+  runId                      String
+  run                        ContactAuditRun           @relation(fields: [runId], references: [id], onDelete: Cascade)
+  contactId                  String?
+  contact                    Contact?                  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  artistId                   String?
+  artist                     Artist?                   @relation(fields: [artistId], references: [id], onDelete: SetNull)
+  snapshotArtistName         String
+  snapshotEmail              String?
+  snapshotPhone              String?
+  snapshotDirectOutreachNote String?
+  snapshotName               String?
+  snapshotRole               String?
+  snapshotSource             String?
+  snapshotNotes              String?
+  status                     String                    @default("pending")
+  attemptCount               Int                       @default(0)
+  claimedAt                  DateTime?
+  claimExpiresAt             DateTime?
+  claimToken                 String?                   @unique
+  finding                    String?
+  sourceUrls                 String[]                  @default([])
+  evidence                   String?
+  confidence                 String?
+  agentNotes                 String?
+  verifiedAt                 DateTime?
+  reviewedAt                 DateTime?
+  resolution                 String?
+  resolvedAt                 DateTime?
+  selectedAlternativeId      String?
+  selectedAlternative        ContactAuditAlternative?  @relation("ContactAuditSelectedAlternative", fields: [selectedAlternativeId], references: [id], onDelete: Restrict)
+  resolvedContactId          String?
+  resolvedArtistId           String?
+  resolvedArtistName         String?
+  resolvedEmail              String?
+  resolvedPhone              String?
+  resolvedDirectOutreachNote String?
+  resolvedName               String?
+  resolvedRole               String?
+  resolvedSource             String?
+  resolvedState              String?
+  resolutionClaimToken       String?                   @unique
+  resolutionClaimedAt        DateTime?
+  alternatives               ContactAuditAlternative[]
+  createdAt                  DateTime                  @default(now())
+  updatedAt                  DateTime                  @updatedAt
 
   @@unique([runId, contactId])
   @@index([runId, status, createdAt])
+  @@index([runId, resolution, finding, verifiedAt])
   @@index([status, claimExpiresAt])
   @@index([finding, reviewedAt, verifiedAt])
   @@index([contactId])
@@ -167,18 +185,19 @@ model ContactAuditJob {
 }
 
 model ContactAuditAlternative {
-  id              String          @id @default(cuid())
+  id              String            @id @default(cuid())
   jobId           String
-  job             ContactAuditJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job             ContactAuditJob   @relation(fields: [jobId], references: [id], onDelete: Cascade)
   normalizedEmail String
   email           String
   name            String?
   role            String
-  sourceUrls      String[]        @default([])
+  sourceUrls      String[]          @default([])
   evidence        String
   confidence      String
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  selectedByJobs  ContactAuditJob[] @relation("ContactAuditSelectedAlternative")
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
 
   @@unique([jobId, normalizedEmail])
   @@index([jobId, createdAt])
@@ -233,25 +252,25 @@ model ArtistResearchSkip {
 }
 
 model ContactResearchCandidate {
-  id              String             @id @default(cuid())
-  jobId           String
-  job             ContactResearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  normalizedEmail String
-  email           String
-  name            String?
-  role            String
-  sourceUrls      String[]           @default([])
-  evidence        String
-  confidence      String
-  needsApproval   Boolean            @default(true)
-  officialSourceType                String?
-  officialSourceUrl                 String?
-  officialManagementLabel           String?
-  officialSourceEvidence            String?
-  status          String             @default("pending")
-  reviewedAt      DateTime?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  id                      String             @id @default(cuid())
+  jobId                   String
+  job                     ContactResearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  normalizedEmail         String
+  email                   String
+  name                    String?
+  role                    String
+  sourceUrls              String[]           @default([])
+  evidence                String
+  confidence              String
+  needsApproval           Boolean            @default(true)
+  officialSourceType      String?
+  officialSourceUrl       String?
+  officialManagementLabel String?
+  officialSourceEvidence  String?
+  status                  String             @default("pending")
+  reviewedAt              DateTime?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
   @@unique([jobId, normalizedEmail])
   @@index([status, createdAt])

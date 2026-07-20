@@ -2,27 +2,47 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const source = readFileSync(
-  new URL("./page.tsx", import.meta.url),
-  "utf8"
-);
+const source = readFileSync(new URL("./page.tsx", import.meta.url), "utf8");
 
-test("contact audit UI launches the manual workflow and exposes saved evidence", () => {
-  assert.match(
-    source,
-    /actions\/workflows\/contact-audit\.yml/
-  );
-  assert.match(source, /Run contact audit/);
-  assert.match(source, /Verification source/);
-  assert.match(source, /Plausible current manager contacts/);
-  assert.match(source, /Verified \{formatTimestamp\(job\.verifiedAt\)\}/);
-  assert.match(source, /Mark reviewed/);
-  assert.match(source, /Open contact/);
+test("contact audit UI is an unresolved flagged exception queue", () => {
+  assert.match(source, /status: "complete"/);
+  assert.match(source, /finding: \{ in: \[\.\.\.FLAGGED_FINDINGS\] \}/);
+  assert.match(source, /resolution: null/);
+  assert.match(source, /Decisions needed/);
+  assert.doesNotMatch(source, /type AuditView/);
+  assert.doesNotMatch(source, /Unreviewed/);
+  assert.doesNotMatch(source, /All \(/);
+  assert.doesNotMatch(source, /edit a contact separately/i);
 });
 
-test("contact audit UI is review-only", () => {
-  assert.match(source, /never change contact records/);
-  assert.doesNotMatch(source, /db\.contact\.(update|delete|upsert|create)/);
-  assert.doesNotMatch(source, /approveContactResearchCandidate/);
-  assert.match(source, /markContactAuditReviewed/);
+test("contact audit UI exposes evidence and in-place decisions", () => {
+  assert.match(source, /Run contact audit/);
+  assert.match(source, /Current contact/);
+  assert.match(source, /Saved evidence/);
+  assert.match(source, /Verification source/);
+  assert.match(source, /Alternative source/);
+  assert.match(source, /Approve and apply this contact/);
+  assert.match(source, /Approve stale — mark contact inactive/);
+  assert.match(source, /Reject finding — keep current contact active/);
+  assert.match(source, /pendingLabel="Applying contact…"/);
+  assert.match(source, /role="alert"/);
+});
+
+test("every contact audit Server Action authenticates and resolves in place", () => {
+  const actions = [
+    source.slice(
+      source.indexOf("async function approveContactAuditAction"),
+      source.indexOf("async function rejectContactAuditAction")
+    ),
+    source.slice(
+      source.indexOf("async function rejectContactAuditAction"),
+      source.indexOf("export default async function ContactAuditPage")
+    ),
+  ];
+  for (const action of actions) {
+    assert.match(action, /"use server"/);
+    assert.match(action, /requireServerActionAuth\("\/contact-audit"\)/);
+    assert.match(action, /resolveContactAuditJob/);
+    assert.match(action, /revalidatePath\("\/contact-audit"\)/);
+  }
 });

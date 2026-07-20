@@ -12,6 +12,8 @@ import {
   normalizeResearchEmail,
   normalizeResearchSourceUrl,
 } from "@/lib/contactResearch";
+import { updateContactInSheet } from "@/lib/sheets";
+import { CONTACT_AUDIT_RESOLUTION_CLAIM_TTL_MS } from "@/lib/contactAuditResolutionPolicy";
 
 export const CONTACT_AUDIT_DEFAULT_CLAIM_LIMIT = 1;
 export const CONTACT_AUDIT_MAX_CLAIM_LIMIT = 10;
@@ -41,6 +43,14 @@ export type ContactAuditFinding =
   | "stale"
   | "ambiguous"
   | "unverified";
+export type ContactAuditResolution = "approved" | "rejected";
+
+export interface ContactAuditResolutionResult {
+  ok: boolean;
+  status?: "resolved" | "already_resolved";
+  resolution?: ContactAuditResolution;
+  error?: string;
+}
 
 export interface ContactAuditAlternativeInput {
   email: string;
@@ -345,6 +355,7 @@ export async function prepareContactAudit(
         artistId: true,
         email: true,
         phone: true,
+        directOutreachNote: true,
         name: true,
         role: true,
         source: true,
@@ -371,6 +382,7 @@ export async function prepareContactAudit(
           snapshotArtistName: contact.artist.name,
           snapshotEmail: contact.email,
           snapshotPhone: contact.phone,
+          snapshotDirectOutreachNote: contact.directOutreachNote,
           snapshotName: contact.name,
           snapshotRole: contact.role,
           snapshotSource: contact.source,
@@ -439,6 +451,7 @@ export async function claimContactAuditJobs(
           snapshotArtistName: true,
           snapshotEmail: true,
           snapshotPhone: true,
+          snapshotDirectOutreachNote: true,
           snapshotName: true,
           snapshotRole: true,
           snapshotSource: true,
@@ -460,6 +473,7 @@ export async function claimContactAuditJobs(
                   artistName: job.snapshotArtistName,
                   email: job.snapshotEmail,
                   phone: job.snapshotPhone,
+                  directOutreachNote: job.snapshotDirectOutreachNote,
                   name: job.snapshotName,
                   role: job.snapshotRole,
                   source: job.snapshotSource,
@@ -559,4 +573,548 @@ export async function markContactAuditReviewed(
     data: { reviewedAt: now },
   });
   return result.count === 1;
+}
+
+const FLAGGED_CONTACT_AUDIT_FINDINGS = new Set([
+  "changed",
+  "stale",
+  "ambiguous",
+]);
+
+type ResolutionDecision =
+  | { resolution: "approved"; alternativeId: string | null }
+  | { resolution: "rejected"; alternativeId: null };
+
+type ResolutionContact = {
+  id: string;
+  artistId: string;
+  email: string | null;
+  phone: string | null;
+  directOutreachNote: string | null;
+  name: string | null;
+  role: string | null;
+  customPrice: string | null;
+  notes: string | null;
+  source: string | null;
+  sourceKey: string | null;
+  state: "active" | "quarantined";
+  updatedAt: Date;
+  artist: { name: string };
+};
+
+type ResolutionAlternative = {
+  id: string;
+  jobId: string;
+  normalizedEmail: string;
+  email: string;
+  name: string | null;
+  role: string;
+};
+
+type ResolutionReservation = {
+  jobId: string;
+  finding: "changed" | "stale" | "ambiguous";
+  claimToken: string;
+  contact: ResolutionContact;
+  alternative: ResolutionAlternative | null;
+};
+
+type SheetContactUpdater = typeof updateContactInSheet;
+
+function contactStillMatchesAuditSnapshot(
+  job: {
+    snapshotEmail: string | null;
+    snapshotPhone: string | null;
+    snapshotDirectOutreachNote: string | null;
+    snapshotName: string | null;
+    snapshotRole: string | null;
+    snapshotSource: string | null;
+  },
+  contact: ResolutionContact
+): boolean {
+  return (
+    contact.state === "active" &&
+    contact.email === job.snapshotEmail &&
+    contact.phone === job.snapshotPhone &&
+    contact.directOutreachNote === job.snapshotDirectOutreachNote &&
+    contact.name === job.snapshotName &&
+    contact.role === job.snapshotRole &&
+    contact.source === job.snapshotSource
+  );
+}
+
+function isSameResolution(
+  existing: {
+    resolution: string | null;
+    selectedAlternativeId: string | null;
+  },
+  decision: ResolutionDecision
+): boolean {
+  return (
+    existing.resolution === decision.resolution &&
+    existing.selectedAlternativeId === decision.alternativeId
+  );
+}
+
+function resolutionError(error: unknown): string {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002"
+  ) {
+    return "That artist already has the proposed email address. No contact or outreach history was merged.";
+  }
+  return "The decision could not be saved. The contact was not changed; refresh and try again.";
+}
+
+async function releaseContactAuditResolutionClaim(
+  jobId: string,
+  claimToken: string
+): Promise<void> {
+  await db.contactAuditJob.updateMany({
+    where: {
+      id: jobId,
+      resolution: null,
+      resolutionClaimToken: claimToken,
+    },
+    data: {
+      resolutionClaimToken: null,
+      resolutionClaimedAt: null,
+    },
+  });
+}
+
+async function reserveContactAuditResolution(
+  jobId: string,
+  decision: ResolutionDecision,
+  now: Date
+): Promise<
+  | { ok: true; reservation: ResolutionReservation }
+  | { ok: false; result: ContactAuditResolutionResult }
+> {
+  const staleClaimBefore = new Date(
+    now.getTime() - CONTACT_AUDIT_RESOLUTION_CLAIM_TTL_MS
+  );
+  return withSerializableRetry(async (tx) => {
+    const job = await tx.contactAuditJob.findUnique({
+      where: { id: jobId },
+      include: {
+        contact: { include: { artist: { select: { name: true } } } },
+        alternatives: decision.alternativeId
+          ? { where: { id: decision.alternativeId } }
+          : false,
+      },
+    });
+    if (!job) {
+      return {
+        ok: false as const,
+        result: { ok: false, error: "This audit finding no longer exists." },
+      };
+    }
+    if (job.resolution) {
+      if (isSameResolution(job, decision)) {
+        return {
+          ok: false as const,
+          result: {
+            ok: true,
+            status: "already_resolved",
+            resolution: decision.resolution,
+          },
+        };
+      }
+      return {
+        ok: false as const,
+        result: {
+          ok: false,
+          error:
+            "This finding was already resolved with a different decision.",
+        },
+      };
+    }
+    if (
+      job.status !== "complete" ||
+      !job.verifiedAt ||
+      !job.finding ||
+      !FLAGGED_CONTACT_AUDIT_FINDINGS.has(job.finding)
+    ) {
+      return {
+        ok: false as const,
+        result: {
+          ok: false,
+          error: "This audit finding is not an unresolved flagged result.",
+        },
+      };
+    }
+    if (!job.contact || !contactStillMatchesAuditSnapshot(job, job.contact)) {
+      return {
+        ok: false as const,
+        result: {
+          ok: false,
+          error:
+            "The contact changed after this audit was saved. Run a new audit before deciding it.",
+        },
+      };
+    }
+
+    const alternative =
+      decision.alternativeId && job.alternatives
+        ? job.alternatives[0] ?? null
+        : null;
+    if (
+      decision.resolution === "approved" &&
+      (job.finding === "changed" || job.finding === "ambiguous") &&
+      (!alternative || alternative.jobId !== job.id)
+    ) {
+      return {
+        ok: false as const,
+        result: {
+          ok: false,
+          error: "Select a proposed contact from this audit finding.",
+        },
+      };
+    }
+    if (
+      decision.resolution === "approved" &&
+      job.finding === "stale" &&
+      decision.alternativeId
+    ) {
+      return {
+        ok: false as const,
+        result: {
+          ok: false,
+          error: "A stale finding cannot apply a replacement contact.",
+        },
+      };
+    }
+    if (decision.resolution === "rejected" && decision.alternativeId) {
+      return {
+        ok: false as const,
+        result: { ok: false, error: "Reject does not select an alternative." },
+      };
+    }
+    if (alternative) {
+      const duplicate = await tx.contact.findFirst({
+        where: {
+          artistId: job.contact.artistId,
+          email: {
+            equals: alternative.normalizedEmail,
+            mode: "insensitive",
+          },
+          id: { not: job.contact.id },
+        },
+        select: { id: true },
+      });
+      if (duplicate) {
+        return {
+          ok: false as const,
+          result: {
+            ok: false,
+            error:
+              "That artist already has the proposed email address. Resolve the duplicate contact separately; outreach history will not be merged automatically.",
+          },
+        };
+      }
+    }
+
+    const claimed = await tx.contactAuditJob.updateMany({
+      where: {
+        id: job.id,
+        resolution: null,
+        OR: [
+          { resolutionClaimToken: null },
+          { resolutionClaimedAt: { lte: staleClaimBefore } },
+        ],
+      },
+      data: {
+        resolutionClaimToken: randomUUID(),
+        resolutionClaimedAt: now,
+      },
+    });
+    if (claimed.count !== 1) {
+      return {
+        ok: false as const,
+        result: {
+          ok: false,
+          error:
+            "Another decision is currently being applied to this finding. Refresh before trying again.",
+        },
+      };
+    }
+    const claimedJob = await tx.contactAuditJob.findUniqueOrThrow({
+      where: { id: job.id },
+      select: { resolutionClaimToken: true },
+    });
+    return {
+      ok: true as const,
+      reservation: {
+        jobId: job.id,
+        finding: job.finding as ResolutionReservation["finding"],
+        claimToken: claimedJob.resolutionClaimToken!,
+        contact: job.contact as ResolutionContact,
+        alternative: alternative as ResolutionAlternative | null,
+      },
+    };
+  });
+}
+
+async function finalizeContactAuditResolution(
+  reservation: ResolutionReservation,
+  decision: ResolutionDecision,
+  now: Date,
+  sheetSourceKey: string | null
+): Promise<ContactAuditResolutionResult> {
+  return withSerializableRetry(async (tx) => {
+    const job = await tx.contactAuditJob.findUnique({
+      where: { id: reservation.jobId },
+      include: {
+        contact: { include: { artist: { select: { name: true } } } },
+        alternatives: decision.alternativeId
+          ? { where: { id: decision.alternativeId } }
+          : false,
+      },
+    });
+    if (job?.resolution) {
+      return isSameResolution(job, decision)
+        ? {
+            ok: true,
+            status: "already_resolved" as const,
+            resolution: decision.resolution,
+          }
+        : {
+            ok: false,
+            error:
+              "This finding was already resolved with a different decision.",
+          };
+    }
+    if (
+      !job ||
+      job.resolutionClaimToken !== reservation.claimToken ||
+      job.status !== "complete" ||
+      job.finding !== reservation.finding ||
+      !job.contact ||
+      !contactStillMatchesAuditSnapshot(job, job.contact) ||
+      job.contact.updatedAt.getTime() !==
+        reservation.contact.updatedAt.getTime()
+    ) {
+      return {
+        ok: false,
+        error:
+          "The audit finding or contact changed while the decision was being applied. No database change was saved.",
+      };
+    }
+    const alternative =
+      decision.alternativeId && job.alternatives
+        ? job.alternatives[0] ?? null
+        : null;
+    if (
+      decision.resolution === "approved" &&
+      (job.finding === "changed" || job.finding === "ambiguous") &&
+      (!alternative || alternative.jobId !== job.id)
+    ) {
+      return {
+        ok: false,
+        error: "The selected replacement no longer belongs to this finding.",
+      };
+    }
+    if (alternative) {
+      const duplicate = await tx.contact.findFirst({
+        where: {
+          artistId: job.contact.artistId,
+          email: {
+            equals: alternative.normalizedEmail,
+            mode: "insensitive",
+          },
+          id: { not: job.contact.id },
+        },
+        select: { id: true },
+      });
+      if (duplicate) {
+        return {
+          ok: false,
+          error:
+            "That artist already has the proposed email address. Resolve the duplicate contact separately; outreach history was not merged.",
+        };
+      }
+    }
+
+    let resolvedContact: ResolutionContact = job.contact as ResolutionContact;
+    if (decision.resolution === "approved" && job.finding === "stale") {
+      resolvedContact = (await tx.contact.update({
+        where: { id: job.contact.id },
+        data: { state: "quarantined" },
+        include: { artist: { select: { name: true } } },
+      })) as ResolutionContact;
+    } else if (decision.resolution === "approved" && alternative) {
+      resolvedContact = (await tx.contact.update({
+        where: { id: job.contact.id },
+        data: {
+          email: alternative.normalizedEmail,
+          phone: null,
+          directOutreachNote: null,
+          name: alternative.name,
+          role: "management",
+          state: "active",
+          ...(job.contact.source === "sheet"
+            ? {
+                sourceKey: sheetSourceKey ?? job.contact.sourceKey,
+                sourceSyncedAt: now,
+              }
+            : {}),
+        },
+        include: { artist: { select: { name: true } } },
+      })) as ResolutionContact;
+    }
+
+    const saved = await tx.contactAuditJob.updateMany({
+      where: {
+        id: job.id,
+        resolution: null,
+        resolutionClaimToken: reservation.claimToken,
+      },
+      data: {
+        resolution: decision.resolution,
+        resolvedAt: now,
+        reviewedAt: now,
+        selectedAlternativeId:
+          decision.resolution === "approved" ? alternative?.id ?? null : null,
+        resolvedContactId: resolvedContact.id,
+        resolvedArtistId: resolvedContact.artistId,
+        resolvedArtistName: resolvedContact.artist.name,
+        resolvedEmail: resolvedContact.email,
+        resolvedPhone: resolvedContact.phone,
+        resolvedDirectOutreachNote: resolvedContact.directOutreachNote,
+        resolvedName: resolvedContact.name,
+        resolvedRole: resolvedContact.role,
+        resolvedSource: resolvedContact.source,
+        resolvedState: resolvedContact.state,
+        resolutionClaimToken: null,
+        resolutionClaimedAt: null,
+      },
+    });
+    if (saved.count !== 1) {
+      throw new Error("Contact audit resolution claim was lost");
+    }
+    return {
+      ok: true,
+      status: "resolved",
+      resolution: decision.resolution,
+    };
+  });
+}
+
+export async function resolveContactAuditJob(
+  jobId: string,
+  resolution: ContactAuditResolution,
+  alternativeId: string | null,
+  now: Date = new Date(),
+  sheetUpdater: SheetContactUpdater = updateContactInSheet
+): Promise<ContactAuditResolutionResult> {
+  const normalizedJobId = jobId.trim();
+  const normalizedAlternativeId = alternativeId?.trim() || null;
+  if (!normalizedJobId) {
+    return { ok: false, error: "Missing audit finding." };
+  }
+  const decision: ResolutionDecision =
+    resolution === "approved"
+      ? { resolution, alternativeId: normalizedAlternativeId }
+      : { resolution: "rejected", alternativeId: null };
+  const reserved = await reserveContactAuditResolution(
+    normalizedJobId,
+    decision,
+    now
+  );
+  if (!reserved.ok) return reserved.result;
+
+  const { reservation } = reserved;
+  let sheetUpdate: Awaited<ReturnType<SheetContactUpdater>> | null = null;
+  if (
+    decision.resolution === "approved" &&
+    reservation.alternative &&
+    reservation.contact.source === "sheet"
+  ) {
+    try {
+      sheetUpdate = await sheetUpdater({
+        artistName: reservation.contact.artist.name,
+        oldEmail: reservation.contact.email,
+        newEmail: reservation.alternative.normalizedEmail,
+        oldDirectOutreachNote: reservation.contact.directOutreachNote,
+        newDirectOutreachNote: null,
+        sourceKey: reservation.contact.sourceKey,
+        managerName: reservation.alternative.name,
+        role: "management",
+        customPrice: reservation.contact.customPrice,
+        notes: reservation.contact.notes,
+      });
+    } catch (error) {
+      await releaseContactAuditResolutionClaim(
+        reservation.jobId,
+        reservation.claimToken
+      );
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        error: `Google Sheet update failed; the database and decision were not changed. ${detail.slice(0, 180)}`,
+      };
+    }
+  }
+
+  let result: ContactAuditResolutionResult;
+  try {
+    result = await finalizeContactAuditResolution(
+      reservation,
+      decision,
+      now,
+      sheetUpdate?.sourceKey ?? null
+    );
+  } catch (error) {
+    result = { ok: false, error: resolutionError(error) };
+  }
+  if (result.ok || !sheetUpdate || !reservation.alternative) {
+    if (!result.ok) {
+      await releaseContactAuditResolutionClaim(
+        reservation.jobId,
+        reservation.claimToken
+      );
+    }
+    return result;
+  }
+
+  let rollbackError: string | null = null;
+  try {
+    await sheetUpdater({
+      artistName: reservation.contact.artist.name,
+      oldEmail: reservation.alternative.normalizedEmail,
+      newEmail: reservation.contact.email,
+      oldDirectOutreachNote: null,
+      newDirectOutreachNote: reservation.contact.directOutreachNote,
+      sourceKey: sheetUpdate.sourceKey,
+      managerName: reservation.contact.name,
+      role: reservation.contact.role,
+      customPrice: reservation.contact.customPrice,
+      notes: reservation.contact.notes,
+    });
+  } catch (error) {
+    rollbackError = error instanceof Error ? error.message : String(error);
+  }
+  await releaseContactAuditResolutionClaim(
+    reservation.jobId,
+    reservation.claimToken
+  );
+  if (rollbackError) {
+    console.error(
+      JSON.stringify({
+        event: "contact_audit_sheet_database_divergence",
+        jobId: reservation.jobId,
+        contactId: reservation.contact.id,
+        rollbackError,
+      })
+    );
+    return {
+      ok: false,
+      error: `The Sheet changed, but the database decision failed and the Sheet rollback also failed. Reconcile the Sheet before retrying. ${rollbackError.slice(0, 180)}`,
+    };
+  }
+  return {
+    ok: false,
+    error: `${result.error ?? "The database decision failed."} The Sheet change was rolled back.`,
+  };
 }

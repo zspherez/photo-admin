@@ -22,6 +22,7 @@ import {
   withIntegrationSyncLease,
 } from "@/lib/integrationUtils";
 import { normalizeEmail } from "@/lib/resend";
+import { CONTACT_AUDIT_RESOLUTION_CLAIM_TTL_MS } from "@/lib/contactAuditResolutionPolicy";
 
 const SHEET_SOURCE_ID_HEADER = "photo_admin_id";
 const SHEET_SYNC_LEASE_WAIT_MS = 2 * 60 * 1_000;
@@ -1180,6 +1181,36 @@ export function staleOwnedSheetContactIds(
     .map((contact) => contact.id);
 }
 
+export function shouldKeepApprovedStaleSheetContactQuarantined(
+  contact: {
+    auditJobs: readonly {
+      resolution: string | null;
+      resolvedEmail: string | null;
+      resolvedDirectOutreachNote: string | null;
+    }[];
+  },
+  incoming: {
+    email: string | null;
+    directOutreachNote: string | null;
+  }
+): boolean {
+  const incomingEmail = normalizeEmail(incoming.email ?? "");
+  const incomingDirectOutreachNote =
+    incoming.directOutreachNote?.trim() || null;
+  return contact.auditJobs.some((job) => {
+    if (job.resolution !== "approved") return false;
+    const resolvedEmail = normalizeEmail(job.resolvedEmail ?? "");
+    const resolvedDirectOutreachNote =
+      job.resolvedDirectOutreachNote?.trim() || null;
+    return incomingEmail
+      ? resolvedEmail === incomingEmail
+      : Boolean(
+          incomingDirectOutreachNote &&
+            resolvedDirectOutreachNote === incomingDirectOutreachNote
+        );
+  });
+}
+
 interface ContactSheetRow {
   rowId: string;
   artistName: string;
@@ -1635,11 +1666,51 @@ async function syncContactsAtTarget(
               : []),
           ],
         },
+        include: {
+          auditJobs: {
+            where: {
+              OR: [
+                {
+                  finding: "stale",
+                  resolution: "approved",
+                },
+                {
+                  resolution: null,
+                  resolutionClaimToken: { not: null },
+                  resolutionClaimedAt: {
+                    gt: new Date(
+                      now.getTime() -
+                        CONTACT_AUDIT_RESOLUTION_CLAIM_TTL_MS
+                    ),
+                  },
+                },
+              ],
+            },
+            select: {
+              resolution: true,
+              resolvedEmail: true,
+              resolvedDirectOutreachNote: true,
+              resolutionClaimToken: true,
+            },
+          },
+        },
       });
+      if (
+        contacts.some((contact) =>
+          contact.auditJobs.some((job) => job.resolutionClaimToken)
+        )
+      ) {
+        throw new Error(
+          "A contact audit decision is currently updating a Sheet-owned contact; retry the Sheet sync"
+        );
+      }
       const bySourceKey = new Map(
         contacts
           .filter((contact) => contact.sourceKey)
           .map((contact) => [contact.sourceKey!, contact])
+      );
+      const contactsById = new Map(
+        contacts.map((contact) => [contact.id, contact])
       );
       const byArtistEmail = new Map<string, (typeof contacts)[number]>(
         contacts.flatMap((contact) => {
@@ -1833,7 +1904,12 @@ async function syncContactsAtTarget(
                 source: "sheet",
                 sourceKey: plan.sourceKey,
                 sourceSyncedAt: now,
-                state: "active",
+                state: shouldKeepApprovedStaleSheetContactQuarantined(
+                  contactsById.get(plan.existingId!)!,
+                  plan
+                )
+                  ? "quarantined"
+                  : "active",
                 isFullTeam: plan.row.isFullTeam,
               },
             })

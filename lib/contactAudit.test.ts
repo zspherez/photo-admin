@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   CONTACT_AUDIT_OIDC_AUDIENCE,
@@ -197,4 +198,42 @@ test("GitHub OIDC trust is pinned to manual audit workflow dispatches", () => {
     }),
     false
   );
+});
+
+test("contact audit resolution reserves before Sheet work and rolls back failed persistence", () => {
+  const source = readFileSync(new URL("./contactAudit.ts", import.meta.url), "utf8");
+  const reserve = source.indexOf("reserveContactAuditResolution(");
+  const sheetUpdate = source.indexOf("sheetUpdate = await sheetUpdater(", reserve);
+  const finalize = source.indexOf("finalizeContactAuditResolution(", sheetUpdate);
+  const rollback = source.indexOf(
+    "oldEmail: reservation.alternative.normalizedEmail",
+    finalize
+  );
+
+  assert.ok(reserve >= 0);
+  assert.ok(sheetUpdate > reserve);
+  assert.ok(finalize > sheetUpdate);
+  assert.ok(rollback > finalize);
+  assert.match(source, /resolutionClaimToken: reservation\.claimToken/);
+  assert.match(source, /isolationLevel: Prisma\.TransactionIsolationLevel\.Serializable/);
+  assert.match(source, /outreach history will not be merged automatically/);
+  assert.match(source, /Google Sheet update failed; the database and decision were not changed/);
+  assert.match(source, /The Sheet change was rolled back/);
+});
+
+test("reject resolution does not mutate the contact", () => {
+  const source = readFileSync(new URL("./contactAudit.ts", import.meta.url), "utf8");
+  const finalizer = source.slice(
+    source.indexOf("async function finalizeContactAuditResolution"),
+    source.indexOf("export async function resolveContactAuditJob")
+  );
+  assert.match(
+    finalizer,
+    /if \(decision\.resolution === "approved" && job\.finding === "stale"\)/
+  );
+  assert.match(
+    finalizer,
+    /else if \(decision\.resolution === "approved" && alternative\)/
+  );
+  assert.doesNotMatch(finalizer, /decision\.resolution === "rejected"[\s\S]*tx\.contact\.update/);
 });

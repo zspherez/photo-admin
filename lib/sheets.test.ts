@@ -20,6 +20,7 @@ import {
   sheetApiRequestOptions,
   sheetDatabaseTransactionTiming,
   sheetSourceKeyBelongsToTarget,
+  shouldKeepApprovedStaleSheetContactQuarantined,
   sheetSyncDeadlineResult,
   staleOwnedSheetContactIds,
   validateSheetBootstrapTarget,
@@ -738,6 +739,60 @@ test("stale cleanup scopes ownership to one spreadsheet and tab", () => {
     rowId: "row-legacy",
     slot: 0,
   });
+});
+
+test("approved stale Sheet identities stay quarantined until the Sheet target changes", () => {
+  const contact = {
+    auditJobs: [
+      {
+        resolution: "approved",
+        resolvedEmail: "old.manager@example.com",
+        resolvedDirectOutreachNote: null,
+      },
+    ],
+  };
+  assert.equal(
+    shouldKeepApprovedStaleSheetContactQuarantined(contact, {
+      email: "OLD.MANAGER@example.com",
+      directOutreachNote: null,
+    }),
+    true
+  );
+  assert.equal(
+    shouldKeepApprovedStaleSheetContactQuarantined(contact, {
+      email: "new.manager@example.com",
+      directOutreachNote: null,
+    }),
+    false
+  );
+  assert.equal(
+    shouldKeepApprovedStaleSheetContactQuarantined(
+      {
+        auditJobs: [
+          {
+            resolution: "approved",
+            resolvedEmail: null,
+            resolvedDirectOutreachNote: "DM the artist",
+          },
+        ],
+      },
+      { email: null, directOutreachNote: "DM the artist" }
+    ),
+    true
+  );
+});
+
+test("Sheet reconciliation honors approved stale audit decisions", () => {
+  const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
+  assert.match(source, /finding: "stale",\s*resolution: "approved"/);
+  assert.match(
+    source,
+    /state: shouldKeepApprovedStaleSheetContactQuarantined/
+  );
+  assert.match(
+    source,
+    /A contact audit decision is currently updating a Sheet-owned contact/
+  );
 });
 
 test("Sheet target switches commit only after verified reconciliation", () => {
