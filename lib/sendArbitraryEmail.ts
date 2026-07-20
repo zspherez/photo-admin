@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
-import type { ArbitraryEmailInput } from "@/lib/arbitraryEmail";
+import {
+  ARBITRARY_EMAIL_UTM_KEYS,
+  type ArbitraryEmailInput,
+} from "@/lib/arbitraryEmail";
+import { normalizeArbitraryEmailContent } from "@/lib/arbitraryEmailContent";
 import { db } from "@/lib/db";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
 import {
@@ -94,23 +98,40 @@ export async function sendArbitraryEmailWithDependencies(
   input: ArbitraryEmailInput,
   dependencies: SendArbitraryEmailDependencies,
 ): Promise<SendArbitraryEmailResult> {
+  const content = normalizeArbitraryEmailContent(
+    input.html,
+    ARBITRARY_EMAIL_UTM_KEYS.map((key) => [key, input.utm[key]]),
+  );
+  if (!content.ok) return content;
+
   const id = dependencies.createId();
   const idempotencyKey = `arbitrary-email/${id}`;
   const prepared = await dependencies.prepare({
     to: input.recipientEmails,
     subject: input.subject,
-    html: input.html,
+    html: content.content.html,
+    text: content.content.text,
     arbitraryEmailId: id,
     idempotencyKey,
   });
   if (!prepared.ok) return { ok: false, error: prepared.error };
+  if (
+    prepared.request.html !== content.content.html ||
+    prepared.request.text !== content.content.text
+  ) {
+    return {
+      ok: false,
+      error: "Prepared Resend request changed the canonical email content",
+    };
+  }
 
   await dependencies.database.arbitraryEmail.create({
     data: {
       id,
       recipientEmails: prepared.intendedRecipients,
       subject: input.subject,
-      html: input.html,
+      html: prepared.request.html,
+      text: prepared.request.text,
       utmSource: input.utm.utm_source || null,
       utmMedium: input.utm.utm_medium || null,
       utmCampaign: input.utm.utm_campaign || null,

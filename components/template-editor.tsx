@@ -4,6 +4,7 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import { useEffect, useRef, useState } from "react";
+import { normalizeArbitraryEmailPreviewAction } from "@/app/emails/actions";
 import { insertTextAtSelection } from "./template-editor-utils";
 
 type View = "visual" | "html" | "preview";
@@ -17,7 +18,18 @@ interface Props {
   htmlValue?: string;
   onSubjectChange?: (value: string) => void;
   onHtmlChange?: (value: string) => void;
+  previewNormalization?: "arbitrary-email";
 }
+
+const EMPTY_PREVIEW =
+  '<!doctype html><html lang="en"><head><meta charset="utf-8"></head><body></body></html>';
+const ARBITRARY_UTM_FIELDS = [
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_content",
+  "utm_term",
+] as const;
 
 export function TemplateEditor({
   initialSubject,
@@ -28,14 +40,20 @@ export function TemplateEditor({
   htmlValue,
   onSubjectChange,
   onHtmlChange,
+  previewNormalization,
 }: Props) {
   const [internalSubject, setInternalSubject] = useState(initialSubject);
   const [internalHtml, setInternalHtml] = useState(initialHtml);
   const subject = subjectValue ?? internalSubject;
   const html = htmlValue ?? internalHtml;
   const [view, setView] = useState<View>("visual");
+  const [normalizedPreview, setNormalizedPreview] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const htmlTextareaRef = useRef<HTMLTextAreaElement>(null);
   const onHtmlChangeRef = useRef(onHtmlChange);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const previewRequestRef = useRef(0);
 
   useEffect(() => {
     onHtmlChangeRef.current = onHtmlChange;
@@ -83,6 +101,40 @@ export function TemplateEditor({
     editor?.setEditable(!disabled);
   }, [disabled, editor]);
 
+  const showPreview = async () => {
+    setView("preview");
+    if (previewNormalization !== "arbitrary-email") return;
+    const request = previewRequestRef.current + 1;
+    previewRequestRef.current = request;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setNormalizedPreview(null);
+    try {
+      const form = containerRef.current?.closest("form");
+      const formData = form ? new FormData(form) : null;
+      const utm = Object.fromEntries(
+        ARBITRARY_UTM_FIELDS.map((name) => [
+          name,
+          String(formData?.get(name) ?? ""),
+        ]),
+      );
+      const result = await normalizeArbitraryEmailPreviewAction(html, utm);
+      if (previewRequestRef.current !== request) return;
+      if (result.ok) {
+        setNormalizedPreview(result.content.html);
+      } else {
+        setNormalizedPreview(null);
+        setPreviewError(result.error);
+      }
+    } catch {
+      if (previewRequestRef.current !== request) return;
+      setNormalizedPreview(null);
+      setPreviewError("Unable to normalize the email preview");
+    } finally {
+      if (previewRequestRef.current === request) setPreviewLoading(false);
+    }
+  };
+
   const insertVar = (v: string) => {
     const insertion = `{{${v}}}`;
     if (view === "html") {
@@ -119,7 +171,7 @@ export function TemplateEditor({
   };
 
   return (
-    <div className="space-y-4">
+    <div ref={containerRef} className="space-y-4">
       <input type="hidden" name="subject" value={subject} />
       <input type="hidden" name="html" value={html} />
 
@@ -141,7 +193,7 @@ export function TemplateEditor({
       >
         <Tab active={view === "visual"} onClick={() => setView("visual")}>Visual</Tab>
         <Tab active={view === "html"} onClick={() => setView("html")}>HTML</Tab>
-        <Tab active={view === "preview"} onClick={() => setView("preview")}>Preview</Tab>
+        <Tab active={view === "preview"} onClick={() => void showPreview()}>Preview</Tab>
         <div className="mx-2 h-5 w-px bg-zinc-200 dark:bg-zinc-700" />
         {view === "visual" && editor && (
           <>
@@ -234,12 +286,26 @@ export function TemplateEditor({
       )}
 
       {view === "preview" && (
-        <iframe
-          title="Email HTML preview"
-          sandbox=""
-          srcDoc={html}
-          className="min-h-[360px] w-full rounded-md border border-zinc-200 bg-white dark:border-zinc-800"
-        />
+        <div className="space-y-2">
+          {previewLoading && (
+            <p className="text-xs text-zinc-500">Normalizing preview…</p>
+          )}
+          {previewError && (
+            <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+              {previewError}
+            </p>
+          )}
+          <iframe
+            title="Email HTML preview"
+            sandbox=""
+            srcDoc={
+              previewNormalization === "arbitrary-email"
+                ? normalizedPreview ?? EMPTY_PREVIEW
+                : html
+            }
+            className="min-h-[360px] w-full rounded-md border border-zinc-200 bg-white dark:border-zinc-800"
+          />
+        </div>
       )}
     </div>
   );

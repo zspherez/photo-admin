@@ -21,7 +21,8 @@ export default async function ComposeEmailPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Compose email</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            Send a custom tracked email without using an outreach template.
+            Paste rich content or HTML; it is normalized for valid email HTML and
+            a matching plain-text alternative before sending.
           </p>
         </div>
         <Link href="/emails" className="text-sm text-zinc-500 hover:text-zinc-900">
@@ -59,7 +60,16 @@ export default async function ComposeEmailPage({
               initialSubject=""
               initialHtml="<p></p>"
               variables={[]}
+              previewNormalization="arbitrary-email"
             />
+            <p className="-mt-4 text-xs text-zinc-500">
+              Normalization avoids malformed MIME/HTML and improves mail-client
+              compatibility. Inbox placement also depends on DNS authentication,
+              sender reputation, content, and sending behavior. Paste rendered
+              content or decoded HTML, not quoted-printable message source. Only
+              safe web, email, and phone links and visible absolute web images
+              are retained; unsafe schemes and hidden tracking pixels are removed.
+            </p>
 
             <fieldset>
               <legend className="text-sm font-medium">UTM tags</legend>

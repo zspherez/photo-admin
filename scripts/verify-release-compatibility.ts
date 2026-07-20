@@ -212,6 +212,7 @@ async function main(): Promise<void> {
         recipientEmails: true,
         subject: true,
         html: true,
+        text: true,
         utmSource: true,
         utmMedium: true,
         utmCampaign: true,
@@ -287,6 +288,7 @@ async function main(): Promise<void> {
         "ContactAuditJob",
         "ContactAuditAlternative",
         "ArbitraryEmail",
+        "ArbitraryEmail.text",
         "ResendWebhookEvent.arbitraryEmailId",
       ],
     })

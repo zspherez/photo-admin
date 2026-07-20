@@ -31,6 +31,11 @@ test("arbitrary email input validates recipients and adds explicit UTM values", 
     result.input.html,
     /view=all&amp;utm_source=newsletter&amp;utm_medium=email&amp;utm_campaign=summer&amp;utm_content=hero&amp;utm_term=portraits#new/,
   );
+  assert.ok(result.input.html.startsWith("<!doctype html>"));
+  assert.match(
+    result.input.text,
+    /View \(https:\/\/example\.com\/work\?view=all&utm_source=newsletter/,
+  );
   const unsafeScheme = parseArbitraryEmailInput({
     recipients: "one@example.com",
     subject: "Safe link",
@@ -39,7 +44,8 @@ test("arbitrary email input validates recipients and adds explicit UTM values", 
   });
   assert.equal(unsafeScheme.ok, true);
   if (unsafeScheme.ok) {
-    assert.match(unsafeScheme.input.html, /href="javascript:alert\(1\)"/);
+    assert.doesNotMatch(unsafeScheme.input.html, /javascript:/);
+    assert.match(unsafeScheme.input.html, /<a>Do not rewrite<\/a>/);
   }
 });
 
@@ -384,7 +390,7 @@ test("arbitrary webhook correlation rejects outreach and provider identity confl
   );
 });
 
-test("arbitrary email migration is ordered, transactional, and constrained", () => {
+test("arbitrary email migrations are ordered, transactional, and constrained", () => {
   const migrationsDirectory = new URL("../prisma/migrations/", import.meta.url);
   const migrationNames = readdirSync(migrationsDirectory, {
     withFileTypes: true,
@@ -397,6 +403,8 @@ test("arbitrary email migration is ordered, transactional, and constrained", () 
     migrationNames.indexOf("20260720170000_festival_lead_time") <
       migrationNames.indexOf(migrationName),
   );
+  const textMigrationName = "20260721003000_arbitrary_email_text";
+  assert.equal(migrationNames.at(-1), textMigrationName);
 
   const migration = readFileSync(
     new URL(`${migrationName}/migration.sql`, migrationsDirectory),
@@ -411,4 +419,37 @@ test("arbitrary email migration is ordered, transactional, and constrained", () 
     migration,
     /FOREIGN KEY \("arbitraryEmailId"\) REFERENCES "ArbitraryEmail"\("id"\)/,
   );
+
+  const textMigration = readFileSync(
+    new URL(`${textMigrationName}/migration.sql`, migrationsDirectory),
+    "utf8",
+  );
+  assert.match(textMigration, /^BEGIN;\n/);
+  assert.match(textMigration, /\nCOMMIT;\s*$/);
+  assert.match(textMigration, /ADD COLUMN "text" TEXT/);
+  assert.match(textMigration, /CONSTRAINT "ArbitraryEmail_text_check"/);
+  assert.match(textMigration, /"text" IS NULL OR btrim\("text"\) <> ''/);
+});
+
+test("arbitrary email UI normalizes previews and explains deliverability limits", () => {
+  const editor = readFileSync(
+    new URL("../components/template-editor.tsx", import.meta.url),
+    "utf8",
+  );
+  const compose = readFileSync(
+    new URL("../app/emails/new/page.tsx", import.meta.url),
+    "utf8",
+  );
+  const dashboard = readFileSync(
+    new URL("../app/emails/page.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(editor, /normalizeArbitraryEmailPreviewAction\(html, utm\)/);
+  assert.match(compose, /previewNormalization="arbitrary-email"/);
+  assert.match(compose, /avoids malformed MIME\/HTML/);
+  assert.match(compose, /DNS authentication/);
+  assert.match(compose, /quoted-printable message source/);
+  assert.match(dashboard, /text: true/);
+  assert.match(dashboard, /Canonical HTML source/);
 });
