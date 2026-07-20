@@ -220,6 +220,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "recipientEmails",
       "subject",
       "html",
+      "text",
       "utmSource",
       "utmMedium",
       "utmCampaign",
@@ -252,6 +253,6 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*\]/,
+    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*\]/,
   );
 });

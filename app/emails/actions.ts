@@ -2,9 +2,31 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { parseArbitraryEmailInput } from "@/lib/arbitraryEmail";
+import {
+  ARBITRARY_EMAIL_UTM_KEYS,
+  parseArbitraryEmailInput,
+  type ArbitraryEmailUtmValues,
+} from "@/lib/arbitraryEmail";
+import { normalizeArbitraryEmailContent } from "@/lib/arbitraryEmailContent";
 import { requireServerActionAuth } from "@/lib/auth";
 import { sendArbitraryEmail } from "@/lib/sendArbitraryEmail";
+
+export async function normalizeArbitraryEmailPreviewAction(
+  html: string,
+  values: Partial<ArbitraryEmailUtmValues>,
+) {
+  await requireServerActionAuth("/emails/new");
+  const utm = Object.fromEntries(
+    ARBITRARY_EMAIL_UTM_KEYS.map((key) => [key, (values[key] ?? "").trim()]),
+  ) as ArbitraryEmailUtmValues;
+  if (Object.values(utm).some((value) => value.length > 200)) {
+    return { ok: false as const, error: "UTM values must be 200 characters or fewer" };
+  }
+  return normalizeArbitraryEmailContent(
+    html,
+    ARBITRARY_EMAIL_UTM_KEYS.map((key) => [key, utm[key]]),
+  );
+}
 
 export async function sendArbitraryEmailAction(formData: FormData) {
   await requireServerActionAuth("/emails/new");

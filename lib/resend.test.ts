@@ -88,6 +88,15 @@ test("immutable Resend request hashes include every provider-significant field",
     hashResendRequestSnapshot(REQUEST),
   );
   assert.deepEqual(parseResendRequestSnapshot(REQUEST), REQUEST);
+  const multipartRequest = { ...REQUEST, text: "Immutable body" };
+  assert.deepEqual(
+    parseResendRequestSnapshot(multipartRequest),
+    multipartRequest,
+  );
+  assert.notEqual(
+    hashResendRequestSnapshot(multipartRequest),
+    hashResendRequestSnapshot(REQUEST),
+  );
   assert.equal(
     parseResendRequestSnapshot({ ...REQUEST, subject: undefined }),
     null,

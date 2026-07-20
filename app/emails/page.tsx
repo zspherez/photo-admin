@@ -59,6 +59,8 @@ export default async function EmailsPage({
       id: true,
       recipientEmails: true,
       subject: true,
+      html: true,
+      text: true,
       status: true,
       error: true,
       sentAt: true,
@@ -136,6 +138,30 @@ export default async function EmailsPage({
                           {email.error}
                         </div>
                       )}
+                      <details className="mt-2 text-xs">
+                        <summary className="cursor-pointer text-zinc-500">
+                          Canonical content
+                        </summary>
+                        <div className="mt-2 space-y-2">
+                          <div>
+                            <div className="font-medium text-zinc-700 dark:text-zinc-300">
+                              Plain text
+                            </div>
+                            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-zinc-50 p-2 text-[11px] dark:bg-zinc-900">
+                              {email.text ??
+                                "Plain-text snapshot unavailable for this legacy email."}
+                            </pre>
+                          </div>
+                          <div>
+                            <div className="font-medium text-zinc-700 dark:text-zinc-300">
+                              Canonical HTML source
+                            </div>
+                            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-zinc-50 p-2 text-[11px] dark:bg-zinc-900">
+                              {email.html}
+                            </pre>
+                          </div>
+                        </div>
+                      </details>
                     </td>
                     <td className="px-4 py-3">
                       <Badge tone={statusTone(email.status)}>{email.status.replace("_", " ")}</Badge>

@@ -1,4 +1,4 @@
-import { appendUtmParametersToHtml } from "@/lib/emailUtm";
+import { normalizeArbitraryEmailContent } from "@/lib/arbitraryEmailContent";
 import { normalizeEmail, normalizeEmails } from "@/lib/resend";
 
 export const ARBITRARY_EMAIL_UTM_KEYS = [
@@ -16,6 +16,7 @@ export interface ArbitraryEmailInput {
   recipientEmails: string[];
   subject: string;
   html: string;
+  text: string;
   utm: ArbitraryEmailUtmValues;
 }
 
@@ -49,27 +50,25 @@ export function parseArbitraryEmailInput(values: {
   if (/[\r\n]/.test(subject) || subject.length > 998) {
     return { ok: false, error: "Subject is invalid or too long" };
   }
-  if (!values.html.trim()) return { ok: false, error: "Enter an email body" };
-  if (values.html.length > 1_000_000) {
-    return { ok: false, error: "Email body is too large" };
-  }
-
   const utm = Object.fromEntries(
     ARBITRARY_EMAIL_UTM_KEYS.map((key) => [key, (values[key] ?? "").trim()]),
   ) as ArbitraryEmailUtmValues;
   if (Object.values(utm).some((value) => value.length > 200)) {
     return { ok: false, error: "UTM values must be 200 characters or fewer" };
   }
+  const content = normalizeArbitraryEmailContent(
+    values.html,
+    ARBITRARY_EMAIL_UTM_KEYS.map((key) => [key, utm[key]]),
+  );
+  if (!content.ok) return content;
 
   return {
     ok: true,
     input: {
       recipientEmails,
       subject,
-      html: appendUtmParametersToHtml(
-        values.html,
-        ARBITRARY_EMAIL_UTM_KEYS.map((key) => [key, utm[key]]),
-      ),
+      html: content.content.html,
+      text: content.content.text,
       utm,
     },
   };

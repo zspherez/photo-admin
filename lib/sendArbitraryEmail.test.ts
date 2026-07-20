@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Prisma } from "@prisma/client";
 import { acquireOutreachRecipientPolicyLocks } from "./outreachPolicyLocks";
 import {
   buildArbitraryResendDeliveryPolicy,
@@ -53,6 +54,7 @@ interface MemoryTransaction {
 
 class MemoryArbitraryEmailDatabase {
   record: Record<string, unknown> | null = null;
+  transactionFailuresRemaining = 0;
   readonly suppressed = new Set<string>();
   readonly settingsMutex = new Mutex();
   private readonly recipientMutexes = new Map<string, Mutex>();
@@ -92,6 +94,13 @@ class MemoryArbitraryEmailDatabase {
   async $transaction<T>(
     work: (tx: MemoryTransaction) => Promise<T>,
   ): Promise<T> {
+    if (this.transactionFailuresRemaining > 0) {
+      this.transactionFailuresRemaining -= 1;
+      throw new Prisma.PrismaClientKnownRequestError("retry transaction", {
+        code: "P2034",
+        clientVersion: "test",
+      });
+    }
     const releases: Array<() => void> = [];
     const tx: MemoryTransaction = {
       releases,
@@ -158,6 +167,7 @@ const INPUT = {
   recipientEmails: ["first@example.com", "second@example.com"],
   subject: "Private update",
   html: "<p>Hello</p>",
+  text: "Hello",
   utm: {
     utm_source: "",
     utm_medium: "",
@@ -192,6 +202,7 @@ function prepareWithSettings(
       replyTo: [],
       subject: resolved.policy.subject,
       html: args.html,
+      text: args.text,
       headers: { "X-Arbitrary-Email-Id": args.arbitraryEmailId },
       tags: [{ name: "arbitrary_email_id", value: args.arbitraryEmailId }],
       attachments: [],
@@ -385,4 +396,47 @@ test("uncertain provider outcomes retain the immutable request for manual review
   );
   assert.equal(typeof database.record?.providerRequest, "object");
   assert.match(String(database.record?.requestHash), /^[0-9a-f]{64}$/);
+});
+
+test("transaction retries submit the immutable canonical HTML and text snapshot", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  database.transactionFailuresRemaining = 1;
+  let preparationCalls = 0;
+  let submittedRequest: ResendRequestSnapshot | null = null;
+  const deps = dependencies(database, REAL_SETTINGS, async (request) => {
+    submittedRequest = request;
+    return {
+      providerMessageId: "message-retry",
+      error: null,
+      failureDisposition: null,
+    };
+  });
+  const prepare = deps.prepare;
+  deps.prepare = async (args) => {
+    preparationCalls += 1;
+    return prepare(args);
+  };
+
+  const result = await sendArbitraryEmailWithDependencies(
+    {
+      ...INPUT,
+      html:
+        '<html><head><meta charset="utf-16"></head><body><p onclick="bad()">Hello <a href="https://example.com?a=1">there</a></p></body></html>',
+      text: "ignored caller text",
+      utm: { ...INPUT.utm, utm_source: "newsletter" },
+    },
+    deps,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(preparationCalls, 1);
+  const submitted = submittedRequest as ResendRequestSnapshot | null;
+  assert.ok(submitted);
+  assert.deepEqual(submitted, database.record?.providerRequest);
+  assert.equal(database.record?.html, submitted.html);
+  assert.equal(database.record?.text, submitted.text);
+  assert.ok(submitted.html.startsWith("<!doctype html>"));
+  assert.doesNotMatch(submitted.html, /onclick|utf-16/);
+  assert.match(submitted.html, /utm_source=newsletter/);
+  assert.match(submitted.text ?? "", /Hello there \(https:\/\/example\.com/);
 });

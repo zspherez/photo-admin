@@ -109,6 +109,7 @@ export interface ResendRequestSnapshot {
   replyTo: string[];
   subject: string;
   html: string;
+  text?: string;
   headers: Record<string, string>;
   tags: { name: string; value: string }[];
   attachments: ResendAttachmentSnapshot[];
@@ -127,6 +128,7 @@ export interface PrepareArbitraryResendRequestArgs {
   to: string[];
   subject: string;
   html: string;
+  text: string;
   arbitraryEmailId: string;
   idempotencyKey: string;
 }
@@ -727,6 +729,7 @@ export async function prepareArbitraryResendRequest({
   to,
   subject,
   html,
+  text,
   arbitraryEmailId,
   idempotencyKey,
 }: PrepareArbitraryResendRequestArgs): Promise<PrepareResendRequestResult> {
@@ -748,6 +751,7 @@ export async function prepareArbitraryResendRequest({
     replyTo: [],
     subject: policy.subject,
     html,
+    text,
     headers: { "X-Arbitrary-Email-Id": arbitraryEmailId },
     tags: [{ name: "arbitrary_email_id", value: arbitraryEmailId }],
     attachments: [],
@@ -807,27 +811,30 @@ function readStringRecord(value: unknown): Record<string, string> | null {
 }
 
 export function parseResendRequestSnapshot(value: unknown): ResendRequestSnapshot | null {
+  const requiredKeys = [
+    "version",
+    "idempotencyKey",
+    "from",
+    "to",
+    "cc",
+    "bcc",
+    "replyTo",
+    "subject",
+    "html",
+    "headers",
+    "tags",
+    "attachments",
+  ];
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, [
-      "version",
-      "idempotencyKey",
-      "from",
-      "to",
-      "cc",
-      "bcc",
-      "replyTo",
-      "subject",
-      "html",
-      "headers",
-      "tags",
-      "attachments",
-    ]) ||
+    (!hasExactKeys(value, requiredKeys) &&
+      !hasExactKeys(value, [...requiredKeys, "text"])) ||
     value.version !== 1 ||
     typeof value.idempotencyKey !== "string" ||
     typeof value.from !== "string" ||
     typeof value.subject !== "string" ||
-    typeof value.html !== "string"
+    typeof value.html !== "string" ||
+    ("text" in value && typeof value.text !== "string")
   ) {
     return null;
   }
@@ -882,6 +889,7 @@ export function parseResendRequestSnapshot(value: unknown): ResendRequestSnapsho
     replyTo,
     subject: value.subject,
     html: value.html,
+    ...("text" in value ? { text: value.text as string } : {}),
     headers,
     tags: value.tags.map((tag) => ({
       name: (tag as Record<string, string>).name,
@@ -1040,6 +1048,7 @@ export async function sendPreparedEmailViaResend(
         to: request.to,
         subject: request.subject,
         html: request.html,
+        ...(request.text ? { text: request.text } : {}),
         headers: request.headers,
         tags: request.tags,
         ...(request.cc.length > 0
