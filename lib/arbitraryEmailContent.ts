@@ -138,13 +138,27 @@ const SAFE_DISPLAY_VALUES = new Set([
   "table-row",
 ]);
 
-const BLOCK_CONTAINER_TAGS = new Set([
+const BLOCK_LEVEL_TAGS = new Set([
+  "address",
+  "blockquote",
   "body",
   "div",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "hr",
+  "li",
   "ol",
+  "p",
+  "pre",
   "table",
   "tbody",
+  "td",
   "tfoot",
+  "th",
   "thead",
   "tr",
   "ul",
@@ -182,10 +196,34 @@ function looksLikeQuotedPrintableSource(value: string): boolean {
   const encodedBytes = value.match(/=[0-9a-f]{2}/gi)?.length ?? 0;
   const softBreaks = value.match(/=\r?\n/g)?.length ?? 0;
   const encodedUtf8 = /(?:=[c-f][0-9a-f])(?:=[89ab][0-9a-f]){1,3}/i.test(value);
+  const encodedLength = encodedBytes * 3;
+  const compactLength = value.replace(/\s/g, "").length;
+  const denseEncodedAscii =
+    encodedBytes >= 6 &&
+    compactLength > 0 &&
+    encodedLength / compactLength >= 0.35;
+  const asciiDecodedProbe = value
+    .replace(/</g, "\u0001")
+    .replace(/>/g, "\u0002")
+    .replace(
+      /=([0-9a-f]{2})/gi,
+      (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)),
+    );
+  const encodedMarkupTags = Array.from(
+    asciiDecodedProbe.matchAll(
+      /<\/?(?:html|head|body|meta|title|style|div|span|p|br|hr|h[1-6]|ul|ol|li|blockquote|pre|code|table|thead|tbody|tfoot|tr|th|td|a|img|strong|b|em|i|u|s|sub|sup|address)\b[^>]*>/gi,
+    ),
+  ).length;
+  const encodedMarkup =
+    /=3c/i.test(value) &&
+    /=3e/i.test(value) &&
+    encodedMarkupTags >= 2;
   return (
     (assignments >= 2 && (softBreaks >= 1 || encodedBytes >= 6)) ||
     (softBreaks >= 2 && encodedBytes >= 3) ||
-    (assignments >= 1 && encodedUtf8)
+    (assignments >= 1 && encodedUtf8) ||
+    encodedMarkup ||
+    denseEncodedAscii
   );
 }
 
@@ -280,24 +318,47 @@ function safeSpanAttribute(value: string | undefined): string | null {
   return parsed && Number(parsed) >= 1 ? parsed : null;
 }
 
+function pixelDimension(value: string | undefined): number | null {
+  if (!value) return null;
+  const match = value
+    .trim()
+    .match(
+      /^((?:\d+(?:\.\d*)?)|(?:\.\d+))(?:px)?(?:\s*!important)?$/i,
+    );
+  if (!match) return null;
+  const parsed = Number.parseFloat(match[1]);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function isTrackingImage(
   attributes: Record<string, string>,
   sanitizedStyle: string | null,
 ): boolean {
-  const width = safeIntegerAttribute(attributes.width);
-  const height = safeIntegerAttribute(attributes.height);
-  if ((width && Number(width) <= 1) || (height && Number(height) <= 1)) {
-    return true;
+  for (const name of [
+    "width",
+    "height",
+    "min-width",
+    "min-height",
+    "max-width",
+    "max-height",
+    "minwidth",
+    "minheight",
+    "maxwidth",
+    "maxheight",
+  ]) {
+    const dimension = pixelDimension(attributes[name]);
+    if (dimension !== null && dimension <= 1) return true;
   }
-  const compactStyle = sanitizedStyle?.toLowerCase().replace(/\s+/g, "") ?? "";
-  return (
-    /(?:^|;)width:(?:0(?:\.\d+)?|1(?:\.0*)?)(?:px|pt)?(?:;|$)/.test(
-      compactStyle,
-    ) ||
-    /(?:^|;)height:(?:0(?:\.\d+)?|1(?:\.0*)?)(?:px|pt)?(?:;|$)/.test(
-      compactStyle,
-    )
-  );
+
+  for (const declaration of sanitizedStyle?.split(";") ?? []) {
+    const separator = declaration.indexOf(":");
+    if (separator < 1) continue;
+    const property = declaration.slice(0, separator).trim().toLowerCase();
+    if (!/^(?:min-|max-)?(?:width|height)$/.test(property)) continue;
+    const dimension = pixelDimension(declaration.slice(separator + 1));
+    if (dimension !== null && dimension <= 1) return true;
+  }
+  return false;
 }
 
 function setSafeAttributes($: CheerioAPI, element: Element): void {
@@ -391,12 +452,41 @@ function normalizeTextNodes($: CheerioAPI): void {
       if (!parent || parent.type !== "tag") return;
       const parentTag = parent.tagName.toLowerCase();
       if ($(parent).parents("pre, code").length > 0 || parentTag === "pre") return;
-      const normalized = node.data.replace(/\s+/g, " ");
-      if (!normalized.trim() && BLOCK_CONTAINER_TAGS.has(parentTag)) {
-        $(node).remove();
-      } else {
-        node.data = normalized;
+      let normalized = node.data.replace(/\s+/g, " ");
+      if (BLOCK_LEVEL_TAGS.has(parentTag)) {
+        if (
+          !node.prev ||
+          (node.prev.type === "tag" &&
+            BLOCK_LEVEL_TAGS.has(node.prev.tagName.toLowerCase()))
+        ) {
+          normalized = normalized.trimStart();
+        }
+        if (
+          !node.next ||
+          (node.next.type === "tag" &&
+            BLOCK_LEVEL_TAGS.has(node.next.tagName.toLowerCase()))
+        ) {
+          normalized = normalized.trimEnd();
+        }
       }
+      if (normalized.trim()) {
+        node.data = normalized;
+        return;
+      }
+
+      const previousIsBlock =
+        node.prev?.type === "tag" &&
+        BLOCK_LEVEL_TAGS.has(node.prev.tagName.toLowerCase());
+      const nextIsBlock =
+        node.next?.type === "tag" &&
+        BLOCK_LEVEL_TAGS.has(node.next.tagName.toLowerCase());
+      const isBlockBoundary =
+        BLOCK_LEVEL_TAGS.has(parentTag) && (!node.prev || !node.next);
+      if (previousIsBlock || nextIsBlock || isBlockBoundary) {
+        $(node).remove();
+        return;
+      }
+      node.data = " ";
     });
 }
 
@@ -471,7 +561,7 @@ function plainTextFromDocument($: CheerioAPI): string {
     }
     item.prepend(`${"  ".repeat(depth)}${marker} `).append("\n");
   });
-  body.find(TEXT_BLOCK_TAGS.join(",")).append("\n\n");
+  body.find(TEXT_BLOCK_TAGS.join(",")).prepend("\n\n").append("\n\n");
   body.find("tr").append("\n");
 
   return body

@@ -83,6 +83,21 @@ test("quoted-printable message source is rejected instead of rendered or manuall
     "<p>Use the literal values =3D and x=3D in this explanation.</p>",
   );
   assert.equal(ordinaryEqualsText.ok, true);
+
+  for (const encoded of [
+    "=3Cp=3EHello=20world=3C/p=3E",
+    "=3Cdiv=3E=48=65=6C=6C=6F=20=74=65=61=6D=3C/div=3E",
+  ]) {
+    assert.equal(normalizeArbitraryEmailContent(encoded).ok, false);
+  }
+  for (const ordinary of [
+    "<p>Equation: total=3C + tax=20.</p>",
+    "<p>Literal tokens =3Ctag=3E remain text.</p>",
+    "<p>Tokens: =3G =0Z = and =4.</p>",
+    "<p>Occasional hex-like values: =41 then =42.</p>",
+  ]) {
+    assert.equal(normalizeArbitraryEmailContent(ordinary).ok, true);
+  }
 });
 
 test("unsafe content and hidden tracking are removed while safe formatting and visible images remain", () => {
@@ -96,8 +111,13 @@ test("unsafe content and hidden tracking are removed while safe formatting and v
       <a href="https://example.com/path">good link</a>
     </p>
     <img src="https://tracker.example/open.gif" width="1" height="1" alt="">
+    <img src="https://tracker.example/max-width.gif" style="max-width: 1px !important" alt="">
+    <img src="https://tracker.example/max-height.gif" style="max-height: .5px" alt="">
+    <img src="https://tracker.example/mixed.gif" style="height: 600px; max-width: 1px" alt="">
+    <img src="https://tracker.example/min-width.gif" style="min-width: 1px" alt="">
+    <img src="https://tracker.example/attribute.gif" max-width=".5px" alt="">
     <img src="data:image/png;base64,AAAA" alt="embedded">
-    <img src="https://images.example/photo.jpg" width="600" alt="Gallery">
+    <img src="https://images.example/photo.jpg" width="600" style="width: 600px; min-width: 200px; max-width: 100%" alt="Gallery">
     <div style="display:none">hidden preheader tracker</div>
   `);
 
@@ -116,6 +136,36 @@ test("unsafe content and hidden tracking are removed while safe formatting and v
     result.content.html,
     /src="https:\/\/images\.example\/photo\.jpg" alt="Gallery" width="600"/,
   );
+  assert.match(result.content.html, /max-width: 100%/);
+});
+
+test("inline sibling whitespace is preserved while block indentation is removed", () => {
+  const result = normalizeArbitraryEmailContent(`
+    <div>
+      <span>Hello</span> <span>world</span><span>!</span>
+      <p>
+        <a href="https://example.com/read">Read</a> <em>this</em>, <strong>please</strong>.
+      </p>
+      <div>
+        <span>Nested</span>
+        <span>inline</span>
+      </div>
+    </div>
+  `);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.match(
+    result.content.html,
+    /<span>Hello<\/span> <span>world<\/span><span>!<\/span><p><a[^>]+>Read<\/a> <em>this<\/em>, <strong>please<\/strong>\.<\/p><div><span>Nested<\/span> <span>inline<\/span><\/div>/,
+  );
+  assert.match(result.content.text, /Hello world!\n\nRead/);
+  assert.match(
+    result.content.text,
+    /Read \(https:\/\/example\.com\/read\) this, please\./,
+  );
+  assert.match(result.content.text, /please\.\n\nNested inline/);
+  assert.doesNotMatch(result.content.html, />\s{2,}</);
 });
 
 test("plain text preserves Unicode, paragraphs, lists, links, and signatures with UTM parity", () => {
