@@ -72,10 +72,37 @@ test("research jobs are ranked by the best upcoming venue tier", () => {
   assert.match(source, /ORDER BY "tier" DESC, show\."date" ASC/);
   assert.match(
     source,
-    /CASE WHEN job\."status" = 'exhausted' THEN 1 ELSE 0 END,\s*COALESCE\(best_show\."tier", 0\) DESC/
+    /activeFilter === "all"[\s\S]*CASE WHEN job\."status" = 'exhausted' THEN 1 ELSE 0 END,[\s\S]*COALESCE\(best_show\."tier", 0\) DESC/
   );
   assert.match(source, /LIMIT 125/);
   assert.match(source, /venueTierLabel\(job\.bestShow\.tier\)/);
+});
+
+test("status filtering happens before ordering and limiting while counts stay global", () => {
+  assert.match(
+    source,
+    /groupBy\(\{[\s\S]*where: \{ status: \{ in: \[\.\.\.RESEARCH_JOB_STATUSES\] \} \}[\s\S]*_count/
+  );
+  assert.match(
+    source,
+    /job\."status" IN \(\$\{Prisma\.join\([\s\S]*activeFilterDefinition\.statuses[\s\S]*\)\}\)/
+  );
+  assert.match(
+    source,
+    /WHERE \$\{visibleStatusWhere\}[\s\S]*ORDER BY[\s\S]*LIMIT 125/
+  );
+  assert.match(source, /counts\.set\("skipped", skippedCount\)/);
+});
+
+test("status count cards are accessible links with a visible active state", () => {
+  assert.match(
+    source,
+    /aria-label="Filter contact research jobs by status"/
+  );
+  assert.match(source, /RESEARCH_STATUS_FILTERS\.map/);
+  assert.match(source, /href=\{researchStatusHref\(filter\.key\)\}/);
+  assert.match(source, /aria-current=\{isActive \? "page" : undefined\}/);
+  assert.match(source, /isActive[\s\S]*border-zinc-900 ring-1 ring-zinc-900/);
 });
 
 test("review and exhausted jobs can be requeued", () => {
@@ -87,15 +114,14 @@ test("review and exhausted jobs can be requeued", () => {
 });
 
 test("intentional skips have a URL-backed count and dedicated view", () => {
+  assert.match(source, /parseResearchStatusFilter\(raw\.status\)/);
   assert.match(source, /parseContactResearchView\(raw\.view\)/);
   assert.match(source, /db\.artistResearchSkip\.count/);
-  assert.match(source, /contactResearchHref\("skipped"\)/);
-  assert.match(source, /aria-current=\{researchView === "skipped"/);
-  assert.match(source, />Skipped</);
-  assert.match(source, /← All research jobs/);
+  assert.match(source, /activeFilter === "skipped"/);
+  assert.match(source, /RESEARCH_STATUS_FILTERS\.map/);
   assert.match(
     source,
-    /researchView === "skipped"[\s\S]*job\."status" = 'skipped'/
+    /activeFilter === "skipped"[\s\S]*job\."status" = 'skipped'[\s\S]*ArtistResearchSkip/
   );
 });
 
@@ -112,15 +138,24 @@ test("research cards support explicit skip and unskip with audit context", () =>
   assert.match(source, /Rule: \{activeSkip\.agentRuleText\}/);
 });
 
-test("research mutations preserve the skipped view URL", () => {
-  assert.match(source, /contactResearchViewFromForm\(formData\)/);
+test("research actions preserve the active status URL", () => {
   assert.match(
     source,
-    /name="view"\s*value=\{researchView\}/
+    /function actionResearchFilter\(formData: FormData\)[\s\S]*formData\.get\("status"\)/
   );
   assert.match(
     source,
-    /contactResearchHref\(view, \{ error: "skip_failed" \}\)/
+    /researchStatusHref\(filter, \{ error: "skip_failed" \}\)/
+  );
+  assert.match(
+    source,
+    /researchStatusHref\(filter, \{ error: "unskip_failed" \}\)/
+  );
+  assert.ok(
+    (source.match(
+      /<input[\s\S]{0,120}type="hidden"[\s\S]{0,120}name="status"[\s\S]{0,120}value=\{activeFilter\}/g
+    )?.length ?? 0) >= 9,
+    "expected every research action form to submit the active status filter"
   );
 });
 
@@ -128,5 +163,6 @@ test("research status banners clear after three seconds without navigation", () 
   assert.match(dismissSource, /}, 3_000\)/);
   assert.match(dismissSource, /window\.history\.replaceState/);
   assert.doesNotMatch(dismissSource, /router\.(push|replace)/);
+  assert.doesNotMatch(dismissSource, /"status"/);
   assert.match(source, /<AutoDismissStatus>/);
 });

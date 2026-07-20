@@ -17,18 +17,22 @@ import {
 } from "@/lib/contactResearch";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
-import {
-  contactResearchHref,
-  contactResearchViewFromForm,
-  parseContactResearchView,
-} from "@/lib/contactResearchView";
+import { parseContactResearchView } from "@/lib/contactResearchView";
 import { formatShowDate } from "@/lib/formatDate";
-import { Card, CardBody, CardLink } from "@/components/ui/card";
+import { Card, CardBody } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { TextArea } from "@/components/ui/field";
 import { AutoDismissStatus } from "./auto-dismiss-status";
 import { easternTodayStoredDate } from "@/lib/calendarDate";
+import {
+  RESEARCH_JOB_STATUSES,
+  RESEARCH_STATUS_FILTERS,
+  parseResearchStatusFilter,
+  researchStatusCounts,
+  researchStatusFilterDefinition,
+  researchStatusHref,
+} from "@/lib/researchStatusFilter";
 import {
   type VenueTier,
   venueTierSql,
@@ -38,20 +42,26 @@ import {
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact research" };
 
+function actionResearchFilter(formData: FormData) {
+  return parseResearchStatusFilter(formData.get("status"));
+}
+
 async function refreshQueueAction(formData: FormData) {
   "use server";
-  await requireServerActionAuth("/research");
-  const view = contactResearchViewFromForm(formData);
+  await requireServerActionAuth(
+    researchStatusHref(actionResearchFilter(formData))
+  );
+  const filter = actionResearchFilter(formData);
   let destination: string;
   try {
     const result = await refreshContactResearchQueue();
-    destination = contactResearchHref(view, {
+    destination = researchStatusHref(filter, {
       refreshed: "1",
       eligible: String(result.eligible),
       enqueued: String(result.enqueued),
     });
   } catch (error) {
-    destination = contactResearchHref(view, {
+    destination = researchStatusHref(filter, {
       error: "queue_refresh",
       detail: (error instanceof Error ? error.message : String(error)).slice(
         0,
@@ -66,11 +76,13 @@ async function refreshQueueAction(formData: FormData) {
 
 async function approveCandidateAction(formData: FormData) {
   "use server";
-  await requireServerActionAuth("/research");
-  const view = contactResearchViewFromForm(formData);
+  await requireServerActionAuth(
+    researchStatusHref(actionResearchFilter(formData))
+  );
+  const filter = actionResearchFilter(formData);
   const candidateId = String(formData.get("candidateId") ?? "").trim();
   if (!candidateId) {
-    redirect(contactResearchHref(view, { error: "missing_candidate" }));
+    redirect(researchStatusHref(filter, { error: "missing_candidate" }));
   }
   const result = await approveContactResearchCandidate(candidateId);
   revalidatePath("/research");
@@ -79,56 +91,64 @@ async function approveCandidateAction(formData: FormData) {
   revalidatePath("/settings/contacts");
   if (!result.ok) {
     redirect(
-      contactResearchHref(view, {
+      researchStatusHref(filter, {
         error: "approve_failed",
         detail: result.error ?? "Candidate could not be approved",
       })
     );
   }
   if (result.sheetError) {
-    redirect(contactResearchHref(view, { sheet_error: result.sheetError }));
+    redirect(
+      researchStatusHref(filter, { sheet_error: result.sheetError })
+    );
   }
 }
 
 async function rejectCandidateAction(formData: FormData) {
   "use server";
-  await requireServerActionAuth("/research");
-  const view = contactResearchViewFromForm(formData);
+  await requireServerActionAuth(
+    researchStatusHref(actionResearchFilter(formData))
+  );
+  const filter = actionResearchFilter(formData);
   const candidateId = String(formData.get("candidateId") ?? "").trim();
   if (!candidateId) {
-    redirect(contactResearchHref(view, { error: "missing_candidate" }));
+    redirect(researchStatusHref(filter, { error: "missing_candidate" }));
   }
   const result = await rejectContactResearchCandidate(candidateId);
   revalidatePath("/research");
   revalidatePath("/settings");
   if (!result.ok) {
-    redirect(contactResearchHref(view, { error: "reject_failed" }));
+    redirect(researchStatusHref(filter, { error: "reject_failed" }));
   }
 }
 
 async function retryJobAction(formData: FormData) {
   "use server";
-  await requireServerActionAuth("/research");
-  const view = contactResearchViewFromForm(formData);
+  await requireServerActionAuth(
+    researchStatusHref(actionResearchFilter(formData))
+  );
+  const filter = actionResearchFilter(formData);
   const jobId = String(formData.get("jobId") ?? "").trim();
   if (!jobId) {
-    redirect(contactResearchHref(view, { error: "missing_job" }));
+    redirect(researchStatusHref(filter, { error: "missing_job" }));
   }
   const retried = await retryContactResearchJob(jobId);
   revalidatePath("/research");
   revalidatePath("/settings");
   if (!retried) {
-    redirect(contactResearchHref(view, { error: "retry_failed" }));
+    redirect(researchStatusHref(filter, { error: "retry_failed" }));
   }
 }
 
 async function saveResearchNotesAction(formData: FormData) {
   "use server";
-  await requireServerActionAuth("/research");
-  const view = contactResearchViewFromForm(formData);
+  await requireServerActionAuth(
+    researchStatusHref(actionResearchFilter(formData))
+  );
+  const filter = actionResearchFilter(formData);
   const jobId = String(formData.get("jobId") ?? "").trim();
   if (!jobId) {
-    redirect(contactResearchHref(view, { error: "missing_job" }));
+    redirect(researchStatusHref(filter, { error: "missing_job" }));
   }
   let updated = false;
   try {
@@ -138,7 +158,7 @@ async function saveResearchNotesAction(formData: FormData) {
     );
   } catch (error) {
     redirect(
-      contactResearchHref(view, {
+      researchStatusHref(filter, {
         error: "notes_failed",
         detail: (error instanceof Error ? error.message : String(error)).slice(
           0,
@@ -149,21 +169,25 @@ async function saveResearchNotesAction(formData: FormData) {
   }
   revalidatePath("/research");
   if (!updated) {
-    redirect(contactResearchHref(view, { error: "notes_failed" }));
+    redirect(researchStatusHref(filter, { error: "notes_failed" }));
   }
 }
 
-async function retryAllExhaustedJobsAction() {
+async function retryAllExhaustedJobsAction(formData: FormData) {
   "use server";
-  await requireServerActionAuth("/research");
+  await requireServerActionAuth(
+    researchStatusHref(actionResearchFilter(formData))
+  );
   await retryAllExhaustedContactResearchJobs();
   revalidatePath("/research");
   revalidatePath("/settings");
 }
 
-async function retryAllReviewJobsAction() {
+async function retryAllReviewJobsAction(formData: FormData) {
   "use server";
-  await requireServerActionAuth("/research");
+  await requireServerActionAuth(
+    researchStatusHref(actionResearchFilter(formData))
+  );
   await retryAllReviewContactResearchJobs();
   revalidatePath("/research");
   revalidatePath("/settings");
@@ -171,11 +195,13 @@ async function retryAllReviewJobsAction() {
 
 async function skipArtistAction(formData: FormData) {
   "use server";
-  await requireServerActionAuth("/research");
-  const view = contactResearchViewFromForm(formData);
+  await requireServerActionAuth(
+    researchStatusHref(actionResearchFilter(formData))
+  );
+  const filter = actionResearchFilter(formData);
   const jobId = String(formData.get("jobId") ?? "").trim();
   if (!jobId) {
-    redirect(contactResearchHref(view, { error: "missing_job" }));
+    redirect(researchStatusHref(filter, { error: "missing_job" }));
   }
   let skipped = false;
   try {
@@ -185,7 +211,7 @@ async function skipArtistAction(formData: FormData) {
     );
   } catch (error) {
     redirect(
-      contactResearchHref(view, {
+      researchStatusHref(filter, {
         error: "skip_failed",
         detail: (error instanceof Error ? error.message : String(error)).slice(
           0,
@@ -197,23 +223,25 @@ async function skipArtistAction(formData: FormData) {
   revalidatePath("/research");
   revalidatePath("/settings");
   if (!skipped) {
-    redirect(contactResearchHref(view, { error: "skip_failed" }));
+    redirect(researchStatusHref(filter, { error: "skip_failed" }));
   }
 }
 
 async function unskipArtistAction(formData: FormData) {
   "use server";
-  await requireServerActionAuth("/research");
-  const view = contactResearchViewFromForm(formData);
+  await requireServerActionAuth(
+    researchStatusHref(actionResearchFilter(formData))
+  );
+  const filter = actionResearchFilter(formData);
   const jobId = String(formData.get("jobId") ?? "").trim();
   if (!jobId) {
-    redirect(contactResearchHref(view, { error: "missing_job" }));
+    redirect(researchStatusHref(filter, { error: "missing_job" }));
   }
   const unskipped = await unskipContactResearchArtist(jobId);
   revalidatePath("/research");
   revalidatePath("/settings");
   if (!unskipped) {
-    redirect(contactResearchHref(view, { error: "unskip_failed" }));
+    redirect(researchStatusHref(filter, { error: "unskip_failed" }));
   }
 }
 
@@ -246,11 +274,18 @@ export default async function ContactResearchPage({
     error?: SearchParamValue;
     detail?: SearchParamValue;
     sheet_error?: SearchParamValue;
+    status?: SearchParamValue;
     view?: SearchParamValue;
   }>;
 }) {
   const raw = await searchParams;
-  const researchView = parseContactResearchView(raw.view);
+  const activeFilter =
+    raw.status === undefined &&
+    parseContactResearchView(raw.view) === "skipped"
+      ? "skipped"
+      : parseResearchStatusFilter(raw.status);
+  const activeFilterDefinition =
+    researchStatusFilterDefinition(activeFilter);
   const status = {
     refreshed: firstSearchParam(raw.refreshed),
     eligible: firstSearchParam(raw.eligible),
@@ -269,7 +304,7 @@ export default async function ContactResearchPage({
     Prisma.sql`show."eventName"`
   );
   const visibleStatusWhere =
-    researchView === "skipped"
+    activeFilter === "skipped"
       ? Prisma.sql`
           job."status" = 'skipped'
           AND EXISTS (
@@ -280,7 +315,9 @@ export default async function ContactResearchPage({
           )
         `
       : Prisma.sql`
-          job."status" IN ('pending', 'claimed', 'review', 'exhausted')
+          job."status" IN (${Prisma.join([
+            ...activeFilterDefinition.statuses,
+          ])})
           AND NOT EXISTS (
             SELECT 1
             FROM "ArtistResearchSkip" research_skip
@@ -291,6 +328,7 @@ export default async function ContactResearchPage({
   const [groupedCounts, skippedCount, rankedSummaries] = await Promise.all([
     db.contactResearchJob.groupBy({
       by: ["status"],
+      where: { status: { in: [...RESEARCH_JOB_STATUSES] } },
       _count: { _all: true },
     }),
     db.artistResearchSkip.count({
@@ -329,13 +367,18 @@ export default async function ContactResearchPage({
       ) best_show ON TRUE
       WHERE ${visibleStatusWhere}
       ORDER BY
-        CASE WHEN job."status" = 'exhausted' THEN 1 ELSE 0 END,
+        ${
+          activeFilter === "all"
+            ? Prisma.sql`CASE WHEN job."status" = 'exhausted' THEN 1 ELSE 0 END,`
+            : Prisma.sql``
+        }
         COALESCE(best_show."tier", 0) DESC,
         CASE job."status"
           WHEN 'review' THEN 0
           WHEN 'claimed' THEN 1
           WHEN 'pending' THEN 2
-          WHEN 'exhausted' THEN 3
+          WHEN 'complete' THEN 3
+          WHEN 'exhausted' THEN 4
           ELSE 99
         END,
         job."priority" DESC,
@@ -344,9 +387,13 @@ export default async function ContactResearchPage({
       LIMIT 125
     `),
   ]);
-  const counts = new Map(
-    groupedCounts.map((row) => [row.status, row._count._all])
+  const counts = researchStatusCounts(
+    groupedCounts.map((row) => ({
+      status: row.status,
+      count: row._count._all,
+    }))
   );
+  counts.set("skipped", skippedCount);
   const detailedRows = await db.contactResearchJob.findMany({
     where: { id: { in: rankedSummaries.map((job) => job.id) } },
     include: {
@@ -408,7 +455,7 @@ export default async function ContactResearchPage({
         </div>
         <div className="flex flex-wrap gap-2">
           <form action={retryAllReviewJobsAction}>
-            <input type="hidden" name="view" value={researchView} />
+            <input type="hidden" name="status" value={activeFilter} />
             <PendingSubmitButton
               variant="secondary"
               pendingLabel="Requeueing…"
@@ -418,7 +465,7 @@ export default async function ContactResearchPage({
             </PendingSubmitButton>
           </form>
           <form action={retryAllExhaustedJobsAction}>
-            <input type="hidden" name="view" value={researchView} />
+            <input type="hidden" name="status" value={activeFilter} />
             <PendingSubmitButton
               variant="secondary"
               pendingLabel="Requeueing…"
@@ -428,7 +475,7 @@ export default async function ContactResearchPage({
             </PendingSubmitButton>
           </form>
           <form action={refreshQueueAction}>
-            <input type="hidden" name="view" value={researchView} />
+            <input type="hidden" name="status" value={activeFilter} />
             <PendingSubmitButton
               variant="secondary"
               pendingLabel="Refreshing…"
@@ -439,35 +486,39 @@ export default async function ContactResearchPage({
         </div>
       </div>
 
-      <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-5">
-        {[
-          ["To review", counts.get("review") ?? 0],
-          ["Researching", counts.get("claimed") ?? 0],
-          ["Queued", counts.get("pending") ?? 0],
-          ["Exhausted", counts.get("exhausted") ?? 0],
-        ].map(([label, value]) => (
-          <Card key={label}>
-            <CardBody className="p-4">
-              <p className="text-xs text-zinc-500">{label}</p>
-              <p className="mt-1 text-xl font-semibold">{value}</p>
-            </CardBody>
-          </Card>
-        ))}
-        <CardLink
-          href={contactResearchHref("skipped")}
-          aria-current={researchView === "skipped" ? "page" : undefined}
-          className={
-            researchView === "skipped"
-              ? "border-amber-400 ring-2 ring-amber-200 dark:border-amber-700 dark:ring-amber-950"
-              : undefined
-          }
-        >
-          <CardBody className="p-4">
-            <p className="text-xs text-zinc-500">Skipped</p>
-            <p className="mt-1 text-xl font-semibold">{skippedCount}</p>
-          </CardBody>
-        </CardLink>
-      </div>
+      <nav
+        aria-label="Filter contact research jobs by status"
+        className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4"
+      >
+        {RESEARCH_STATUS_FILTERS.map((filter) => {
+          const isActive = filter.key === activeFilter;
+          const count = counts.get(filter.key) ?? 0;
+          return (
+            <Link
+              key={filter.key}
+              href={researchStatusHref(filter.key)}
+              aria-current={isActive ? "page" : undefined}
+              aria-label={`Show ${filter.countLabel} contact research jobs: ${count}`}
+              className={`rounded-xl border bg-white p-4 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 dark:bg-zinc-950 dark:focus-visible:ring-zinc-600 dark:focus-visible:ring-offset-zinc-950 ${
+                isActive
+                  ? "border-zinc-900 ring-1 ring-zinc-900 dark:border-zinc-100 dark:ring-zinc-100"
+                  : "border-zinc-200 hover:border-zinc-400 hover:shadow-md dark:border-zinc-800 dark:hover:border-zinc-600"
+              }`}
+            >
+              <p
+                className={`text-xs ${
+                  isActive
+                    ? "font-medium text-zinc-900 dark:text-zinc-100"
+                    : "text-zinc-500"
+                }`}
+              >
+                {filter.label}
+              </p>
+              <p className="mt-1 text-xl font-semibold">{count}</p>
+            </Link>
+          );
+        })}
+      </nav>
 
       {status.refreshed && (
         <AutoDismissStatus>
@@ -523,13 +574,9 @@ export default async function ContactResearchPage({
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
         <span>
-          {researchView === "skipped" ? (
-            <Link href="/research" className="font-medium hover:underline">
-              ← All research jobs
-            </Link>
-          ) : (
-            `${activeCount} active jobs`
-          )}
+          {activeFilter === "all"
+            ? `${activeCount} active jobs`
+            : `${counts.get(activeFilter) ?? 0} ${activeFilterDefinition.countLabel} jobs`}
         </span>
         <span>
           Run locally with <code>npm run contact-research:agent</code>
@@ -539,9 +586,11 @@ export default async function ContactResearchPage({
       {jobs.length === 0 ? (
         <Card className="mt-3">
           <CardBody className="py-12 text-center text-sm text-zinc-500">
-            {researchView === "skipped"
-              ? "No artists are intentionally skipped."
-              : "No contact research jobs. Refresh after show and listen syncs."}
+            {activeFilter === "all"
+              ? "No contact research jobs. Refresh after show and listen syncs."
+              : activeFilter === "skipped"
+                ? "No artists are intentionally skipped."
+                : `No ${activeFilterDefinition.countLabel} contact research jobs.`}
           </CardBody>
         </Card>
       ) : (
@@ -610,8 +659,8 @@ export default async function ContactResearchPage({
                         <input type="hidden" name="jobId" value={job.id} />
                         <input
                           type="hidden"
-                          name="view"
-                          value={researchView}
+                          name="status"
+                          value={activeFilter}
                         />
                         <PendingSubmitButton
                           variant="secondary"
@@ -630,8 +679,8 @@ export default async function ContactResearchPage({
                         <input type="hidden" name="jobId" value={job.id} />
                         <input
                           type="hidden"
-                          name="view"
-                          value={researchView}
+                          name="status"
+                          value={activeFilter}
                         />
                         <TextArea
                           name="userNotes"
@@ -654,8 +703,8 @@ export default async function ContactResearchPage({
                         <input type="hidden" name="jobId" value={job.id} />
                         <input
                           type="hidden"
-                          name="view"
-                          value={researchView}
+                          name="status"
+                          value={activeFilter}
                         />
                         <TextArea
                           name="reason"
@@ -722,8 +771,8 @@ export default async function ContactResearchPage({
                                 />
                                 <input
                                   type="hidden"
-                                  name="view"
-                                  value={researchView}
+                                  name="status"
+                                  value={activeFilter}
                                 />
                                 <PendingSubmitButton
                                   size="sm"
@@ -740,8 +789,8 @@ export default async function ContactResearchPage({
                                 />
                                 <input
                                   type="hidden"
-                                  name="view"
-                                  value={researchView}
+                                  name="status"
+                                  value={activeFilter}
                                 />
                                 <PendingSubmitButton
                                   variant="secondary"
@@ -764,8 +813,8 @@ export default async function ContactResearchPage({
                       <input type="hidden" name="jobId" value={job.id} />
                       <input
                         type="hidden"
-                        name="view"
-                        value={researchView}
+                        name="status"
+                        value={activeFilter}
                       />
                       <PendingSubmitButton
                         variant="secondary"
