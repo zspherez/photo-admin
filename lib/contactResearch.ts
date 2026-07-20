@@ -1211,60 +1211,52 @@ export async function refreshContactResearchQueue(
 
 export async function enqueueFestivalManagerResearch(
   showId: string,
-  now: Date = new Date()
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work)
 ): Promise<{
   eligible: number;
   enqueued: number;
   alreadyQueued: number;
 }> {
   const today = easternTodayStoredDate(now);
-  const festival = await db.show.findFirst({
-    where: {
-      id: showId,
-      isFestival: true,
-      syncStatus: "active",
-      date: { gte: today },
-    },
-    select: {
-      id: true,
-      date: true,
-      artists: {
-        where: {
-          artist: {
-            researchSkips: { none: { clearedAt: null } },
+  return runTransaction(async (tx) => {
+    const festival = await tx.show.findFirst({
+      where: {
+        id: showId,
+        isFestival: true,
+        syncStatus: "active",
+        date: { gte: today },
+      },
+      select: {
+        id: true,
+        date: true,
+        artists: {
+          where: {
+            artist: {
+              contacts: { none: ACTIVE_EMAIL_CONTACT_WHERE },
+              researchSkips: { none: { clearedAt: null } },
+            },
           },
-        },
-        select: {
-          artistId: true,
-          artist: {
-            select: {
-              popularity: true,
-              contacts: {
-                where: ACTIVE_EMAIL_CONTACT_WHERE,
-                select: {
-                  email: true,
-                  role: true,
-                  state: true,
+          select: {
+            artistId: true,
+            artist: {
+              select: {
+                popularity: true,
+                listenSignals: {
+                  where: activeListenSignalWhere(now),
+                  take: 1,
+                  select: { id: true },
                 },
-              },
-              listenSignals: {
-                where: activeListenSignalWhere(now),
-                take: 1,
-                select: { id: true },
               },
             },
           },
         },
       },
-    },
-  });
-  if (!festival) throw new Error("Festival is inactive or unavailable");
+    });
+    if (!festival) throw new Error("Festival is inactive or unavailable");
 
-  return withSerializableRetry(async (tx) => {
-    const eligibleArtists = festival.artists.filter((row) =>
-      needsManagerContactResearch(row.artist.contacts)
-    );
-    const artistIds = eligibleArtists.map((row) => row.artistId);
+    const artistIds = festival.artists.map((row) => row.artistId);
     const existing =
       artistIds.length === 0
         ? []
@@ -1278,7 +1270,7 @@ export async function enqueueFestivalManagerResearch(
     let enqueued = 0;
     let alreadyQueued = 0;
 
-    for (const row of eligibleArtists) {
+    for (const row of festival.artists) {
       const priority =
         2_000 +
         contactResearchPriority({
@@ -1336,7 +1328,7 @@ export async function enqueueFestivalManagerResearch(
     }
 
     return {
-      eligible: eligibleArtists.length,
+      eligible: festival.artists.length,
       enqueued,
       alreadyQueued,
     };
