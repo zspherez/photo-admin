@@ -10,6 +10,16 @@ const LEGACY_RENDERED_RATE_PARAGRAPH =
   /<p\b[^>]*>\s*My standard (?:(?!<\/?p\b)[\s\S])*? show rate is (?:(?!<\/?p\b)[\s\S])*?<\/p\s*>/gi;
 const LEGACY_RATE_SUMMARY_PARAGRAPH =
   /<p\b[^>]*>Gave a brief summary of my rates\/deliverables below, and (?:attached my full rate card to this email but )?I'm happy to work with you to meet your needs!<\/p\s*>/gi;
+const TEMPLATE_VARIABLE = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+const LEGACY_RATE_TEMPLATE_VARIABLE_TEST = /\{\{\s*rate\s*\}\}/i;
+const HTML_PARAGRAPH =
+  /<p\b[^>]*>(?:(?!<\/?p\b)[\s\S])*?<\/p\s*>/gi;
+const PRICING_LANGUAGE =
+  /\b(?:rate|rates|price|pricing|cost|fee|quote|estimate)\b/i;
+const LEGACY_RATE_LANGUAGE =
+  /\b(?:rate|rates|rate card|custom price|fee|quote|estimate)\b/i;
+const CURRENCY_VALUE =
+  /(?:[$€£]\s*\d|\b\d+(?:\.\d{1,2})?\s*(?:USD|dollars?)\b)/i;
 const DEFAULT_DELIVERABLES_SUMMARY =
   "<p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p>";
 
@@ -74,6 +84,233 @@ export function escapeHtml(value: string): string {
         return "&#39;";
     }
   });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function templatePattern(
+  template: string,
+  captureVariables: boolean,
+  variablePattern = "[\\s\\S]*?",
+): { pattern: string; variables: string[] } {
+  let pattern = "";
+  let cursor = 0;
+  const variables: string[] = [];
+  for (const match of template.matchAll(TEMPLATE_VARIABLE)) {
+    pattern += escapeRegExp(template.slice(cursor, match.index));
+    variables.push(match[1].toLowerCase());
+    pattern += captureVariables ? `(${variablePattern})` : variablePattern;
+    cursor = (match.index ?? 0) + match[0].length;
+  }
+  pattern += escapeRegExp(template.slice(cursor));
+  return { pattern, variables };
+}
+
+function normalizeRenderedSubjectFromTemplate(
+  subject: string,
+  template: string,
+): string | null {
+  const tokens = Array.from(template.matchAll(TEMPLATE_VARIABLE));
+  for (let index = 1; index < tokens.length; index += 1) {
+    const previous = tokens[index - 1];
+    const current = tokens[index];
+    const between = template.slice(
+      (previous.index ?? 0) + previous[0].length,
+      current.index,
+    );
+    if (
+      between.length === 0 &&
+      (previous[1].toLowerCase() === "rate" ||
+        current[1].toLowerCase() === "rate")
+    ) {
+      return null;
+    }
+  }
+
+  const { pattern, variables } = templatePattern(template, true);
+  const match = new RegExp(`^${pattern}$`, "i").exec(subject);
+  if (!match) return null;
+
+  let normalized = "";
+  let cursor = 0;
+  let capture = 1;
+  for (const token of template.matchAll(TEMPLATE_VARIABLE)) {
+    normalized += template.slice(cursor, token.index);
+    if (token[1].toLowerCase() !== "rate") {
+      normalized += match[capture] ?? "";
+    }
+    capture += 1;
+    cursor = (token.index ?? 0) + token[0].length;
+  }
+  normalized += template.slice(cursor);
+  return variables.includes("rate") ? normalized : null;
+}
+
+function legacyRateTemplateParagraphs(template: string): string[] {
+  return Array.from(
+    new Set(template.match(LEGACY_RATE_TEMPLATE_PARAGRAPH) ?? []),
+  );
+}
+
+function removeRenderedTemplateParagraph(
+  html: string,
+  templateParagraph: string,
+): { html: string; removed: boolean } {
+  const { pattern } = templatePattern(
+    templateParagraph,
+    false,
+    "(?:(?!<\\/?p\\b)[\\s\\S])*?",
+  );
+  let removed = false;
+  return {
+    html: html.replace(new RegExp(pattern, "gi"), () => {
+      removed = true;
+      return "";
+    }),
+    removed,
+  };
+}
+
+function hasPricingEvidence(
+  value: string,
+  evidenceValues: readonly string[],
+): boolean {
+  const containsExactValue = (candidate: string): boolean => {
+    if (!candidate) return false;
+    let offset = 0;
+    while (offset <= value.length - candidate.length) {
+      const index = value.indexOf(candidate, offset);
+      if (index < 0) return false;
+      const before = value[index - 1] ?? "";
+      const after = value[index + candidate.length] ?? "";
+      const startsWithWord = /[a-zA-Z0-9]/.test(candidate[0] ?? "");
+      const endsWithWord = /[a-zA-Z0-9]/.test(
+        candidate[candidate.length - 1] ?? "",
+      );
+      if (
+        (!startsWithWord || !/[a-zA-Z0-9]/.test(before)) &&
+        (!endsWithWord || !/[a-zA-Z0-9]/.test(after))
+      ) {
+        return true;
+      }
+      offset = index + 1;
+    }
+    return false;
+  };
+  const matchesStoredRate = evidenceValues.some((evidence) => {
+    const trimmed = evidence.trim();
+    return (
+      trimmed.length > 0 &&
+      (containsExactValue(trimmed) ||
+        containsExactValue(escapeHtml(trimmed))) &&
+      (CURRENCY_VALUE.test(trimmed) || PRICING_LANGUAGE.test(value))
+    );
+  });
+  if (matchesStoredRate) return true;
+  return (
+    PRICING_LANGUAGE.test(value) &&
+    LEGACY_RATE_LANGUAGE.test(value) &&
+    CURRENCY_VALUE.test(value)
+  );
+}
+
+function removePricingEvidenceParagraphs(
+  html: string,
+  evidenceValues: readonly string[],
+): { html: string; removed: boolean } {
+  let removed = false;
+  return {
+    html: html.replace(HTML_PARAGRAPH, (paragraph) => {
+      if (!hasPricingEvidence(paragraph, evidenceValues)) return paragraph;
+      removed = true;
+      return "";
+    }),
+    removed,
+  };
+}
+
+export interface LegacyOutreachSnapshotInput {
+  subject: string;
+  html: string;
+  templateSubject?: string | null;
+  templateHtml?: string | null;
+  evidenceValues?: readonly string[];
+}
+
+export interface LegacyOutreachSnapshotNormalization {
+  subject: string;
+  html: string;
+  detected: boolean;
+  safe: boolean;
+}
+
+export function normalizeLegacyOutreachSnapshot(
+  input: LegacyOutreachSnapshotInput,
+): LegacyOutreachSnapshotNormalization {
+  const evidenceValues = input.evidenceValues ?? [];
+  let subject = normalizeLegacyRateTemplateVariable(input.subject);
+  let html = normalizeLegacyRateTemplateHtml(input.html);
+  let detected = subject !== input.subject || html !== input.html;
+  let safe = true;
+
+  if (
+    input.templateSubject &&
+    LEGACY_RATE_TEMPLATE_VARIABLE_TEST.test(input.templateSubject)
+  ) {
+    detected = true;
+    const normalized = normalizeRenderedSubjectFromTemplate(
+      input.subject,
+      input.templateSubject,
+    );
+    if (normalized === null) safe = false;
+    else subject = normalized;
+  }
+
+  if (
+    input.templateHtml &&
+    LEGACY_RATE_TEMPLATE_VARIABLE_TEST.test(input.templateHtml)
+  ) {
+    detected = true;
+    const paragraphs = legacyRateTemplateParagraphs(input.templateHtml);
+    const hasUnsupportedPlacement =
+      LEGACY_RATE_TEMPLATE_VARIABLE_TEST.test(
+        input.templateHtml.replace(LEGACY_RATE_TEMPLATE_PARAGRAPH, ""),
+      );
+    if (hasUnsupportedPlacement) safe = false;
+    for (const paragraph of paragraphs) {
+      const result = removeRenderedTemplateParagraph(html, paragraph);
+      html = result.html;
+      if (
+        !result.removed &&
+        !LEGACY_RATE_TEMPLATE_VARIABLE_TEST.test(input.html)
+      ) {
+        safe = false;
+      }
+    }
+  }
+
+  const pricingParagraphs = removePricingEvidenceParagraphs(
+    html,
+    evidenceValues,
+  );
+  if (pricingParagraphs.removed) {
+    detected = true;
+    html = pricingParagraphs.html;
+  }
+
+  if (hasPricingEvidence(subject, evidenceValues)) {
+    detected = true;
+    safe = false;
+  }
+  const remainingText = html.replace(/<[^>]*>/g, " ");
+  if (hasPricingEvidence(remainingText, evidenceValues)) {
+    detected = true;
+    safe = false;
+  }
+
+  return { subject, html, detected, safe };
 }
 
 export function applyHtmlTemplate(template: string, vars: TemplateVars): string {

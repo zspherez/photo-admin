@@ -7,6 +7,7 @@ import {
   ensureDefaultTemplate,
   ensureFollowUpTemplate,
   normalizeLegacyRateTemplateHtml,
+  normalizeLegacyOutreachSnapshot,
   normalizeLegacyRateTemplateVariable,
 } from "@/lib/template";
 import {
@@ -291,6 +292,10 @@ const MANUAL_REVIEW_IN_FLIGHT_EXPIRED =
   "Resend idempotency retention expired while provider acceptance remained unresolved; reconcile provider or webhook state before replacing the immutable request";
 const MANUAL_REVIEW_SNAPSHOT =
   "Current active contact membership, recipient addresses, or suppressions conflict with the verified outreach snapshot; review manually";
+const MANUAL_REVIEW_LEGACY_RATE_SNAPSHOT =
+  "Scheduled outreach contains legacy rate/custom-price content that could not be normalized safely; review manually before sending";
+const MANUAL_REVIEW_LEGACY_RATE_ATTEMPT =
+  "Immutable provider request contains legacy rate/custom-price content; review manually and do not resend this request";
 const MANUAL_REVIEW_CREDENTIAL_SCOPE_MISSING =
   "Provider attempt has no provable Resend credential scope; reconcile provider or webhook state before retrying";
 const MANUAL_REVIEW_CREDENTIAL_SCOPE_CHANGED =
@@ -305,6 +310,64 @@ export const DEFINITIVELY_UNSENT_CANCELLATION_ERROR =
 export const OUTREACH_MAX_SEND_ATTEMPTS = 5;
 export const OUTREACH_RETRY_BASE_DELAY_MS = 60 * 1000;
 export const OUTREACH_RETRY_MAX_DELAY_MS = 30 * 60 * 1000;
+
+export type LegacyScheduledSnapshotProtection =
+  | { kind: "unchanged" }
+  | { kind: "normalize"; subject: string; html: string }
+  | { kind: "block"; error: string };
+
+export interface LegacyScheduledSnapshotProtectionInput {
+  status: string;
+  finalSubject: string;
+  finalHtml: string;
+  templateSubject?: string | null;
+  templateHtml?: string | null;
+  evidenceValues?: readonly string[];
+  immutableRequest?: { subject: string; html: string } | null;
+}
+
+export function protectLegacyScheduledSnapshot(
+  input: LegacyScheduledSnapshotProtectionInput,
+): LegacyScheduledSnapshotProtection {
+  if (
+    input.status !== "scheduled" &&
+    input.status !== "retry_scheduled" &&
+    input.status !== "queued"
+  ) {
+    return { kind: "unchanged" };
+  }
+
+  const snapshot = normalizeLegacyOutreachSnapshot({
+    subject: input.finalSubject,
+    html: input.finalHtml,
+    templateSubject: input.templateSubject,
+    templateHtml: input.templateHtml,
+    evidenceValues: input.evidenceValues,
+  });
+
+  if (input.immutableRequest) {
+    const request = normalizeLegacyOutreachSnapshot({
+      subject: input.immutableRequest.subject,
+      html: input.immutableRequest.html,
+      templateSubject: input.templateSubject,
+      templateHtml: input.templateHtml,
+      evidenceValues: input.evidenceValues,
+    });
+    return snapshot.detected || request.detected
+      ? { kind: "block", error: MANUAL_REVIEW_LEGACY_RATE_ATTEMPT }
+      : { kind: "unchanged" };
+  }
+
+  if (!snapshot.detected) return { kind: "unchanged" };
+  if (!snapshot.safe) {
+    return { kind: "block", error: MANUAL_REVIEW_LEGACY_RATE_SNAPSHOT };
+  }
+  return {
+    kind: "normalize",
+    subject: snapshot.subject,
+    html: snapshot.html,
+  };
+}
 
 export function getOutreachRetryDelayMs(completedAttempts: number): number {
   const exponent = Math.max(0, completedAttempts - 1);
@@ -5429,8 +5492,15 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
             id: true,
             artistId: true,
             email: true,
+            customPrice: true,
             state: true,
             isFullTeam: true,
+          },
+        },
+        template: {
+          select: {
+            subject: true,
+            htmlBody: true,
           },
         },
       },
@@ -5633,6 +5703,34 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
       );
     }
 
+    const legacyDefaultRate = await tx.setting.findUnique({
+      where: { key: "default_rate" },
+      select: { value: true },
+    });
+    const immutableRequest = attempt?.providerRequest
+      ? parseResendRequestSnapshot(attempt.providerRequest)
+      : null;
+    const snapshotProtection = protectLegacyScheduledSnapshot({
+      status: outreach.status,
+      finalSubject: outreach.finalSubject,
+      finalHtml: outreach.finalHtml,
+      templateSubject: outreach.template?.subject,
+      templateHtml: outreach.template?.htmlBody,
+      evidenceValues: [
+        outreach.contact?.customPrice ?? "",
+        legacyDefaultRate?.value ?? "",
+      ],
+      immutableRequest,
+    });
+    if (snapshotProtection.kind === "block") {
+      return markManualReview(
+        tx,
+        outreach.id,
+        snapshotProtection.error,
+        attempt?.id,
+      );
+    }
+
     const preparationRetryCount =
       getOutreachPreparationRetryCount(outreach.error) ?? 0;
     if (attempt) {
@@ -5662,6 +5760,12 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
         lastAttemptAt: now,
         error: null,
         idempotencyKey,
+        ...(snapshotProtection.kind === "normalize"
+          ? {
+              finalSubject: snapshotProtection.subject,
+              finalHtml: snapshotProtection.html,
+            }
+          : {}),
       },
       include: {
         contact: {

@@ -10,6 +10,7 @@ import {
   extractVars,
   FOLLOW_UP_TEMPLATE_NAME,
   normalizeDefaultTemplateContent,
+  normalizeLegacyOutreachSnapshot,
   normalizeLegacyRateTemplateHtml,
   normalizeLegacyRateTemplateVariable,
   normalizeTemplateContent,
@@ -136,6 +137,22 @@ test("legacy saved templates and built-in defaults normalize without pricing", (
     DEFAULT_TEMPLATE_HTML,
   );
   assert.doesNotMatch(DEFAULT_TEMPLATE_HTML, /\{\{\s*rate\s*\}\}|\$[0-9]/i);
+});
+
+test("ambiguous rendered rate placement fails closed instead of guessing", () => {
+  assert.deepEqual(
+    normalizeLegacyOutreachSnapshot({
+      subject: "$650Artist",
+      html: "<p>Keep me.</p>",
+      templateSubject: "{{rate}}{{artist}}",
+    }),
+    {
+      subject: "$650Artist",
+      html: "<p>Keep me.</p>",
+      detected: true,
+      safe: false,
+    },
+  );
 });
 
 test("follow-up template cloning is a one-time independent snapshot", () => {

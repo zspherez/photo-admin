@@ -25,8 +25,17 @@ test("live, scheduled, follow-up, and preview rendering omit custom prices", () 
     "app/dashboard/customize/[showId]/[contactId]/page.tsx",
   );
   const templateSettings = source("app/settings/template/page.tsx");
+  const originalPreparation = sendOutreach.slice(
+    sendOutreach.indexOf("async function prepareOriginalOutreach"),
+    sendOutreach.indexOf("async function prepareFollowUpOutreach"),
+  );
+  const followUpPreparation = sendOutreach.slice(
+    sendOutreach.indexOf("async function prepareFollowUpOutreach"),
+    sendOutreach.indexOf("async function currentAttempt"),
+  );
 
-  assert.doesNotMatch(sendOutreach, /customPrice/);
+  assert.doesNotMatch(originalPreparation, /customPrice/);
+  assert.doesNotMatch(followUpPreparation, /customPrice/);
   assert.match(sendOutreach, /normalizeLegacyRateTemplateVariable/);
   assert.match(
     sendOutreach,

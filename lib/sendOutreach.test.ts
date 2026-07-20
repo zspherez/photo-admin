@@ -30,6 +30,7 @@ import {
   isNonBlockingLegacyUnknownAttempt,
   isProviderAcceptanceUnresolvedAttempt,
   recipientSnapshotConflict,
+  protectLegacyScheduledSnapshot,
   type DeliveryPolicyAttempt,
   type EvaluateOutreachDeliveryPolicyInput,
 } from "./sendOutreach";
@@ -53,6 +54,117 @@ import {
 
 const NOW = new Date("2026-07-16T04:00:00.000Z");
 const CREDENTIAL_SCOPE = getResendCredentialScope("re_original")!;
+
+test("historical sent attempts remain untouched by legacy pricing protection", () => {
+  const immutableRequest = {
+    subject: "Quote $650",
+    html: "<p>My standard NYC show rate is $650 for photo/video.</p>",
+  };
+  assert.deepEqual(
+    protectLegacyScheduledSnapshot({
+      status: "sent",
+      finalSubject: immutableRequest.subject,
+      finalHtml: immutableRequest.html,
+      evidenceValues: ["$650"],
+      immutableRequest,
+    }),
+    { kind: "unchanged" },
+  );
+  assert.deepEqual(immutableRequest, {
+    subject: "Quote $650",
+    html: "<p>My standard NYC show rate is $650 for photo/video.</p>",
+  });
+});
+
+test("legacy unsent scheduled snapshots normalize before their first attempt", () => {
+  assert.deepEqual(
+    protectLegacyScheduledSnapshot({
+      status: "scheduled",
+      finalSubject: "Quote $650 — Artist",
+      finalHtml:
+        "<p>Rate: $650</p><p>Keep this unrelated ticket price: $25.</p>",
+      templateSubject: "Quote {{rate}} — {{artist}}",
+      templateHtml:
+        "<p>Rate: {{rate}}</p><p>Keep this unrelated ticket price: $25.</p>",
+      evidenceValues: ["$650"],
+      immutableRequest: null,
+    }),
+    {
+      kind: "normalize",
+      subject: "Quote  — Artist",
+      html: "<p>Keep this unrelated ticket price: $25.</p>",
+    },
+  );
+  assert.deepEqual(
+    protectLegacyScheduledSnapshot({
+      status: "scheduled",
+      finalSubject: "Artist availability",
+      finalHtml: "<p>Budget: $650</p><p>Keep me.</p>",
+      evidenceValues: ["$650"],
+    }),
+    {
+      kind: "normalize",
+      subject: "Artist availability",
+      html: "<p>Keep me.</p>",
+    },
+  );
+});
+
+test("immutable retry attempts containing legacy pricing fail closed", () => {
+  const immutableRequest = {
+    subject: "Artist availability",
+    html: "<p>Rate: $650</p><p>Keep me.</p>",
+  };
+  const decision = protectLegacyScheduledSnapshot({
+    status: "retry_scheduled",
+    finalSubject: immutableRequest.subject,
+    finalHtml: immutableRequest.html,
+    immutableRequest,
+  });
+  assert.equal(decision.kind, "block");
+  if (decision.kind === "block") {
+    assert.match(decision.error, /Immutable provider request/);
+    assert.match(decision.error, /do not resend/);
+  }
+  assert.deepEqual(immutableRequest, {
+    subject: "Artist availability",
+    html: "<p>Rate: $650</p><p>Keep me.</p>",
+  });
+});
+
+test("ordinary unpriced scheduled and retry snapshots are unaffected", () => {
+  const unpriced = {
+    subject: "Artist availability",
+    html: "<p>Deliverables include 25 photos and 3 clips.</p>",
+  };
+  assert.deepEqual(
+    protectLegacyScheduledSnapshot({
+      status: "scheduled",
+      finalSubject: unpriced.subject,
+      finalHtml: unpriced.html,
+      evidenceValues: ["$65"],
+    }),
+    { kind: "unchanged" },
+  );
+  assert.deepEqual(
+    protectLegacyScheduledSnapshot({
+      status: "scheduled",
+      finalSubject: unpriced.subject,
+      finalHtml: "<p>Keep this unrelated ticket price: $650.</p>",
+      evidenceValues: ["$65"],
+    }),
+    { kind: "unchanged" },
+  );
+  assert.deepEqual(
+    protectLegacyScheduledSnapshot({
+      status: "retry_scheduled",
+      finalSubject: unpriced.subject,
+      finalHtml: unpriced.html,
+      immutableRequest: unpriced,
+    }),
+    { kind: "unchanged" },
+  );
+});
 
 function retryableAttempt(
   overrides: Record<string, unknown> = {},
@@ -683,6 +795,14 @@ test("policy changes quarantine unresolved provider acceptance instead of cancel
   assert.match(
     scheduledClaim,
     /recipientSnapshotState !== "verified"[\s\S]*applyDeliveryPolicyDecision/,
+  );
+  assert.match(
+    scheduledClaim,
+    /protectLegacyScheduledSnapshot[\s\S]*markManualReview\([\s\S]*attempt\?\.id/,
+  );
+  assert.match(
+    scheduledClaim,
+    /snapshotProtection\.kind === "normalize"[\s\S]*finalSubject:[\s\S]*finalHtml:/,
   );
 });
 
