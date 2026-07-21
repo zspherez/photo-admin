@@ -57,6 +57,10 @@ import {
   OUTREACH_CLAIM_TIMEOUT_MS,
   OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
 } from "@/lib/schedule";
+import {
+  requireActionableTrajectoryRecommendation,
+  type TrajectoryActionContext,
+} from "@/lib/trajectoryActiveRun";
 
 export { OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS } from "@/lib/schedule";
 
@@ -67,6 +71,7 @@ export interface SendOutreachInput {
   htmlOverride?: string;
   singleRecipient?: boolean;
   expectedRecipientIdentity?: CustomizeRecipientIdentity;
+  trajectoryContext?: TrajectoryActionContext;
 }
 
 export type OutreachKindValue = "original" | "follow_up";
@@ -2466,6 +2471,7 @@ async function prepareOriginalOutreach(
     htmlOverride,
     singleRecipient,
     expectedRecipientIdentity,
+    trajectoryContext,
   } = input;
   const [sendability] = await getOutreachSendabilityBatch([
     { showId, contactId, singleRecipient },
@@ -2512,6 +2518,24 @@ async function prepareOriginalOutreach(
     select: { showId: true },
   });
   if (!association) return { error: artistNotOnShowError() };
+  if (trajectoryContext) {
+    if (
+      trajectoryContext.showId !== showId ||
+      trajectoryContext.artistId !== contact.artistId
+    ) {
+      return { error: "Trajectory recommendation outreach target changed" };
+    }
+    try {
+      await requireActionableTrajectoryRecommendation(trajectoryContext);
+    } catch (error) {
+      return {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Trajectory recommendation is no longer actionable",
+      };
+    }
+  }
 
   const vars = await buildVarsForShow({
     artistName: contact.artist.name,
@@ -2534,7 +2558,8 @@ async function prepareOriginalOutreach(
   return {
     kind: "original",
     parentOutreachId: null,
-    trajectoryRecommendationId: null,
+    trajectoryRecommendationId:
+      trajectoryContext?.recommendationId ?? null,
     showId,
     artistId: contact.artistId,
     contactId,

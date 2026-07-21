@@ -6,17 +6,23 @@ import {
   type FollowUpEligibility,
   type OutreachSendability,
 } from "@/lib/sendOutreach";
+import {
+  getDashboardRecommendationBadges,
+  type DashboardRecommendationBadge,
+} from "@/lib/dashboardTrajectoryRecommendations";
 
 export interface DashboardInteractionState {
   sendabilityRows: OutreachSendability[];
   followUpEligibilityRows: FollowUpEligibility[];
+  recommendationBadges: DashboardRecommendationBadge[];
 }
 
 export async function getDashboardInteractionState(
   shows: readonly MatchedShow[],
   now: Date
 ): Promise<DashboardInteractionState> {
-  const [sendabilityRows, followUpEligibilityRows] = await Promise.all([
+  const [sendabilityRows, followUpEligibilityRows, recommendationBadges] =
+    await Promise.all([
     getOutreachSendabilityBatch(
       shows.flatMap((show) =>
         show.matchedArtists.flatMap((artist) => {
@@ -34,6 +40,11 @@ export async function getDashboardInteractionState(
       ),
       now
     ),
+    getDashboardRecommendationBadges(shows, now),
   ]);
-  return { sendabilityRows, followUpEligibilityRows };
+  return {
+    sendabilityRows,
+    followUpEligibilityRows,
+    recommendationBadges,
+  };
 }

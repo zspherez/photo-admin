@@ -6,6 +6,9 @@ import { ArtistLink } from "@/components/artist-modal";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button, LinkButton } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
+import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { SendButton } from "@/components/send-button";
+import { FollowUpButton } from "@/components/follow-up-button";
 import { cn } from "@/lib/cn";
 import { formatShowDate } from "@/lib/formatDate";
 import { mergeUniqueByKey } from "@/lib/dashboardInfinite";
@@ -22,6 +25,17 @@ import {
   groupRecommendationsByDate,
   type RecommendationView,
 } from "@/lib/trajectoryRecommendationView";
+import { withWorkflowReturnTo } from "@/lib/workflowLinks";
+import {
+  cancelScheduledAction,
+  dismissShowAction,
+  markSentAction,
+  restoreShowAction,
+  sendFollowUpAction,
+  sendNowAction,
+  setInterestedAction,
+  unmarkSentAction,
+} from "@/app/dashboard/actions";
 
 const TABS: Array<{ value: RecommendationTab; label: string }> = [
   { value: "suggested", label: "Suggested slate" },
@@ -82,13 +96,73 @@ function RecommendationCard({
   recommendation,
   role,
   returnTo,
+  isWeekend,
 }: {
   recommendation: RecommendationView;
   role: "primary" | "backup";
   returnTo: string;
+  isWeekend: boolean;
 }) {
+  const hiddenFields = [
+    { name: "recommendationId", value: recommendation.id },
+    { name: "runId", value: recommendation.runId },
+    { name: "artistId", value: recommendation.artistId },
+    {
+      name: "trajectoryActionId",
+      value: recommendation.trajectoryActionId,
+    },
+  ];
+  const sendability = recommendation.sendability;
+  const isScheduled = recommendation.scheduledInfo !== null;
+  const emailDisabledLabel =
+    recommendation.emailContact &&
+    !isScheduled &&
+    (!sendability || !sendability.sendable)
+      ? sendability?.blockingStatus === "queued"
+        ? "In progress"
+        : sendability?.blockingStatus === "retry_scheduled"
+          ? "Retry scheduled"
+          : sendability?.blockingStatus === "manual_review"
+            ? "Review"
+            : "Unavailable"
+      : undefined;
+  const followUpEligibility = recommendation.followUpEligibility
+    ? {
+        parentOutreachId:
+          recommendation.followUpEligibility.parentOutreachId,
+        eligible: recommendation.followUpEligibility.eligible,
+        state: recommendation.followUpEligibility.state,
+        mode: recommendation.followUpEligibility.mode,
+        reason: recommendation.followUpEligibility.reason,
+        recipients: recommendation.followUpEligibility.recipients,
+        fullTeamSend: recommendation.followUpEligibility.fullTeamSend,
+        followUpOutreachId:
+          recommendation.followUpEligibility.followUpOutreachId,
+        followUpStatus: recommendation.followUpEligibility.followUpStatus,
+        nextAttemptAt: recommendation.followUpEligibility.nextAttemptAt
+          ? new Date(recommendation.followUpEligibility.nextAttemptAt)
+          : undefined,
+      }
+    : null;
+  const customizeHref = recommendation.emailContact
+    ? (() => {
+        const href = withWorkflowReturnTo(
+          `/dashboard/customize/${recommendation.showId}/${recommendation.emailContact.id}`,
+          returnTo,
+        );
+        const url = new URL(href, "https://recommendations.local");
+        url.searchParams.set("recommendationId", recommendation.id);
+        url.searchParams.set("runId", recommendation.runId);
+        url.searchParams.set("artistId", recommendation.artistId);
+        return `${url.pathname}${url.search}`;
+      })()
+    : null;
+
   return (
-    <Card data-recommendation-identity={recommendation.identityKey}>
+    <Card
+      id={`recommendation-${recommendation.id}`}
+      data-recommendation-identity={recommendation.identityKey}
+    >
       <CardBody className="space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -101,12 +175,16 @@ function RecommendationCard({
                   ? "Broader momentum"
                   : recommendation.arm}
               </Badge>
-              <Badge tone="muted">Arm rank #{recommendation.listRank}</Badge>
+              <Badge tone="muted">
+                Workflow priority #{recommendation.workflowPriority.rank} ·{" "}
+                {recommendation.workflowPriority.label}
+              </Badge>
               {recommendation.slatePosition && (
                 <Badge tone="default">
                   Slate #{recommendation.slatePosition}
                 </Badge>
               )}
+              <Badge tone="muted">{recommendation.framingLabel}</Badge>
             </div>
             <h3 className="mt-2 text-lg font-semibold">
               <ArtistLink
@@ -172,6 +250,172 @@ function RecommendationCard({
           </p>
         )}
 
+        <div className="flex flex-wrap items-center gap-2">
+          {(recommendation.emailContact || recommendation.phoneContact) && (
+            <SendButton
+              showId={recommendation.showId}
+              contactId={recommendation.emailContact?.id ?? null}
+              contactName={recommendation.emailContact?.name ?? null}
+              phone={recommendation.phoneContact?.phone ?? null}
+              phoneContactName={recommendation.phoneContact?.name ?? null}
+              alreadySent={recommendation.alreadySent}
+              emailDisabledLabel={emailDisabledLabel}
+              emailDisabledReason={sendability?.reason ?? undefined}
+              isRetry={sendability?.mode === "retry"}
+              isWeekend={isWeekend}
+              scheduledInfo={recommendation.scheduledInfo}
+              returnTo={returnTo}
+              action={sendNowAction}
+              cancelAction={cancelScheduledAction}
+              hiddenFields={hiddenFields}
+            />
+          )}
+          {customizeHref && sendability?.mode !== "retry" && (
+            <LinkButton href={customizeHref} variant="secondary" size="sm">
+              Customize
+            </LinkButton>
+          )}
+          {recommendation.contactCategory === "needs_email" && (
+            <>
+              <LinkButton
+                href={withWorkflowReturnTo(
+                  `/dashboard/add-contact/${recommendation.artistId}`,
+                  returnTo,
+                )}
+                variant="secondary"
+                size="sm"
+              >
+                Add contact
+              </LinkButton>
+              <LinkButton
+                href={withWorkflowReturnTo(
+                  `/artists/${recommendation.artistId}`,
+                  returnTo,
+                )}
+                variant="secondary"
+                size="sm"
+              >
+                Research contact
+              </LinkButton>
+            </>
+          )}
+          {recommendation.contactCategory === "direct_outreach" && (
+            <LinkButton
+              href={withWorkflowReturnTo(
+                `/artists/${recommendation.artistId}`,
+                returnTo,
+              )}
+              variant="secondary"
+              size="sm"
+            >
+              Review direct outreach
+            </LinkButton>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3 dark:border-zinc-900">
+          <form action={setInterestedAction}>
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <input type="hidden" name="showId" value={recommendation.showId} />
+            <input
+              type="hidden"
+              name="interested"
+              value={recommendation.interested ? "false" : "true"}
+            />
+            {hiddenFields.map((field) => (
+              <input key={field.name} type="hidden" {...field} />
+            ))}
+            <PendingSubmitButton
+              variant={recommendation.interested ? "secondary" : "primary"}
+              size="sm"
+              pendingLabel="Saving…"
+            >
+              {recommendation.interested
+                ? "Remove interested"
+                : "Mark interested"}
+            </PendingSubmitButton>
+          </form>
+          <form
+            action={
+              recommendation.dismissed ? restoreShowAction : dismissShowAction
+            }
+          >
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <input type="hidden" name="showId" value={recommendation.showId} />
+            {hiddenFields.map((field) => (
+              <input key={field.name} type="hidden" {...field} />
+            ))}
+            <PendingSubmitButton
+              variant="secondary"
+              size="sm"
+              pendingLabel="Saving…"
+            >
+              {recommendation.dismissed ? "Restore" : "Dismiss"}
+            </PendingSubmitButton>
+          </form>
+          {followUpEligibility && recommendation.emailContact && (
+            <FollowUpButton
+              eligibility={followUpEligibility}
+              returnTo={returnTo}
+              isWeekend={isWeekend}
+              action={sendFollowUpAction}
+              cancelAction={cancelScheduledAction}
+              showId={recommendation.showId}
+              hiddenFields={hiddenFields}
+            />
+          )}
+          {recommendation.canMarkManually && (
+            <form action={markSentAction}>
+              <input type="hidden" name="returnTo" value={returnTo} />
+              <input type="hidden" name="showId" value={recommendation.showId} />
+              {recommendation.contactId ? (
+                <input
+                  type="hidden"
+                  name="contactId"
+                  value={recommendation.contactId}
+                />
+              ) : (
+                <input
+                  type="hidden"
+                  name="artistId"
+                  value={recommendation.artistId}
+                />
+              )}
+              {hiddenFields.map((field) => (
+                <input key={field.name} type="hidden" {...field} />
+              ))}
+              <PendingSubmitButton
+                variant="ghost"
+                size="sm"
+                pendingLabel="Marking…"
+              >
+                Mark sent (manual)
+              </PendingSubmitButton>
+            </form>
+          )}
+          {recommendation.manualMarkerId && (
+            <form action={unmarkSentAction}>
+              <input type="hidden" name="returnTo" value={returnTo} />
+              <input type="hidden" name="showId" value={recommendation.showId} />
+              <input
+                type="hidden"
+                name="outreachId"
+                value={recommendation.manualMarkerId}
+              />
+              {hiddenFields.map((field) => (
+                <input key={field.name} type="hidden" {...field} />
+              ))}
+              <PendingSubmitButton
+                variant="ghost"
+                size="sm"
+                pendingLabel="Unmarking…"
+              >
+                Unmark sent
+              </PendingSubmitButton>
+            </form>
+          )}
+        </div>
+
         <div>
           <h4 className="text-sm font-semibold">Why it is here</h4>
           <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
@@ -209,6 +453,10 @@ function RecommendationCard({
         <details className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
           <summary className="cursor-pointer font-medium">Details</summary>
           <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+            <div>
+              <dt className="text-zinc-500">Model list order</dt>
+              <dd>#{recommendation.listRank}</dd>
+            </div>
             <div>
               <dt className="text-zinc-500">Coverage state</dt>
               <dd>{recommendation.details.coverageState}</dd>
@@ -263,11 +511,15 @@ export function RecommendationsClient({
   initialNextCursor,
   total,
   query,
+  isWeekend,
+  dashboardReturnTo,
 }: {
   initialRecommendations: RecommendationView[];
   initialNextCursor: string | null;
   total: number;
   query: RecommendationQuery;
+  isWeekend: boolean;
+  dashboardReturnTo: string | null;
 }) {
   const [recommendations, setRecommendations] = useState(
     initialRecommendations,
@@ -349,6 +601,8 @@ export function RecommendationsClient({
             key={tab.value}
             href={buildRecommendationHref(
               recommendationQueryWith(query, { tab: tab.value }),
+              "/recommendations",
+              dashboardReturnTo,
             )}
             aria-current={query.tab === tab.value ? "page" : undefined}
             className={cn(
@@ -376,6 +630,8 @@ export function RecommendationsClient({
                   recommendationQueryWith(query, {
                     workflow: workflow.value,
                   }),
+                  "/recommendations",
+                  dashboardReturnTo,
                 )}
                 aria-current={
                   query.workflow === workflow.value ? "true" : undefined
@@ -402,6 +658,8 @@ export function RecommendationsClient({
                 key={band.value}
                 href={buildRecommendationHref(
                   recommendationQueryWith(query, { dateBand: band.value }),
+                  "/recommendations",
+                  dashboardReturnTo,
                 )}
                 title={band.description}
                 aria-current={query.dateBand === band.value ? "true" : undefined}
@@ -462,7 +720,12 @@ export function RecommendationsClient({
                     key={recommendation.identityKey}
                     recommendation={recommendation}
                     role={recommendation.sameNightRole}
-                    returnTo={buildRecommendationHref(query)}
+                    returnTo={buildRecommendationHref(
+                      query,
+                      "/recommendations",
+                      dashboardReturnTo,
+                    )}
+                    isWeekend={isWeekend}
                   />
                 ))}
               </div>

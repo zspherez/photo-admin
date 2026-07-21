@@ -353,7 +353,10 @@ test("default and bulk outreach calls retain existing recipient semantics", () =
     dashboardActions.indexOf("export async function sendFollowUpAction"),
   );
 
-  assert.match(sendNow, /sendOutreach\(\{ showId, contactId \}\)/);
+  assert.match(
+    sendNow,
+    /sendOutreach\(\{\s*showId,\s*contactId,\s*trajectoryContext:/,
+  );
   assert.doesNotMatch(sendNow, /singleRecipient/);
   assert.match(festival, /sendOutreach\(\{ showId, contactId \}\)/);
 

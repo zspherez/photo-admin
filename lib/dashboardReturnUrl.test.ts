@@ -99,6 +99,12 @@ test("workflow returns allow exact workflow routes and preserve their filters", 
     ),
     "/dashboard/contact/contact_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dunsent&historyPage=4",
   );
+  assert.equal(
+    workflowReturnPath(
+      "/recommendations?tab=portfolio&workflow=needs&date=45-90&returnTo=%2Fdashboard%3Fmode%3Dunknown%26contact%3Dneeds&sent=old",
+    ),
+    "/recommendations?tab=portfolio&workflow=needs&date=45-90&returnTo=%2Fdashboard%3Fmode%3Dunknown%26contact%3Dneeds",
+  );
 });
 
 test("festival search parameters normalize repeated values safely", () => {

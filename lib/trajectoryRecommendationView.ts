@@ -19,6 +19,8 @@ export type ContactCategory =
 
 export interface RecommendationView {
   id: string;
+  runId: string;
+  trajectoryActionId: string;
   identityKey: string;
   showId: string;
   showDate: string;
@@ -40,6 +42,47 @@ export interface RecommendationView {
   contactCategory: ContactCategory;
   contactLabel: string;
   contactDetail: string | null;
+  emailContact: {
+    id: string;
+    name: string | null;
+  } | null;
+  phoneContact: {
+    phone: string;
+    name: string | null;
+  } | null;
+  contactId: string | null;
+  sendability: {
+    sendable: boolean;
+    mode: "new" | "retry" | null;
+    reason: string | null;
+    blockingOutreachId: string | null;
+    blockingStatus: string | null;
+    blockingNextAttemptAt: string | null;
+  } | null;
+  alreadySent: boolean;
+  scheduledInfo: {
+    outreachId: string;
+    scheduledLabel: string;
+  } | null;
+  followUpEligibility: {
+    parentOutreachId: string;
+    eligible: boolean;
+    state: "eligible" | "pending" | "sent" | "blocked";
+    mode: "new" | "retry" | null;
+    reason: string | null;
+    recipients: string[];
+    fullTeamSend: boolean;
+    followUpOutreachId?: string;
+    followUpStatus?: string;
+    nextAttemptAt?: string;
+  } | null;
+  canMarkManually: boolean;
+  manualMarkerId: string | null;
+  workflowPriority: {
+    rank: number;
+    label: string;
+  };
+  framingLabel: string;
   outreachLabels: string[];
   rationale: string[];
   analogSummary: AnalogSummaryView | null;

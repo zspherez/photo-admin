@@ -3,6 +3,7 @@ import { isCancellableOutreachStatus } from "@/lib/outreachStatus";
 import type { FollowUpEligibility } from "@/lib/sendOutreach";
 
 type FormAction = (formData: FormData) => void | Promise<void>;
+type HiddenField = { name: string; value: string };
 
 export function FollowUpButton({
   eligibility,
@@ -10,12 +11,16 @@ export function FollowUpButton({
   isWeekend,
   action,
   cancelAction,
+  showId,
+  hiddenFields = [],
 }: {
   eligibility: FollowUpEligibility;
   returnTo: string;
   isWeekend: boolean;
   action: FormAction;
   cancelAction?: FormAction;
+  showId?: string;
+  hiddenFields?: readonly HiddenField[];
 }) {
   if (eligibility.eligible) {
     return (
@@ -26,6 +31,14 @@ export function FollowUpButton({
           value={eligibility.parentOutreachId}
         />
         <input type="hidden" name="returnTo" value={returnTo} />
+        {hiddenFields.map((field) => (
+          <input
+            key={field.name}
+            type="hidden"
+            name={field.name}
+            value={field.value}
+          />
+        ))}
         <PendingSubmitButton
           variant="secondary"
           size="sm"
@@ -73,6 +86,17 @@ export function FollowUpButton({
                 value={eligibility.followUpOutreachId}
               />
               <input type="hidden" name="returnTo" value={returnTo} />
+              {showId && (
+                <input type="hidden" name="showId" value={showId} />
+              )}
+              {hiddenFields.map((field) => (
+                <input
+                  key={field.name}
+                  type="hidden"
+                  name={field.name}
+                  value={field.value}
+                />
+              ))}
               <PendingSubmitButton
                 variant="danger"
                 size="sm"

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { TrajectoryArm, TrajectoryRunStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
@@ -8,17 +9,28 @@ import {
 import { contactDisplayValue } from "@/lib/contactDisplay";
 import {
   getOutreachSendabilityBatch,
+  getFollowUpEligibilityBatch,
+  type FollowUpEligibility,
   type OutreachSendability,
   type OutreachSendabilityInput,
 } from "@/lib/sendOutreach";
+import {
+  canMarkOutreachManually,
+  isActiveManualOutreachMarker,
+} from "@/lib/manualOutreach";
+import { isCancellableOutreachStatus } from "@/lib/outreachStatus";
 import {
   recommendationDateRange,
   type RecommendationQuery,
 } from "@/lib/trajectoryRecommendationQuery";
 import {
   TRAJECTORY_PRODUCER,
-  TRAJECTORY_STALE_AFTER_HOURS,
 } from "@/lib/trajectoryContract";
+import {
+  resolveTrajectoryRun,
+  trajectoryFreshnessCutoff,
+  type TrajectoryRunAvailability,
+} from "@/lib/trajectoryActiveRun";
 import { dateOnlyFromStoredDate } from "@/lib/calendarDate";
 import type {
   AnalogSummaryView,
@@ -56,12 +68,22 @@ interface ContactRecord {
   directOutreachNote: string | null;
   state: "active" | "quarantined";
   isFullTeam: boolean;
+  name: string | null;
 }
 
 interface OutreachRecord {
+  id: string;
   artistId: string;
+  contactId: string | null;
   kind: "original" | "follow_up";
   status: string;
+  providerMessageId: string | null;
+  attemptCount: number;
+  scheduledFor: Date | null;
+  nextAttemptAt: Date | null;
+  finalSubject: string;
+  finalHtml: string;
+  _count: { sendAttempts: number };
   sentAt: Date | null;
   deliveredAt: Date | null;
   openCount: number;
@@ -241,13 +263,22 @@ const DEFAULT_STORE: TrajectoryRecommendationStore = {
               where: { kind: "original" },
               orderBy: [{ createdAt: "desc" }, { id: "asc" }],
               select: {
+                id: true,
                 artistId: true,
+                contactId: true,
                 kind: true,
                 status: true,
+                providerMessageId: true,
+                attemptCount: true,
+                scheduledFor: true,
+                nextAttemptAt: true,
+                finalSubject: true,
+                finalHtml: true,
                 sentAt: true,
                 deliveredAt: true,
                 openCount: true,
                 clickCount: true,
+                _count: { select: { sendAttempts: true } },
               },
             },
           },
@@ -281,6 +312,7 @@ const DEFAULT_STORE: TrajectoryRecommendationStore = {
                     directOutreachNote: true,
                     state: true,
                     isFullTeam: true,
+                    name: true,
                   },
                 },
               },
@@ -292,13 +324,7 @@ const DEFAULT_STORE: TrajectoryRecommendationStore = {
 };
 
 export type RecommendationAvailability =
-  | "ready"
-  | "none"
-  | "failed"
-  | "stale"
-  | "expired"
-  | "superseded"
-  | "multiple_ready";
+  TrajectoryRunAvailability;
 
 export interface RecommendationRun {
   id: string;
@@ -331,12 +357,10 @@ interface LoadOptions {
     inputs: readonly OutreachSendabilityInput[],
     now: Date,
   ) => Promise<OutreachSendability[]>;
-}
-
-function freshnessCutoff(now: Date): Date {
-  return new Date(
-    now.getTime() - TRAJECTORY_STALE_AFTER_HOURS * 60 * 60 * 1_000,
-  );
+  followUpEligibility?: (
+    parentOutreachIds: readonly string[],
+    now: Date,
+  ) => Promise<FollowUpEligibility[]>;
 }
 
 function runView(run: RunRecord, now: Date): RecommendationRun {
@@ -352,7 +376,7 @@ function runView(run: RunRecord, now: Date): RecommendationRun {
     failureCode: run.failureCode,
     failureMessage: run.failureMessage,
     freshness:
-      run.generatedAt.getTime() > freshnessCutoff(now).getTime()
+      run.generatedAt.getTime() > trajectoryFreshnessCutoff(now).getTime()
         ? "fresh"
         : "stale",
   };
@@ -365,29 +389,7 @@ export async function resolveRecommendationRun(
   availability: RecommendationAvailability;
   run: RunRecord | null;
 }> {
-  const readyRuns = await store.findReadyRuns(TRAJECTORY_PRODUCER, 2);
-  if (readyRuns.length > 1) {
-    return { availability: "multiple_ready", run: readyRuns[0] };
-  }
-  if (readyRuns.length === 1) {
-    const run = readyRuns[0];
-    if (run.validUntil.getTime() <= now.getTime()) {
-      return { availability: "expired", run };
-    }
-    if (run.generatedAt.getTime() <= freshnessCutoff(now).getTime()) {
-      return { availability: "stale", run };
-    }
-    return { availability: "ready", run };
-  }
-
-  const latest = await store.findLatestRun(TRAJECTORY_PRODUCER);
-  if (!latest) return { availability: "none", run: null };
-  if (latest.status === "failed") return { availability: "failed", run: latest };
-  if (latest.status === "stale") return { availability: "stale", run: latest };
-  if (latest.validUntil.getTime() <= now.getTime()) {
-    return { availability: "expired", run: latest };
-  }
-  return { availability: "superseded", run: latest };
+  return resolveTrajectoryRun(now, store);
 }
 
 function analogSummary(value: unknown): AnalogSummaryView | null {
@@ -506,6 +508,55 @@ function matchesWorkflow(
   return outreach.some((item) => SENT_OR_SCHEDULED_STATUSES.has(item.status));
 }
 
+function workflowPriority(
+  row: Pick<
+    RecommendationView,
+    "interested" | "contactCategory" | "isSuggested" | "arm"
+  >,
+): RecommendationView["workflowPriority"] {
+  if (row.interested && row.contactCategory === "ready_email") {
+    return { rank: 1, label: "Interested + ready to send" };
+  }
+  if (row.isSuggested && row.arm === "trajectory") {
+    return { rank: 2, label: "Suggested trajectory" };
+  }
+  if (row.arm === "trajectory") {
+    return { rank: 3, label: "Other trajectory" };
+  }
+  if (row.arm === "momentum") {
+    return { rank: 4, label: "Broader momentum" };
+  }
+  if (row.arm === "exploration") {
+    return { rank: 6, label: "Exploration" };
+  }
+  return { rank: 7, label: "Portfolio" };
+}
+
+function framingLabel(arm: RecommendationView["arm"]): string {
+  if (arm === "exploration") return "Listen/research first";
+  if (arm === "portfolio") return "Portfolio credibility framing";
+  return "Relationship-building framing";
+}
+
+function scheduledLabel(
+  status: string | undefined,
+  scheduledAt: Date | undefined,
+): string {
+  if (!scheduledAt) {
+    return status === "retry_scheduled" ? "Retry scheduled" : "Scheduled";
+  }
+  const prefix = status === "retry_scheduled" ? "Retry" : "Scheduled";
+  return `${prefix} · ${scheduledAt.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  })}`;
+}
+
 export async function getTrajectoryRecommendationPage(
   query: RecommendationQuery,
   options: LoadOptions = {},
@@ -542,7 +593,7 @@ export async function getTrajectoryRecommendationPage(
     producer: TRAJECTORY_PRODUCER,
     status: "ready",
     validAfter: now,
-    generatedAfter: freshnessCutoff(now),
+    generatedAfter: trajectoryFreshnessCutoff(now),
     showStart: dateRange.start,
     showEndExclusive: dateRange.endExclusive,
     tab: query.tab,
@@ -575,6 +626,22 @@ export async function getTrajectoryRecommendationPage(
       item,
     ]),
   );
+  const parentOutreachIds = uniqueRecords.flatMap((record) =>
+    record.show.outreaches.flatMap((outreach) =>
+      outreach.kind === "original" ? [outreach.id] : [],
+    ),
+  );
+  const followUpRows =
+    parentOutreachIds.length === 0
+      ? []
+      : options.followUpEligibility
+        ? await options.followUpEligibility(parentOutreachIds, now)
+        : store === DEFAULT_STORE
+          ? await getFollowUpEligibilityBatch(parentOutreachIds, now)
+          : [];
+  const followUpByParent = new Map(
+    followUpRows.map((row) => [row.parentOutreachId, row]),
+  );
 
   const filtered: RecommendationView[] = [];
   for (const record of uniqueRecords) {
@@ -589,6 +656,66 @@ export async function getTrajectoryRecommendationPage(
     const sendability = email
       ? sendabilityByTarget.get(`${record.showId}\u0000${email.id}`)
       : null;
+    const artistOutreaches = relevantOutreach;
+    const preferredOutreach =
+      artistOutreaches.find((outreach) =>
+        [
+          "sent",
+          "scheduled",
+          "retry_scheduled",
+          "queued",
+          "manual_review",
+        ].includes(outreach.status),
+      ) ??
+      artistOutreaches.find((outreach) => outreach.status === "failed") ??
+      artistOutreaches.find((outreach) => outreach.status === "test");
+    const followUpEligibility =
+      artistOutreaches
+        .map((row) => followUpByParent.get(row.id))
+        .find(
+          (row) =>
+            row &&
+            (row.state === "eligible" ||
+              row.state === "pending" ||
+              row.state === "sent"),
+        ) ?? null;
+    const scheduledOutreach =
+      artistOutreaches.find(
+        (row) => row.id === sendability?.blockingOutreachId,
+      ) ??
+      (isCancellableOutreachStatus(preferredOutreach?.status)
+        ? preferredOutreach
+        : undefined);
+    const scheduledStatus =
+      sendability?.blockingStatus ?? scheduledOutreach?.status;
+    const scheduledAt =
+      sendability?.blockingNextAttemptAt ??
+      scheduledOutreach?.nextAttemptAt ??
+      scheduledOutreach?.scheduledFor ??
+      undefined;
+    const scheduledInfo =
+      isCancellableOutreachStatus(scheduledStatus) && scheduledOutreach
+        ? {
+            outreachId:
+              sendability?.blockingOutreachId ?? scheduledOutreach.id,
+            scheduledLabel: scheduledLabel(scheduledStatus, scheduledAt),
+          }
+        : null;
+    const manualMarker =
+      artistOutreaches.find((outreach) =>
+        isActiveManualOutreachMarker({
+          id: outreach.id,
+          kind: outreach.kind,
+          showId: record.showId,
+          artistId: outreach.artistId,
+          status: outreach.status,
+          providerMessageId: outreach.providerMessageId,
+          attemptCount: outreach.attemptCount,
+          sendAttemptCount: outreach._count?.sendAttempts ?? 0,
+          finalSubject: outreach.finalSubject,
+          finalHtml: outreach.finalHtml,
+        }),
+      ) ?? null;
     const contactCategory: ContactCategory = email
       ? sendability?.sendable
         ? "ready_email"
@@ -599,6 +726,8 @@ export async function getTrajectoryRecommendationPage(
     const displayContact = email ?? phone ?? direct;
     const view: RecommendationView = {
       id: record.id,
+      runId: resolved.run.id,
+      trajectoryActionId: randomUUID(),
       identityKey: `${record.showId}:${artist.id}:${record.arm}`,
       showId: record.show.id,
       showDate: record.show.date.toISOString(),
@@ -631,6 +760,53 @@ export async function getTrajectoryRecommendationPage(
       contactDetail: displayContact
         ? contactDisplayValue(displayContact, "")
         : null,
+      emailContact: email ? { id: email.id, name: email.name } : null,
+      phoneContact:
+        phone?.phone
+          ? { phone: phone.phone, name: phone.name }
+          : null,
+      contactId: displayContact?.id ?? null,
+      sendability: sendability
+        ? {
+            sendable: sendability.sendable,
+            mode: sendability.mode,
+            reason: sendability.reason,
+            blockingOutreachId: sendability.blockingOutreachId ?? null,
+            blockingStatus: sendability.blockingStatus ?? null,
+            blockingNextAttemptAt:
+              sendability.blockingNextAttemptAt?.toISOString() ?? null,
+          }
+        : null,
+      alreadySent:
+        sendability?.blockingStatus === "sent" ||
+        preferredOutreach?.status === "sent",
+      scheduledInfo,
+      followUpEligibility: followUpEligibility
+        ? {
+            parentOutreachId: followUpEligibility.parentOutreachId,
+            eligible: followUpEligibility.eligible,
+            state: followUpEligibility.state,
+            mode: followUpEligibility.mode,
+            reason: followUpEligibility.reason,
+            recipients: followUpEligibility.recipients,
+            fullTeamSend: followUpEligibility.fullTeamSend,
+            followUpOutreachId: followUpEligibility.followUpOutreachId,
+            followUpStatus: followUpEligibility.followUpStatus,
+            nextAttemptAt:
+              followUpEligibility.nextAttemptAt?.toISOString(),
+          }
+        : null,
+      canMarkManually: canMarkOutreachManually(
+        artistOutreaches.map((outreach) => ({
+          status: outreach.status,
+          providerMessageId: outreach.providerMessageId,
+          attemptCount: outreach.attemptCount,
+          sendAttemptCount: outreach._count?.sendAttempts ?? 0,
+        })),
+      ),
+      manualMarkerId: manualMarker?.id ?? null,
+      workflowPriority: { rank: 0, label: "" },
+      framingLabel: framingLabel(record.arm),
       outreachLabels: outreachLabels(relevantOutreach),
       rationale: rationaleFor(record),
       analogSummary: analogSummary(record.runArtist.analogSummary),
@@ -647,10 +823,20 @@ export async function getTrajectoryRecommendationPage(
         releaseContext: record.runArtist.releaseContext,
       },
     };
+    view.workflowPriority = workflowPriority(view);
     if (matchesWorkflow(view, relevantOutreach, query.workflow)) {
       filtered.push(view);
     }
   }
+
+  filtered.sort(
+    (left, right) =>
+      left.workflowPriority.rank - right.workflowPriority.rank ||
+      left.showDate.localeCompare(right.showDate) ||
+      (left.slatePosition ?? left.listRank) -
+        (right.slatePosition ?? right.listRank) ||
+      left.id.localeCompare(right.id),
+  );
 
   const page = filtered.slice(offset, offset + RECOMMENDATION_BATCH_SIZE);
   const nextOffset =

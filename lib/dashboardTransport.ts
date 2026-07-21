@@ -3,6 +3,7 @@ import type {
   FollowUpEligibility,
   OutreachSendability,
 } from "@/lib/sendOutreach";
+import type { DashboardRecommendationBadge } from "@/lib/dashboardTrajectoryRecommendations";
 
 type Jsonify<T> = T extends Date
   ? string
@@ -17,6 +18,7 @@ export interface DashboardAppendPayload {
   nextCursor: string | null;
   sendabilityRows: OutreachSendability[];
   followUpEligibilityRows: FollowUpEligibility[];
+  recommendationBadges: DashboardRecommendationBadge[];
 }
 
 export type DashboardAppendJson = Jsonify<DashboardAppendPayload>;
@@ -65,5 +67,6 @@ export function deserializeDashboardAppendPayload(
           : {}),
       })
     ),
+    recommendationBadges: payload.recommendationBadges,
   };
 }

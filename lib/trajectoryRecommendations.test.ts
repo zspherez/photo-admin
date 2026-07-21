@@ -352,6 +352,7 @@ test("contact queues distinguish ready email, needs email, direct outreach, and 
     store: store({ recommendations: rows }),
     sendability: classify,
   });
+
   assert.deepEqual(
     Object.fromEntries(
       result.recommendations.map((item) => [
@@ -481,6 +482,48 @@ test("same-night alternatives group by canonical date without deduplicating diff
   assert.deepEqual(
     groups[0].recommendations.map((item) => item.sameNightRole),
     ["primary", "backup", "primary"],
+  );
+});
+
+test("workflow order is explicit priority rather than model rank or probability", async () => {
+  const interested = recommendation("interested", {
+    listRank: 99,
+    show: {
+      ...recommendation("interested").show,
+      interestedAt: NOW,
+    },
+  });
+  const momentum = recommendation("momentum", {
+    arm: "momentum",
+    listRank: 1,
+  });
+  const exploration = recommendation("exploration", {
+    arm: "exploration",
+    listRank: 1,
+  });
+  const portfolio = recommendation("portfolio", {
+    arm: "portfolio",
+    listRank: 1,
+  });
+  const result = await getTrajectoryRecommendationPage(QUERY, {
+    now: NOW,
+    store: store({
+      recommendations: [portfolio, exploration, momentum, interested],
+    }),
+    sendability: sendable,
+  });
+  assert.deepEqual(
+    result.recommendations.map((row) => [
+      row.id,
+      row.workflowPriority.rank,
+      row.workflowPriority.label,
+    ]),
+    [
+      ["interested", 1, "Interested + ready to send"],
+      ["momentum", 4, "Broader momentum"],
+      ["exploration", 6, "Exploration"],
+      ["portfolio", 7, "Portfolio"],
+    ],
   );
 });
 

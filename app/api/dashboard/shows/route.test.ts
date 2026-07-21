@@ -25,6 +25,7 @@ function dependencies(
     loadInteractionState: async () => ({
       sendabilityRows: [],
       followUpEligibilityRows: [],
+      recommendationBadges: [],
     }),
     now: () => now,
     ...overrides,
@@ -84,7 +85,11 @@ test("dashboard batch API separates invalid cursors from gone snapshots", async 
       loadBatch: async () => ({ status: "expired" }),
       loadInteractionState: async () => {
         interactionLoaded = true;
-        return { sendabilityRows: [], followUpEligibilityRows: [] };
+        return {
+          sendabilityRows: [],
+          followUpEligibilityRows: [],
+          recommendationBadges: [],
+        };
       },
     })
   );
@@ -111,5 +116,6 @@ test("dashboard batch API returns read-safe data for a valid snapshot", async ()
     nextCursor: null,
     sendabilityRows: [],
     followUpEligibilityRows: [],
+    recommendationBadges: [],
   });
 });

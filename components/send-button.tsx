@@ -5,6 +5,18 @@ import { Button } from "@/components/ui/button";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 
 type FormAction = (formData: FormData) => void | Promise<void>;
+type HiddenField = { name: string; value: string };
+
+function HiddenFields({ fields }: { fields: readonly HiddenField[] }) {
+  return fields.map((field) => (
+    <input
+      key={field.name}
+      type="hidden"
+      name={field.name}
+      value={field.value}
+    />
+  ));
+}
 
 function SmsButton({
   phone,
@@ -105,6 +117,7 @@ export function SendButton({
   returnTo,
   action,
   cancelAction,
+  hiddenFields = [],
 }: {
   showId: string;
   contactId: string | null;
@@ -120,6 +133,7 @@ export function SendButton({
   returnTo?: string;
   action: FormAction;
   cancelAction?: FormAction;
+  hiddenFields?: readonly HiddenField[];
 }) {
   if (scheduledInfo) {
     return (
@@ -133,6 +147,8 @@ export function SendButton({
         {cancelAction && (
           <form action={cancelAction}>
             <input type="hidden" name="outreachId" value={scheduledInfo.outreachId} />
+            <input type="hidden" name="showId" value={showId} />
+            <HiddenFields fields={hiddenFields} />
             {returnTo && (
               <input type="hidden" name="returnTo" value={returnTo} />
             )}
@@ -182,6 +198,7 @@ export function SendButton({
     <div className="flex items-center gap-1.5">
       <form action={action}>
         <input type="hidden" name="showId" value={showId} />
+        <HiddenFields fields={hiddenFields} />
         {contactId && (
           <input type="hidden" name="contactId" value={contactId} />
         )}
