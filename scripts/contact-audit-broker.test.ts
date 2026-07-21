@@ -241,14 +241,14 @@ test("audit broker isolates credentials and submits only audit results", async (
     jobId: "job-1",
     claimToken: "claim-1",
     finding: "stale",
-    sourceUrls: ["https://artist.example/contact"],
+    sourceUrls: ["https://www.instagram.com/drinkurwater/"],
     evidence: "The existing contact is no longer current.",
     confidence: "medium",
     alternatives: [
       {
         email: "replacement@example.com",
         role: "management",
-        sourceUrls: ["https://agency.example/team"],
+        sourceUrls: ["https://nuwave.io/"],
         evidence: "A plausible replacement manager.",
         confidence: "medium",
       },
@@ -256,37 +256,67 @@ test("audit broker isolates credentials and submits only audit results", async (
     rosterReview,
   });
   assert.equal(invalidStale.status, 400);
+  for (const evidence of [
+    "test evidence for save",
+    "test no official source",
+    "test minimal no official source",
+  ]) {
+    const leaked = await brokerRequest(socketPath, "/submit-result", {
+      jobId: "job-1",
+      claimToken: "claim-1",
+      finding: "current",
+      sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+      evidence,
+      confidence: "low",
+      alternatives: [],
+      rosterReview,
+    });
+    assert.equal(leaked.status, 400);
+  }
   const wrongJob = await brokerRequest(socketPath, "/submit-result", {
     jobId: "contact-1",
     claimToken: "claim-1",
     finding: "stale",
-    sourceUrls: ["https://artist.example/contact"],
+    sourceUrls: ["https://www.instagram.com/drinkurwater/"],
     evidence: "The artist now lists a different management company.",
     confidence: "medium",
     alternatives: [],
     rosterReview,
   });
   assert.equal(wrongJob.status, 409);
-  const submitted = await brokerRequest(socketPath, "/submit-result", {
+  const finalPayload = {
     jobId: "job-1",
     claimToken: "claim-1",
     finding: "changed",
-    sourceUrls: ["https://artist.example/contact"],
-    evidence: "The official artist page publishes a new manager.",
+    sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+    evidence:
+      "DRINKURWATER's official Instagram bio publishes Justin's management address.",
     confidence: "high",
     notes: "Checked official artist and agency pages.",
     alternatives: [
       {
-        email: "new@example.com",
-        name: "New Manager",
+        email: "justin@nuwave.io",
+        name: "Justin",
         role: "management",
-        sourceUrls: ["https://agency.example/team"],
-        evidence: "The official agency roster confirms the address.",
+        sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+        evidence:
+          "DRINKURWATER's official Instagram bio publishes MGMT: justin@nuwave.io.",
         confidence: "high",
       },
     ],
     rosterReview,
-  });
+  };
+  const validated = await brokerRequest(
+    socketPath,
+    "/validate-result",
+    finalPayload
+  );
+  assert.deepEqual(validated, { status: 200, value: { ok: true } });
+  const submitted = await brokerRequest(
+    socketPath,
+    "/submit-result",
+    finalPayload
+  );
   assert.equal(submitted.status, 200);
   assert.deepEqual(submitted.value, { ok: true, runComplete: true });
   assert.equal(
@@ -308,17 +338,19 @@ test("audit broker isolates credentials and submits only audit results", async (
       body: {
         claimToken: "claim-1",
         finding: "changed",
-        sourceUrls: ["https://artist.example/contact"],
-        evidence: "The official artist page publishes a new manager.",
+        sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+        evidence:
+          "DRINKURWATER's official Instagram bio publishes Justin's management address.",
         confidence: "high",
         notes: "Checked official artist and agency pages.",
         alternatives: [
           {
-            email: "new@example.com",
-            name: "New Manager",
+            email: "justin@nuwave.io",
+            name: "Justin",
             role: "management",
-            sourceUrls: ["https://agency.example/team"],
-            evidence: "The official agency roster confirms the address.",
+            sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+            evidence:
+              "DRINKURWATER's official Instagram bio publishes MGMT: justin@nuwave.io.",
             confidence: "high",
           },
         ],

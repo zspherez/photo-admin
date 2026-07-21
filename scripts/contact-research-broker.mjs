@@ -10,6 +10,7 @@ import {
   searchWeb,
 } from "./contact-research-web.mjs";
 import { validateCandidateReview } from "./contact-research-candidate-review.mjs";
+import { validateResearchBrokerPayload } from "../lib/contactAgentPayloadValidation.mjs";
 
 const baseUrl = process.env.APP_BASE_URL?.trim().replace(/\/+$/, "");
 const staticToken = process.env.CONTACT_RESEARCH_AGENT_TOKEN?.trim();
@@ -149,6 +150,17 @@ const schemas = {
     ruleVersion: z.number().int().min(1),
     ruleText: z.string().min(1).max(8_000),
   }).strict(),
+  "validate-result": z
+    .object({
+      action: z.enum([
+        "submit-candidates",
+        "submit-direct-outreach",
+        "submit-exhausted",
+        "submit-skipped",
+      ]),
+      payload: z.unknown(),
+    })
+    .strict(),
 };
 
 class BrokerConflictError extends Error {}
@@ -392,9 +404,25 @@ async function runTool(name, input, sessionId) {
         "/api/contact-research/known-contacts",
         input
       );
+    case "validate-result": {
+      const payload = schemas[input.action].parse(input.payload);
+      requireSessionClaim(state, payload);
+      try {
+        validateResearchBrokerPayload(input.action, payload);
+        if (input.action === "submit-candidates") {
+          validateCandidateReview(payload);
+        }
+      } catch (error) {
+        throw new BrokerInputError(
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+      return { ok: true, action: input.action };
+    }
     case "submit-candidates": {
       requireSessionClaim(state, input);
       try {
+        validateResearchBrokerPayload(name, input);
         validateCandidateReview(input);
       } catch (error) {
         throw new BrokerInputError(
@@ -436,6 +464,13 @@ async function runTool(name, input, sessionId) {
     }
     case "submit-direct-outreach": {
       requireSessionClaim(state, input);
+      try {
+        validateResearchBrokerPayload(name, input);
+      } catch (error) {
+        throw new BrokerInputError(
+          error instanceof Error ? error.message : String(error)
+        );
+      }
       let result;
       try {
         result = await photoAdminRequest(
@@ -466,6 +501,13 @@ async function runTool(name, input, sessionId) {
     }
     case "submit-exhausted": {
       requireSessionClaim(state, input);
+      try {
+        validateResearchBrokerPayload(name, input);
+      } catch (error) {
+        throw new BrokerInputError(
+          error instanceof Error ? error.message : String(error)
+        );
+      }
       let result;
       try {
         result = await photoAdminRequest(
@@ -494,6 +536,13 @@ async function runTool(name, input, sessionId) {
     }
     case "submit-skipped": {
       requireSessionClaim(state, input);
+      try {
+        validateResearchBrokerPayload(name, input);
+      } catch (error) {
+        throw new BrokerInputError(
+          error instanceof Error ? error.message : String(error)
+        );
+      }
       let result;
       try {
         result = await photoAdminRequest(

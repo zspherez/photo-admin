@@ -14,7 +14,6 @@ import {
 } from "@/lib/calendarDate";
 import { activeListenSignalWhere } from "@/lib/listenSignal";
 import { appendContactToSheet, parseSheetEmails } from "@/lib/sheets";
-import { constantTimeEqual } from "@/lib/auth";
 import {
   readGlobalAgentRulesInTransaction,
   readStoredDirectOutreachAgentRules,
@@ -28,6 +27,14 @@ import {
   festivalLeadTimeSql,
   festivalLeadTimeWhere,
 } from "@/lib/festivalEligibility";
+import {
+  type AgentMutationEnvironment,
+  isValidAgentMutationAuthorization,
+} from "@/lib/agentMutationAuthorization";
+import {
+  assertPublicHttpsSourceUrl,
+  validateResearchSubmissionPayload,
+} from "@/lib/contactAgentPayloadValidation.mjs";
 
 export const CONTACT_RESEARCH_WINDOW_DAYS = 90;
 export const CONTACT_RESEARCH_DEFAULT_CLAIM_LIMIT = 3;
@@ -339,13 +346,7 @@ export function normalizeResearchSourceUrl(value: unknown): string {
     throw new Error("source URL is invalid");
   }
 
-  if (
-    (url.protocol !== "https:" && url.protocol !== "http:") ||
-    url.username ||
-    url.password
-  ) {
-    throw new Error("source URL must be a public HTTP(S) URL");
-  }
+  assertPublicHttpsSourceUrl(raw, "source URL");
   url.hash = "";
   return url.toString();
 }
@@ -1081,6 +1082,7 @@ export function parseContactResearchSubmission(
     if (input.directOutreach != null) {
       throw new Error("exhausted outcomes cannot include direct outreach");
     }
+    validateResearchSubmissionPayload(value);
     return { outcome, claimToken, notes, candidates: [] };
   }
   if (outcome === "skipped") {
@@ -1097,7 +1099,7 @@ export function parseContactResearchSubmission(
     ) {
       throw new Error("ruleVersion must be a positive integer");
     }
-    return {
+    const submission: ContactResearchSubmission = {
       outcome,
       claimToken,
       notes: normalizeArtistResearchSkipReason(notes),
@@ -1105,6 +1107,8 @@ export function parseContactResearchSubmission(
       ruleText: requiredString(input.ruleText, 8_000, "ruleText"),
       candidates: [],
     };
+    validateResearchSubmissionPayload(value);
+    return submission;
   }
   const directOutreach =
     input.directOutreach == null
@@ -1186,13 +1190,15 @@ export function parseContactResearchSubmission(
     });
   }
 
-  return {
+  const submission: ContactResearchSubmission = {
     outcome,
     claimToken,
     notes,
     candidates: [...candidatesByEmail.values()],
     directOutreach,
   };
+  validateResearchSubmissionPayload(value);
+  return submission;
 }
 
 export function isTrustedAgentSkipRuleProvenance(
@@ -1381,35 +1387,51 @@ async function applyApprovedDirectOutreach(
   });
 }
 
-export async function isValidContactResearchAuthorization(
-  authorization: string | null,
-  secrets:
+interface ContactResearchAuthorizationOptions {
+  environment?: AgentMutationEnvironment;
+  staticToken?: string;
+  verifyGithubActionsToken?: (token: string) => Promise<boolean>;
+}
+
+function isContactResearchAuthorizationOptions(
+  value:
+    | ContactResearchAuthorizationOptions
     | string
     | readonly (string | undefined)[]
-    = [
-      process.env.CONTACT_RESEARCH_AGENT_TOKEN,
-      process.env.CRON_SECRET,
-    ],
-  verifyGithubActionsToken: (
-    token: string
-  ) => Promise<boolean> = verifyGithubActionsContactResearchToken
+): value is ContactResearchAuthorizationOptions {
+  return typeof value === "object" && !Array.isArray(value);
+}
+
+export async function isValidContactResearchAuthorization(
+  authorization: string | null,
+  optionsOrStaticToken:
+    | ContactResearchAuthorizationOptions
+    | string
+    | readonly (string | undefined)[] = {},
+  legacyVerifier?: (token: string) => Promise<boolean>
 ): Promise<boolean> {
-  if (!authorization?.startsWith("Bearer ")) return false;
-  const token = authorization.slice("Bearer ".length);
-  if (!token) return false;
-  const candidates = (Array.isArray(secrets) ? secrets : [secrets]).filter(
-    (secret): secret is string => Boolean(secret)
-  );
-  const matches = await Promise.all(
-    candidates.map((secret) => constantTimeEqual(token, secret))
-  );
-  return matches.some(Boolean) || verifyGithubActionsToken(token);
+  const hasOptions =
+    isContactResearchAuthorizationOptions(optionsOrStaticToken);
+  const options = hasOptions ? optionsOrStaticToken : undefined;
+  const staticSecrets = hasOptions
+    ? optionsOrStaticToken.staticToken ??
+      process.env.CONTACT_RESEARCH_AGENT_TOKEN
+    : optionsOrStaticToken;
+  return isValidAgentMutationAuthorization(authorization, {
+    environment: options?.environment,
+    staticSecrets,
+    verifyOidcToken:
+      options?.verifyGithubActionsToken ??
+      legacyVerifier ??
+      verifyGithubActionsContactResearchToken,
+  });
 }
 
 export function isTrustedContactResearchOidcClaims(
   payload: JWTPayload
 ): boolean {
   return (
+    payload.aud === CONTACT_RESEARCH_OIDC_AUDIENCE &&
     payload.repository === "zspherez/photo-admin" &&
     payload.repository_owner === "zspherez" &&
     payload.ref === "refs/heads/main" &&
@@ -1427,6 +1449,7 @@ export async function verifyGithubActionsContactResearchToken(
     const { payload } = await jwtVerify(token, githubActionsJwks, {
       issuer: CONTACT_RESEARCH_OIDC_ISSUER,
       audience: CONTACT_RESEARCH_OIDC_AUDIENCE,
+      maxTokenAge: "10m",
     });
     return isTrustedContactResearchOidcClaims(payload);
   } catch {
@@ -3339,6 +3362,129 @@ export async function retryContactResearchJob(
       [jobId]
     )) === 1
   );
+}
+
+export type ContactResearchCleanupStatus =
+  | "pending"
+  | "review"
+  | "complete"
+  | "skipped"
+  | "inactive";
+
+export function contactResearchCleanupStatus(input: {
+  hasActiveSkip: boolean;
+  hasPendingCandidate: boolean;
+  hasPendingDirectOutreach: boolean;
+  hasDirectOutreachHistory: boolean;
+  hasActiveEmailContact: boolean;
+  hasEffectiveApproval: boolean;
+  eligible: boolean;
+}): ContactResearchCleanupStatus {
+  if (input.hasActiveSkip) return "skipped";
+  if (
+    input.hasPendingCandidate ||
+    input.hasPendingDirectOutreach
+  ) {
+    return "review";
+  }
+  if (input.hasActiveEmailContact || input.hasEffectiveApproval) {
+    return "complete";
+  }
+  if (input.hasDirectOutreachHistory) return "review";
+  return input.eligible ? "pending" : "inactive";
+}
+
+export async function reconcileContactResearchJobAfterProbeCleanup(
+  tx: Prisma.TransactionClient,
+  jobId: string,
+  now: Date
+): Promise<ContactResearchCleanupStatus> {
+  const job = await tx.contactResearchJob.findUnique({
+    where: { id: jobId },
+    select: {
+      artistId: true,
+      requestedShowId: true,
+      artist: {
+        select: {
+          contacts: {
+            where: ACTIVE_EMAIL_CONTACT_WHERE,
+            select: { email: true, state: true },
+          },
+          researchSkips: {
+            where: { clearedAt: null },
+            take: 1,
+            select: { id: true },
+          },
+        },
+      },
+      candidates: {
+        where: { status: { in: ["pending", "approved"] } },
+        select: { status: true, normalizedEmail: true },
+      },
+      directOutreachProposals: {
+        select: { status: true },
+      },
+    },
+  });
+  if (!job) {
+    throw new Error(`Contact research job ${jobId} no longer exists`);
+  }
+  const today = easternTodayStoredDate(now);
+  const end = parseDateOnly(
+    addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
+  );
+  const eligibleShow = await tx.showArtist.findFirst({
+    where: {
+      artistId: job.artistId,
+      show: {
+        date: { gte: today },
+        syncStatus: "active",
+        AND: [festivalLeadTimeWhere(now)],
+        OR: [
+          {
+            isFestival: false,
+            date: { lte: end },
+          },
+          ...(job.requestedShowId
+            ? [{ id: job.requestedShowId }]
+            : []),
+        ],
+      },
+    },
+    select: { showId: true },
+  });
+  const hasEffectiveApproval = job.candidates.some(
+    (candidate) =>
+      candidate.status === "approved" &&
+      isContactResearchApprovalEffective(
+        candidate.normalizedEmail,
+        job.artist.contacts
+      )
+  );
+  const status = contactResearchCleanupStatus({
+    hasActiveSkip: job.artist.researchSkips.length > 0,
+    hasPendingCandidate: job.candidates.some(
+      (candidate) => candidate.status === "pending"
+    ),
+    hasPendingDirectOutreach: job.directOutreachProposals.some(
+      (proposal) => proposal.status === "pending"
+    ),
+    hasDirectOutreachHistory: job.directOutreachProposals.length > 0,
+    hasActiveEmailContact: job.artist.contacts.length > 0,
+    hasEffectiveApproval,
+    eligible: eligibleShow !== null,
+  });
+  await tx.contactResearchJob.update({
+    where: { id: jobId },
+    data: {
+      status,
+      completedAt: status === "complete" ? now : null,
+      claimToken: null,
+      claimedAt: null,
+      claimExpiresAt: null,
+    },
+  });
+  return status;
 }
 
 async function retryContactResearchJobsByStatus(

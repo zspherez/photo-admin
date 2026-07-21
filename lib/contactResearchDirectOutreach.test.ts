@@ -25,7 +25,7 @@ function directOutreach(overrides: Record<string, unknown> = {}) {
     managerCompany: "Fosse Management",
     evidence: [
       {
-        sourceUrl: "https://artist.example/team",
+        sourceUrl: "https://fossemanagement.com/team",
         quote: "The artist is managed by Leif Fosse.",
       },
     ],
@@ -74,7 +74,7 @@ test("structured direct outreach accepts positive quotes and rejects self-assert
           directOutreach({
             evidence: [
               {
-                sourceUrl: "https://artist.example/team",
+                sourceUrl: "https://fossemanagement.com/team",
                 quote,
               },
             ],
@@ -96,7 +96,7 @@ test("every agent-controlled field rejects phone numbers and safe IDs remain val
     {
       evidence: [
         {
-          sourceUrl: "https://artist.example/team",
+          sourceUrl: "https://fossemanagement.com/team",
           quote: "Managed by Leif Fosse at １２３.４５６.７８９０.",
         },
       ],
@@ -105,7 +105,7 @@ test("every agent-controlled field rejects phone numbers and safe IDs remain val
       evidence: [
         {
           sourceUrl:
-            "https://artist.example/contact/%2B1-212-555-0199",
+            "https://fossemanagement.com/contact/%2B1-212-555-0199",
           quote: "Managed by Leif Fosse.",
         },
       ],
@@ -113,7 +113,7 @@ test("every agent-controlled field rejects phone numbers and safe IDs remain val
     {
       evidence: [
         {
-          sourceUrl: "https://artist.example/team?phone=2125550199",
+          sourceUrl: "https://fossemanagement.com/team?phone=2125550199",
           quote: "Managed by Leif Fosse.",
         },
       ],
@@ -292,7 +292,7 @@ test("human approval preserves existing contact fields and atomically records pr
           managerName: "Leif Fosse",
           managerCompany: "Fosse Management",
           note: "Direct outreach: Use the number already on file",
-          sourceUrls: ["https://artist.example/team"],
+          sourceUrls: ["https://fossemanagement.com/team"],
           evidenceQuotes: ["Managed by Leif Fosse."],
           job: { id: "job-1", artistId: "artist-1" },
         }),
@@ -350,7 +350,7 @@ test("human approval creates one null-email research contact when no manager con
           managerName: "Leif Fosse",
           managerCompany: null,
           note: "Direct outreach: Use the number already on file",
-          sourceUrls: ["https://artist.example/team"],
+          sourceUrls: ["https://fossemanagement.com/team"],
           evidenceQuotes: ["Managed by Leif Fosse."],
           job: { id: "job-1", artistId: "artist-1" },
         }),
@@ -391,8 +391,9 @@ test("email candidates and direct outreach persist together without collapsing r
           email: "manager@example.com",
           name: "Example Manager",
           role: "management",
-          sourceUrls: ["https://example.com/team"],
-          evidence: "Published management email.",
+          sourceUrls: ["https://fossemanagement.com/team"],
+          evidence:
+            "Fosse Management publishes manager@example.com for Example Manager.",
           confidence: "high",
         },
       ],
@@ -419,7 +420,7 @@ test("email candidates and direct outreach persist together without collapsing r
           candidateWrites += 1;
           return {
             id: "candidate-1",
-            sourceUrls: ["https://example.com/team"],
+            sourceUrls: ["https://fossemanagement.com/team"],
             normalizedEmail: value.create.normalizedEmail,
             status: "pending",
           };

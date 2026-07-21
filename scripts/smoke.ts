@@ -1,10 +1,16 @@
 import "dotenv/config";
 import { db } from "@/lib/db";
+import { assertSafeDatabaseTestWrite } from "@/lib/databaseWriteSafety";
 import { syncEdmtrainShows } from "@/lib/edmtrain";
 import { listTabs, syncContactsFromSheet } from "@/lib/sheets";
 import { getMe, saveStatsfmCredential, syncStatsfmTopArtists } from "@/lib/statsfm";
 
 async function main() {
+  assertSafeDatabaseTestWrite([
+    process.env.DATABASE_URL,
+    process.env.DIRECT_URL ?? process.env.DATABASE_URL,
+  ]);
+
   console.log("\n=== EDMTrain sync ===");
   const edm = await syncEdmtrainShows(90);
   console.log(edm);

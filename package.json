@@ -20,7 +20,7 @@
     "contact-audit:agent": "bash scripts/run-contact-audit-agent.sh",
     "contact-research:agent": "bash scripts/run-contact-research-agent.sh",
     "start": "next start",
-    "test": "tsx --test \"**/*.{test,spec}.{ts,tsx,mts}\"",
+    "test": "tsx --test --import ./scripts/test-environment.mjs \"**/*.{test,spec}.{ts,tsx,mts}\"",
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint",
     "rotate:statsfm-token": "tsx scripts/rotate-statsfm-token.ts",

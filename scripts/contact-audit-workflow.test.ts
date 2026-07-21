@@ -51,6 +51,7 @@ test("contact audit workflow polls explicitly requested work and is OIDC-authent
   assert.match(workflow, /copilot-requests: write/);
   assert.match(workflow, /id-token: write/);
   assert.match(workflow, /audience=photo-admin-contact-audit/);
+  assert.match(workflow, /Authorization:[^\n]*oidc_token/);
   assert.match(workflow, /\/api\/contact-audit\/prepare/);
   assert.match(workflow, /workflowRunId/);
   assert.match(workflow, /requested=\$\{requested\}/);
@@ -67,6 +68,7 @@ test("contact audit workflow polls explicitly requested work and is OIDC-authent
   assert.match(workflow, /npm run contact-audit:agent/);
   assert.doesNotMatch(workflow, /secrets\.CRON_SECRET/);
   assert.doesNotMatch(workflow, /secrets\.CONTACT_AUDIT_AGENT_TOKEN/);
+  assert.doesNotMatch(workflow, /CONTACT_AUDIT_AGENT_TOKEN:/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.doesNotMatch(workflow, /cancel-in-progress: true/);
   assert.doesNotMatch(workflow, /jq -er '\.resumed \| booleans'/);

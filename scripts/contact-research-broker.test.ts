@@ -214,6 +214,55 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
       },
     ],
   });
+  const leakedEvidence = await brokerRequest(
+    socketPath,
+    "/submit-candidates",
+    {
+      jobId: "job-1",
+      claimToken: "claim-1",
+      notes: "Official artist sources were checked.",
+      candidates: [
+        {
+          email: "justin@nuwave.io",
+          name: "Justin",
+          sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+          evidence: "test evidence for save",
+          confidence: "high",
+          needsApproval: true,
+          officialSource: null,
+        },
+      ],
+      reviewedEmails: [
+        {
+          email: "justin@nuwave.io",
+          classification: "named_manager",
+          personName: "Justin",
+          reason: "Official Instagram labels this address MGMT.",
+        },
+      ],
+    }
+  );
+  assert.equal(leakedEvidence.status, 400);
+  const leakedExhausted = await brokerRequest(
+    socketPath,
+    "/submit-exhausted",
+    {
+      jobId: "job-1",
+      claimToken: "claim-1",
+      notes: "test no official source",
+    }
+  );
+  assert.equal(leakedExhausted.status, 400);
+  const leakedMinimal = await brokerRequest(
+    socketPath,
+    "/submit-exhausted",
+    {
+      jobId: "job-1",
+      claimToken: "claim-1",
+      notes: "test minimal no official source",
+    }
+  );
+  assert.equal(leakedMinimal.status, 400);
   const wrongId = await brokerRequest(
     socketPath,
     "/submit-exhausted",
@@ -224,36 +273,52 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
     }
   );
   assert.equal(wrongId.status, 409);
-  const submitted = await brokerRequest(socketPath, "/submit-candidates", {
+  const finalPayload = {
     jobId: "job-1",
     claimToken: "claim-1",
-    notes: "Official Instagram explicitly labels the manager.",
+    notes:
+      "DRINKURWATER's official Instagram explicitly labels the manager.",
     candidates: [
       {
-        email: "manager@example.com",
-        name: "Manager Name",
-        sourceUrls: ["https://instagram.com/exampleartist"],
-        evidence: "Official Instagram publishes MGMT manager@example.com.",
+        email: "justin@nuwave.io",
+        name: "Justin",
+        sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+        evidence:
+          "DRINKURWATER's official Instagram bio publishes MGMT: justin@nuwave.io.",
         confidence: "high",
         needsApproval: false,
         officialSource: {
           type: "instagram",
-          url: "https://instagram.com/exampleartist",
+          url: "https://www.instagram.com/drinkurwater/",
           managementLabel: "mgmt",
           evidence:
-            "Official Instagram bio: MGMT manager@example.com",
+            "DRINKURWATER official Instagram bio: MGMT: justin@nuwave.io",
         },
       },
     ],
     reviewedEmails: [
       {
-        email: "manager@example.com",
+        email: "justin@nuwave.io",
         classification: "named_manager",
-        personName: "Manager Name",
-        reason: "Official artist Instagram labels this address MGMT.",
+        personName: "Justin",
+        reason:
+          "DRINKURWATER's official Instagram labels Justin's address MGMT.",
       },
     ],
+  };
+  const validated = await brokerRequest(socketPath, "/validate-result", {
+    action: "submit-candidates",
+    payload: finalPayload,
   });
+  assert.deepEqual(validated, {
+    status: 200,
+    value: { ok: true, action: "submit-candidates" },
+  });
+  const submitted = await brokerRequest(
+    socketPath,
+    "/submit-candidates",
+    finalPayload
+  );
   assert.equal(submitted.status, 200);
   assert.deepEqual(submitted.value, { ok: true, status: "exhausted" });
   const secondClaim = await brokerRequest(
@@ -288,22 +353,23 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
     {
       outcome: "candidates",
       claimToken: "claim-1",
-      notes: "Official Instagram explicitly labels the manager.",
+      notes:
+        "DRINKURWATER's official Instagram explicitly labels the manager.",
       candidates: [
         {
-          email: "manager@example.com",
-          name: "Manager Name",
-          sourceUrls: ["https://instagram.com/exampleartist"],
+          email: "justin@nuwave.io",
+          name: "Justin",
+          sourceUrls: ["https://www.instagram.com/drinkurwater/"],
           evidence:
-            "Official Instagram publishes MGMT manager@example.com.",
+            "DRINKURWATER's official Instagram bio publishes MGMT: justin@nuwave.io.",
           confidence: "high",
           needsApproval: false,
           officialSource: {
             type: "instagram",
-            url: "https://instagram.com/exampleartist",
+            url: "https://www.instagram.com/drinkurwater/",
             managementLabel: "mgmt",
             evidence:
-              "Official Instagram bio: MGMT manager@example.com",
+              "DRINKURWATER official Instagram bio: MGMT: justin@nuwave.io",
           },
           role: "management",
         },

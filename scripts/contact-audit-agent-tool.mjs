@@ -22,6 +22,7 @@ switch (action) {
     input = { url: first ?? "" };
     break;
   case "known-contacts":
+  case "validate-result":
   case "submit-result":
     try {
       input = JSON.parse(first ?? "");
@@ -31,7 +32,7 @@ switch (action) {
     break;
   default:
     throw new Error(
-      "usage: claim [limit] | search <query> [limit] | fetch <url> | known-contacts <json> | submit-result <json>"
+      "usage: claim [limit] | search <query> [limit] | fetch <url> | known-contacts <json> | validate-result <json> | submit-result <json>"
     );
 }
 

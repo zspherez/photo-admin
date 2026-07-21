@@ -554,7 +554,7 @@ test("completion marks an adopted request completed without replacing its run", 
       {
         claimToken: "claim-1",
         finding: "current",
-        sourceUrls: ["https://artist.example/contact"],
+        sourceUrls: ["https://www.instagram.com/drinkurwater/"],
         evidence: "The official artist page still lists this manager.",
         confidence: "high",
         alternatives: [],
