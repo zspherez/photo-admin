@@ -48,6 +48,12 @@ async function main(): Promise<void> {
     emailTemplateProbe,
     dashboardShowSnapshotProbe,
     dashboardShowSnapshotMemberProbe,
+    trajectoryModelRunProbe,
+    trajectoryRunArtistProbe,
+    trajectoryRecommendationProbe,
+    trajectoryImportIssueProbe,
+    trajectoryConstraintProbe,
+    trajectoryReadyIndexProbe,
   ] = await Promise.all([
     db.setting.findMany({
       where: {
@@ -328,6 +334,120 @@ async function main(): Promise<void> {
         sortDate: true,
       },
     }),
+    db.trajectoryModelRun.findMany({
+      take: 1,
+      select: {
+        id: true,
+        producer: true,
+        producerRunId: true,
+        contractVersion: true,
+        producerSchemaVersion: true,
+        artifactSha256: true,
+        fullArtifactSha256: true,
+        artifactGzip: true,
+        artifactByteLength: true,
+        producerRevision: true,
+        generatedAt: true,
+        asOfDate: true,
+        decisionDate: true,
+        minimumShowDate: true,
+        validUntil: true,
+        modelStatus: true,
+        validationReference: true,
+        status: true,
+        summary: true,
+        failureCode: true,
+        failureMessage: true,
+        importedAt: true,
+        activatedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+    db.trajectoryRunArtist.findMany({
+      take: 1,
+      select: {
+        id: true,
+        runId: true,
+        artistId: true,
+        edmtrainArtistId: true,
+        sourceName: true,
+        spotifyArtistId: true,
+        raArtistId: true,
+        coverageState: true,
+        momentumBand: true,
+        isEarlyStage: true,
+        isEstablished: true,
+        isVeteran: true,
+        eventDelta6m: true,
+        eventsPrior6m: true,
+        eventsRecent6m: true,
+        marketsPrior6m: true,
+        marketsRecent6m: true,
+        careerAgeYears: true,
+        analogSummary: true,
+        releaseContext: true,
+        genres: true,
+        createdAt: true,
+      },
+    }),
+    db.trajectoryRecommendation.findMany({
+      take: 1,
+      select: {
+        id: true,
+        runId: true,
+        showId: true,
+        runArtistId: true,
+        arm: true,
+        listRank: true,
+        isSuggested: true,
+        slatePosition: true,
+        billingPosition: true,
+        lineupSize: true,
+        isFirstBilled: true,
+        rationale: true,
+        sourceFingerprint: true,
+        createdAt: true,
+      },
+    }),
+    db.trajectoryImportIssue.findMany({
+      take: 1,
+      select: {
+        id: true,
+        runId: true,
+        recommendationKey: true,
+        code: true,
+        detail: true,
+        createdAt: true,
+      },
+    }),
+    db.$queryRaw<Array<{ constraintName: string; validated: boolean }>>(
+      Prisma.sql`
+        SELECT
+          constraint_row."conname" AS "constraintName",
+          constraint_row."convalidated" AS "validated"
+        FROM pg_constraint AS constraint_row
+        JOIN pg_class AS table_row
+          ON table_row.oid = constraint_row."conrelid"
+        JOIN pg_namespace AS namespace_row
+          ON namespace_row.oid = table_row."relnamespace"
+        WHERE namespace_row."nspname" = current_schema()
+          AND table_row."relname" IN (
+            'TrajectoryModelRun',
+            'TrajectoryRunArtist',
+            'TrajectoryRecommendation'
+          )
+          AND constraint_row."contype" = 'c'
+      `,
+    ),
+    db.$queryRaw<Array<{ indexDefinition: string }>>(
+      Prisma.sql`
+        SELECT indexdef AS "indexDefinition"
+        FROM pg_indexes
+        WHERE schemaname = current_schema()
+          AND indexname = 'TrajectoryModelRun_one_ready_artist_trajectory_idx'
+      `,
+    ),
   ]);
   const values = new Map(settings.map((setting) => [setting.key, setting.value]));
 
@@ -358,12 +478,26 @@ async function main(): Promise<void> {
           emailTemplateProbe,
           dashboardShowSnapshotProbe,
           dashboardShowSnapshotMemberProbe,
+          trajectoryModelRunProbe,
+          trajectoryRunArtistProbe,
+          trajectoryRecommendationProbe,
+          trajectoryImportIssueProbe,
+          trajectoryConstraintProbe,
+          trajectoryReadyIndexProbe,
         ].every(Array.isArray) &&
         outreachDispatchIdentityConstraintProbe.some(
           (constraint) =>
             constraint.constraintName ===
               "Outreach_dispatch_recipient_identity_check" &&
             constraint.validated,
+        ) &&
+        trajectoryConstraintProbe.length >= 10 &&
+        trajectoryConstraintProbe.every((constraint) => constraint.validated) &&
+        trajectoryReadyIndexProbe.some(
+          (index) =>
+            index.indexDefinition.includes("UNIQUE") &&
+            index.indexDefinition.includes("status") &&
+            index.indexDefinition.includes("ready"),
         ),
       configuredSpreadsheetId:
         values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,
@@ -393,6 +527,11 @@ async function main(): Promise<void> {
         "EmailTemplate.purpose",
         "DashboardShowSnapshot",
         "DashboardShowSnapshotMember",
+        "TrajectoryModelRun",
+        "TrajectoryRunArtist",
+        "TrajectoryRecommendation",
+        "TrajectoryImportIssue",
+        "TrajectoryModelRun_one_ready_artist_trajectory_idx",
       ],
     })
   );
