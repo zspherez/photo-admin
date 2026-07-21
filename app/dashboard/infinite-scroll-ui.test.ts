@@ -7,6 +7,10 @@ const source = fs.readFileSync(
   path.join(process.cwd(), "app/dashboard/dashboard-client.tsx"),
   "utf8"
 );
+const navSource = fs.readFileSync(
+  path.join(process.cwd(), "components/nav.tsx"),
+  "utf8"
+);
 
 test("dashboard replaces page navigation with infinite loading states", () => {
   assert.doesNotMatch(source, /Dashboard pages|← Previous|Next →/);
@@ -16,6 +20,18 @@ test("dashboard replaces page navigation with infinite loading states", () => {
   assert.match(source, /Couldn’t load more shows/);
   assert.match(source, /You’ve reached the end/);
   assert.match(source, /aria-live="polite"/);
+});
+
+test("all NYC cards keep badges optional and new outreach actions eligibility-gated", () => {
+  assert.match(source, /key: "all-nyc", label: "All NYC shows"/);
+  assert.doesNotMatch(navSource, /href: "\/shows", label: "All shows"/);
+  assert.match(source, /\{artist\.topSignal && \(/);
+  assert.match(
+    source,
+    /artist\.workflowEligible &&\s*\(emailContact \|\| phoneContact\)/
+  );
+  assert.match(source, /!contact && artist\.workflowEligible/);
+  assert.match(source, /returnTo=\{returnTo\}/);
 });
 
 test("dashboard retains a manual fallback and prevents concurrent loads", () => {

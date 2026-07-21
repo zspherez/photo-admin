@@ -85,7 +85,9 @@ export default async function DashboardPage({
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Matched shows</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">
+        {query.mode === "all-nyc" ? "All NYC shows" : "Matched shows"}
+      </h1>
 
       <div className="mt-3 space-y-2">
         {testOverride && (

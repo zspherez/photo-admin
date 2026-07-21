@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildDashboardHref,
+  dashboardShowWhere,
   DEFAULT_FILTERS,
   getDashboardDateRange,
   getPagination,
   isDashboardArtistMatch,
+  isDashboardArtistVisible,
   parseDashboardQuery,
 } from "./match";
 import { dashboardHrefWithoutLegacyPage } from "./dashboardQuery";
@@ -45,6 +47,17 @@ test("dashboard filters parse shareable URL state and reject invalid values", ()
   );
   assert.deepEqual(
     parseDashboardQuery({
+      mode: "all-nyc",
+      src: "spotify",
+      search: "  Bicep  ",
+    }),
+    {
+      mode: "all-nyc",
+      filters: { ...DEFAULT_FILTERS, search: "Bicep" },
+    }
+  );
+  assert.deepEqual(
+    parseDashboardQuery({
       mode: "unknown",
       src: "spotify",
       search: "Bicep",
@@ -80,6 +93,13 @@ test("dashboard URL generation omits defaults and obsolete page state", () => {
     "/dashboard?mode=unknown"
   );
   assert.equal(
+    buildDashboardHref({
+      mode: "all-nyc",
+      filters: { ...DEFAULT_FILTERS, source: "spotify" },
+    }),
+    "/dashboard?mode=all-nyc"
+  );
+  assert.equal(
     dashboardHrefWithoutLegacyPage({
       mode: "dismissed",
       search: "Jamie xx",
@@ -98,6 +118,70 @@ test("dashboard date ranges use Eastern calendar dates", () => {
   );
   assert.equal(range.start.toISOString(), "2026-08-15T00:00:00.000Z");
   assert.equal(range.end.toISOString(), "2026-09-14T00:00:00.000Z");
+
+  assert.equal(
+    getDashboardDateRange(
+      "7d",
+      new Date("2026-03-08T04:59:59.999Z")
+    ).start.toISOString(),
+    "2026-03-07T00:00:00.000Z"
+  );
+  assert.equal(
+    getDashboardDateRange(
+      "7d",
+      new Date("2026-03-08T05:00:00.000Z")
+    ).start.toISOString(),
+    "2026-03-08T00:00:00.000Z"
+  );
+  assert.equal(
+    getDashboardDateRange(
+      "7d",
+      new Date("2026-11-01T04:00:00.000Z")
+    ).start.toISOString(),
+    "2026-11-01T00:00:00.000Z"
+  );
+});
+
+test("all NYC mode uses cached inside-NYC geography without a match requirement", () => {
+  const now = new Date("2026-07-21T03:59:59.999Z");
+  const where = dashboardShowWhere("all-nyc", DEFAULT_FILTERS, now);
+
+  assert.deepEqual(where.date, {
+    gte: new Date("2026-07-20T00:00:00.000Z"),
+    lte: new Date("2026-10-18T00:00:00.000Z"),
+  });
+  assert.equal(where.isFestival, false);
+  assert.equal(where.syncStatus, "active");
+  assert.equal(where.dismissedAt, null);
+  assert.deepEqual(where.edmtrainVenue, {
+    is: { nycStatus: "inside_nyc" },
+  });
+  assert.equal(where.artists, undefined);
+
+  const matchedWhere = dashboardShowWhere("matched", DEFAULT_FILTERS, now);
+  assert.ok(matchedWhere.artists);
+  assert.equal(matchedWhere.edmtrainVenue, undefined);
+});
+
+test("all NYC artist cards include unmatched artists without granting workflow eligibility", () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const unmatched = { popularity: null, listenSignals: [] };
+  const matched = {
+    popularity: 10,
+    listenSignals: [
+      {
+        source: "statsfm_top",
+        rank: 5,
+        expiresAt: null,
+      },
+    ],
+  };
+
+  assert.equal(isDashboardArtistVisible(unmatched, "all-nyc", now), true);
+  assert.equal(isDashboardArtistMatch(unmatched, "all-nyc", now), false);
+  assert.equal(isDashboardArtistVisible(matched, "all-nyc", now), true);
+  assert.equal(isDashboardArtistMatch(matched, "matched", now), true);
+  assert.equal(isDashboardArtistVisible(unmatched, "matched", now), false);
 });
 
 test("pagination reports stable bounds and clamps stale page links", () => {

@@ -33,7 +33,12 @@ test("browser returns and action redirects restore, while filters and sessions r
     "/dashboard?search=Four+Tet"
   );
   const bicep = dashboardRestoreStorageKey(scope, "/dashboard?search=Bicep");
+  const allNyc = dashboardRestoreStorageKey(
+    scope,
+    "/dashboard?mode=all-nyc"
+  );
   assert.notEqual(fourTet, bicep);
+  assert.notEqual(allNyc, dashboardRestoreStorageKey(scope, "/dashboard"));
   assert.notEqual(
     dashboardRestoreStorageKey(scope, "/dashboard"),
     dashboardRestoreStorageKey("b".repeat(64), "/dashboard")

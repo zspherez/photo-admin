@@ -14,6 +14,7 @@ export type ContactFilter = "any" | "has" | "needs";
 export type StatusFilter = "any" | "unsent" | "sent" | "opened" | "clicked";
 export type DashboardMode =
   | "matched"
+  | "all-nyc"
   | "unknown"
   | "interested"
   | "dismissed";
@@ -63,7 +64,10 @@ export function parseDashboardQuery(
   const mode = firstSearchParam(searchParams.mode);
 
   const parsedMode: DashboardMode =
-    mode === "unknown" || mode === "interested" || mode === "dismissed"
+    mode === "all-nyc" ||
+    mode === "unknown" ||
+    mode === "interested" ||
+    mode === "dismissed"
       ? mode
       : "matched";
   const parsedSource: SourceFilter =
@@ -81,7 +85,10 @@ export function parseDashboardQuery(
         range === "90d"
           ? range
           : DEFAULT_FILTERS.range,
-      source: parsedMode === "unknown" ? "any" : parsedSource,
+      source:
+        parsedMode === "unknown" || parsedMode === "all-nyc"
+          ? "any"
+          : parsedSource,
       contact:
         contact === "has" || contact === "needs" || contact === "any"
           ? contact
@@ -109,6 +116,7 @@ export function buildDashboardHref(query: DashboardQuery): string {
   }
   if (
     query.mode !== "unknown" &&
+    query.mode !== "all-nyc" &&
     query.filters.source !== DEFAULT_FILTERS.source
   ) {
     params.set("src", query.filters.source);

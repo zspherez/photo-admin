@@ -11,6 +11,14 @@ test("dashboard snapshot creation freezes ordered membership transactionally", (
   );
   assert.match(create, /TransactionIsolationLevel\.RepeatableRead/);
   assert.match(create, /orderBy: \[\{ date: "asc" \}, \{ id: "asc" \}\]/);
+  assert.match(
+    source,
+    /mode === "all-nyc"[\s\S]*edmtrainVenue:[\s\S]*nycStatus: "inside_nyc"/
+  );
+  assert.match(
+    source,
+    /mode === query\.mode\s*\?\s*Promise\.resolve\(0\)/
+  );
   assert.ok(
     create.indexOf("transaction.show.findMany") <
       create.indexOf("dashboardShowSnapshotMember.createMany")

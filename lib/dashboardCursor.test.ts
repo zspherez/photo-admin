@@ -68,6 +68,10 @@ test("dashboard cursor and query hashes reset when filters change", () => {
   };
   assert.equal(decodeDashboardCursor(encoded, changed), null);
   assert.notEqual(dashboardQueryKey(query), dashboardQueryKey(changed));
+
+  const allNyc = { ...query, mode: "all-nyc" as const };
+  assert.equal(decodeDashboardCursor(encoded, allNyc), null);
+  assert.notEqual(dashboardQueryKey(query), dashboardQueryKey(allNyc));
 });
 
 test("snapshot membership remains complete when live show dates change", () => {
