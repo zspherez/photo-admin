@@ -376,7 +376,7 @@ function officialCandidate(email: string) {
     name: "Official Manager",
     role: "management",
     sourceUrls: ["https://soundcloud.com/exampleartist"],
-    evidence: "Official profile publishes the address.",
+    evidence: `The official SoundCloud profile publishes ${email} as the management address.`,
     confidence: "high",
     needsApproval: false,
     officialSource: {
@@ -393,8 +393,8 @@ function manualCandidate(email: string) {
     email,
     name: "Possible Manager",
     role: "management",
-    sourceUrls: ["https://agency.example/team"],
-    evidence: "Agency roster associates this manager with the artist.",
+    sourceUrls: ["https://nuwave.io/team"],
+    evidence: `The NuWave roster associates Possible Manager and ${email} with the artist.`,
     confidence: "medium",
     needsApproval: true,
   };
@@ -1279,8 +1279,9 @@ test("auto-approval leaves manual candidates awaiting review", async () => {
           email: "manual@example.com",
           name: "Possible Manager",
           role: "management",
-          sourceUrls: ["https://agency.example/team"],
-          evidence: "Agency roster associates this manager with the artist.",
+          sourceUrls: ["https://nuwave.io/team"],
+          evidence:
+            "The NuWave roster associates Possible Manager and manual@example.com with the artist.",
           confidence: "medium",
           needsApproval: true,
         },
@@ -1693,18 +1694,24 @@ test("refresh reconciles an audit quarantine that wins the serializable race", a
   assert.equal(state.candidates[0].status, "superseded");
 });
 
-test("accepts only public HTTP(S) evidence URLs", () => {
+test("accepts only real public HTTPS evidence URLs", () => {
   assert.equal(
-    normalizeResearchSourceUrl("https://example.com/contact#team"),
-    "https://example.com/contact"
+    normalizeResearchSourceUrl(
+      "https://www.instagram.com/drinkurwater/#team"
+    ),
+    "https://www.instagram.com/drinkurwater/"
   );
   assert.throws(
     () => normalizeResearchSourceUrl("https://user:pass@example.com"),
-    /public HTTP\(S\)/
+    /real public HTTPS/
   );
   assert.throws(
     () => normalizeResearchSourceUrl("file:///tmp/contact"),
-    /public HTTP\(S\)/
+    /real public HTTPS/
+  );
+  assert.throws(
+    () => normalizeResearchSourceUrl("https://example.com/contact"),
+    /example or test domain/
   );
 });
 
@@ -1787,12 +1794,12 @@ test("official artist management sources are strictly normalized", () => {
       normalizeOfficialManagementSource(
         {
           type: "instagram",
-          url: "https://example.com/profile",
+          url: "https://www.billboard.com/profile",
           managementLabel: "mgmt",
           evidence: "MGMT manager@example.com",
         },
         "manager@example.com",
-        ["https://example.com/profile"]
+        ["https://www.billboard.com/profile"]
       ),
     /does not match its source type/
   );
@@ -2089,17 +2096,19 @@ test("parses and deduplicates evidence-backed candidate submissions", () => {
         name: "Alex Manager",
         role: "management",
         sourceUrls: [
-          "https://artist.example/contact",
-          "https://artist.example/contact#team",
+          "https://www.instagram.com/drinkurwater/",
+          "https://www.instagram.com/drinkurwater/#team",
         ],
-        evidence: "The artist's contact page publishes this management email.",
+        evidence:
+          "The artist's contact page publishes manager@example.com for Alex Manager.",
         confidence: "high",
       },
       {
         email: "manager@example.com",
         role: "manager",
-        sourceUrls: ["https://agency.example/team"],
-        evidence: "Agency team page confirms the same address.",
+        sourceUrls: ["https://nuwave.io/team"],
+        evidence:
+          "The NuWave team page confirms manager@example.com as the management address.",
         confidence: "medium",
       },
     ],
@@ -2109,7 +2118,7 @@ test("parses and deduplicates evidence-backed candidate submissions", () => {
   assert.equal(submission.candidates.length, 1);
   assert.equal(submission.candidates[0].normalizedEmail, "manager@example.com");
   assert.deepEqual(submission.candidates[0].sourceUrls, [
-    "https://agency.example/team",
+    "https://nuwave.io/team",
   ]);
   assert.equal(submission.candidates[0].role, "management");
   assert.equal(submission.candidates[0].needsApproval, true);
@@ -2127,7 +2136,7 @@ test("approval flag requires direct official-source evidence", () => {
           {
             email: "manager@example.com",
             role: "management",
-            sourceUrls: ["https://example.com/press"],
+            sourceUrls: ["https://www.billboard.com/music/music-news/"],
             evidence: "A press article inferred this address.",
             confidence: "medium",
             needsApproval: false,
@@ -2160,6 +2169,68 @@ test("requires evidence and bounded claim limits", () => {
       }),
     /source URL/
   );
+});
+
+test("rejects leaked synthetic submissions and accepts real DRINKURWATER evidence", () => {
+  for (const notes of [
+    "test no official source",
+    "test minimal no official source",
+  ]) {
+    assert.throws(
+      () =>
+        parseContactResearchSubmission({
+          outcome: "exhausted",
+          claimToken: "claim-1",
+          notes,
+        }),
+      /synthetic test or placeholder/
+    );
+  }
+  assert.throws(
+    () =>
+      parseContactResearchSubmission({
+        outcome: "candidates",
+        claimToken: "claim-1",
+        candidates: [
+          {
+            email: "justin@nuwave.io",
+            name: "Justin",
+            role: "management",
+            sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+            evidence: "test evidence for save",
+            confidence: "high",
+          },
+        ],
+      }),
+    /synthetic test or placeholder/
+  );
+
+  const result = parseContactResearchSubmission({
+    outcome: "candidates",
+    claimToken: "claim-1",
+    notes:
+      "DRINKURWATER's official Instagram was checked for current management.",
+    candidates: [
+      {
+        email: "justin@nuwave.io",
+        name: "Justin",
+        role: "management",
+        sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+        evidence:
+          "DRINKURWATER's official Instagram bio publishes MGMT: justin@nuwave.io.",
+        confidence: "high",
+        needsApproval: false,
+        officialSource: {
+          type: "instagram",
+          url: "https://www.instagram.com/drinkurwater/",
+          managementLabel: "mgmt",
+          evidence:
+            "DRINKURWATER official Instagram bio: MGMT: justin@nuwave.io",
+        },
+      },
+    ],
+  });
+  assert.equal(result.candidates[0].email, "justin@nuwave.io");
 });
 
 test("parses agent-rule skip outcomes with required provenance", () => {
@@ -3513,6 +3584,59 @@ test("contact research bearer authorization fails closed", async () => {
   );
 });
 
+test("production research mutation auth rejects static and cron credentials", async () => {
+  const environment = { VERCEL_ENV: "production" };
+  const rejectOidc = async () => false;
+  assert.equal(
+    await isValidContactResearchAuthorization("Bearer research-static", {
+      environment,
+      staticToken: "research-static",
+      verifyGithubActionsToken: rejectOidc,
+    }),
+    false
+  );
+  assert.equal(
+    await isValidContactResearchAuthorization("Bearer cron-secret", {
+      environment,
+      staticToken: "cron-secret",
+      verifyGithubActionsToken: rejectOidc,
+    }),
+    false
+  );
+  assert.equal(
+    await isValidContactResearchAuthorization("Bearer research-oidc", {
+      environment,
+      staticToken: "research-static",
+      verifyGithubActionsToken: async (token) => token === "research-oidc",
+    }),
+    true
+  );
+  assert.doesNotMatch(
+    readFileSync(new URL("./contactResearch.ts", import.meta.url), "utf8"),
+    /CRON_SECRET/
+  );
+});
+
+test("development research static auth works only when explicitly configured", async () => {
+  const environment = { NODE_ENV: "development" };
+  const rejectOidc = async () => false;
+  assert.equal(
+    await isValidContactResearchAuthorization("Bearer local-static", {
+      environment,
+      staticToken: "local-static",
+      verifyGithubActionsToken: rejectOidc,
+    }),
+    true
+  );
+  assert.equal(
+    await isValidContactResearchAuthorization("Bearer local-static", {
+      environment,
+      verifyGithubActionsToken: rejectOidc,
+    }),
+    false
+  );
+});
+
 test("GitHub Actions OIDC claims are pinned to the research workflow", () => {
   const trusted = {
     aud: CONTACT_RESEARCH_OIDC_AUDIENCE,
@@ -3523,6 +3647,13 @@ test("GitHub Actions OIDC claims are pinned to the research workflow", () => {
     event_name: "workflow_dispatch",
   };
   assert.equal(isTrustedContactResearchOidcClaims(trusted), true);
+  assert.equal(
+    isTrustedContactResearchOidcClaims({
+      ...trusted,
+      aud: "photo-admin-contact-audit",
+    }),
+    false
+  );
   assert.equal(
     isTrustedContactResearchOidcClaims({
       ...trusted,

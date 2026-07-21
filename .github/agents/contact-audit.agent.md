@@ -32,8 +32,9 @@ A localhost broker holds queue authentication and provides bounded public-web
 tools. Use only these commands from the repository root:
 
 - `contact-audit-agent-tool search '"Artist Name" manager' 8`
-- `contact-audit-agent-tool fetch 'https://example.com/page'`
-- `contact-audit-agent-tool known-contacts '{"managerName":"Name","company":"Company","domain":"example.com"}'`
+- `contact-audit-agent-tool fetch 'https://www.instagram.com/artistname/'`
+- `contact-audit-agent-tool known-contacts '{"managerName":"Greg Burnell","company":"Palm Artists","domain":"palmartists.com"}'`
+- `contact-audit-agent-tool validate-result '<json>'`
 - `contact-audit-agent-tool submit-result '<json>'`
 
 Do not use general shell commands, direct network tools, filesystem inspection,
@@ -45,6 +46,14 @@ top-level `jobId` and `claimToken`; do not invent identifiers. The job includes
 artist when the run was prepared. It has stable `rosterEntryId` values and
 exactly one `isTarget: true` entry. A `legacy_single_contact` roster is
 explicitly incomplete; do not infer that it was the artist's whole team.
+
+The result endpoint writes persistent production state. Never submit dummy,
+test, example, placeholder, probe, or simplified factual payloads. Use
+`validate-result` to dry-check the complete final JSON without saving it. If a
+real `submit-result` returns `500`, do not simplify evidence, sources, names,
+emails, findings, or notes to test whether persistence works. Report the
+failure and leave the claim recoverable. `submit-result` remains the one
+successful final write for the claimed job.
 
 ## Audit goal
 
@@ -128,3 +137,7 @@ either the immutable run snapshot or current stored contacts.
 
 A `409` means the claim expired or was reassigned. Do not retry with another
 identifier. Finish with a concise statement of the submitted finding.
+
+A `500` means the production save failed. Do not probe the persistent endpoint
+with alternate or synthetic data; finish as not submitted and surface the
+failure for recovery.

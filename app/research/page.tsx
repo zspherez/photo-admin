@@ -659,11 +659,11 @@ export default async function ContactResearchPage({
         </AutoDismissStatus>
       )}
 
-      {!process.env.CONTACT_RESEARCH_AGENT_TOKEN &&
-        !process.env.CRON_SECRET && (
+      {process.env.NODE_ENV !== "production" &&
+        !process.env.CONTACT_RESEARCH_AGENT_TOKEN && (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          Set <code>CRON_SECRET</code> or{" "}
-          <code>CONTACT_RESEARCH_AGENT_TOKEN</code> before running the worker.
+          Set <code>CONTACT_RESEARCH_AGENT_TOKEN</code> only for an explicit
+          local worker. Hosted workers use GitHub Actions OIDC.
         </div>
       )}
 

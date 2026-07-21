@@ -21,8 +21,8 @@ test("parses evidence-backed review-only audit findings", () => {
       claimToken: "claim-1",
       finding: "changed",
       sourceUrls: [
-        "https://artist.example/contact#management",
-        "https://artist.example/contact",
+        "https://www.instagram.com/drinkurwater/#management",
+        "https://www.instagram.com/drinkurwater/",
       ],
       evidence:
         "The current artist page names a different manager and publishes the replacement address.",
@@ -33,9 +33,9 @@ test("parses evidence-backed review-only audit findings", () => {
           email: "New.Manager@Agency.example",
           name: "New Manager",
           role: "manager",
-          sourceUrls: ["https://agency.example/team"],
+          sourceUrls: ["https://www.instagram.com/drinkurwater/"],
           evidence:
-            "The agency roster lists the artist and publishes this manager address.",
+            "DRINKURWATER's official Instagram publishes New.Manager@Agency.example for New Manager.",
           confidence: "high",
         },
       ],
@@ -45,16 +45,50 @@ test("parses evidence-backed review-only audit findings", () => {
 
   assert.equal(result.finding, "changed");
   assert.deepEqual(result.sourceUrls, [
-    "https://artist.example/contact",
+    "https://www.instagram.com/drinkurwater/",
   ]);
   assert.equal(result.alternatives[0].email, "new.manager@agency.example");
   assert.equal(result.alternatives[0].role, "management");
 });
 
+test("rejects leaked audit payloads while allowing real evidence", () => {
+  for (const evidence of [
+    "test evidence for save",
+    "test no official source",
+    "test minimal no official source",
+  ]) {
+    assert.throws(
+      () =>
+        parseContactAuditSubmission({
+          claimToken: "claim-1",
+          finding: "current",
+          sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+          evidence,
+          confidence: "low",
+          alternatives: [],
+        }),
+      /synthetic test or placeholder/
+    );
+  }
+  assert.doesNotThrow(() =>
+    parseContactAuditSubmission({
+      claimToken: "claim-1",
+      finding: "current",
+      sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+      evidence:
+        "The official DRINKURWATER Instagram bio still identifies Justin as management.",
+      confidence: "high",
+      notes:
+        "Test event coverage was reviewed alongside the official artist biography.",
+      alternatives: [],
+    })
+  );
+});
+
 test("enforces finding semantics and manager-only alternatives", () => {
   const base = {
     claimToken: "claim-1",
-    sourceUrls: ["https://artist.example/contact"],
+    sourceUrls: ["https://www.instagram.com/drinkurwater/"],
     evidence: "Bounded public-source review.",
     confidence: "medium",
   };
@@ -113,7 +147,7 @@ test("enforces finding semantics and manager-only alternatives", () => {
           {
             email: "other@example.com",
             role: "management",
-            sourceUrls: ["https://agency.example"],
+            sourceUrls: ["https://www.instagram.com/drinkurwater/"],
             evidence: "Another plausible manager.",
             confidence: "medium",
           },
@@ -130,7 +164,7 @@ test("enforces finding semantics and manager-only alternatives", () => {
           {
             email: "replacement@example.com",
             role: "management",
-            sourceUrls: ["https://agency.example"],
+            sourceUrls: ["https://www.instagram.com/drinkurwater/"],
             evidence: "A plausible replacement manager.",
             confidence: "medium",
           },
@@ -256,7 +290,7 @@ test("complete roster submissions inventory every stored contact and keep stale 
   const base = {
     claimToken: "claim-1",
     finding: "stale",
-    sourceUrls: ["https://artist.example/management"],
+    sourceUrls: ["https://www.instagram.com/drinkurwater/"],
     evidence:
       "The target is stale; second@management.example remains a valid already stored manager.",
     confidence: "high",
@@ -332,15 +366,16 @@ test("stored roster or current emails are rejected while a genuinely new changed
   const changed = parseContactAuditSubmission({
     claimToken: "claim-1",
     finding: "changed",
-    sourceUrls: ["https://artist.example/management"],
+    sourceUrls: ["https://www.instagram.com/drinkurwater/"],
     evidence: "Official management page publishes a genuinely new address.",
     confidence: "high",
     alternatives: [
       {
         email: "new@management.example",
         role: "management",
-        sourceUrls: ["https://management.example/team"],
-        evidence: "Official team page lists the new address.",
+        sourceUrls: ["https://nuwave.io/team"],
+        evidence:
+          "The official management team page lists new@management.example as the new address.",
         confidence: "high",
       },
     ],
@@ -384,8 +419,9 @@ test("legacy jobs retain safe explicit single-contact context", () => {
     parseContactAuditSubmission({
       claimToken: "legacy-claim",
       finding: "current",
-      sourceUrls: ["https://artist.example/contact"],
-      evidence: "The legacy target remains current.",
+      sourceUrls: ["https://www.instagram.com/drinkurwater/"],
+      evidence:
+        "The official artist profile still identifies the legacy target as current management.",
       confidence: "medium",
       alternatives: [],
     })
@@ -778,6 +814,61 @@ test("contact audit authorization fails closed", async () => {
   );
 });
 
+test("production audit mutation auth rejects static and cron credentials", async () => {
+  const bearer = (token: string) => `Bearer ${token}`;
+  const environment = { VERCEL_TARGET_ENV: "production" };
+  const rejectOidc = async () => false;
+  assert.equal(
+    await isValidContactAuditAuthorization(bearer("audit-static"), {
+      environment,
+      staticToken: "audit-static",
+      verifyGithubActionsToken: rejectOidc,
+    }),
+    false
+  );
+  assert.equal(
+    await isValidContactAuditAuthorization(bearer("cron-secret"), {
+      environment,
+      staticToken: "cron-secret",
+      verifyGithubActionsToken: rejectOidc,
+    }),
+    false
+  );
+  assert.equal(
+    await isValidContactAuditAuthorization(bearer("audit-oidc"), {
+      environment,
+      staticToken: "audit-static",
+      verifyGithubActionsToken: async (token) => token === "audit-oidc",
+    }),
+    true
+  );
+  assert.doesNotMatch(
+    readFileSync(new URL("./contactAudit.ts", import.meta.url), "utf8"),
+    /CRON_SECRET/
+  );
+});
+
+test("development audit static auth works only when explicitly configured", async () => {
+  const bearer = (token: string) => `Bearer ${token}`;
+  const environment = { NODE_ENV: "development" };
+  const rejectOidc = async () => false;
+  assert.equal(
+    await isValidContactAuditAuthorization(bearer("local-static"), {
+      environment,
+      staticToken: "local-static",
+      verifyGithubActionsToken: rejectOidc,
+    }),
+    true
+  );
+  assert.equal(
+    await isValidContactAuditAuthorization(bearer("local-static"), {
+      environment,
+      verifyGithubActionsToken: rejectOidc,
+    }),
+    false
+  );
+});
+
 test("GitHub OIDC trust accepts only scheduled or manual main-branch audit workflow runs", () => {
   const trusted = {
     aud: CONTACT_AUDIT_OIDC_AUDIENCE,
@@ -788,6 +879,13 @@ test("GitHub OIDC trust accepts only scheduled or manual main-branch audit workf
     event_name: "workflow_dispatch",
   };
   assert.equal(isTrustedContactAuditOidcClaims(trusted), true);
+  assert.equal(
+    isTrustedContactAuditOidcClaims({
+      ...trusted,
+      aud: "photo-admin-contact-research",
+    }),
+    false
+  );
   assert.equal(
     isTrustedContactAuditOidcClaims({
       ...trusted,

@@ -32,8 +32,9 @@ environment or use another network or filesystem command.
 Use only these commands:
 
 - `contact-research-agent-tool search '"Artist Name" manager' 8`
-- `contact-research-agent-tool fetch 'https://example.com/page'`
+- `contact-research-agent-tool fetch 'https://www.instagram.com/artistname/'`
 - `contact-research-agent-tool known-contacts '{"managerName":"Greg Burnell","company":"Palm Artists","domain":"palmartists.com"}'`
+- `contact-research-agent-tool validate-result submit-candidates '<json>'`
 - `contact-research-agent-tool submit-candidates '<json>'`
 - `contact-research-agent-tool submit-direct-outreach '<json>'`
 - `contact-research-agent-tool submit-exhausted '<json>'`
@@ -99,6 +100,15 @@ not submit it again; continue normal email research.
 
 The submit commands take one compact JSON argument; use valid JSON inside shell
 single quotes and avoid apostrophes in prose.
+
+The result endpoint writes persistent production state. Never submit dummy,
+test, example, placeholder, probe, or simplified factual payloads, even while
+troubleshooting. `validate-result` is the only dry validation operation; it
+checks a complete payload without saving it. If a real submission returns
+`500`, do not change real evidence, source URLs, names, emails, reasons, or
+notes merely to test persistence, and do not submit a reduced synthetic
+payload. Report the failure so the claim remains recoverable. A submit command
+must remain the one successful final write for the claimed job.
 
 Candidate submission JSON must be exactly:
 `{"jobId":"...","claimToken":"...","notes":"...","candidates":[{"email":"...","name":"...","sourceUrls":["https://..."],"evidence":"...","confidence":"high|medium|low","needsApproval":true|false,"officialSource":null|{"type":"website|instagram|facebook|soundcloud","url":"https://...","managementLabel":"mgmt|management","evidence":"exact published text containing the email and its MGMT/management label"}}],"reviewedEmails":[{"email":"...","classification":"named_manager|management_fallback|excluded_non_manager","personName":"... or null","reason":"..."}],"directOutreach":null|{"ruleId":"stable-rule-id","ruleVersion":1,"canonicalRule":"exact canonicalRule from globalAgentRules.directOutreachRules","managerName":"exact managerName from that rule","managerCompany":"Company or null","evidence":[{"sourceUrl":"https://...","quote":"exact positive published management statement"}]}}`.
@@ -246,6 +256,10 @@ skipped, call `submit-skipped` with the job ID, claim token, required note, and
 matching rule provenance. A skipped outcome never creates a contact candidate.
 
 A `409` means the claim expired or was reassigned. Do not overwrite it; move to the next job.
+
+A `500` means the production save failed. Do not probe the persistent endpoint
+with alternate or simplified data; finish as not submitted and surface the
+failure for recovery.
 
 The claimed job must receive exactly one successful candidate,
 direct-outreach-only, exhausted, or skipped submission before you finish.

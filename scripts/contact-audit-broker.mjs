@@ -9,6 +9,7 @@ import {
   fetchReadablePage,
   searchWeb,
 } from "./contact-research-web.mjs";
+import { validateAuditSubmissionPayload } from "../lib/contactAgentPayloadValidation.mjs";
 
 const baseUrl = process.env.APP_BASE_URL?.trim().replace(/\/+$/, "");
 const staticToken = process.env.CONTACT_AUDIT_AGENT_TOKEN?.trim();
@@ -102,6 +103,62 @@ const alternativeSchema = z
     confidence: z.enum(["high", "medium", "low"]),
   })
   .strict();
+const submitResultSchema = z
+  .object({
+    jobId: z.string().min(1),
+    claimToken: z.string().min(1),
+    finding: z.enum([
+      "current",
+      "changed",
+      "stale",
+      "ambiguous",
+      "unverified",
+    ]),
+    sourceUrls: sourceUrlsSchema.max(10),
+    evidence: z.string().min(1).max(4_000),
+    confidence: z.enum(["high", "medium", "low"]),
+    notes: z.string().max(4_000).nullable().optional(),
+    alternatives: z.array(alternativeSchema).max(10),
+    rosterReview: z
+      .array(
+        z
+          .object({
+            rosterEntryId: z.string().min(1).max(100),
+            assessment: z.enum([
+              "current",
+              "stale",
+              "coexisting",
+              "conflicting",
+              "unverified",
+            ]),
+            notes: z.string().min(1).max(1_000),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(100),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.finding === "current" && value.alternatives.length > 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "current findings cannot include alternatives",
+      });
+    }
+    if (value.finding === "stale" && value.alternatives.length > 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "stale findings cannot include alternatives",
+      });
+    }
+    if (value.finding === "changed" && value.alternatives.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "changed findings require an alternative",
+      });
+    }
+  });
 const schemas = {
   claim: z.object({ limit: z.literal(1) }).strict(),
   search: z
@@ -122,65 +179,12 @@ const schemas = {
       (value) => Boolean(value.managerName || value.domain),
       "managerName or domain is required"
     ),
-  "submit-result": z
-    .object({
-      jobId: z.string().min(1),
-      claimToken: z.string().min(1),
-      finding: z.enum([
-        "current",
-        "changed",
-        "stale",
-        "ambiguous",
-        "unverified",
-      ]),
-      sourceUrls: sourceUrlsSchema.max(10),
-      evidence: z.string().min(1).max(4_000),
-      confidence: z.enum(["high", "medium", "low"]),
-      notes: z.string().max(4_000).nullable().optional(),
-      alternatives: z.array(alternativeSchema).max(10),
-      rosterReview: z
-        .array(
-          z
-            .object({
-              rosterEntryId: z.string().min(1).max(100),
-              assessment: z.enum([
-                "current",
-                "stale",
-                "coexisting",
-                "conflicting",
-                "unverified",
-              ]),
-              notes: z.string().min(1).max(1_000),
-            })
-            .strict()
-        )
-        .min(1)
-        .max(100),
-    })
-    .strict()
-    .superRefine((value, context) => {
-      if (value.finding === "current" && value.alternatives.length > 0) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "current findings cannot include alternatives",
-        });
-      }
-      if (value.finding === "stale" && value.alternatives.length > 0) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "stale findings cannot include alternatives",
-        });
-      }
-      if (value.finding === "changed" && value.alternatives.length === 0) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "changed findings require an alternative",
-        });
-      }
-    }),
+  "submit-result": submitResultSchema,
+  "validate-result": submitResultSchema,
 };
 
 class BrokerConflictError extends Error {}
+class BrokerInputError extends Error {}
 class PhotoAdminRequestError extends Error {
   status;
 
@@ -377,8 +381,25 @@ async function runTool(name, input, sessionId) {
         "/api/contact-audit/known-contacts",
         input
       );
+    case "validate-result":
+      requireSessionClaim(state, input);
+      try {
+        validateAuditSubmissionPayload(input);
+      } catch (error) {
+        throw new BrokerInputError(
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+      return { ok: true };
     case "submit-result": {
       requireSessionClaim(state, input);
+      try {
+        validateAuditSubmissionPayload(input);
+      } catch (error) {
+        throw new BrokerInputError(
+          error instanceof Error ? error.message : String(error)
+        );
+      }
       let result;
       try {
         result = await photoAdminRequest(
@@ -450,6 +471,10 @@ const server = createServer(async (request, response) => {
   } catch (error) {
     if (error instanceof BrokerConflictError) {
       sendJson(response, 409, { error: error.message });
+      return;
+    }
+    if (error instanceof BrokerInputError) {
+      sendJson(response, 400, { error: error.message });
       return;
     }
     if (error instanceof z.ZodError || error instanceof SyntaxError) {

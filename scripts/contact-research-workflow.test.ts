@@ -16,6 +16,7 @@ test("contact research automation is scheduled, bounded, and preflighted", () =>
   assert.match(source, /copilot-requests: write/);
   assert.match(source, /id-token: write/);
   assert.match(source, /audience=photo-admin-contact-research/);
+  assert.match(source, /Authorization:[^\n]*oidc_token/);
   assert.match(source, /\/api\/contact-research\/prepare/);
   assert.match(source, /lane_count > 10/);
   assert.match(
@@ -26,6 +27,7 @@ test("contact research automation is scheduled, bounded, and preflighted", () =>
   assert.match(source, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
   assert.doesNotMatch(source, /secrets\.CRON_SECRET/);
   assert.doesNotMatch(source, /secrets\.CONTACT_RESEARCH_AGENT_TOKEN/);
+  assert.doesNotMatch(source, /CONTACT_RESEARCH_AGENT_TOKEN:/);
   assert.doesNotMatch(source, /CONTACT_RESEARCH_MAX_AI_CREDITS/);
   assert.match(source, /CONTACT_RESEARCH_WORKERS: "4"/);
   assert.match(source, /CONTACT_RESEARCH_LANE: \$\{\{ matrix\.lane \}\}/);

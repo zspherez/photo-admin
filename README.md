@@ -95,8 +95,8 @@ The full list is in `.env.example`. Minimum to boot:
 | `RESEND_FROM_EMAIL` | for sending | The verified `From:` sender, as `you@example.com` or `Name <you@example.com>`. Malformed values are rejected before a provider attempt is created. |
 | `RESEND_WEBHOOK_SECRET` | for webhooks | `whsec_...` from Resend → Webhooks. The webhook route fails closed when this is blank. |
 | `CRON_SECRET` | for scheduled jobs | Bearer token Vercel Cron and the scheduled GitHub Actions workflow present on `/api/cron/*`. Cron routes fail closed when this is blank. |
-| `CONTACT_RESEARCH_AGENT_TOKEN` | optional local contact research | Dedicated bearer token for a local worker. Hosted GitHub Actions research reuses `CRON_SECRET` to avoid production secret drift. |
-| `CONTACT_AUDIT_AGENT_TOKEN` | optional local contact audit | Dedicated bearer token for a local audit worker. Hosted scheduled and diagnostic audits use short-lived GitHub Actions OIDC. |
+| `CONTACT_RESEARCH_AGENT_TOKEN` | optional local contact research | Dedicated bearer token for an explicitly configured local/development worker. Production agent mutation endpoints ignore it and require workflow-scoped GitHub Actions OIDC. |
+| `CONTACT_AUDIT_AGENT_TOKEN` | optional local contact audit | Dedicated bearer token for an explicitly configured local/development audit worker. Production agent mutation endpoints ignore it and require workflow-scoped GitHub Actions OIDC. |
 | `EDMTRAIN_API_KEY` | for show sync | Request a key at <https://edmtrain.com/api>. |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | for Spotify | Create an app at <https://developer.spotify.com/dashboard>. Redirect URI is `${APP_BASE_URL}/api/spotify/callback`. Spotify rejects `http://localhost`, so use `http://127.0.0.1:3000` locally. |
 | `STATSFM_TOKEN` | for Stats.fm | No public API — grab a session token from DevTools (Application → Local Storage → `token`) after logging into stats.fm. |
@@ -156,7 +156,9 @@ Scheduled runs are enabled when the workflow reaches the default branch.
 
 Configure the repository Actions secret `APP_BASE_URL`. Hosted research uses a
 short-lived GitHub Actions OIDC token pinned to this repository, main branch,
-and workflow file; no shared app bearer or Copilot PAT is needed. Copilot CLI
+workflow file, scheduled/manual event, and the
+`photo-admin-contact-research` audience; no shared app bearer or Copilot PAT is
+needed. Copilot CLI
 authenticates separately with the workflow's short-lived `GITHUB_TOKEN`. For
 organization repositories, enable **Allow use of Copilot CLI billed to the
 organization** and keep the workflow's `copilot-requests: write` and
@@ -232,6 +234,13 @@ its own. Configure the same `APP_BASE_URL` Actions secret used by contact
 research. Hosted workers authenticate to the app with a short-lived OIDC token
 pinned to this repository, main branch, exact workflow file, audience, and
 either the scheduled or manual-dispatch event.
+
+In production, the research `prepare`, `claim`, `known-contacts`, and `result`
+routes and the audit `prepare`, `claim`, `known-contacts`, `attempt`, and
+`result` routes accept only those workflow-specific OIDC tokens. `CRON_SECRET`
+is reserved for `/api/cron/*` and release runtime verification; it is never an
+agent claim or result credential. Dedicated `CONTACT_*_AGENT_TOKEN` values are
+local/development-only and must be configured explicitly.
 
 The page shows pending, running, completed, and failure/retry metadata. Failed
 worker attempts release their claims and keep the same request and audit run
@@ -588,9 +597,11 @@ The scheduled workflows require GitHub repository secrets under
 - `APP_BASE_URL` — the production origin, such as `https://photo.example.com`,
   with no path.
 - `CRON_SECRET` — exactly the same secret configured in the production Vercel
-  environment.
-The manager-research workflow's OIDC token is refreshed for every queue API
-request, so long-running research does not depend on one expiring token.
+  environment, for workflows that call `/api/cron/*`. Contact research and
+  audit mutation routes do not accept it.
+The manager-research and contact-audit workers refresh workflow-specific OIDC
+tokens for queue API requests, so long-running work does not depend on one
+expiring token.
 
 The normal outreach cadence is one dispatch during the weekday
 09:00-09:59 America/New_York window, intended to pick up outreach prepared the
@@ -674,8 +685,30 @@ npm test           # Node test runner with TypeScript support
 npm run typecheck
 npm run lint
 npm run rotate:statsfm-token
-npx tsx scripts/smoke.ts   # one-shot sanity check of all integrations
+npx tsx scripts/smoke.ts   # write-capable local/disposable-target integration check
 ```
+
+### Safe tests and live smoke checks
+
+`npm test` replaces inherited database URLs with unreachable localhost test
+URLs, disables dotenv file loading for the test process, and clears agent/cron
+credentials. This prevents an ignored `.env` or Vercel production environment
+from silently connecting unit tests to production. The release workflow's
+localhost dummy URLs remain compatible with this guard.
+
+`scripts/smoke.ts` performs real integration writes. It always refuses Vercel
+production and production-named database targets. A non-local disposable test
+target additionally requires `DESTRUCTIVE_TEST_DATABASE_CONFIRMATION` to be
+set for that one invocation to `CONFIRM_NONLOCAL_DATABASE_TEST_WRITE`. Use only
+a disposable database even with confirmation; never point it at production.
+
+For a live production smoke check, use authenticated read-only pages or fixed
+read-only endpoints. If database-level validation is unavoidable, wrap it in a
+transaction that is always rolled back and verify the rollback. Never claim an
+agent job or submit synthetic candidates, notes, evidence, exhausted/skipped
+outcomes, or audit findings as a smoke test. Production agent API validation
+should stop after proving an unauthorized request is rejected or should run
+the real GitHub workflow against genuine queued work.
 
 ## Notes for forks
 

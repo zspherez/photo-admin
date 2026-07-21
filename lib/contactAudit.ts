@@ -6,7 +6,11 @@ import {
   type JWTPayload,
 } from "jose";
 import { db } from "@/lib/db";
-import { constantTimeEqual } from "@/lib/auth";
+import {
+  type AgentMutationEnvironment,
+  isValidAgentMutationAuthorization,
+} from "@/lib/agentMutationAuthorization";
+import { validateAuditSubmissionPayload } from "@/lib/contactAgentPayloadValidation.mjs";
 import {
   normalizeManagerRole,
   normalizeResearchEmail,
@@ -329,7 +333,7 @@ export function parseContactAuditSubmission(
     }
   }
 
-  return {
+  const submission: ContactAuditSubmission = {
     claimToken,
     finding: finding as ContactAuditFinding,
     sourceUrls,
@@ -339,6 +343,8 @@ export function parseContactAuditSubmission(
     alternatives,
     rosterReview: [...rosterReviewById.values()],
   };
+  validateAuditSubmissionPayload(value);
+  return submission;
 }
 
 export function validateContactAuditAlternativeEmails(
@@ -438,32 +444,49 @@ export function buildContactAuditRosterPayload(job: {
   };
 }
 
-export async function isValidContactAuditAuthorization(
-  authorization: string | null,
-  secrets:
+interface ContactAuditAuthorizationOptions {
+  environment?: AgentMutationEnvironment;
+  staticToken?: string;
+  verifyGithubActionsToken?: (token: string) => Promise<boolean>;
+}
+
+function isContactAuditAuthorizationOptions(
+  value:
+    | ContactAuditAuthorizationOptions
     | string
     | readonly (string | undefined)[]
-    = [process.env.CONTACT_AUDIT_AGENT_TOKEN, process.env.CRON_SECRET],
-  verifyGithubActionsToken: (
-    token: string
-  ) => Promise<boolean> = verifyGithubActionsContactAuditToken
+): value is ContactAuditAuthorizationOptions {
+  return typeof value === "object" && !Array.isArray(value);
+}
+
+export async function isValidContactAuditAuthorization(
+  authorization: string | null,
+  optionsOrStaticToken:
+    | ContactAuditAuthorizationOptions
+    | string
+    | readonly (string | undefined)[] = {},
+  legacyVerifier?: (token: string) => Promise<boolean>
 ): Promise<boolean> {
-  if (!authorization?.startsWith("Bearer ")) return false;
-  const token = authorization.slice("Bearer ".length);
-  if (!token) return false;
-  const candidates = (Array.isArray(secrets) ? secrets : [secrets]).filter(
-    (secret): secret is string => Boolean(secret)
-  );
-  const matches = await Promise.all(
-    candidates.map((secret) => constantTimeEqual(token, secret))
-  );
-  return matches.some(Boolean) || verifyGithubActionsToken(token);
+  const hasOptions = isContactAuditAuthorizationOptions(optionsOrStaticToken);
+  const options = hasOptions ? optionsOrStaticToken : undefined;
+  const staticSecrets = hasOptions
+    ? optionsOrStaticToken.staticToken ?? process.env.CONTACT_AUDIT_AGENT_TOKEN
+    : optionsOrStaticToken;
+  return isValidAgentMutationAuthorization(authorization, {
+    environment: options?.environment,
+    staticSecrets,
+    verifyOidcToken:
+      options?.verifyGithubActionsToken ??
+      legacyVerifier ??
+      verifyGithubActionsContactAuditToken,
+  });
 }
 
 export function isTrustedContactAuditOidcClaims(
   payload: JWTPayload
 ): boolean {
   return (
+    payload.aud === CONTACT_AUDIT_OIDC_AUDIENCE &&
     payload.repository === "zspherez/photo-admin" &&
     payload.repository_owner === "zspherez" &&
     payload.ref === "refs/heads/main" &&
@@ -481,6 +504,7 @@ export async function verifyGithubActionsContactAuditToken(
     const { payload } = await jwtVerify(token, githubActionsJwks, {
       issuer: CONTACT_AUDIT_OIDC_ISSUER,
       audience: CONTACT_AUDIT_OIDC_AUDIENCE,
+      maxTokenAge: "10m",
     });
     return isTrustedContactAuditOidcClaims(payload);
   } catch {

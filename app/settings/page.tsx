@@ -72,10 +72,9 @@ export default async function SettingsIndex() {
       title: "Contact research",
       href: "/research",
       status: `${researchReviewCount.toLocaleString()} to review`,
-      ok:
-        !!process.env.CONTACT_RESEARCH_AGENT_TOKEN ||
-        !!process.env.CRON_SECRET,
-      description: "Agent queue and evidence-backed approvals.",
+      ok: true,
+      description:
+        "Agent queue; hosted mutations use workflow-scoped GitHub OIDC.",
     },
     {
       title: "Contact audit",

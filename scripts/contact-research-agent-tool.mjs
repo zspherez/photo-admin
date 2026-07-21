@@ -28,6 +28,18 @@ switch (action) {
       throw new Error("known-contacts requires one valid JSON argument");
     }
     break;
+  case "validate-result":
+    try {
+      input = {
+        action: first,
+        payload: JSON.parse(second ?? ""),
+      };
+    } catch {
+      throw new Error(
+        "validate-result requires a submit action and one valid JSON argument"
+      );
+    }
+    break;
   case "submit-candidates":
   case "submit-direct-outreach":
   case "submit-exhausted":
@@ -40,7 +52,7 @@ switch (action) {
     break;
   default:
     throw new Error(
-      "usage: claim [limit] | search <query> [limit] | fetch <url> | known-contacts <json> | submit-candidates <json> | submit-direct-outreach <json> | submit-exhausted <json> | submit-skipped <json>"
+      "usage: claim [limit] | search <query> [limit] | fetch <url> | known-contacts <json> | validate-result <submit-action> <json> | submit-candidates <json> | submit-direct-outreach <json> | submit-exhausted <json> | submit-skipped <json>"
     );
 }
 
