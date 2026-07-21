@@ -39,6 +39,10 @@ import {
   type OperationDeadline,
   type OperationDeadlineDeferredResult,
 } from "@/lib/integrationUtils";
+import {
+  acquireShowArtistMembershipLock,
+  staleReadyTrajectoryRunsWithMissingMembership,
+} from "@/lib/showArtistMembershipInvariant";
 
 const EDMTRAIN_BASE = "https://edmtrain.com/api/events";
 const NYC_LOCATION_ID = 38;
@@ -416,6 +420,7 @@ async function reconcileEdmtrainSnapshots(
     async (tx) => {
       await lease.fenceTransaction(tx);
       const resolved = await resolveArtists(tx, identities);
+      let membershipLockAcquired = false;
       const result: Record<EdmtrainScope, SyncResult | undefined> = {
         nyc: undefined,
         festivals: undefined,
@@ -620,6 +625,10 @@ async function reconcileEdmtrainSnapshots(
           persistedShows.map((show) => [show.edmtrainId, show.id])
         );
         if (persistedShows.length > 0) {
+          if (!membershipLockAcquired) {
+            await acquireShowArtistMembershipLock(tx);
+            membershipLockAcquired = true;
+          }
           await tx.showArtist.deleteMany({
             where: { showId: { in: persistedShows.map((show) => show.id) } },
           });
@@ -701,6 +710,9 @@ async function reconcileEdmtrainSnapshots(
           venuesReused: venues.filter((venue) => venue.reused).length,
           identityConflicts: resolved.conflicts,
         };
+      }
+      if (membershipLockAcquired) {
+        await staleReadyTrajectoryRunsWithMissingMembership(tx);
       }
       return result;
     }

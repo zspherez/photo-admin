@@ -20,6 +20,7 @@ import {
   type ParsedTrajectoryManifest,
   type TrajectoryManifestRecommendation,
 } from "@/lib/trajectoryContract";
+import { acquireShowArtistMembershipLock } from "@/lib/showArtistMembershipInvariant";
 
 export const TRAJECTORY_IMPORT_LEASE_KEY = makeIntegrationSyncLeaseKey(
   "artist-trajectory",
@@ -34,7 +35,8 @@ const TRAJECTORY_IMPORT_TRANSACTION = {
   timeoutMs: 120_000,
   minimumTimeoutMs: 30_000,
   lockTimeoutMs: 10_000,
-  isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+  // Reads after waiting on the shared advisory lock must see the lock winner.
+  isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
 } satisfies DeadlineTransactionPolicy;
 
 export type TrajectoryImportIssueCode =
@@ -192,6 +194,7 @@ export interface TrajectoryImportTransaction {
   ): Promise<TrajectoryIdentitySnapshot>;
   currentTime(): Promise<Date>;
   fence(lease: IntegrationSyncLeaseGuard): Promise<void>;
+  acquireMembershipLock(): Promise<void>;
   createRun(input: TrajectoryRunCreateInput): Promise<void>;
   createRunArtists(
     runId: string,
@@ -251,7 +254,7 @@ function isRetryableTrajectoryTransactionError(error: unknown): boolean {
   );
 }
 
-async function runTrajectorySerializableTransaction<T>(
+async function runTrajectoryPromotionTransaction<T>(
   deadline: OperationDeadline,
   work: (tx: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> {
@@ -272,7 +275,7 @@ async function runTrajectorySerializableTransaction<T>(
           minimumDeadlineTransactionRemainingMs(
             TRAJECTORY_IMPORT_TRANSACTION,
           ),
-          "Retry artist trajectory serializable promotion",
+          "Retry artist trajectory promotion",
         );
         continue;
       }
@@ -336,7 +339,7 @@ export function createPrismaTrajectoryImportPersistence(): TrajectoryImportPersi
       });
     },
     withTransaction(deadline, work) {
-      return runTrajectorySerializableTransaction(
+      return runTrajectoryPromotionTransaction(
         deadline,
         async (tx) =>
           work({
@@ -405,6 +408,9 @@ export function createPrismaTrajectoryImportPersistence(): TrajectoryImportPersi
             },
             fence(lease) {
               return lease.fenceTransaction(tx);
+            },
+            acquireMembershipLock() {
+              return acquireShowArtistMembershipLock(tx);
             },
             async createRun({ id, parsed, summary }) {
               const manifest = parsed.manifest;
@@ -857,6 +863,7 @@ async function promoteTrajectoryImportPlan(
 ): Promise<TrajectoryImportSummary> {
   return persistence.withTransaction(deadline, async (transaction) => {
     await transaction.fence(lease);
+    await transaction.acquireMembershipLock();
     const existing = await transaction.findExistingRun(
       plan.parsed.manifest.producer,
       plan.parsed.manifest.producer_run_id,

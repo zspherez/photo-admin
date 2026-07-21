@@ -235,6 +235,7 @@ class MemoryPersistence implements TrajectoryImportPersistence {
           throw new IntegrationSyncLeaseLostError(lease.key);
         }
       },
+      acquireMembershipLock: async () => undefined,
       createRun: async ({ id, parsed }) => {
         this.runs.push({
           id,
@@ -670,11 +671,15 @@ test("runtime importer has no canonical identity mutation or fallback surface", 
   );
   assert.match(
     source,
-    /isolationLevel: Prisma\.TransactionIsolationLevel\.Serializable/,
+    /isolationLevel: Prisma\.TransactionIsolationLevel\.ReadCommitted/,
   );
   assert.match(source, /error\.code === "P2034"/);
   const promotion = source.slice(
     source.indexOf("async function promoteTrajectoryImportPlan"),
+  );
+  assert.ok(
+    promotion.indexOf("transaction.acquireMembershipLock()") <
+      promotion.indexOf("transaction.loadIdentitySnapshot("),
   );
   assert.ok(
     promotion.indexOf("transaction.loadIdentitySnapshot(") <
@@ -682,7 +687,7 @@ test("runtime importer has no canonical identity mutation or fallback surface", 
   );
 });
 
-test("default promotion retries serialization failures within the deadline", async () => {
+test("default promotion retries transaction conflicts within the deadline", async () => {
   type TransactionRunner = {
     $transaction<T>(
       callback: (tx: Prisma.TransactionClient) => Promise<T>,
@@ -722,8 +727,8 @@ test("default promotion retries serialization failures within the deadline", asy
     assert.equal(result, "completed");
     assert.equal(attempts, 2);
     assert.deepEqual(isolationLevels, [
-      Prisma.TransactionIsolationLevel.Serializable,
-      Prisma.TransactionIsolationLevel.Serializable,
+      Prisma.TransactionIsolationLevel.ReadCommitted,
+      Prisma.TransactionIsolationLevel.ReadCommitted,
     ]);
   } finally {
     if (descriptor) Object.defineProperty(db, "$transaction", descriptor);
