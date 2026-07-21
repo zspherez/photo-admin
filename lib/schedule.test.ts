@@ -259,6 +259,10 @@ test("normal morning dispatch and exceptional recovery stay distinct", () => {
     route,
     /status: "queued",\s+nextAttemptAt: \{ lte: now \},\s+OR:/,
   );
+  assert.match(
+    route,
+    /status: "sending",\s+nextAttemptAt: \{ lte: now \},\s+claimedAt: \{ lte: staleBefore \}/,
+  );
   assert.match(route, /isOutreachMorningDispatchWindow\(\)/);
   assert.match(route, /export const maxDuration = 60/);
   assert.match(route, /nextRetryAt,/);

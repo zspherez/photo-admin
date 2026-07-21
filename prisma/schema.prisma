@@ -447,47 +447,51 @@ enum OutreachKind {
 }
 
 model Outreach {
-  id                     String                @id @default(cuid())
-  kind                   OutreachKind          @default(original)
-  parentOutreachId       String?               @unique
-  parentOutreach         Outreach?             @relation("OutreachFollowUp", fields: [parentOutreachId], references: [id], onDelete: Cascade)
-  followUp               Outreach?             @relation("OutreachFollowUp")
-  showId                 String
-  show                   Show                  @relation(fields: [showId], references: [id], onDelete: Cascade)
-  artistId               String
-  artist                 Artist                @relation(fields: [artistId], references: [id], onDelete: Cascade)
-  contactId              String?
-  contact                Contact?              @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  templateId             String?
-  template               EmailTemplate?        @relation(fields: [templateId], references: [id], onDelete: SetNull)
-  finalSubject           String
-  finalHtml              String
-  recipientEmails        String[]              @default([])
-  recipientSnapshotState String                @default("legacy_unknown")
-  fullTeamSend           Boolean               @default(false)
-  status                 String
-  error                  String?
-  providerMessageId      String?
-  idempotencyKey         String                @unique @default(dbgenerated("('outreach/'::text || md5(((random())::text || (clock_timestamp())::text)))"))
-  attemptCount           Int                   @default(0)
-  claimedAt              DateTime?
-  claimToken             String?
-  lastAttemptAt          DateTime?
-  sentAt                 DateTime?
-  deliveredAt            DateTime?
-  firstOpenedAt          DateTime?
-  lastOpenedAt           DateTime?
-  openCount              Int                   @default(0)
-  firstClickedAt         DateTime?
-  lastClickedAt          DateTime?
-  clickCount             Int                   @default(0)
-  bouncedAt              DateTime?
-  complainedAt           DateTime?
-  scheduledFor           DateTime?
-  nextAttemptAt          DateTime?
-  sendAttempts           OutreachSendAttempt[]
-  webhookEvents          ResendWebhookEvent[]
-  createdAt              DateTime              @default(now())
+  id                         String                @id @default(cuid())
+  kind                       OutreachKind          @default(original)
+  parentOutreachId           String?               @unique
+  parentOutreach             Outreach?             @relation("OutreachFollowUp", fields: [parentOutreachId], references: [id], onDelete: Cascade)
+  followUp                   Outreach?             @relation("OutreachFollowUp")
+  showId                     String
+  show                       Show                  @relation(fields: [showId], references: [id], onDelete: Cascade)
+  artistId                   String
+  artist                     Artist                @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  contactId                  String?
+  contact                    Contact?              @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  templateId                 String?
+  template                   EmailTemplate?        @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  finalSubject               String
+  finalHtml                  String
+  recipientEmails            String[]              @default([])
+  recipientSnapshotState     String                @default("legacy_unknown")
+  fullTeamSend               Boolean               @default(false)
+  expectedRecipientContactId String?
+  expectedRecipientArtistId  String?
+  expectedRecipientEmail     String?
+  expectedRecipientUpdatedAt DateTime?
+  status                     String
+  error                      String?
+  providerMessageId          String?
+  idempotencyKey             String                @unique @default(dbgenerated("('outreach/'::text || md5(((random())::text || (clock_timestamp())::text)))"))
+  attemptCount               Int                   @default(0)
+  claimedAt                  DateTime?
+  claimToken                 String?
+  lastAttemptAt              DateTime?
+  sentAt                     DateTime?
+  deliveredAt                DateTime?
+  firstOpenedAt              DateTime?
+  lastOpenedAt               DateTime?
+  openCount                  Int                   @default(0)
+  firstClickedAt             DateTime?
+  lastClickedAt              DateTime?
+  clickCount                 Int                   @default(0)
+  bouncedAt                  DateTime?
+  complainedAt               DateTime?
+  scheduledFor               DateTime?
+  nextAttemptAt              DateTime?
+  sendAttempts               OutreachSendAttempt[]
+  webhookEvents              ResendWebhookEvent[]
+  createdAt                  DateTime              @default(now())
 
   @@unique([showId, contactId, kind])
   @@index([showId])
@@ -579,42 +583,46 @@ model ResendWebhookEvent {
 }
 
 model ArbitraryEmail {
-  id                String               @id
-  recipientEmails   String[]             @default([])
-  subject           String
-  html              String
-  text              String?
-  utmSource         String?
-  utmMedium         String?
-  utmCampaign       String?
-  utmContent        String?
-  utmTerm           String?
-  status            String
-  error             String?
-  providerMessageId String?              @unique
-  idempotencyKey    String               @unique
-  providerRequest   Json?
-  requestHash       String?
-  testSend          Boolean?
-  scheduledFor      DateTime?
-  nextAttemptAt     DateTime?
-  claimedAt         DateTime?
-  claimToken        String?              @unique
-  lastAttemptAt     DateTime?
-  attemptCount      Int                  @default(0)
-  sentAt            DateTime?
-  deliveredAt       DateTime?
-  firstOpenedAt     DateTime?
-  lastOpenedAt      DateTime?
-  openCount         Int                  @default(0)
-  firstClickedAt    DateTime?
-  lastClickedAt     DateTime?
-  clickCount        Int                  @default(0)
-  bouncedAt         DateTime?
-  complainedAt      DateTime?
-  webhookEvents     ResendWebhookEvent[]
-  createdAt         DateTime             @default(now())
-  updatedAt         DateTime             @updatedAt
+  id                      String               @id
+  recipientEmails         String[]             @default([])
+  subject                 String
+  html                    String
+  text                    String?
+  utmSource               String?
+  utmMedium               String?
+  utmCampaign             String?
+  utmContent              String?
+  utmTerm                 String?
+  status                  String
+  error                   String?
+  providerMessageId       String?              @unique
+  idempotencyKey          String               @unique
+  providerRequest         Json?
+  requestHash             String?
+  testSend                Boolean?
+  scheduledFor            DateTime?
+  nextAttemptAt           DateTime?
+  claimedAt               DateTime?
+  claimToken              String?              @unique
+  lastAttemptAt           DateTime?
+  firstAttemptAt          DateTime?
+  attemptCount            Int                  @default(0)
+  failureDisposition      String?
+  /// Stable SHA-256 fingerprint of the Resend API credential; never the secret key.
+  providerCredentialScope String?
+  sentAt                  DateTime?
+  deliveredAt             DateTime?
+  firstOpenedAt           DateTime?
+  lastOpenedAt            DateTime?
+  openCount               Int                  @default(0)
+  firstClickedAt          DateTime?
+  lastClickedAt           DateTime?
+  clickCount              Int                  @default(0)
+  bouncedAt               DateTime?
+  complainedAt            DateTime?
+  webhookEvents           ResendWebhookEvent[]
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
 
   @@index([createdAt])
   @@index([status, createdAt])

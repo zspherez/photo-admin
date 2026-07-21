@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { acquireOutreachRecipientPolicyLocks } from "./outreachPolicyLocks";
 import {
   buildArbitraryResendDeliveryPolicy,
+  getResendCredentialScope,
   hashResendRequestSnapshot,
   type PrepareArbitraryResendRequestArgs,
   type PrepareResendRequestResult,
@@ -109,7 +110,10 @@ class MemoryArbitraryEmailDatabase {
       claimedAt: null,
       claimToken: null,
       lastAttemptAt: null,
+      firstAttemptAt: null,
       attemptCount: 0,
+      failureDisposition: null,
+      providerCredentialScope: null,
       sentAt: null,
       ...Object.fromEntries(
         Object.entries(data).map(([key, value]) => [
@@ -590,11 +594,129 @@ test("concurrent morning claims submit an overdue queued record once", async () 
   assert.ok(first.ok || second.ok);
   assert.ok(first.skipped || second.skipped);
   assert.equal(database.record?.status, "sent");
+  assert.equal(
+    database.record?.providerCredentialScope,
+    getResendCredentialScope(settings.apiKey),
+  );
+  assert.ok(database.record?.firstAttemptAt instanceof Date);
   assert.deepEqual(database.record?.recipientEmails, INPUT.recipientEmails);
   const submitted = submittedRequest as ResendRequestSnapshot | null;
   assert.ok(submitted);
   assert.equal(database.record?.html, submitted.html);
   assert.equal(database.record?.text, submitted.text);
+});
+
+test("scheduled retries retain their committed credential scope", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  const now = { value: new Date("2026-07-20T12:00:00.000Z") };
+  const settings = { ...REAL_SETTINGS, apiKey: "re_same_scope" };
+  let submissions = 0;
+  let scopeAtFirstSubmission: unknown;
+  const deps = dependencies(database, settings, async () => {
+    submissions += 1;
+    scopeAtFirstSubmission ??= database.record?.providerCredentialScope;
+    return submissions === 1
+      ? {
+          providerMessageId: null,
+          error: "temporary provider outage",
+          failureDisposition: "retryable",
+        }
+      : {
+          providerMessageId: "message-retried",
+          error: null,
+          failureDisposition: null,
+        };
+  });
+  deps.now = () => now.value;
+  const id = "d9bde2a6-8c6b-4424-9907-14cdb46867a2";
+  await queueArbitraryEmailWithDependencies(
+    INPUT,
+    new Date("2026-07-20T13:00:00.000Z"),
+    id,
+    deps,
+  );
+  now.value = new Date("2026-07-20T13:00:01.000Z");
+  const first = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
+  assert.equal(first.retryScheduled, true);
+  const committedScope = getResendCredentialScope(settings.apiKey);
+  assert.equal(scopeAtFirstSubmission, committedScope);
+  assert.equal(database.record?.providerCredentialScope, committedScope);
+  const firstAttemptAt = database.record?.firstAttemptAt;
+
+  now.value = new Date("2026-07-20T13:01:01.000Z");
+  const second = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
+  assert.equal(second.ok, true);
+  assert.equal(submissions, 2);
+  assert.equal(database.record?.providerCredentialScope, committedScope);
+  assert.equal(database.record?.firstAttemptAt, firstAttemptAt);
+});
+
+test("credential rotation after an in-flight scheduled attempt fails closed", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  const now = { value: new Date("2026-07-20T12:00:00.000Z") };
+  const settings = { ...REAL_SETTINGS, apiKey: "re_initial_scope" };
+  let submissions = 0;
+  const deps = dependencies(database, settings, async () => {
+    submissions += 1;
+    return {
+      providerMessageId: null,
+      error: "provider may still be processing",
+      failureDisposition: "in_flight",
+    };
+  });
+  deps.now = () => now.value;
+  const id = "091abfac-ca35-40f7-9d1a-457c2028c12d";
+  await queueArbitraryEmailWithDependencies(
+    INPUT,
+    new Date("2026-07-20T13:00:00.000Z"),
+    id,
+    deps,
+  );
+  now.value = new Date("2026-07-20T13:00:01.000Z");
+  const first = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
+  assert.equal(first.retryScheduled, true);
+  const originalScope = database.record?.providerCredentialScope;
+
+  settings.apiKey = "re_rotated_scope";
+  now.value = new Date("2026-07-20T13:01:01.000Z");
+  const rotated = await dispatchScheduledArbitraryEmailWithDependencies(
+    id,
+    deps,
+  );
+  assert.equal(rotated.ok, false);
+  assert.equal(submissions, 1);
+  assert.equal(database.record?.status, "manual_review");
+  assert.equal(database.record?.providerCredentialScope, originalScope);
+  assert.match(String(database.record?.error), /credential scope changed/i);
+});
+
+test("uncertain scheduled outcomes retain credential scope for manual review", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  const now = { value: new Date("2026-07-20T12:00:00.000Z") };
+  const settings = { ...REAL_SETTINGS, apiKey: "re_uncertain_scope" };
+  const deps = dependencies(database, settings, async () => ({
+    providerMessageId: null,
+    error: "provider connection closed",
+    failureDisposition: "uncertain",
+  }));
+  deps.now = () => now.value;
+  const id = "4cc419bf-26a9-47f0-b09a-42d58dd34bc6";
+  await queueArbitraryEmailWithDependencies(
+    INPUT,
+    new Date("2026-07-20T13:00:00.000Z"),
+    id,
+    deps,
+  );
+  now.value = new Date("2026-07-20T13:00:01.000Z");
+  const result = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
+  assert.equal(result.ok, false);
+  assert.equal(database.record?.status, "manual_review");
+  assert.equal(database.record?.failureDisposition, "uncertain");
+  assert.equal(
+    database.record?.providerCredentialScope,
+    getResendCredentialScope(settings.apiKey),
+  );
+  assert.ok(database.record?.firstAttemptAt instanceof Date);
 });
 
 test("dispatch rechecks suppression and test override without replacing intended recipients", async () => {
@@ -712,6 +834,42 @@ test("recovery reclaims a stale queued arbitrary email exactly once", async () =
   assert.equal(submissions, 1);
   assert.ok(first.ok || second.ok);
   assert.ok(first.skipped || second.skipped);
+});
+
+test("recovery quarantines a stale provider-submission marker without resubmitting", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  const now = { value: new Date("2026-07-20T12:00:00.000Z") };
+  let submissions = 0;
+  const deps = dependencies(database, REAL_SETTINGS, async () => {
+    submissions += 1;
+    return {
+      providerMessageId: "must-not-submit",
+      error: null,
+      failureDisposition: null,
+    };
+  });
+  deps.now = () => now.value;
+  const id = "e24fd1d2-3d21-487b-a641-cb0afb9d4405";
+  await queueArbitraryEmailWithDependencies(
+    INPUT,
+    new Date("2026-07-20T13:00:00.000Z"),
+    id,
+    deps,
+  );
+  Object.assign(database.record!, {
+    status: "sending",
+    providerCredentialScope: getResendCredentialScope(REAL_SETTINGS.apiKey),
+    claimedAt: new Date("2026-07-20T12:30:00.000Z"),
+    claimToken: "stale-provider-claim",
+  });
+  now.value = new Date("2026-07-20T13:00:01.000Z");
+
+  const result = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
+  assert.equal(result.ok, false);
+  assert.equal(submissions, 0);
+  assert.equal(database.record?.status, "manual_review");
+  assert.equal(database.record?.failureDisposition, "uncertain");
+  assert.match(String(database.record?.error), /may have started/);
 });
 
 test("scheduled arbitrary email cancellation is conditional and idempotent", async () => {

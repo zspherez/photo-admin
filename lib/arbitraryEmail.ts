@@ -182,7 +182,7 @@ function later(current: Date | null, candidate: Date): Date {
 }
 
 function completeQueuedDispatch(status: string): Record<string, unknown> {
-  return status === "queued"
+  return status === "queued" || status === "sending"
     ? {
         nextAttemptAt: null,
         claimedAt: null,

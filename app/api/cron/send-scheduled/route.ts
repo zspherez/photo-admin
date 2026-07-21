@@ -132,6 +132,11 @@ export async function GET(request: NextRequest) {
                 nextAttemptAt: { lte: now },
                 claimedAt: { lte: staleBefore },
               },
+              {
+                status: "sending",
+                nextAttemptAt: { lte: now },
+                claimedAt: { lte: staleBefore },
+              },
             ],
           },
           select: { id: true, nextAttemptAt: true, createdAt: true },

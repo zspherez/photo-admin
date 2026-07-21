@@ -135,12 +135,21 @@ test("immediate, scheduled, and retry delivery use the selected immutable snapsh
   assert.match(schedule, /finalHtml: prep\.html/);
   assert.match(
     schedule,
+    /expectedRecipientIdentityData\(prep\.expectedRecipientIdentity\)/,
+  );
+  assert.match(schedule, /sameExpectedRecipientIdentity\(/);
+  assert.match(
+    schedule,
     /scheduled\.finalSubject === prep\.subject[\s\S]*scheduled\.finalHtml === prep\.html[\s\S]*scheduled\.scheduledFor\?\.getTime\(\) === scheduledFor\.getTime\(\)[\s\S]*ok: true/,
   );
   assert.match(locked, /outreach\.fullTeamSend/);
   assert.match(locked, /stored: outreach/);
   assert.match(locked, /"updatedAt"/);
   assert.match(locked, /customizeRecipientIdentityError/);
+  assert.match(
+    locked,
+    /if \(identityError\)[\s\S]*state: "manual_review"/,
+  );
   assert.match(
     send,
     /preparedDeliveryPolicyBlockingReason[\s\S]*FROM "Contact"[\s\S]*FOR UPDATE/,
@@ -159,7 +168,34 @@ test("immediate, scheduled, and retry delivery use the selected immutable snapsh
   );
   assert.match(
     send,
+    /expectedRecipientIdentity: storedExpectedRecipientIdentity\(row\)/,
+  );
+  assert.match(
+    send,
     /recipients: currentPolicy\.currentRecipients,[\s\S]*fullTeamSend: currentPolicy\.fullTeamSend,[\s\S]*mode: "retry"/,
+  );
+});
+
+test("scheduled Customize identity is persisted and constrained as one snapshot", () => {
+  const send = source("lib/sendOutreach.ts");
+  const migration = source(
+    "prisma/migrations/20260721030000_queue_next_dispatch/migration.sql",
+  );
+
+  assert.match(send, /expectedRecipientContactId: identity\?\.contactId/);
+  assert.match(send, /expectedRecipientArtistId: identity\?\.artistId/);
+  assert.match(send, /expectedRecipientEmail: identity\?\.normalizedEmail/);
+  assert.match(
+    send,
+    /expectedRecipientUpdatedAt: identity[\s\S]*new Date\(identity\.updatedAt\)/,
+  );
+  assert.match(
+    send,
+    /updatedAt: row\.expectedRecipientUpdatedAt!\.toISOString\(\)/,
+  );
+  assert.match(
+    migration,
+    /Outreach_expected_recipient_identity_check[\s\S]*expectedRecipientContactId" IS NULL[\s\S]*expectedRecipientUpdatedAt" IS NULL[\s\S]*expectedRecipientContactId" IS NOT NULL[\s\S]*expectedRecipientUpdatedAt" IS NOT NULL/,
   );
 });
 

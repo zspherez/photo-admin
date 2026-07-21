@@ -100,11 +100,19 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /db\.outreach\.count\(\{\s*where: \{ kind: "original", parentOutreachId: null \}/,
+    /contactProbe,\s*directOutreachNoteProbe,\s*festivalGeographyProbe,\s*outreachAttemptProbe/,
   );
-  assert.match(
-    source,
-    /contactProbe,\s*directOutreachNoteProbe,\s*festivalGeographyProbe,\s*outreachKindProbe,\s*outreachAttemptProbe/,
+  assert.deepEqual(
+    selectedScalarFields(source, "outreach"),
+    [
+      "id",
+      "kind",
+      "parentOutreachId",
+      "expectedRecipientContactId",
+      "expectedRecipientArtistId",
+      "expectedRecipientEmail",
+      "expectedRecipientUpdatedAt",
+    ],
   );
   assert.match(source, /directOutreachNote: \{ not: null \}/);
   assert.match(
@@ -141,7 +149,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*outreachKindProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,
@@ -255,7 +263,10 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "claimedAt",
       "claimToken",
       "lastAttemptAt",
+      "firstAttemptAt",
       "attemptCount",
+      "failureDisposition",
+      "providerCredentialScope",
       "sentAt",
       "deliveredAt",
       "firstOpenedAt",
@@ -295,6 +306,6 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*\]/,
+    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ArbitraryEmail\.providerCredentialScope",[\s\S]*"Outreach\.expectedRecipientUpdatedAt",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*\]/,
   );
 });

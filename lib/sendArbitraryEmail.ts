@@ -7,6 +7,7 @@ import {
 import { normalizeArbitraryEmailContent } from "@/lib/arbitraryEmailContent";
 import { db } from "@/lib/db";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
+import { getResendCredentialScopeConflict } from "@/lib/sendOutreach";
 import {
   buildArbitraryResendDeliveryPolicy,
   compareResendRequestToPolicy,
@@ -85,6 +86,21 @@ function sendFailureStatus(result: SendResult): "failed" | "manual_review" {
     result.failureDisposition === "in_flight"
     ? "manual_review"
     : "failed";
+}
+
+interface ArbitraryCredentialScopeState {
+  status: string;
+  providerCredentialScope: string | null;
+  firstAttemptAt: Date | null;
+  attemptCount: number;
+  failureDisposition: string | null;
+}
+
+function arbitraryCredentialScopeConflict(
+  row: ArbitraryCredentialScopeState,
+  currentCredentialScope?: string | null,
+): string | null {
+  return getResendCredentialScopeConflict(row, currentCredentialScope);
 }
 
 function errorMessage(error: unknown): string {
@@ -198,7 +214,7 @@ export async function queueArbitraryEmailWithDependencies(
           });
           if (existing) {
             if (
-              ["scheduled", "queued", "retry_scheduled"].includes(
+              ["scheduled", "queued", "sending", "retry_scheduled"].includes(
                 existing.status,
               ) &&
               sameQueuedSnapshot(
@@ -523,7 +539,10 @@ async function claimScheduledArbitraryEmail(
             (row.status === "scheduled" ||
               row.status === "retry_scheduled" ||
               (row.status === "queued" &&
-                (!row.claimedAt || row.claimedAt <= staleBefore)));
+                (!row.claimedAt || row.claimedAt <= staleBefore)) ||
+              (row.status === "sending" &&
+                !!row.claimedAt &&
+                row.claimedAt <= staleBefore));
           if (!due) {
             return {
               kind: "complete" as const,
@@ -565,6 +584,25 @@ async function claimScheduledArbitraryEmail(
               result: { ok: true, id },
             };
           }
+          if (row.status === "sending") {
+            const error =
+              "Provider submission may have started before the dispatch claim became stale; manual review is required";
+            await tx.arbitraryEmail.update({
+              where: { id },
+              data: {
+                status: "manual_review",
+                error,
+                failureDisposition: "uncertain",
+                nextAttemptAt: null,
+                claimedAt: null,
+                claimToken: null,
+              },
+            });
+            return {
+              kind: "complete" as const,
+              result: { ok: false, id, error },
+            };
+          }
           if (row.status === "sent" || row.status === "test") {
             return {
               kind: "complete" as const,
@@ -572,7 +610,7 @@ async function claimScheduledArbitraryEmail(
             };
           }
           const immutableRequestAgeAnchor =
-            row.lastAttemptAt ?? row.claimedAt;
+            row.firstAttemptAt ?? row.lastAttemptAt ?? row.claimedAt;
           if (
             row.providerRequest &&
             immutableRequestAgeAnchor &&
@@ -741,6 +779,154 @@ async function ensureScheduledArbitraryRequest(
   return { ok: true };
 }
 
+async function bindScheduledArbitraryCredentialScope(
+  id: string,
+  claimToken: string,
+  dependencies: SendArbitraryEmailDependencies,
+): Promise<
+  | { ok: true }
+  | { ok: false; result: DispatchArbitraryEmailResult }
+> {
+  for (let transactionAttempt = 0; transactionAttempt < 4; transactionAttempt += 1) {
+    try {
+      return await dependencies.database.$transaction(
+        async (tx) => {
+          await tx.$queryRaw<Array<{ id: string }>>(
+            Prisma.sql`
+              SELECT "id"
+              FROM "ArbitraryEmail"
+              WHERE "id" = ${id}
+              FOR UPDATE
+            `,
+          );
+          const stored = await tx.arbitraryEmail.findUnique({ where: { id } });
+          if (
+            !stored ||
+            stored.status !== "queued" ||
+            stored.claimToken !== claimToken
+          ) {
+            return {
+              ok: false as const,
+              result: {
+                ok: false,
+                id,
+                error:
+                  "Arbitrary email claim changed before credential binding",
+              },
+            };
+          }
+          if (
+            !stored.providerRequest ||
+            !stored.requestHash ||
+            typeof stored.testSend !== "boolean"
+          ) {
+            const error =
+              "Arbitrary email request snapshot is incomplete before credential binding";
+            await tx.arbitraryEmail.update({
+              where: { id },
+              data: {
+                status: "manual_review",
+                error,
+                nextAttemptAt: null,
+                claimedAt: null,
+                claimToken: null,
+              },
+            });
+            return {
+              ok: false as const,
+              result: { ok: false, id, error },
+            };
+          }
+
+          const deliverySettings = await dependencies.getDeliverySettings(tx);
+          const submissionCredential = getResendSubmissionCredential(
+            deliverySettings.apiKey,
+          );
+          if (!submissionCredential) {
+            const error =
+              "Current send configuration blocks this immutable request: Resend submission credential is unavailable";
+            await tx.arbitraryEmail.update({
+              where: { id },
+              data: {
+                status: "failed",
+                error,
+                failureDisposition: "configuration",
+                nextAttemptAt: null,
+                claimedAt: null,
+                claimToken: null,
+              },
+            });
+            return {
+              ok: false as const,
+              result: { ok: false, id, error },
+            };
+          }
+
+          const scopeConflict = arbitraryCredentialScopeConflict(
+            stored,
+            submissionCredential.scope,
+          );
+          if (scopeConflict) {
+            await tx.arbitraryEmail.update({
+              where: { id },
+              data: {
+                status: "manual_review",
+                error: scopeConflict,
+                nextAttemptAt: null,
+                claimedAt: null,
+                claimToken: null,
+              },
+            });
+            return {
+              ok: false as const,
+              result: { ok: false, id, error: scopeConflict },
+            };
+          }
+
+          await tx.arbitraryEmail.update({
+            where: { id },
+            data: {
+              status: "sending",
+              providerCredentialScope:
+                stored.providerCredentialScope ?? submissionCredential.scope,
+              lastAttemptAt: dependencies.now(),
+            },
+          });
+          return { ok: true as const };
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+          maxWait: 10_000,
+          timeout: OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
+        },
+      );
+    } catch (error) {
+      if (
+        transactionAttempt < 3 &&
+        isRetryableTransactionError(error)
+      ) {
+        continue;
+      }
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          id,
+          error: `Arbitrary email credential binding failed: ${errorMessage(error)}`,
+        },
+      };
+    }
+  }
+  return {
+    ok: false,
+    result: {
+      ok: false,
+      id,
+      error: "Unable to bind arbitrary email credential scope",
+    },
+  };
+}
+
 async function submitScheduledArbitraryEmail(
   id: string,
   claimToken: string,
@@ -748,6 +934,8 @@ async function submitScheduledArbitraryEmail(
 ): Promise<DispatchArbitraryEmailResult> {
   for (let transactionAttempt = 0; transactionAttempt < 4; transactionAttempt += 1) {
     let providerSubmissionStarted = false;
+    let providerFirstAttemptAt: Date | null = null;
+    let providerAttemptStartedAt: Date | null = null;
     try {
       return await dependencies.database.$transaction(
         async (tx): Promise<DispatchArbitraryEmailResult> => {
@@ -762,7 +950,7 @@ async function submitScheduledArbitraryEmail(
           const stored = await tx.arbitraryEmail.findUnique({ where: { id } });
           if (
             !stored ||
-            stored.status !== "queued" ||
+            stored.status !== "sending" ||
             stored.claimToken !== claimToken
           ) {
             return {
@@ -848,6 +1036,9 @@ async function submitScheduledArbitraryEmail(
               data: {
                 status: "failed",
                 error,
+                failureDisposition: configurationError
+                  ? "configuration"
+                  : "policy",
                 nextAttemptAt: null,
                 claimedAt: null,
                 claimToken: null,
@@ -867,6 +1058,27 @@ async function submitScheduledArbitraryEmail(
               data: {
                 status: "failed",
                 error,
+                failureDisposition: "configuration",
+                nextAttemptAt: null,
+                claimedAt: null,
+                claimToken: null,
+              },
+            });
+            return { ok: false, id, error };
+          }
+          const scopeConflict = arbitraryCredentialScopeConflict(
+            stored,
+            submissionCredential.scope,
+          );
+          if (scopeConflict || !stored.providerCredentialScope) {
+            const error =
+              scopeConflict ??
+              "Arbitrary email credential scope was not persisted before provider submission";
+            await tx.arbitraryEmail.update({
+              where: { id },
+              data: {
+                status: "manual_review",
+                error,
                 nextAttemptAt: null,
                 claimedAt: null,
                 claimToken: null,
@@ -876,11 +1088,16 @@ async function submitScheduledArbitraryEmail(
           }
 
           const completedAttempts = stored.attemptCount + 1;
+          const attemptStartedAt = dependencies.now();
+          providerFirstAttemptAt = stored.firstAttemptAt;
+          providerAttemptStartedAt = attemptStartedAt;
           await tx.arbitraryEmail.update({
             where: { id },
             data: {
               attemptCount: completedAttempts,
-              lastAttemptAt: dependencies.now(),
+              firstAttemptAt: stored.firstAttemptAt ?? attemptStartedAt,
+              lastAttemptAt: attemptStartedAt,
+              failureDisposition: null,
             },
           });
           providerSubmissionStarted = true;
@@ -899,6 +1116,7 @@ async function submitScheduledArbitraryEmail(
                 providerMessageId: submission.providerMessageId,
                 sentAt: completedAt,
                 error: null,
+                failureDisposition: null,
                 nextAttemptAt: null,
                 claimedAt: null,
                 claimToken: null,
@@ -923,6 +1141,7 @@ async function submitScheduledArbitraryEmail(
                 ? "retry_scheduled"
                 : sendFailureStatus(submission),
               error,
+              failureDisposition: submission.failureDisposition,
               nextAttemptAt,
               claimedAt: null,
               claimToken: null,
@@ -954,7 +1173,7 @@ async function submitScheduledArbitraryEmail(
       if (providerSubmissionStarted) {
         const message = `Provider submission outcome is uncertain: ${detail}`;
         await dependencies.database.arbitraryEmail.updateMany({
-          where: { id, status: "queued", claimToken },
+          where: { id, status: "sending", claimToken },
           data: {
             status: "manual_review",
             error: message,
@@ -962,7 +1181,12 @@ async function submitScheduledArbitraryEmail(
             claimedAt: null,
             claimToken: null,
             attemptCount: { increment: 1 },
-            lastAttemptAt: dependencies.now(),
+            firstAttemptAt:
+              providerFirstAttemptAt ??
+              providerAttemptStartedAt ??
+              dependencies.now(),
+            lastAttemptAt: providerAttemptStartedAt ?? dependencies.now(),
+            failureDisposition: "uncertain",
           },
         });
         return { ok: false, id, error: message };
@@ -993,6 +1217,12 @@ export async function dispatchScheduledArbitraryEmailWithDependencies(
     dependencies,
   );
   if (!prepared.ok) return prepared.result;
+  const bound = await bindScheduledArbitraryCredentialScope(
+    id,
+    claim.claimToken,
+    dependencies,
+  );
+  if (!bound.ok) return bound.result;
   return submitScheduledArbitraryEmail(id, claim.claimToken, dependencies);
 }
 
