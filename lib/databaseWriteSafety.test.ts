@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   assertSafeDatabaseTestWrite,
+  databaseTargetFingerprint,
   DESTRUCTIVE_TEST_CONFIRMATION,
   SAFE_TEST_DATABASE_URL,
   sanitizedTestEnvironment,
@@ -40,38 +41,93 @@ test("write-capable tests accept only local non-production database targets", ()
   );
 });
 
-test("non-local test writes require the exact one-off confirmation", () => {
-  const remote = "postgresql://tester@preview-db.example.com/photo_admin_test";
+test("unknown remote targets remain rejected even with confirmation", () => {
+  const remote = "postgresql://tester@db-42.internal/app_test";
   assert.throws(
     () =>
       assertSafeDatabaseTestWrite([remote], {
-        DESTRUCTIVE_TEST_DATABASE_CONFIRMATION: "CONFIRM",
+        DESTRUCTIVE_TEST_DATABASE_CONFIRMATION:
+          DESTRUCTIVE_TEST_CONFIRMATION,
       }),
-    /Refusing a write-capable test/
+    /unknown remote database target/
+  );
+});
+
+test("remote disposable targets require confirmation and a positive allowlist", () => {
+  const remote = "postgresql://tester@preview-db.internal/photo_admin_test";
+  const allowlist = {
+    TEST_DATABASE_ALLOWED_HOSTS: "preview-db.internal",
+    TEST_DATABASE_ALLOWED_DATABASES: "photo_admin_test",
+  };
+  assert.throws(
+    () => assertSafeDatabaseTestWrite([remote], allowlist),
+    /unknown remote database target/
   );
   assert.doesNotThrow(() =>
     assertSafeDatabaseTestWrite([remote], {
+      ...allowlist,
       DESTRUCTIVE_TEST_DATABASE_CONFIRMATION:
         DESTRUCTIVE_TEST_CONFIRMATION,
     })
   );
+});
+
+test("remote fingerprint authorization is exact and credential-independent", () => {
+  const remote =
+    "postgresql://tester:secret@ephemeral.internal:6543/photo_admin_test";
+  const fingerprint = databaseTargetFingerprint(remote);
+  assert.doesNotThrow(() =>
+    assertSafeDatabaseTestWrite([remote], {
+      TEST_DATABASE_ALLOWED_SHA256: fingerprint,
+      DESTRUCTIVE_TEST_DATABASE_CONFIRMATION:
+        DESTRUCTIVE_TEST_CONFIRMATION,
+    })
+  );
+  assert.equal(
+    fingerprint,
+    databaseTargetFingerprint(
+      "postgresql://different:credentials@ephemeral.internal:6543/photo_admin_test"
+    )
+  );
+  assert.throws(
+    () =>
+      assertSafeDatabaseTestWrite([remote], {
+        TEST_DATABASE_ALLOWED_SHA256: "0".repeat(64),
+        DESTRUCTIVE_TEST_DATABASE_CONFIRMATION:
+          DESTRUCTIVE_TEST_CONFIRMATION,
+      }),
+    /unknown remote database target/
+  );
+});
+
+test("production identities and environments cannot be overridden", () => {
+  const allowlist = {
+    TEST_DATABASE_ALLOWED_HOSTS: "production-db.example.com",
+    TEST_DATABASE_ALLOWED_DATABASES: "photo_admin",
+    DESTRUCTIVE_TEST_DATABASE_CONFIRMATION:
+      DESTRUCTIVE_TEST_CONFIRMATION,
+  };
   assert.throws(
     () =>
       assertSafeDatabaseTestWrite(
         ["postgresql://tester@production-db.example.com/photo_admin"],
-        {
-          DESTRUCTIVE_TEST_DATABASE_CONFIRMATION:
-            DESTRUCTIVE_TEST_CONFIRMATION,
-        }
+        allowlist
       ),
     /production database target/
   );
   assert.throws(
     () =>
-      assertSafeDatabaseTestWrite([remote], {
-        VERCEL_ENV: "production",
+      assertSafeDatabaseTestWrite([SAFE_TEST_DATABASE_URL], {
+        VERCEL_ENV: "Production",
         DESTRUCTIVE_TEST_DATABASE_CONFIRMATION:
           DESTRUCTIVE_TEST_CONFIRMATION,
+      }),
+    /production database target/
+  );
+  assert.throws(
+    () =>
+      assertSafeDatabaseTestWrite([SAFE_TEST_DATABASE_URL], {
+        VERCEL: "1",
       }),
     /production database target/
   );
@@ -95,6 +151,9 @@ test("the npm test environment replaces inherited database and auth secrets", ()
   assert.equal(sanitized.CONTACT_RESEARCH_AGENT_TOKEN, "");
   assert.equal(sanitized.CONTACT_AUDIT_AGENT_TOKEN, "");
   assert.equal(sanitized.CRON_SECRET, "");
+  assert.equal(sanitized.TEST_DATABASE_ALLOWED_HOSTS, "");
+  assert.equal(sanitized.TEST_DATABASE_ALLOWED_DATABASES, "");
+  assert.equal(sanitized.TEST_DATABASE_ALLOWED_SHA256, "");
   assert.equal(sanitized.DOTENV_CONFIG_OVERRIDE, "false");
 });
 
