@@ -214,9 +214,33 @@ test("festival locations ignore provider sentinels and avoid duplicate punctuati
   assert.equal(rendered.match(/Waterfront Park/g)?.length, 1);
   assert.match(
     rendered,
-    /set at Waterfront Park on Saturday, August 1\.<\/p>/,
+    /Artist set at Waterfront Park in a few weeks!/,
   );
-  assert.doesNotMatch(rendered, /\bUnknown\b|August 1\s+(?:in|at)\s*[.,<]/i);
+  assert.doesNotMatch(rendered, /\bUnknown\b|undefined|null/i);
+});
+
+test("festival default and preview use the canonical rate-free copy", () => {
+  assert.equal(
+    FESTIVAL_TEMPLATE_HTML,
+    `<p>Hi {{manager_name}}, wanted to shoot a quick message over regarding the {{artist}} set at {{festival_name}} in a few weeks! I am a photographer and videographer specializing in the electronic music space and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`,
+  );
+  const preview = applyHtmlTemplate(FESTIVAL_TEMPLATE_HTML, {
+    artist: "Artist",
+    festival_name: "Summer Sound",
+    manager_name: "Manager",
+    portfolio_url: "https://portfolio.example",
+    sender_email: "photo@example.com",
+    sender_name: "Photographer",
+    sender_phone: "555-0100",
+  });
+  assert.match(preview, /Artist set at Summer Sound in a few weeks!/);
+  assert.match(preview, /specializing in the electronic music space/);
+  assert.match(preview, /My minimum deliverables include 25 photos/);
+  assert.match(
+    preview,
+    /<a target="_blank" rel="noopener noreferrer nofollow" href="https:\/\/portfolio\.example">/,
+  );
+  assert.doesNotMatch(preview, /\{\{|\brate\b|customPrice|\$[0-9]/i);
 });
 
 test("festival selection and variable validation are purpose-aware", () => {

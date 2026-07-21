@@ -386,18 +386,7 @@ export const DEFAULT_TEMPLATE_HTML = `<p>Hey {{manager_name}} - wanted to shoot 
 export const FESTIVAL_TEMPLATE_SUBJECT =
   "Photo coverage request: {{artist}} at {{festival_name}}";
 
-export const FESTIVAL_TEMPLATE_HTML = `<html>
-  <body>
-    <p>Hi {{manager_name}},</p>
-    <p>I'm reaching out to request photo credentials and permission to photograph {{artist}}'s set at {{festival_name}} on {{date}}{{location_clause}}.</p>
-    <p>I specialize in live music photography and would love to provide polished coverage of the set. You can view recent concert and festival work at <a href="{{portfolio_url}}">{{portfolio_url}}</a>.</p>
-    <p>If photo access is coordinated by the festival press team, I'd appreciate being pointed to the right contact or credential instructions.</p>
-    <p>Best,<br>
-       {{sender_name}}<br>
-       <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
-    </p>
-  </body>
-</html>`;
+export const FESTIVAL_TEMPLATE_HTML = `<p>Hi {{manager_name}}, wanted to shoot a quick message over regarding the {{artist}} set at {{festival_name}} in a few weeks! I am a photographer and videographer specializing in the electronic music space and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`;
 
 export interface TemplateContent {
   subject: string;

@@ -110,6 +110,7 @@ test("scheduled sends and retries retain stored festival snapshots", () => {
 
 test("Settings edits, previews, and resets normal and festival templates independently", () => {
   const settings = source("app/settings/template/page.tsx");
+  const templates = source("lib/template.ts");
 
   assert.match(settings, /\["original", "festival", "follow_up"\]/);
   assert.match(settings, /if \(kind === "festival"\) return ensureFestivalTemplate\(\)/);
@@ -125,6 +126,10 @@ test("Settings edits, previews, and resets normal and festival templates indepen
   assert.match(
     settings,
     /previewHtml = renderTrackedEmailHtml\([\s\S]*template\.htmlBody/,
+  );
+  assert.match(
+    templates,
+    /where: \{ purpose: "festival" \},[\s\S]*update: \{\},[\s\S]*htmlBody: FESTIVAL_TEMPLATE_HTML/,
   );
 });
 
