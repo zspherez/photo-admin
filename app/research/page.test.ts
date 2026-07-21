@@ -69,6 +69,10 @@ test("review and exhausted jobs have separate bulk requeue actions", () => {
   );
   assert.match(source, /disabled=\{retryReviewCount === 0\}/);
   assert.match(source, /disabled=\{retryExhaustedCount === 0\}/);
+  assert.match(
+    source,
+    /none: \{ status: \{ in: \["approved", "superseded"\] \} \}/
+  );
 });
 
 test("research page links to the trusted queue-draining workflow", () => {
@@ -127,7 +131,7 @@ test("status count cards are accessible links with a visible active state", () =
 test("review and exhausted jobs can be requeued", () => {
   assert.match(
     source,
-    /job\.status === "exhausted" \|\|[\s\S]*job\.status === "review"[\s\S]*approvedCandidateCount === 0/
+    /job\.status === "exhausted" \|\|[\s\S]*job\.status === "review"[\s\S]*!hasApprovalHistory/
   );
   assert.match(source, />\s*Requeue research\s*</);
 });
@@ -146,6 +150,10 @@ test("candidate cards retain pending actions with independent review counts", ()
     /\{approvedCandidateCount\} approved ·\{" "\}[\s\S]*\{pendingCandidates\.length\} awaiting review/
   );
   assert.match(source, /pendingCandidates\.map\(\(candidate\) =>/);
+  assert.match(
+    source,
+    /\["approved", "superseded"\]\.includes\(candidate\.status\)/
+  );
 });
 
 test("intentional skips have a URL-backed count and dedicated view", () => {

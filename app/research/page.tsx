@@ -352,7 +352,9 @@ export default async function ContactResearchPage({
     db.contactResearchJob.count({
       where: {
         status: "review",
-        candidates: { none: { status: "approved" } },
+        candidates: {
+          none: { status: { in: ["approved", "superseded"] } },
+        },
       },
     }),
     db.$queryRaw<
@@ -630,6 +632,9 @@ export default async function ContactResearchPage({
             const approvedCandidateCount = job.candidates.filter(
               (candidate) => candidate.status === "approved"
             ).length;
+            const hasApprovalHistory = job.candidates.some((candidate) =>
+              ["approved", "superseded"].includes(candidate.status)
+            );
             const activeSkip = job.artist.researchSkips[0] ?? null;
             return (
               <Card key={job.id} id={`job-${job.id}`}>
@@ -769,7 +774,7 @@ export default async function ContactResearchPage({
 
                   {(job.status === "exhausted" ||
                     (job.status === "review" &&
-                      approvedCandidateCount === 0)) && (
+                      !hasApprovalHistory)) && (
                     <form action={retryJobAction} className="mt-3">
                       <input type="hidden" name="jobId" value={job.id} />
                       <input

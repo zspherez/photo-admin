@@ -140,6 +140,77 @@ const ACTIVE_EMAIL_CONTACT_WHERE = {
   email: { not: null },
 } satisfies Prisma.ContactWhereInput;
 
+export function isContactResearchApprovalEffective(
+  normalizedEmail: string,
+  contacts: ReadonlyArray<{
+    email: string | null;
+    state: "active" | "quarantined";
+  }>
+): boolean {
+  return contacts.some(
+    (contact) =>
+      contact.state === "active" &&
+      contact.email?.trim().toLowerCase() === normalizedEmail
+  );
+}
+
+async function supersedeObsoleteContactResearchApprovals(
+  tx: Prisma.TransactionClient,
+  artistIds?: readonly string[]
+): Promise<void> {
+  if (artistIds?.length === 0) return;
+  const approvals = await tx.contactResearchCandidate.findMany({
+    where: {
+      status: "approved",
+      ...(artistIds
+        ? { job: { artistId: { in: [...artistIds] } } }
+        : {}),
+    },
+    select: {
+      id: true,
+      normalizedEmail: true,
+      job: { select: { artistId: true } },
+    },
+  });
+  if (approvals.length === 0) return;
+  const contacts = await tx.contact.findMany({
+    where: {
+      artistId: {
+        in: Array.from(
+          new Set(approvals.map((candidate) => candidate.job.artistId))
+        ),
+      },
+      ...ACTIVE_EMAIL_CONTACT_WHERE,
+    },
+    select: { artistId: true, email: true, state: true },
+  });
+  const contactsByArtist = new Map<
+    string,
+    Array<{
+      email: string | null;
+      state: "active" | "quarantined";
+    }>
+  >();
+  for (const contact of contacts) {
+    const current = contactsByArtist.get(contact.artistId) ?? [];
+    current.push(contact);
+    contactsByArtist.set(contact.artistId, current);
+  }
+  const obsolete = approvals.filter(
+    (candidate) =>
+      !isContactResearchApprovalEffective(
+        candidate.normalizedEmail,
+        contactsByArtist.get(candidate.job.artistId) ?? []
+      )
+  );
+  if (obsolete.length === 0) return;
+  await tx.contactResearchCandidate.updateMany({
+    where: { id: { in: obsolete.map((candidate) => candidate.id) } },
+    // Preserve reviewedAt as the approval time; updatedAt records supersession.
+    data: { status: "superseded" },
+  });
+}
+
 function optionalString(
   value: unknown,
   maxLength: number,
@@ -1116,6 +1187,7 @@ export async function refreshContactResearchQueue(
     }
 
     const artistIds = [...eligible.keys()];
+    await supersedeObsoleteContactResearchApprovals(tx);
     const completed = await tx.contactResearchJob.updateMany({
       where: {
         status: { in: ["pending", "claimed", "exhausted"] },
@@ -1165,7 +1237,16 @@ export async function refreshContactResearchQueue(
 
     const existing = await tx.contactResearchJob.findMany({
       where: { artistId: { in: artistIds } },
-      select: { artistId: true, status: true },
+      select: {
+        id: true,
+        artistId: true,
+        status: true,
+        candidates: {
+          where: { status: "superseded" },
+          take: 1,
+          select: { id: true },
+        },
+      },
     });
     const existingByArtist = new Map(
       existing.map((job) => [job.artistId, job])
@@ -1179,7 +1260,11 @@ export async function refreshContactResearchQueue(
         created += 1;
         continue;
       }
-      if (job.status === "complete" || job.status === "inactive") {
+      if (
+        job.status === "complete" ||
+        job.status === "inactive" ||
+        (job.status === "exhausted" && job.candidates.length > 0)
+      ) {
         reopened += 1;
         continue;
       }
@@ -1212,13 +1297,33 @@ export async function refreshContactResearchQueue(
       VALUES ${Prisma.join(values)}
       ON CONFLICT ("artistId") DO UPDATE SET
         "status" = CASE
-          WHEN job."status" IN ('complete', 'inactive') THEN 'pending'
+          WHEN job."status" IN ('complete', 'inactive')
+            OR (
+              job."status" = 'exhausted'
+              AND EXISTS (
+                SELECT 1
+                FROM "ContactResearchCandidate" candidate_history
+                WHERE candidate_history."jobId" = job."id"
+                  AND candidate_history."status" = 'superseded'
+              )
+            )
+          THEN 'pending'
           ELSE job."status"
         END,
         "priority" = EXCLUDED."priority",
         "nextShowAt" = EXCLUDED."nextShowAt",
         "completedAt" = CASE
-          WHEN job."status" IN ('complete', 'inactive') THEN NULL
+          WHEN job."status" IN ('complete', 'inactive')
+            OR (
+              job."status" = 'exhausted'
+              AND EXISTS (
+                SELECT 1
+                FROM "ContactResearchCandidate" candidate_history
+                WHERE candidate_history."jobId" = job."id"
+                  AND candidate_history."status" = 'superseded'
+              )
+            )
+          THEN NULL
           ELSE job."completedAt"
         END,
         "updatedAt" = EXCLUDED."updatedAt"
@@ -1283,6 +1388,7 @@ export async function enqueueFestivalManagerResearch(
     if (!festival) throw new Error("Festival is inactive or unavailable");
 
     const artistIds = festival.artists.map((row) => row.artistId);
+    await supersedeObsoleteContactResearchApprovals(tx, artistIds);
     const existing =
       artistIds.length === 0
         ? []
@@ -1440,6 +1546,12 @@ export async function claimContactResearchJobs(
         AND NOT EXISTS (
           SELECT 1
           FROM "ContactResearchCandidate" candidate
+          JOIN "Contact" approved_contact
+            ON approved_contact."artistId" = job."artistId"
+           AND approved_contact."state" = 'active'
+           AND approved_contact."email" IS NOT NULL
+           AND LOWER(BTRIM(approved_contact."email"))
+             = candidate."normalizedEmail"
           WHERE candidate."jobId" = job."id"
             AND candidate."status" = 'approved'
         )
@@ -1795,6 +1907,7 @@ export async function submitContactResearchResult(
     const status = await resolveContactResearchJob(
       tx,
       jobId,
+      job.artistId,
       now,
       submission.notes
     );
@@ -1866,15 +1979,29 @@ class ContactResearchCandidateConflictError extends Error {}
 async function resolveContactResearchJob(
   tx: Prisma.TransactionClient,
   jobId: string,
+  artistId: string,
   now: Date,
   agentNotes?: string | null
 ): Promise<"review" | "complete" | "exhausted"> {
-  const pending = await tx.contactResearchCandidate.count({
-    where: { jobId, status: "pending" },
+  const candidates = await tx.contactResearchCandidate.findMany({
+    where: { jobId, status: { in: ["pending", "approved"] } },
+    select: { status: true, normalizedEmail: true },
   });
-  const approved = await tx.contactResearchCandidate.count({
-    where: { jobId, status: "approved" },
+  const activeContacts = await tx.contact.findMany({
+    where: { artistId, ...ACTIVE_EMAIL_CONTACT_WHERE },
+    select: { email: true, state: true },
   });
+  const pending = candidates.filter(
+    (candidate) => candidate.status === "pending"
+  ).length;
+  const approved = candidates.filter(
+    (candidate) =>
+      candidate.status === "approved" &&
+      isContactResearchApprovalEffective(
+        candidate.normalizedEmail,
+        activeContacts
+      )
+  ).length;
   const status =
     pending > 0 ? "review" : approved > 0 ? "complete" : "exhausted";
   await tx.contactResearchJob.update({
@@ -2056,7 +2183,12 @@ export async function approveContactResearchCandidates(
         });
       }
 
-      await resolveContactResearchJob(tx, candidates[0].jobId, now);
+      await resolveContactResearchJob(
+        tx,
+        candidates[0].jobId,
+        candidates[0].job.artistId,
+        now
+      );
 
       return {
         ok: true as const,
@@ -2121,7 +2253,11 @@ export async function rejectContactResearchCandidate(
           status: "pending",
           job: { status: "review" },
         },
-        select: { id: true, jobId: true },
+        select: {
+          id: true,
+          jobId: true,
+          job: { select: { artistId: true } },
+        },
       });
       if (!candidate) {
         return {
@@ -2140,6 +2276,7 @@ export async function rejectContactResearchCandidate(
       const status = await resolveContactResearchJob(
         tx,
         candidate.jobId,
+        candidate.job.artistId,
         now
       );
       return { ok: true, exhausted: status === "exhausted" };
@@ -2649,8 +2786,23 @@ async function retryEligibleContactResearchJobs(
       AND NOT EXISTS (
         SELECT 1
         FROM "ContactResearchCandidate" candidate
+        JOIN "Contact" approved_contact
+          ON approved_contact."artistId" = job."artistId"
+         AND approved_contact."state" = 'active'
+         AND approved_contact."email" IS NOT NULL
+         AND LOWER(BTRIM(approved_contact."email"))
+           = candidate."normalizedEmail"
         WHERE candidate."jobId" = job."id"
           AND candidate."status" = 'approved'
+      )
+      AND (
+        job."status" <> 'review'
+        OR NOT EXISTS (
+          SELECT 1
+          FROM "ContactResearchCandidate" candidate_history
+          WHERE candidate_history."jobId" = job."id"
+            AND candidate_history."status" = 'superseded'
+        )
       )
       AND EXISTS (
         SELECT 1

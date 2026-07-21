@@ -30,6 +30,7 @@ import {
   rankKnownContactEmails,
   rejectContactResearchCandidate,
   isOfficialManagementAutoApprovalEligible,
+  isContactResearchApprovalEffective,
   refreshContactResearchQueue,
   skipContactResearchArtist,
   skipContactResearchArtistByArtistId,
@@ -142,11 +143,18 @@ function createCandidateResolutionHarness(
     contactResearchCandidate: {
       findMany: async (value: unknown) => {
         const input = value as {
-          where: { id: { in: string[] } };
+          where: {
+            id?: { in: string[] };
+            jobId?: string;
+            status?: { in: string[] };
+          };
         };
         return [...candidates.values()]
           .filter((candidate) =>
-            input.where.id.in.includes(candidate.id)
+            input.where.id?.in
+              ? input.where.id.in.includes(candidate.id)
+              : candidate.jobId === input.where.jobId &&
+                input.where.status?.in.includes(candidate.status)
           )
           .map((candidate) => ({
             ...candidate,
@@ -165,7 +173,11 @@ function createCandidateResolutionHarness(
         if (job.status !== "review") return null;
         const candidate = candidates.get(input.where.id);
         return candidate?.status === input.where.status
-          ? { id: candidate.id, jobId: candidate.jobId }
+          ? {
+              id: candidate.id,
+              jobId: candidate.jobId,
+              job: { artistId: job.artistId },
+            }
           : null;
       },
       findUnique: async (value: unknown) => {
@@ -270,6 +282,13 @@ function createCandidateResolutionHarness(
       },
     },
     contact: {
+      findMany: async () =>
+        [...contacts.values()]
+          .filter((contact) => contact.state === "active")
+          .map((contact) => ({
+            email: contact.email,
+            state: contact.state,
+          })),
       findUnique: async (value: unknown) => {
         const input = value as {
           where: {
@@ -350,6 +369,267 @@ function officialCandidate(email: string) {
   };
 }
 
+async function runApprovalRefreshScenario(input: {
+  jobStatus: string;
+  candidates: Array<{ id: string; email: string; status: string }>;
+  contacts: Array<{
+    email: string;
+    state: "active" | "quarantined";
+  }>;
+  beforeTransaction?: () => Promise<void>;
+}) {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const state = {
+    jobStatus: input.jobStatus,
+    candidates: input.candidates.map((candidate) => ({ ...candidate })),
+    contacts: input.contacts,
+  };
+  const runTransaction: ContactResearchTransactionRunner = async (work) => {
+    await input.beforeTransaction?.();
+    return work({
+      showArtist: {
+        findMany: async () =>
+          state.contacts.some((contact) => contact.state === "active")
+            ? []
+            : [
+                {
+                  artistId: "artist-1",
+                  show: {
+                    date: new Date("2026-08-01T00:00:00.000Z"),
+                    interestedAt: null,
+                  },
+                  artist: { popularity: 50, listenSignals: [] },
+                },
+              ],
+      },
+      contactResearchCandidate: {
+        findMany: async () =>
+          state.candidates
+            .filter((candidate) => candidate.status === "approved")
+            .map((candidate) => ({
+              id: candidate.id,
+              normalizedEmail: candidate.email,
+              jobId: "job-1",
+              job: { artistId: "artist-1" },
+            })),
+        updateMany: async (value: unknown) => {
+          const input = value as {
+            where: { id: { in: string[] } };
+            data: { status: string };
+          };
+          let count = 0;
+          for (const candidate of state.candidates) {
+            if (!input.where.id.in.includes(candidate.id)) continue;
+            candidate.status = input.data.status;
+            count += 1;
+          }
+          return { count };
+        },
+      },
+      contact: {
+        findMany: async () =>
+          state.contacts
+            .filter((contact) => contact.state === "active")
+            .map((contact) => ({
+              artistId: "artist-1",
+              email: contact.email,
+              state: contact.state,
+            })),
+      },
+      contactResearchJob: {
+        findMany: async (value: unknown) => {
+          const query = value as {
+            where?: {
+              requestedShow?: unknown;
+              artistId?: { in?: string[] };
+            };
+          };
+          if (query.where?.requestedShow) return [];
+          return query.where?.artistId?.in?.includes("artist-1")
+            ? [
+                {
+                  id: "job-1",
+                  artistId: "artist-1",
+                  status: state.jobStatus,
+                  candidates: state.candidates
+                    .filter(
+                      (candidate) => candidate.status === "superseded"
+                    )
+                    .slice(0, 1)
+                    .map((candidate) => ({ id: candidate.id })),
+                },
+              ]
+            : [];
+        },
+        updateMany: async (value: unknown) => {
+          const query = value as {
+            where?: { status?: { in?: string[] } };
+            data?: { status?: string };
+          };
+          if (
+            query.data?.status === "complete" &&
+            query.where?.status?.in?.includes(state.jobStatus) &&
+            state.contacts.some((contact) => contact.state === "active")
+          ) {
+            state.jobStatus = "complete";
+            return { count: 1 };
+          }
+          return { count: 0 };
+        },
+      },
+      $executeRaw: async () => {
+        const superseded = state.candidates.some(
+          (candidate) => candidate.status === "superseded"
+        );
+        if (
+          state.jobStatus === "complete" ||
+          state.jobStatus === "inactive" ||
+          (state.jobStatus === "exhausted" && superseded)
+        ) {
+          state.jobStatus = "pending";
+        }
+        return 1;
+      },
+    } as unknown as Prisma.TransactionClient);
+  };
+  const result = await refreshContactResearchQueue(now, runTransaction);
+  return { result, state };
+}
+
+test("effective approvals require an active same-email artist contact", () => {
+  assert.equal(
+    isContactResearchApprovalEffective("manager@example.com", [
+      { email: "manager@example.com", state: "active" },
+    ]),
+    true
+  );
+  assert.equal(
+    isContactResearchApprovalEffective("manager@example.com", [
+      { email: "MANAGER@example.com", state: "active" },
+    ]),
+    true,
+    "an active replacement row with the same email remains effective"
+  );
+  assert.equal(
+    isContactResearchApprovalEffective("manager@example.com", [
+      { email: "manager@example.com", state: "quarantined" },
+      { email: "other@example.com", state: "active" },
+    ]),
+    false
+  );
+});
+
+test("active approved contacts suppress queue refresh", async () => {
+  const { result, state } = await runApprovalRefreshScenario({
+    jobStatus: "complete",
+    candidates: [
+      { id: "approved-1", email: "manager@example.com", status: "approved" },
+    ],
+    contacts: [{ email: "manager@example.com", state: "active" }],
+  });
+
+  assert.equal(result.eligible, 0);
+  assert.equal(result.enqueued, 0);
+  assert.equal(state.jobStatus, "complete");
+  assert.equal(state.candidates[0].status, "approved");
+});
+
+test("a replacement active contact with the approved email suppresses refresh", async () => {
+  const { result, state } = await runApprovalRefreshScenario({
+    jobStatus: "complete",
+    candidates: [
+      { id: "approved-1", email: "manager@example.com", status: "approved" },
+    ],
+    contacts: [{ email: "MANAGER@example.com", state: "active" }],
+  });
+
+  assert.equal(result.eligible, 0);
+  assert.equal(state.jobStatus, "complete");
+  assert.equal(state.candidates[0].status, "approved");
+});
+
+test("one effective approval suppresses refresh when another is obsolete", async () => {
+  const { result, state } = await runApprovalRefreshScenario({
+    jobStatus: "complete",
+    candidates: [
+      { id: "approved-1", email: "old@example.com", status: "approved" },
+      { id: "approved-2", email: "current@example.com", status: "approved" },
+    ],
+    contacts: [{ email: "current@example.com", state: "active" }],
+  });
+
+  assert.equal(result.eligible, 0);
+  assert.equal(state.jobStatus, "complete");
+  assert.deepEqual(
+    state.candidates.map((candidate) => candidate.status),
+    ["superseded", "approved"]
+  );
+});
+
+test("quarantined approvals are superseded and refreshed for new research", async () => {
+  const { result, state } = await runApprovalRefreshScenario({
+    jobStatus: "complete",
+    candidates: [
+      { id: "approved-1", email: "manager@example.com", status: "approved" },
+    ],
+    contacts: [{ email: "manager@example.com", state: "quarantined" }],
+  });
+
+  assert.equal(result.enqueued, 1);
+  assert.equal(state.jobStatus, "pending");
+  assert.equal(state.candidates[0].status, "superseded");
+  const source = readFileSync(
+    new URL("./contactResearch.ts", import.meta.url),
+    "utf8"
+  );
+  const claim = source.slice(
+    source.indexOf("export async function claimContactResearchJobs"),
+    source.indexOf("export async function submitContactResearchResult")
+  );
+  assert.match(claim, /JOIN "Contact" approved_contact/);
+  assert.match(
+    claim,
+    /LOWER\(BTRIM\(approved_contact\."email"\)\)[\s\S]*candidate\."normalizedEmail"/
+  );
+  assert.doesNotMatch(claim, /candidate_history\."status" = 'superseded'/);
+});
+
+test("obsolete approval with a pending candidate stays in review", async () => {
+  const { result, state } = await runApprovalRefreshScenario({
+    jobStatus: "review",
+    candidates: [
+      { id: "approved-1", email: "old@example.com", status: "approved" },
+      { id: "pending-1", email: "pending@example.com", status: "pending" },
+    ],
+    contacts: [{ email: "old@example.com", state: "quarantined" }],
+  });
+
+  assert.equal(result.enqueued, 0);
+  assert.equal(result.reprioritized, 1);
+  assert.equal(state.jobStatus, "review");
+  assert.deepEqual(
+    state.candidates.map((candidate) => candidate.status),
+    ["superseded", "pending"]
+  );
+});
+
+test("an exhausted job with superseded approval history reopens", async () => {
+  const { result, state } = await runApprovalRefreshScenario({
+    jobStatus: "exhausted",
+    candidates: [
+      {
+        id: "approved-1",
+        email: "old@example.com",
+        status: "superseded",
+      },
+    ],
+    contacts: [{ email: "old@example.com", state: "quarantined" }],
+  });
+
+  assert.equal(result.enqueued, 1);
+  assert.equal(state.jobStatus, "pending");
+});
+
 test("approving one candidate leaves every other proposal pending", async () => {
   const now = new Date("2026-07-21T12:00:00.000Z");
   const harness = createCandidateResolutionHarness([
@@ -429,6 +709,31 @@ test("rejecting the final candidate after an approval completes", async () => {
   assert.deepEqual(rejected, { ok: true, exhausted: false });
   assert.equal(harness.job.status, "complete");
   assert.equal(harness.job.completedAt, now);
+});
+
+test("job resolution ignores an approval whose contact was quarantined", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness([
+    { id: "candidate-1", email: "one@example.com" },
+    { id: "candidate-2", email: "two@example.com" },
+  ]);
+
+  await approveContactResearchCandidate(
+    "candidate-1",
+    now,
+    harness.serialRunner,
+    async () => []
+  );
+  harness.contacts.get("one@example.com")!.state = "quarantined";
+  const rejected = await rejectContactResearchCandidate(
+    "candidate-2",
+    now,
+    harness.serialRunner
+  );
+
+  assert.deepEqual(rejected, { ok: true, exhausted: true });
+  assert.equal(harness.job.status, "exhausted");
+  assert.equal(harness.job.completedAt, null);
 });
 
 test("rejecting every candidate exhausts the job", async () => {
@@ -630,6 +935,7 @@ test("queue refresh preserves partial review jobs with active contacts", async (
           return { count: 0 };
         },
       },
+      contactResearchCandidate: { findMany: async () => [] },
     })
   );
 
@@ -867,6 +1173,110 @@ test("festival enqueue preserves concurrent contact and skip terminal states", a
       blocker === "active contact" ? "complete" : "skipped"
     );
   }
+});
+
+test("festival enqueue requeues a completed job after approval quarantine", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const state = {
+    jobStatus: "complete",
+    candidateStatus: "approved",
+  };
+  const result = await enqueueFestivalManagerResearch(
+    "festival-1",
+    now,
+    runWithTransaction({
+      show: {
+        findFirst: async () => ({
+          id: "festival-1",
+          date: new Date("2026-08-01T00:00:00.000Z"),
+          artists: [
+            {
+              artistId: "artist-1",
+              artist: { popularity: 50, listenSignals: [] },
+            },
+          ],
+        }),
+      },
+      contactResearchCandidate: {
+        findMany: async () => [
+          {
+            id: "approved-1",
+            normalizedEmail: "manager@example.com",
+            jobId: "job-1",
+            job: { artistId: "artist-1" },
+          },
+        ],
+        updateMany: async (value: unknown) => {
+          state.candidateStatus = (
+            value as { data: { status: string } }
+          ).data.status;
+          return { count: 1 };
+        },
+      },
+      contact: {
+        findMany: async () => [],
+      },
+      contactResearchJob: {
+        findMany: async () => [
+          {
+            id: "job-1",
+            artistId: "artist-1",
+            status: state.jobStatus,
+            candidates: [],
+          },
+        ],
+        update: async (value: unknown) => {
+          const input = value as { data: { status?: string } };
+          state.jobStatus = input.data.status ?? state.jobStatus;
+          return {};
+        },
+      },
+    })
+  );
+
+  assert.deepEqual(result, {
+    eligible: 1,
+    enqueued: 1,
+    alreadyQueued: 0,
+  });
+  assert.equal(state.candidateStatus, "superseded");
+  assert.equal(state.jobStatus, "pending");
+});
+
+test("refresh reconciles an audit quarantine that wins the serializable race", async () => {
+  const contacts: Array<{
+    email: string;
+    state: "active" | "quarantined";
+  }> = [{ email: "manager@example.com", state: "active" }];
+  let enterRefresh!: () => void;
+  let releaseRefresh!: () => void;
+  const refreshEntered = new Promise<void>((resolve) => {
+    enterRefresh = resolve;
+  });
+  const refreshRelease = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+
+  const refresh = runApprovalRefreshScenario({
+    jobStatus: "exhausted",
+    candidates: [
+      { id: "approved-1", email: "manager@example.com", status: "approved" },
+    ],
+    contacts,
+    beforeTransaction: async () => {
+      enterRefresh();
+      await refreshRelease;
+    },
+  });
+
+  await refreshEntered;
+  contacts[0].state = "quarantined";
+  releaseRefresh();
+  const { result, state } = await refresh;
+
+  assert.equal(result.enqueued, 1);
+  assert.equal(state.jobStatus, "pending");
+  assert.equal(state.candidates[0].status, "superseded");
 });
 
 test("accepts only public HTTP(S) evidence URLs", () => {
@@ -2419,7 +2829,13 @@ test("queue refresh evaluates eligibility after a concurrent explicit unskip", a
             };
             if (input.where?.requestedShow) return [];
             return input.where?.artistId?.in?.includes("artist-1")
-              ? [{ artistId: "artist-1", status: state.jobStatus }]
+              ? [
+                  {
+                    id: "job-1",
+                    artistId: "artist-1",
+                    status: state.jobStatus,
+                  },
+                ]
               : [];
           },
           updateMany: async (value: unknown) => {
@@ -2437,6 +2853,9 @@ test("queue refresh evaluates eligibility after a concurrent explicit unskip", a
             }
             return { count: 0 };
           },
+        },
+        contactResearchCandidate: {
+          findMany: async () => [],
         },
         $executeRaw: async () => {
           state.jobStatus = "pending";
