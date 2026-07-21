@@ -28,6 +28,10 @@ export const CONTACT_AUDIT_OIDC_ISSUER =
   "https://token.actions.githubusercontent.com";
 export const CONTACT_AUDIT_WORKFLOW_REF =
   "zspherez/photo-admin/.github/workflows/contact-audit.yml@refs/heads/main";
+export const CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES = [
+  "pending",
+  "running",
+] as const;
 
 const CONFIDENCE_VALUES = new Set(["high", "medium", "low"]);
 const FINDING_VALUES = new Set([
@@ -55,6 +59,20 @@ export interface ContactAuditResolutionResult {
   status?: "resolved" | "already_resolved";
   resolution?: ContactAuditResolution;
   error?: string;
+}
+
+export interface ContactAuditRequestResult {
+  id: string;
+  status: string;
+  requestedAt: Date;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  runId: string | null;
+  attemptCount: number;
+  lastAttemptAt: Date | null;
+  lastWorkflowRunId: string | null;
+  lastError: string | null;
+  created: boolean;
 }
 
 export interface ContactAuditAlternativeInput {
@@ -264,7 +282,8 @@ export function isTrustedContactAuditOidcClaims(
     payload.repository_owner === "zspherez" &&
     payload.ref === "refs/heads/main" &&
     payload.workflow_ref === CONTACT_AUDIT_WORKFLOW_REF &&
-    payload.event_name === "workflow_dispatch"
+    (payload.event_name === "workflow_dispatch" ||
+      payload.event_name === "schedule")
   );
 }
 
@@ -305,31 +324,171 @@ async function withSerializableRetry<T>(
   throw new Error("Unable to complete serializable transaction");
 }
 
+function normalizeWorkflowRunId(value: unknown): string {
+  if (typeof value !== "string" || !/^[1-9][0-9]{0,19}$/.test(value)) {
+    throw new ContactAuditValidationError(
+      "workflowRunId must be a GitHub Actions run id"
+    );
+  }
+  return value;
+}
+
+function contactAuditRequestSelect() {
+  return {
+    id: true,
+    status: true,
+    requestedAt: true,
+    startedAt: true,
+    completedAt: true,
+    runId: true,
+    attemptCount: true,
+    lastAttemptAt: true,
+    lastWorkflowRunId: true,
+    lastError: true,
+  } as const;
+}
+
+async function adoptLegacyContactAuditRun(
+  tx: Prisma.TransactionClient
+): Promise<boolean> {
+  const legacyRun = await tx.contactAuditRun.findFirst({
+    where: {
+      status: "running",
+      request: null,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      createdAt: true,
+    },
+  });
+  if (!legacyRun) return false;
+  await tx.contactAuditRequest.create({
+    data: {
+      id: randomUUID(),
+      status: "running",
+      requestedAt: legacyRun.createdAt,
+      startedAt: legacyRun.createdAt,
+      runId: legacyRun.id,
+    },
+  });
+  return true;
+}
+
+async function ensureLegacyContactAuditRequest(): Promise<void> {
+  await withSerializableRetry(async (tx) => {
+    const active = await tx.contactAuditRequest.findFirst({
+      where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
+      select: { id: true },
+    });
+    if (!active) await adoptLegacyContactAuditRun(tx);
+  });
+}
+
+export async function requestContactAudit(
+  now: Date = new Date()
+): Promise<ContactAuditRequestResult> {
+  return withSerializableRetry(async (tx) => {
+    const existing = await tx.contactAuditRequest.findFirst({
+      where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
+      orderBy: { requestedAt: "asc" },
+      select: contactAuditRequestSelect(),
+    });
+    if (existing) return { ...existing, created: false };
+
+    if (await adoptLegacyContactAuditRun(tx)) {
+      const adopted = await tx.contactAuditRequest.findFirstOrThrow({
+        where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
+        orderBy: { requestedAt: "asc" },
+        select: contactAuditRequestSelect(),
+      });
+      return { ...adopted, created: false };
+    }
+
+    const created = await tx.contactAuditRequest.create({
+      data: {
+        id: randomUUID(),
+        status: "pending",
+        requestedAt: now,
+      },
+      select: contactAuditRequestSelect(),
+    });
+    return { ...created, created: true };
+  });
+}
+
 export async function prepareContactAudit(
+  workflowRunIdValue: unknown,
   now: Date = new Date()
 ): Promise<{
-  runId: string;
+  requested: boolean;
+  requestId: string | null;
+  runId: string | null;
   resumed: boolean;
   contactCount: number;
   claimable: number;
 }> {
+  const workflowRunId = normalizeWorkflowRunId(workflowRunIdValue);
   return withSerializableRetry(async (tx) => {
-    const running = await tx.contactAuditRun.findFirst({
-      where: { status: "running" },
-      orderBy: { createdAt: "asc" },
+    let request = await tx.contactAuditRequest.findFirst({
+      where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
+      orderBy: { requestedAt: "asc" },
       select: {
         id: true,
-        contactCount: true,
-        jobs: {
+        startedAt: true,
+        runId: true,
+        run: {
           select: {
+            id: true,
             status: true,
-            claimExpiresAt: true,
+            contactCount: true,
+            jobs: {
+              select: {
+                status: true,
+                claimExpiresAt: true,
+              },
+            },
           },
         },
       },
     });
-    if (running) {
-      const incomplete = running.jobs.filter(
+    if (!request && (await adoptLegacyContactAuditRun(tx))) {
+      request = await tx.contactAuditRequest.findFirst({
+        where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
+        orderBy: { requestedAt: "asc" },
+        select: {
+          id: true,
+          startedAt: true,
+          runId: true,
+          run: {
+            select: {
+              id: true,
+              status: true,
+              contactCount: true,
+              jobs: {
+                select: {
+                  status: true,
+                  claimExpiresAt: true,
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+    if (!request) {
+      return {
+        requested: false,
+        requestId: null,
+        runId: null,
+        resumed: false,
+        contactCount: 0,
+        claimable: 0,
+      };
+    }
+
+    if (request.run) {
+      const incomplete = request.run.jobs.filter(
         (job) => job.status !== "complete"
       );
       if (incomplete.length > 0) {
@@ -339,17 +498,52 @@ export async function prepareContactAudit(
             !job.claimExpiresAt ||
             job.claimExpiresAt <= now
         ).length;
+        await tx.contactAuditRequest.update({
+          where: { id: request.id },
+          data: {
+            status: "running",
+            startedAt: request.startedAt ?? now,
+            attemptCount: { increment: 1 },
+            lastAttemptAt: now,
+            lastWorkflowRunId: workflowRunId,
+            lastError: null,
+          },
+        });
         return {
-          runId: running.id,
+          requested: true,
+          requestId: request.id,
+          runId: request.run.id,
           resumed: true,
-          contactCount: running.contactCount,
+          contactCount: request.run.contactCount,
           claimable,
         };
       }
-      await tx.contactAuditRun.update({
-        where: { id: running.id },
-        data: { status: "complete", completedAt: now },
+      if (request.run.status !== "complete") {
+        await tx.contactAuditRun.update({
+          where: { id: request.run.id },
+          data: { status: "complete", completedAt: now },
+        });
+      }
+      await tx.contactAuditRequest.update({
+        where: { id: request.id },
+        data: {
+          status: "completed",
+          startedAt: request.startedAt ?? now,
+          completedAt: now,
+          attemptCount: { increment: 1 },
+          lastAttemptAt: now,
+          lastWorkflowRunId: workflowRunId,
+          lastError: null,
+        },
       });
+      return {
+        requested: true,
+        requestId: request.id,
+        runId: request.run.id,
+        resumed: true,
+        contactCount: request.run.contactCount,
+        claimable: 0,
+      };
     }
 
     const contacts = await tx.contact.findMany({
@@ -395,7 +589,22 @@ export async function prepareContactAudit(
         })),
       });
     }
+    await tx.contactAuditRequest.update({
+      where: { id: request.id },
+      data: {
+        status: contacts.length === 0 ? "completed" : "running",
+        startedAt: now,
+        completedAt: contacts.length === 0 ? now : null,
+        runId,
+        attemptCount: { increment: 1 },
+        lastAttemptAt: now,
+        lastWorkflowRunId: workflowRunId,
+        lastError: null,
+      },
+    });
     return {
+      requested: true,
+      requestId: request.id,
       runId,
       resumed: false,
       contactCount: contacts.length,
@@ -404,19 +613,99 @@ export async function prepareContactAudit(
   }, { timeout: 30_000 });
 }
 
+export async function noteContactAuditPrepareFailure(
+  workflowRunIdValue: unknown,
+  error: unknown,
+  now: Date = new Date()
+): Promise<boolean> {
+  const workflowRunId = normalizeWorkflowRunId(workflowRunIdValue);
+  const message = (
+    error instanceof Error ? error.message : String(error)
+  ).trim().slice(0, 4_000) || "Contact audit preflight failed";
+  return withSerializableRetry(async (tx) => {
+    const request = await tx.contactAuditRequest.findFirst({
+      where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
+      orderBy: { requestedAt: "asc" },
+      select: { id: true },
+    });
+    if (!request) return false;
+    await tx.contactAuditRequest.update({
+      where: { id: request.id },
+      data: {
+        status: "pending",
+        lastAttemptAt: now,
+        lastWorkflowRunId: workflowRunId,
+        lastError: message,
+      },
+    });
+    return true;
+  });
+}
+
+export async function recordContactAuditWorkflowFailure(
+  runIdValue: unknown,
+  workflowRunIdValue: unknown,
+  error: unknown,
+  now: Date = new Date()
+): Promise<boolean> {
+  let runId: string;
+  let message: string;
+  try {
+    runId = requiredString(runIdValue, 100, "runId");
+    message = requiredString(error, 4_000, "error");
+  } catch (caught) {
+    throw new ContactAuditValidationError(
+      caught instanceof Error ? caught.message : String(caught)
+    );
+  }
+  const workflowRunId = normalizeWorkflowRunId(workflowRunIdValue);
+  return withSerializableRetry(async (tx) => {
+    const request = await tx.contactAuditRequest.findFirst({
+      where: {
+        runId,
+        status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] },
+        lastWorkflowRunId: workflowRunId,
+      },
+      select: { id: true },
+    });
+    if (!request) return false;
+    await tx.contactAuditJob.updateMany({
+      where: { runId, status: "claimed" },
+      data: {
+        status: "pending",
+        claimedAt: null,
+        claimExpiresAt: null,
+        claimToken: null,
+      },
+    });
+    await tx.contactAuditRequest.update({
+      where: { id: request.id },
+      data: {
+        status: "pending",
+        lastAttemptAt: now,
+        lastError: message,
+      },
+    });
+    return true;
+  });
+}
+
 export async function claimContactAuditJobs(
   limit: number,
   now: Date = new Date()
 ) {
   const claimLimit = parseContactAuditClaimLimit(limit);
   const claimExpiresAt = new Date(now.getTime() + CONTACT_AUDIT_CLAIM_TTL_MS);
+  await ensureLegacyContactAuditRequest();
   return db.$transaction(
     async (tx) => {
       const selected = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT job."id"
         FROM "ContactAuditJob" job
         JOIN "ContactAuditRun" run ON run."id" = job."runId"
+        JOIN "ContactAuditRequest" request ON request."runId" = run."id"
         WHERE run."status" = 'running'
+          AND request."status" = 'running'
           AND (
             job."status" = 'pending'
             OR (
@@ -498,6 +787,7 @@ export async function submitContactAuditResult(
   value: unknown,
   now: Date = new Date()
 ): Promise<{ accepted: boolean; runComplete: boolean }> {
+  await ensureLegacyContactAuditRequest();
   return withSerializableRetry(async (tx) => {
     const job = await tx.contactAuditJob.findFirst({
       where: {
@@ -559,6 +849,17 @@ export async function submitContactAuditResult(
       await tx.contactAuditRun.update({
         where: { id: job.runId },
         data: { status: "complete", completedAt: now },
+      });
+      await tx.contactAuditRequest.updateMany({
+        where: {
+          runId: job.runId,
+          status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] },
+        },
+        data: {
+          status: "completed",
+          completedAt: now,
+          lastError: null,
+        },
       });
     }
     return { accepted: true, runComplete };

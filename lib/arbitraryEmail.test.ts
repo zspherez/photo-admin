@@ -404,10 +404,15 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
       migrationNames.indexOf(migrationName),
   );
   const textMigrationName = "20260721003000_arbitrary_email_text";
-  assert.ok(
-    migrationNames.indexOf(textMigrationName) <
-      migrationNames.indexOf("20260721030000_festival_email_template"),
-  );
+  for (const laterMigration of [
+    "20260721030000_contact_audit_request_queue",
+    "20260721030000_festival_email_template",
+  ]) {
+    assert.ok(
+      migrationNames.indexOf(textMigrationName) <
+        migrationNames.indexOf(laterMigration),
+    );
+  }
 
   const migration = readFileSync(
     new URL(`${migrationName}/migration.sql`, migrationsDirectory),

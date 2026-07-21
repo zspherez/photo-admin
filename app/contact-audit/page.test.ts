@@ -16,7 +16,15 @@ test("contact audit UI is an unresolved flagged exception queue", () => {
 });
 
 test("contact audit UI exposes evidence and in-place decisions", () => {
-  assert.match(source, /Run contact audit/);
+  assert.match(source, /Queue full contact audit/);
+  assert.match(source, /Full audit queued/);
+  assert.match(source, /Full audit running/);
+  assert.match(source, /Workflow diagnostics/);
+  assert.match(source, /polls every 10 minutes/);
+  assert.match(source, /requestedAt/);
+  assert.match(source, /startedAt/);
+  assert.match(source, /completedAt/);
+  assert.match(source, /lastAttemptAt/);
   assert.match(source, /Current contact/);
   assert.match(source, /Saved evidence/);
   assert.match(source, /Verification source/);
@@ -31,6 +39,10 @@ test("contact audit UI exposes evidence and in-place decisions", () => {
 test("every contact audit Server Action authenticates and resolves in place", () => {
   const actions = [
     source.slice(
+      source.indexOf("async function queueContactAuditAction"),
+      source.indexOf("async function approveContactAuditAction")
+    ),
+    source.slice(
       source.indexOf("async function approveContactAuditAction"),
       source.indexOf("async function rejectContactAuditAction")
     ),
@@ -42,7 +54,9 @@ test("every contact audit Server Action authenticates and resolves in place", ()
   for (const action of actions) {
     assert.match(action, /"use server"/);
     assert.match(action, /requireServerActionAuth\("\/contact-audit"\)/);
-    assert.match(action, /resolveContactAuditJob/);
     assert.match(action, /revalidatePath\("\/contact-audit"\)/);
   }
+  assert.match(actions[0], /requestContactAudit/);
+  assert.match(actions[1], /resolveContactAuditJob/);
+  assert.match(actions[2], /resolveContactAuditJob/);
 });

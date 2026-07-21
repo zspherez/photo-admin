@@ -141,11 +141,28 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,
     /db\.edmtrainVenue\.count\(\{[\s\S]*nycStatus: \{ in: \["inside_nyc", "outside_nyc", "unknown"\] \}/
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "contactAuditRequest"),
+    [
+      "id",
+      "status",
+      "requestedAt",
+      "startedAt",
+      "completedAt",
+      "runId",
+      "attemptCount",
+      "lastAttemptAt",
+      "lastWorkflowRunId",
+      "lastError",
+      "createdAt",
+      "updatedAt",
+    ],
   );
   assert.deepEqual(
     selectedScalarFields(source, "contactAuditRun"),

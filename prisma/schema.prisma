@@ -116,15 +116,35 @@ model Contact {
 }
 
 model ContactAuditRun {
-  id           String            @id @default(cuid())
-  status       String            @default("running")
+  id           String               @id @default(cuid())
+  status       String               @default("running")
   contactCount Int
   completedAt  DateTime?
+  request      ContactAuditRequest?
   jobs         ContactAuditJob[]
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
 
   @@index([status, createdAt])
+}
+
+model ContactAuditRequest {
+  id                String           @id @default(cuid())
+  status            String           @default("pending")
+  requestedAt       DateTime         @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+  runId             String?          @unique
+  run               ContactAuditRun? @relation(fields: [runId], references: [id], onDelete: Restrict)
+  attemptCount      Int              @default(0)
+  lastAttemptAt     DateTime?
+  lastWorkflowRunId String?
+  lastError         String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([status, requestedAt])
+  @@index([requestedAt])
 }
 
 model ContactAuditJob {
