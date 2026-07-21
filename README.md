@@ -239,6 +239,12 @@ queued, so the next poll resumes the existing snapshot. After completion, the
 button can create a new request. This queue is independent of the manager
 research queue.
 
+Deploying the request queue while a legacy contact audit is already running
+adopts that existing run into the request lifecycle. Its run ID, snapshot jobs,
+active claims, and GitHub workflow continue unchanged; neither the migration
+nor the first scheduled poll creates a second snapshot or cancels the active
+workflow.
+
 For a local audit worker:
 
 ```bash

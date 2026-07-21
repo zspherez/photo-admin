@@ -64,6 +64,31 @@ CREATE TABLE "ContactAuditRequest" (
 
 CREATE UNIQUE INDEX "ContactAuditRequest_runId_key"
   ON "ContactAuditRequest"("runId");
+
+INSERT INTO "ContactAuditRequest" (
+  "id",
+  "status",
+  "requestedAt",
+  "startedAt",
+  "runId",
+  "attemptCount",
+  "createdAt",
+  "updatedAt"
+)
+SELECT
+  'legacy-' || running."id",
+  'running',
+  running."createdAt",
+  running."createdAt",
+  running."id",
+  0,
+  CURRENT_TIMESTAMP,
+  CURRENT_TIMESTAMP
+FROM "ContactAuditRun" running
+WHERE running."status" = 'running'
+ORDER BY running."createdAt" ASC, running."id" ASC
+LIMIT 1;
+
 CREATE UNIQUE INDEX "ContactAuditRequest_one_active_key"
   ON "ContactAuditRequest" ((1))
   WHERE "status" IN ('pending', 'running');

@@ -348,6 +348,43 @@ function contactAuditRequestSelect() {
   } as const;
 }
 
+async function adoptLegacyContactAuditRun(
+  tx: Prisma.TransactionClient
+): Promise<boolean> {
+  const legacyRun = await tx.contactAuditRun.findFirst({
+    where: {
+      status: "running",
+      request: null,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      createdAt: true,
+    },
+  });
+  if (!legacyRun) return false;
+  await tx.contactAuditRequest.create({
+    data: {
+      id: randomUUID(),
+      status: "running",
+      requestedAt: legacyRun.createdAt,
+      startedAt: legacyRun.createdAt,
+      runId: legacyRun.id,
+    },
+  });
+  return true;
+}
+
+async function ensureLegacyContactAuditRequest(): Promise<void> {
+  await withSerializableRetry(async (tx) => {
+    const active = await tx.contactAuditRequest.findFirst({
+      where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
+      select: { id: true },
+    });
+    if (!active) await adoptLegacyContactAuditRun(tx);
+  });
+}
+
 export async function requestContactAudit(
   now: Date = new Date()
 ): Promise<ContactAuditRequestResult> {
@@ -358,6 +395,15 @@ export async function requestContactAudit(
       select: contactAuditRequestSelect(),
     });
     if (existing) return { ...existing, created: false };
+
+    if (await adoptLegacyContactAuditRun(tx)) {
+      const adopted = await tx.contactAuditRequest.findFirstOrThrow({
+        where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
+        orderBy: { requestedAt: "asc" },
+        select: contactAuditRequestSelect(),
+      });
+      return { ...adopted, created: false };
+    }
 
     const created = await tx.contactAuditRequest.create({
       data: {
@@ -384,7 +430,7 @@ export async function prepareContactAudit(
 }> {
   const workflowRunId = normalizeWorkflowRunId(workflowRunIdValue);
   return withSerializableRetry(async (tx) => {
-    const request = await tx.contactAuditRequest.findFirst({
+    let request = await tx.contactAuditRequest.findFirst({
       where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
       orderBy: { requestedAt: "asc" },
       select: {
@@ -406,6 +452,30 @@ export async function prepareContactAudit(
         },
       },
     });
+    if (!request && (await adoptLegacyContactAuditRun(tx))) {
+      request = await tx.contactAuditRequest.findFirst({
+        where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
+        orderBy: { requestedAt: "asc" },
+        select: {
+          id: true,
+          startedAt: true,
+          runId: true,
+          run: {
+            select: {
+              id: true,
+              status: true,
+              contactCount: true,
+              jobs: {
+                select: {
+                  status: true,
+                  claimExpiresAt: true,
+                },
+              },
+            },
+          },
+        },
+      });
+    }
     if (!request) {
       return {
         requested: false,
@@ -626,6 +696,7 @@ export async function claimContactAuditJobs(
 ) {
   const claimLimit = parseContactAuditClaimLimit(limit);
   const claimExpiresAt = new Date(now.getTime() + CONTACT_AUDIT_CLAIM_TTL_MS);
+  await ensureLegacyContactAuditRequest();
   return db.$transaction(
     async (tx) => {
       const selected = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
@@ -716,6 +787,7 @@ export async function submitContactAuditResult(
   value: unknown,
   now: Date = new Date()
 ): Promise<{ accepted: boolean; runComplete: boolean }> {
+  await ensureLegacyContactAuditRequest();
   return withSerializableRetry(async (tx) => {
     const job = await tx.contactAuditJob.findFirst({
       where: {

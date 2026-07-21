@@ -60,6 +60,8 @@ test("contact audit workflow polls explicitly requested work and is OIDC-authent
   assert.match(workflow, /npm run contact-audit:agent/);
   assert.doesNotMatch(workflow, /secrets\.CRON_SECRET/);
   assert.doesNotMatch(workflow, /secrets\.CONTACT_AUDIT_AGENT_TOKEN/);
+  assert.match(workflow, /cancel-in-progress: false/);
+  assert.doesNotMatch(workflow, /cancel-in-progress: true/);
   assert.doesNotMatch(workflow, /jq -er '\.resumed \| booleans'/);
   assert.match(
     workflow,
@@ -147,6 +149,16 @@ test("contact audit request migration constrains lifecycle and one active reques
     /CREATE UNIQUE INDEX "ContactAuditRequest_one_active_key"[\s\S]*WHERE "status" IN \('pending', 'running'\)/
   );
   assert.match(requestMigration, /ContactAuditRequest_lifecycle_check/);
+  assert.match(
+    requestMigration,
+    /INSERT INTO "ContactAuditRequest"[\s\S]*FROM "ContactAuditRun" running[\s\S]*WHERE running\."status" = 'running'[\s\S]*ORDER BY running\."createdAt" ASC, running\."id" ASC[\s\S]*LIMIT 1/
+  );
+  assert.match(requestMigration, /'legacy-' \|\| running\."id"/);
+  assert.doesNotMatch(
+    requestMigration,
+    /UPDATE\s+"ContactAudit(?:Run|Job)"/
+  );
+  assert.doesNotMatch(requestMigration, /DELETE FROM "ContactAudit(?:Run|Job)"/);
   assert.match(requestMigration, /ContactAuditRequest_transition_guard/);
   assert.match(requestMigration, /run link is immutable/);
   assert.match(requestMigration, /COMMIT;\s*$/);

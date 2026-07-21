@@ -6,6 +6,7 @@ import {
   prepareContactAudit,
   recordContactAuditWorkflowFailure,
   requestContactAudit,
+  submitContactAuditResult,
 } from "./contactAudit";
 
 type RequestRow = {
@@ -94,6 +95,9 @@ test("first, duplicate, running, completed, and concurrent requests preserve one
         return row;
       },
     },
+    contactAuditRun: {
+      findFirst: async () => null,
+    },
   };
   mutableDb.$transaction = serialTransaction(tx);
 
@@ -122,6 +126,124 @@ test("first, duplicate, running, completed, and concurrent requests preserve one
     );
     assert.equal(afterCompletionA.id, afterCompletionB.id);
     assert.notEqual(afterCompletionA.id, first.id);
+  } finally {
+    mutableDb.$transaction = originalTransaction;
+  }
+});
+
+test("the first poll adopts an active legacy run without changing its snapshot or claims", async () => {
+  const mutableDb = db as unknown as MutableDb;
+  const originalTransaction = mutableDb.$transaction;
+  const now = new Date("2026-07-21T01:05:00.000Z");
+  const legacyCreatedAt = new Date("2026-07-21T00:30:00.000Z");
+  const jobs = [
+    {
+      id: "job-claimed",
+      status: "claimed",
+      claimExpiresAt: new Date(now.getTime() + 30_000),
+      claimToken: "existing-claim",
+      attemptCount: 1,
+    },
+    {
+      id: "job-pending",
+      status: "pending",
+      claimExpiresAt: null,
+      claimToken: null,
+      attemptCount: 0,
+    },
+  ];
+  const originalJobs = structuredClone(jobs);
+  const run = {
+    id: "legacy-run",
+    status: "running",
+    contactCount: 2,
+    createdAt: legacyCreatedAt,
+    jobs,
+  };
+  let request: RequestRow | null = null;
+  let contactReads = 0;
+  let runCreates = 0;
+  let snapshotCreates = 0;
+
+  const tx = {
+    contactAuditRequest: {
+      findFirst: async () =>
+        request
+          ? {
+              ...request,
+              run,
+            }
+          : null,
+      create: async ({
+        data,
+      }: {
+        data: {
+          id: string;
+          status: string;
+          requestedAt: Date;
+          startedAt: Date;
+          runId: string;
+        };
+      }) => {
+        request = {
+          id: data.id,
+          status: data.status,
+          requestedAt: data.requestedAt,
+          startedAt: data.startedAt,
+          completedAt: null,
+          runId: data.runId,
+          attemptCount: 0,
+          lastAttemptAt: null,
+          lastWorkflowRunId: null,
+          lastError: null,
+        };
+        return request;
+      },
+      update: async ({ data }: { data: Record<string, unknown> }) => {
+        assert.ok(request);
+        request = applyUpdate(request, data);
+        return request;
+      },
+    },
+    contactAuditRun: {
+      findFirst: async () => run,
+      create: async () => {
+        runCreates += 1;
+      },
+      update: async () => run,
+    },
+    contact: {
+      findMany: async () => {
+        contactReads += 1;
+        return [];
+      },
+    },
+    contactAuditJob: {
+      createMany: async () => {
+        snapshotCreates += 1;
+      },
+    },
+  };
+  mutableDb.$transaction = serialTransaction(tx);
+
+  try {
+    const result = await prepareContactAudit("1000", now);
+    assert.equal(result.requested, true);
+    assert.equal(result.resumed, true);
+    assert.equal(result.runId, "legacy-run");
+    assert.equal(result.contactCount, 2);
+    assert.equal(result.claimable, 1);
+    const adoptedRequest = request as unknown as RequestRow;
+    assert.equal(adoptedRequest.runId, "legacy-run");
+    assert.equal(adoptedRequest.status, "running");
+    assert.equal(
+      adoptedRequest.requestedAt.toISOString(),
+      legacyCreatedAt.toISOString()
+    );
+    assert.equal(contactReads, 0);
+    assert.equal(runCreates, 0);
+    assert.equal(snapshotCreates, 0);
+    assert.deepEqual(jobs, originalJobs);
   } finally {
     mutableDb.$transaction = originalTransaction;
   }
@@ -235,6 +357,81 @@ test("a request snapshots once and a retry resumes the same audit run", async ()
   }
 });
 
+test("completion marks an adopted request completed without replacing its run", async () => {
+  const mutableDb = db as unknown as MutableDb;
+  const originalTransaction = mutableDb.$transaction;
+  const now = new Date("2026-07-21T01:15:00.000Z");
+  let request: RequestRow = {
+    id: "legacy-request",
+    status: "running",
+    requestedAt: new Date("2026-07-21T00:30:00.000Z"),
+    startedAt: new Date("2026-07-21T00:30:00.000Z"),
+    completedAt: null,
+    runId: "legacy-run",
+    attemptCount: 1,
+    lastAttemptAt: new Date("2026-07-21T01:00:00.000Z"),
+    lastWorkflowRunId: "1000",
+    lastError: null,
+  };
+  let completedRunId: string | null = null;
+  const tx = {
+    contactAuditJob: {
+      findFirst: async () => ({
+        id: "legacy-job",
+        runId: "legacy-run",
+        claimToken: "claim-1",
+        snapshotEmail: "old.manager@example.com",
+      }),
+      update: async () => ({ id: "legacy-job" }),
+      count: async () => 0,
+    },
+    contactAuditAlternative: {
+      deleteMany: async () => ({ count: 0 }),
+      createMany: async () => ({ count: 0 }),
+    },
+    contactAuditRun: {
+      update: async ({ where }: { where: { id: string } }) => {
+        completedRunId = where.id;
+        return { id: where.id };
+      },
+    },
+    contactAuditRequest: {
+      findFirst: async () => ({ id: request.id }),
+      updateMany: async ({
+        data,
+      }: {
+        data: Record<string, unknown>;
+      }) => {
+        request = applyUpdate(request, data);
+        return { count: 1 };
+      },
+    },
+  };
+  mutableDb.$transaction = serialTransaction(tx);
+
+  try {
+    const result = await submitContactAuditResult(
+      "legacy-job",
+      {
+        claimToken: "claim-1",
+        finding: "current",
+        sourceUrls: ["https://artist.example/contact"],
+        evidence: "The official artist page still lists this manager.",
+        confidence: "high",
+        alternatives: [],
+      },
+      now
+    );
+    assert.deepEqual(result, { accepted: true, runComplete: true });
+    assert.equal(completedRunId, "legacy-run");
+    assert.equal(request.runId, "legacy-run");
+    assert.equal(request.status, "completed");
+    assert.equal(request.completedAt, now);
+  } finally {
+    mutableDb.$transaction = originalTransaction;
+  }
+});
+
 test("failed workflow attempts release claims and keep the linked request retryable", async () => {
   const mutableDb = db as unknown as MutableDb;
   const originalTransaction = mutableDb.$transaction;
@@ -305,6 +502,16 @@ test("completion links the request and the audit queue is independent from manag
   assert.match(completion, /tx\.contactAuditRequest\.updateMany/);
   assert.match(completion, /status: "completed"/);
   assert.match(completion, /completedAt: now/);
+  const claim = source.indexOf("export async function claimContactAuditJobs");
+  const submit = source.indexOf("export async function submitContactAuditResult");
+  assert.ok(source.indexOf("await ensureLegacyContactAuditRequest()", claim) > claim);
+  assert.ok(
+    source.indexOf("await ensureLegacyContactAuditRequest()", submit) > submit
+  );
+  assert.match(
+    source,
+    /JOIN "ContactAuditRequest" request ON request\."runId" = run\."id"/
+  );
   assert.doesNotMatch(migration, /ContactResearchJob/);
   assert.doesNotMatch(completion, /contactResearchJob/);
 });
