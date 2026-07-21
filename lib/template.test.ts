@@ -8,13 +8,18 @@ import {
   cloneTemplateContent,
   DEFAULT_TEMPLATE_HTML,
   extractVars,
+  FESTIVAL_TEMPLATE_HTML,
+  FESTIVAL_TEMPLATE_SUBJECT,
   FOLLOW_UP_TEMPLATE_NAME,
   normalizeDefaultTemplateContent,
   normalizeLegacyOutreachSnapshot,
   normalizeLegacyRateTemplateHtml,
   normalizeLegacyRateTemplateVariable,
   normalizeTemplateContent,
+  originalTemplatePurposeForShow,
+  supportedTemplateVars,
   SUPPORTED_TEMPLATE_VARS,
+  unsupportedTemplateVars,
 } from "./template";
 
 test("plain substitutions remain unescaped", () => {
@@ -85,6 +90,175 @@ test("show variables do not read or expose legacy rate settings", async () => {
 
   assert.equal(Object.hasOwn(vars, "rate"), false);
   assert.equal(requestedKeys.includes("default_rate"), false);
+});
+
+test("festival variables use event metadata with natural manual fallbacks", async () => {
+  const readSetting = async (key: string) =>
+    ({
+      portfolio_url: "https://portfolio.example",
+      sender_name: "Photographer",
+      sender_email: "photo@example.com",
+      sender_phone: "555-0100",
+      sender_city: "New York",
+    })[key] ?? "";
+  const edmtrain = await buildVarsForShow(
+    {
+      artistName: "Artist",
+      venueName: "Festival Grounds",
+      eventName: "Summer Sound",
+      city: "Queens",
+      state: "NY",
+      countryCode: "US",
+      showDate: new Date("2026-08-01T00:00:00.000Z"),
+      managerName: "Manager",
+    },
+    readSetting,
+  );
+  const manual = await buildVarsForShow(
+    {
+      artistName: "Artist",
+      venueName: "Waterfront Park",
+      eventName: " Unknown ",
+      city: "Brooklyn",
+      state: "NY",
+      showDate: new Date("2026-08-01T00:00:00.000Z"),
+      managerName: null,
+    },
+    readSetting,
+  );
+
+  assert.equal(edmtrain.festival_name, "Summer Sound");
+  assert.equal(edmtrain.location, "Queens, NY");
+  assert.equal(edmtrain.location_clause, " in Queens, NY");
+  assert.equal(manual.festival_name, "Waterfront Park");
+  assert.equal(manual.location, "Brooklyn, NY");
+  assert.equal(manual.location_clause, " in Brooklyn, NY");
+  assert.equal(manual.manager_name, "there");
+  assert.doesNotMatch(
+    applyTemplate(FESTIVAL_TEMPLATE_SUBJECT, manual),
+    /\s{2,}| at $|undefined|null/,
+  );
+  assert.doesNotMatch(
+    applyHtmlTemplate(FESTIVAL_TEMPLATE_HTML, manual),
+    /undefined|null|\{\{/,
+  );
+});
+
+test("festival locations ignore provider sentinels and avoid duplicate punctuation", async () => {
+  const readSetting = async () => "";
+  const unknownCity = await buildVarsForShow(
+    {
+      artistName: "Artist",
+      venueName: "Festival Grounds",
+      eventName: "Summer Sound",
+      city: "  UnKnOwN ",
+      state: "NY",
+      countryName: "United States",
+      showDate: new Date("2026-08-01T00:00:00.000Z"),
+      managerName: null,
+    },
+    readSetting,
+  );
+  const countryOnly = await buildVarsForShow(
+    {
+      artistName: "Artist",
+      venueName: "Festival Grounds",
+      eventName: "Summer Sound",
+      city: "Unknown",
+      state: "unknown",
+      countryName: "Canada",
+      showDate: new Date("2026-08-01T00:00:00.000Z"),
+      managerName: null,
+    },
+    readSetting,
+  );
+  const venueOnly = await buildVarsForShow(
+    {
+      artistName: "Artist",
+      venueName: "Festival Grounds",
+      eventName: "Summer Sound",
+      city: "Unknown",
+      state: "TBD",
+      countryName: "not available",
+      showDate: new Date("2026-08-01T00:00:00.000Z"),
+      managerName: null,
+    },
+    readSetting,
+  );
+  const manualVenueFallback = await buildVarsForShow(
+    {
+      artistName: "Artist",
+      venueName: "Waterfront Park",
+      eventName: null,
+      city: " Unknown ",
+      state: null,
+      countryName: null,
+      showDate: new Date("2026-08-01T00:00:00.000Z"),
+      managerName: null,
+    },
+    readSetting,
+  );
+
+  assert.equal(unknownCity.location, "NY");
+  assert.equal(unknownCity.location_clause, " in NY");
+  assert.equal(countryOnly.location, "Canada");
+  assert.equal(countryOnly.location_clause, " in Canada");
+  assert.equal(venueOnly.location, "Festival Grounds");
+  assert.equal(venueOnly.location_clause, " at Festival Grounds");
+  assert.equal(manualVenueFallback.location, "Waterfront Park");
+  assert.equal(manualVenueFallback.location_clause, "");
+
+  const rendered = applyHtmlTemplate(
+    FESTIVAL_TEMPLATE_HTML,
+    manualVenueFallback,
+  );
+  assert.equal(rendered.match(/Waterfront Park/g)?.length, 1);
+  assert.match(
+    rendered,
+    /set at Waterfront Park on Saturday, August 1\.<\/p>/,
+  );
+  assert.doesNotMatch(rendered, /\bUnknown\b|August 1\s+(?:in|at)\s*[.,<]/i);
+});
+
+test("festival selection and variable validation are purpose-aware", () => {
+  assert.equal(
+    originalTemplatePurposeForShow({ isFestival: true }),
+    "festival",
+  );
+  assert.equal(
+    originalTemplatePurposeForShow({ isFestival: false }),
+    "original",
+  );
+  assert.equal(supportedTemplateVars("original").includes("festival_name"), false);
+  assert.equal(supportedTemplateVars("festival").includes("festival_name"), true);
+  assert.deepEqual(
+    unsupportedTemplateVars(
+      { subject: "{{artist}} {{festival_name}}", htmlBody: "<p>{{location}}</p>" },
+      "original",
+    ),
+    ["festival_name", "location"],
+  );
+  assert.deepEqual(
+    unsupportedTemplateVars(
+      { subject: "{{artist}} {{festival_name}}", htmlBody: "<p>{{location}}</p>" },
+      "festival",
+    ),
+    [],
+  );
+  assert.deepEqual(
+    unsupportedTemplateVars(
+      {
+        subject: FESTIVAL_TEMPLATE_SUBJECT,
+        htmlBody: FESTIVAL_TEMPLATE_HTML,
+      },
+      "festival",
+    ),
+    [],
+  );
+  assert.doesNotMatch(
+    `${FESTIVAL_TEMPLATE_SUBJECT} ${FESTIVAL_TEMPLATE_HTML}`,
+    /\{\{\s*rate\s*\}\}|\brate card\b|custom price|\$[0-9]/i,
+  );
 });
 
 test("legacy saved templates and built-in defaults normalize without pricing", () => {
@@ -172,15 +346,15 @@ test("follow-up template cloning is a one-time independent snapshot", () => {
   const source = readFileSync(new URL("./template.ts", import.meta.url), "utf8");
   assert.match(
     source,
-    /findUnique\(\{\s*where: \{ name: FOLLOW_UP_TEMPLATE_NAME \}/,
+    /where: \{ purpose: "follow_up" \}/,
   );
   assert.match(
     source,
-    /if \(existing\) \{[\s\S]*persistNormalizedTemplate\([\s\S]*existing,[\s\S]*normalizeDefaultTemplateContent,[\s\S]*\)[\s\S]*const original = await ensureDefaultTemplate\(\)/,
+    /const original = await ensureDefaultTemplate\(\)[\s\S]*update: \{\},[\s\S]*persistNormalizedTemplate\(template, normalizeDefaultTemplateContent\)/,
   );
   assert.match(
     source,
-    /where: \{ name: FOLLOW_UP_TEMPLATE_NAME \},\s*update: \{\},\s*create:/,
+    /name: FOLLOW_UP_TEMPLATE_NAME,[\s\S]*purpose: "follow_up"/,
   );
 });
 
@@ -195,6 +369,8 @@ test("follow-up reset clones the current original template", () => {
   );
   assert.match(source, /searchParams: Promise<\{ kind\?: SearchParamValue \}>/);
   assert.match(source, /aria-label="Email template type"/);
-  assert.match(source, /\? "Original" : "Follow-up"/);
+  assert.match(source, /"Normal show outreach"/);
+  assert.match(source, /"Festival outreach"/);
+  assert.match(source, /"Follow-up"/);
   assert.match(source, /key=\{`\$\{template\.name\}:\$\{template\.updatedAt/);
 });

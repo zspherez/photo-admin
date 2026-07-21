@@ -1,4 +1,7 @@
-import type { EmailTemplate } from "@prisma/client";
+import type {
+  EmailTemplate,
+  EmailTemplatePurpose,
+} from "@prisma/client";
 import { db } from "@/lib/db";
 
 export type TemplateVars = Record<string, string>;
@@ -29,7 +32,7 @@ const CURRENCY_VALUE =
 const DEFAULT_DELIVERABLES_SUMMARY =
   "<p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p>";
 
-export const SUPPORTED_TEMPLATE_VARS = [
+export const COMMON_TEMPLATE_VARS = [
   "artist",
   "venue",
   "date",
@@ -40,6 +43,33 @@ export const SUPPORTED_TEMPLATE_VARS = [
   "sender_city",
   "manager_name",
 ] as const;
+
+export const FESTIVAL_TEMPLATE_VARS = [
+  ...COMMON_TEMPLATE_VARS,
+  "festival_name",
+  "location",
+  "location_clause",
+] as const;
+
+export const SUPPORTED_TEMPLATE_VARS = FESTIVAL_TEMPLATE_VARS;
+
+export function supportedTemplateVars(
+  purpose: EmailTemplatePurpose,
+): readonly string[] {
+  return purpose === "festival"
+    ? FESTIVAL_TEMPLATE_VARS
+    : COMMON_TEMPLATE_VARS;
+}
+
+export function unsupportedTemplateVars(
+  template: TemplateContent,
+  purpose: EmailTemplatePurpose,
+): string[] {
+  const supported = new Set<string>(supportedTemplateVars(purpose));
+  return extractVars(`${template.subject} ${template.htmlBody}`).filter(
+    (variable) => !supported.has(variable),
+  );
+}
 
 export function normalizeLegacyRateTemplateVariable(template: string): string {
   return template.replace(LEGACY_RATE_TEMPLATE_VARIABLE, "");
@@ -328,6 +358,7 @@ export function extractVars(template: string): string[] {
 }
 
 export const DEFAULT_TEMPLATE_NAME = "default";
+export const FESTIVAL_TEMPLATE_NAME = "festival_outreach";
 export const FOLLOW_UP_TEMPLATE_NAME = "follow_up";
 
 export const DEFAULT_TEMPLATE_SUBJECT =
@@ -370,6 +401,22 @@ export const DEFAULT_TEMPLATE_HTML = `<html>
     <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
     <p>You can check out some examples of my previous work at <a href="{{portfolio_url}}">{{portfolio_url}}</a></p>
     <p>I look forward to hearing from you soon!</p>
+    <p>Best,<br>
+       {{sender_name}}<br>
+       <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
+    </p>
+  </body>
+</html>`;
+
+export const FESTIVAL_TEMPLATE_SUBJECT =
+  "Photo coverage request: {{artist}} at {{festival_name}}";
+
+export const FESTIVAL_TEMPLATE_HTML = `<html>
+  <body>
+    <p>Hi {{manager_name}},</p>
+    <p>I'm reaching out to request photo credentials and permission to photograph {{artist}}'s set at {{festival_name}} on {{date}}{{location_clause}}.</p>
+    <p>I specialize in live music photography and would love to provide polished coverage of the set. You can view recent concert and festival work at <a href="{{portfolio_url}}">{{portfolio_url}}</a>.</p>
+    <p>If photo access is coordinated by the festival press team, I'd appreciate being pointed to the right contact or credential instructions.</p>
     <p>Best,<br>
        {{sender_name}}<br>
        <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
@@ -434,15 +481,12 @@ async function persistNormalizedTemplate(
 }
 
 export async function ensureDefaultTemplate() {
-  const existing = await db.emailTemplate.findFirst({ where: { isDefault: true } });
-  if (existing) {
-    return persistNormalizedTemplate(existing, normalizeDefaultTemplateContent);
-  }
   const template = await db.emailTemplate.upsert({
-    where: { name: DEFAULT_TEMPLATE_NAME },
-    update: { isDefault: true },
+    where: { purpose: "original" },
+    update: {},
     create: {
       name: DEFAULT_TEMPLATE_NAME,
+      purpose: "original",
       subject: DEFAULT_TEMPLATE_SUBJECT,
       htmlBody: DEFAULT_TEMPLATE_HTML,
       isDefault: true,
@@ -451,28 +495,49 @@ export async function ensureDefaultTemplate() {
   return persistNormalizedTemplate(template, normalizeDefaultTemplateContent);
 }
 
-export async function ensureFollowUpTemplate() {
-  const existing = await db.emailTemplate.findUnique({
-    where: { name: FOLLOW_UP_TEMPLATE_NAME },
+export async function ensureFestivalTemplate() {
+  const template = await db.emailTemplate.upsert({
+    where: { purpose: "festival" },
+    update: {},
+    create: {
+      name: FESTIVAL_TEMPLATE_NAME,
+      purpose: "festival",
+      subject: FESTIVAL_TEMPLATE_SUBJECT,
+      htmlBody: FESTIVAL_TEMPLATE_HTML,
+      isDefault: false,
+    },
   });
-  if (existing) {
-    return persistNormalizedTemplate(
-      existing,
-      normalizeDefaultTemplateContent,
-    );
-  }
+  return persistNormalizedTemplate(template, normalizeTemplateContent);
+}
 
+export async function ensureFollowUpTemplate() {
   const original = await ensureDefaultTemplate();
   const content = cloneTemplateContent(original);
-  return db.emailTemplate.upsert({
-    where: { name: FOLLOW_UP_TEMPLATE_NAME },
+  const template = await db.emailTemplate.upsert({
+    where: { purpose: "follow_up" },
     update: {},
     create: {
       name: FOLLOW_UP_TEMPLATE_NAME,
+      purpose: "follow_up",
       ...content,
       isDefault: false,
     },
   });
+  return persistNormalizedTemplate(template, normalizeDefaultTemplateContent);
+}
+
+export function originalTemplatePurposeForShow(
+  show: { isFestival: boolean },
+): EmailTemplatePurpose {
+  return show.isFestival ? "festival" : "original";
+}
+
+export async function ensureOriginalTemplateForShow(
+  show: { isFestival: boolean },
+) {
+  return originalTemplatePurposeForShow(show) === "festival"
+    ? ensureFestivalTemplate()
+    : ensureDefaultTemplate();
 }
 
 export async function getSetting(key: string, fallback: string): Promise<string> {
@@ -485,6 +550,44 @@ export interface ShowContext {
   venueName: string;
   showDate: Date;
   managerName: string | null;
+  eventName?: string | null;
+  city?: string | null;
+  state?: string | null;
+  countryCode?: string | null;
+  countryName?: string | null;
+}
+
+function usableFestivalText(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  return /^(?:unknown|tba|tbd|n\/a|not available|not provided)$/i.test(trimmed)
+    ? ""
+    : trimmed;
+}
+
+function festivalLocation(ctx: ShowContext): string {
+  const city = usableFestivalText(ctx.city);
+  const region =
+    usableFestivalText(ctx.state) ||
+    usableFestivalText(ctx.countryName) ||
+    usableFestivalText(ctx.countryCode);
+  const location = [city, region]
+    .filter(Boolean)
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .join(", ");
+  return location || usableFestivalText(ctx.venueName) || "the festival venue";
+}
+
+function festivalLocationClause(
+  ctx: ShowContext,
+  festivalName: string,
+  location: string,
+): string {
+  const comparable = (value: string) => value.trim().toLowerCase();
+  if (comparable(location) === comparable(festivalName)) return "";
+  const venue = usableFestivalText(ctx.venueName);
+  return venue && comparable(location) === comparable(venue)
+    ? ` at ${location}`
+    : ` in ${location}`;
 }
 
 export async function buildVarsForShow(
@@ -504,6 +607,11 @@ export async function buildVarsForShow(
     readSetting("sender_phone", ""),
     readSetting("sender_city", ""),
   ]);
+  const festivalName =
+    usableFestivalText(ctx.eventName) ||
+    usableFestivalText(ctx.venueName) ||
+    "the festival";
+  const location = festivalLocation(ctx);
   return {
     artist: ctx.artistName,
     venue: ctx.venueName,
@@ -519,5 +627,8 @@ export async function buildVarsForShow(
     sender_phone: senderPhone,
     sender_city: senderCity,
     manager_name: ctx.managerName?.trim() || "there",
+    festival_name: festivalName,
+    location,
+    location_clause: festivalLocationClause(ctx, festivalName, location),
   };
 }

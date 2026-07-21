@@ -5,14 +5,19 @@ import { db } from "@/lib/db";
 import {
   DEFAULT_TEMPLATE_HTML,
   DEFAULT_TEMPLATE_SUBJECT,
+  FESTIVAL_TEMPLATE_HTML,
+  FESTIVAL_TEMPLATE_SUBJECT,
   applyTemplate,
   buildVarsForShow,
   cloneTemplateContent,
   ensureDefaultTemplate,
+  ensureFestivalTemplate,
   ensureFollowUpTemplate,
   extractVars,
   normalizeDefaultTemplateContent,
-  SUPPORTED_TEMPLATE_VARS,
+  normalizeTemplateContent,
+  supportedTemplateVars,
+  unsupportedTemplateVars,
 } from "@/lib/template";
 import { renderTrackedEmailHtml } from "@/lib/emailUtm";
 import { readEmailUtmSettingsSnapshot } from "@/lib/generalSettings";
@@ -33,39 +38,73 @@ import {
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Email template" };
 
-type TemplateKind = "original" | "follow_up";
+type TemplateKind = "original" | "festival" | "follow_up";
 
 function parseTemplateKind(value: unknown): TemplateKind {
-  return firstSearchParam(value) === "follow_up" ? "follow_up" : "original";
+  const kind = firstSearchParam(value);
+  return kind === "festival" || kind === "follow_up" ? kind : "original";
 }
 
 function requiredTemplateKind(value: FormDataEntryValue | null): TemplateKind {
-  if (value === "original" || value === "follow_up") return value;
+  if (
+    value === "original" ||
+    value === "festival" ||
+    value === "follow_up"
+  ) {
+    return value;
+  }
   throw new Error("Invalid email template kind");
 }
 
 function templateSettingsPath(kind: TemplateKind): string {
-  return kind === "follow_up"
-    ? "/settings/template?kind=follow_up"
-    : "/settings/template";
+  return kind === "original"
+    ? "/settings/template"
+    : `/settings/template?kind=${kind}`;
 }
 
 async function ensureTemplate(kind: TemplateKind) {
-  return kind === "follow_up"
-    ? ensureFollowUpTemplate()
-    : ensureDefaultTemplate();
+  if (kind === "festival") return ensureFestivalTemplate();
+  if (kind === "follow_up") return ensureFollowUpTemplate();
+  return ensureDefaultTemplate();
+}
+
+function templateLabel(kind: TemplateKind): string {
+  if (kind === "festival") return "Festival outreach";
+  if (kind === "follow_up") return "Follow-up";
+  return "Normal show outreach";
+}
+
+function templateUtmKind(kind: TemplateKind): "original" | "follow_up" {
+  return kind === "follow_up" ? "follow_up" : "original";
+}
+
+function normalizeTemplateForKind(
+  kind: TemplateKind,
+  content: { subject: string; htmlBody: string },
+) {
+  return kind === "festival"
+    ? normalizeTemplateContent(content)
+    : normalizeDefaultTemplateContent(content);
 }
 
 async function saveTemplate(formData: FormData) {
   "use server";
   await requireServerActionAuth("/settings/template");
   const kind = requiredTemplateKind(formData.get("kind"));
-  const content = normalizeDefaultTemplateContent({
+  const content = normalizeTemplateForKind(kind, {
     subject: (formData.get("subject") as string)?.trim() ?? "",
     htmlBody: (formData.get("html") as string) ?? "",
   });
   const { subject, htmlBody } = content;
   if (!subject || !htmlBody) return;
+  const unsupported = unsupportedTemplateVars(content, kind);
+  if (unsupported.length > 0) {
+    throw new Error(
+      `Unsupported ${templateLabel(kind).toLowerCase()} variable(s): ${unsupported
+        .map((variable) => `{{${variable}}}`)
+        .join(", ")}`,
+    );
+  }
   const existing = await ensureTemplate(kind);
   await db.emailTemplate.update({
     where: { id: existing.id },
@@ -83,10 +122,15 @@ async function resetToDefault(formData: FormData) {
   const content =
     kind === "follow_up"
       ? cloneTemplateContent(await ensureDefaultTemplate())
-      : {
-          subject: DEFAULT_TEMPLATE_SUBJECT,
-          htmlBody: DEFAULT_TEMPLATE_HTML,
-        };
+      : kind === "festival"
+        ? {
+            subject: FESTIVAL_TEMPLATE_SUBJECT,
+            htmlBody: FESTIVAL_TEMPLATE_HTML,
+          }
+        : {
+            subject: DEFAULT_TEMPLATE_SUBJECT,
+            htmlBody: DEFAULT_TEMPLATE_HTML,
+          };
   await db.emailTemplate.update({
     where: { id: existing.id },
     data: content,
@@ -107,6 +151,9 @@ export default async function TemplateSettingsPage({
       where: {
         date: { gte: easternTodayStoredDate(now) },
         syncStatus: "active",
+        ...(kind === "follow_up"
+          ? {}
+          : { isFestival: kind === "festival" }),
         AND: [festivalLeadTimeWhere(now)],
         artists: {
           some: {
@@ -142,7 +189,7 @@ export default async function TemplateSettingsPage({
     readEmailUtmSettingsSnapshot(),
   ]);
   const usedVars = extractVars(template.subject + " " + template.htmlBody);
-  const allVars = [...SUPPORTED_TEMPLATE_VARS].sort();
+  const allVars = [...supportedTemplateVars(kind)].sort();
 
   let previewSubject = template.subject;
   let previewHtml = template.htmlBody;
@@ -162,12 +209,17 @@ export default async function TemplateSettingsPage({
         venueName: sample.venueName,
         showDate: sample.date,
         managerName: contact.name,
+        eventName: sample.eventName,
+        city: sample.city,
+        state: sample.state,
+        countryCode: sample.countryCode,
+        countryName: sample.countryName,
       });
       previewSubject = applyTemplate(template.subject, sampleVars);
       previewHtml = renderTrackedEmailHtml(
         template.htmlBody,
         sampleVars,
-        kind,
+        templateUtmKind(kind),
         matched.artist.name,
         utmSettings,
       );
@@ -184,7 +236,7 @@ export default async function TemplateSettingsPage({
         aria-label="Email template type"
         className="mt-4 flex gap-1 border-b border-zinc-200 dark:border-zinc-800"
       >
-        {(["original", "follow_up"] as const).map((tab) => (
+        {(["original", "festival", "follow_up"] as const).map((tab) => (
           <Link
             key={tab}
             href={templateSettingsPath(tab)}
@@ -195,7 +247,7 @@ export default async function TemplateSettingsPage({
                 : "border-transparent text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
             }`}
           >
-            {tab === "original" ? "Original" : "Follow-up"}
+            {templateLabel(tab)}
           </Link>
         ))}
       </nav>
@@ -220,7 +272,7 @@ export default async function TemplateSettingsPage({
             />
             <div className="mt-4 flex items-center justify-between gap-2">
               <Button type="submit" variant="primary">
-                Save {kind === "original" ? "original" : "follow-up"} template
+                Save {templateLabel(kind).toLowerCase()} template
               </Button>
             </div>
           </form>
@@ -231,7 +283,7 @@ export default async function TemplateSettingsPage({
         <input type="hidden" name="kind" value={kind} />
         <button type="submit" className="text-xs text-zinc-500 hover:underline">
           {kind === "follow_up"
-            ? "Reset from current original"
+            ? "Reset from current normal show outreach"
             : "Reset to built-in default"}
         </button>
       </form>
@@ -240,7 +292,7 @@ export default async function TemplateSettingsPage({
         <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">{sampleLabel}</h2>
         <p className="mt-1 text-xs text-zinc-500">
           {previewArtist
-            ? `Web links use the ${kind === "original" ? "original" : "follow-up"} UTM campaign; utm_content is automatically derived from preview artist ${previewArtist}.`
+            ? `Web links use the ${templateUtmKind(kind) === "original" ? "original" : "follow-up"} UTM campaign; utm_content is automatically derived from preview artist ${previewArtist}.`
             : "When a sample is available, its web links include the selected message type's UTM campaign and automatic artist utm_content."}
         </p>
         <Card className="mt-3">
@@ -250,7 +302,7 @@ export default async function TemplateSettingsPage({
             <p className="mt-4 text-xs font-medium text-zinc-500">Body</p>
             <iframe
               title={`${
-                kind === "original" ? "Original" : "Follow-up"
+                templateLabel(kind)
               } email template preview`}
               sandbox=""
               srcDoc={previewHtml}
