@@ -94,6 +94,37 @@ export interface ContactAuditSubmission {
   confidence: ContactAuditConfidence;
   notes: string | null;
   alternatives: ContactAuditAlternativeInput[];
+  rosterReview: ContactAuditRosterReviewInput[];
+}
+
+export interface ContactAuditRosterReviewInput {
+  rosterEntryId: string;
+  assessment:
+    | "current"
+    | "stale"
+    | "coexisting"
+    | "conflicting"
+    | "unverified";
+  notes: string;
+}
+
+export interface ContactAuditRosterPayload {
+  snapshotId: string | null;
+  snapshotAt: Date | null;
+  completeness: "complete" | "legacy_single_contact";
+  contacts: Array<{
+    rosterEntryId: string;
+    contactId: string | null;
+    isTarget: boolean;
+    email: string | null;
+    phone: string | null;
+    directOutreachNote: string | null;
+    name: string | null;
+    role: string | null;
+    source: string | null;
+    notes: string | null;
+    isFullTeam: boolean | null;
+  }>;
 }
 
 export class ContactAuditValidationError extends Error {}
@@ -154,7 +185,8 @@ export function parseContactAuditClaimLimit(value: unknown): number {
 
 export function parseContactAuditSubmission(
   value: unknown,
-  existingEmail?: string | null
+  existingEmail?: string | null,
+  requiredRosterEntryIds?: readonly string[]
 ): ContactAuditSubmission {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("request body must be an object");
@@ -235,11 +267,66 @@ export function parseContactAuditSubmission(
   if (finding === "stale" && alternatives.length > 0) {
     throw new Error("a stale finding cannot include alternative contacts");
   }
-  if (
-    (finding === "changed" || finding === "ambiguous") &&
-    alternatives.length === 0
-  ) {
-    throw new Error(`${finding} findings require an alternative contact`);
+  if (finding === "changed" && alternatives.length === 0) {
+    throw new Error("changed findings require an alternative contact");
+  }
+
+  const rosterReviewValues = input.rosterReview ?? [];
+  if (!Array.isArray(rosterReviewValues)) {
+    throw new Error("rosterReview must be an array");
+  }
+  const rosterReviewById = new Map<string, ContactAuditRosterReviewInput>();
+  for (const reviewValue of rosterReviewValues) {
+    if (
+      typeof reviewValue !== "object" ||
+      reviewValue === null ||
+      Array.isArray(reviewValue)
+    ) {
+      throw new Error("each roster review must be an object");
+    }
+    const review = reviewValue as Record<string, unknown>;
+    const rosterEntryId = requiredString(
+      review.rosterEntryId,
+      100,
+      "roster review entry id"
+    );
+    const assessment = requiredString(
+      review.assessment,
+      20,
+      "roster review assessment"
+    );
+    if (
+      ![
+        "current",
+        "stale",
+        "coexisting",
+        "conflicting",
+        "unverified",
+      ].includes(assessment)
+    ) {
+      throw new Error(
+        "roster review assessment must be current, stale, coexisting, conflicting, or unverified"
+      );
+    }
+    if (rosterReviewById.has(rosterEntryId)) {
+      throw new Error("each roster contact must be reviewed exactly once");
+    }
+    rosterReviewById.set(rosterEntryId, {
+      rosterEntryId,
+      assessment: assessment as ContactAuditRosterReviewInput["assessment"],
+      notes: requiredString(review.notes, 1_000, "roster review notes"),
+    });
+  }
+  if (requiredRosterEntryIds?.length) {
+    const requiredIds = new Set(requiredRosterEntryIds);
+    if (
+      rosterReviewById.size !== requiredIds.size ||
+      [...rosterReviewById.keys()].some((id) => !requiredIds.has(id))
+    ) {
+      throw new Error(
+        "rosterReview must inventory every snapshotted artist contact exactly once"
+      );
+    }
   }
 
   return {
@@ -250,6 +337,103 @@ export function parseContactAuditSubmission(
     confidence: confidence as ContactAuditConfidence,
     notes: optionalString(input.notes, 4_000, "notes"),
     alternatives,
+    rosterReview: [...rosterReviewById.values()],
+  };
+}
+
+export function validateContactAuditAlternativeEmails(
+  alternatives: readonly Pick<ContactAuditAlternativeInput, "normalizedEmail">[],
+  storedEmails: readonly (string | null | undefined)[]
+): void {
+  const normalizedStoredEmails = new Set(
+    storedEmails.flatMap((email) => {
+      const normalized = email?.trim().toLowerCase();
+      return normalized ? [normalized] : [];
+    })
+  );
+  const duplicate = alternatives.find((alternative) =>
+    normalizedStoredEmails.has(alternative.normalizedEmail)
+  );
+  if (duplicate) {
+    throw new ContactAuditValidationError(
+      `${duplicate.normalizedEmail} is already stored as a contact for this artist. Existing roster contacts must remain separate and cannot be proposed as replacements.`
+    );
+  }
+}
+
+export function buildContactAuditRosterPayload(job: {
+  id: string;
+  contactId: string | null;
+  targetRosterEntryId: string | null;
+  snapshotEmail: string | null;
+  snapshotPhone: string | null;
+  snapshotDirectOutreachNote: string | null;
+  snapshotName: string | null;
+  snapshotRole: string | null;
+  snapshotSource: string | null;
+  snapshotNotes: string | null;
+  rosterSnapshot: {
+    id: string;
+    createdAt: Date;
+    entries: Array<{
+      id: string;
+      snapshotContactId: string;
+      snapshotEmail: string | null;
+      snapshotPhone: string | null;
+      snapshotDirectOutreachNote: string | null;
+      snapshotName: string | null;
+      snapshotRole: string | null;
+      snapshotSource: string | null;
+      snapshotNotes: string | null;
+      snapshotIsFullTeam: boolean;
+    }>;
+  } | null;
+}): ContactAuditRosterPayload {
+  if (
+    job.rosterSnapshot &&
+    job.targetRosterEntryId &&
+    job.rosterSnapshot.entries.some(
+      (entry) => entry.id === job.targetRosterEntryId
+    )
+  ) {
+    return {
+      snapshotId: job.rosterSnapshot.id,
+      snapshotAt: job.rosterSnapshot.createdAt,
+      completeness: "complete",
+      contacts: job.rosterSnapshot.entries.map((entry) => ({
+        rosterEntryId: entry.id,
+        contactId: entry.snapshotContactId,
+        isTarget: entry.id === job.targetRosterEntryId,
+        email: entry.snapshotEmail,
+        phone: entry.snapshotPhone,
+        directOutreachNote: entry.snapshotDirectOutreachNote,
+        name: entry.snapshotName,
+        role: entry.snapshotRole,
+        source: entry.snapshotSource,
+        notes: entry.snapshotNotes,
+        isFullTeam: entry.snapshotIsFullTeam,
+      })),
+    };
+  }
+  return {
+    snapshotId: null,
+    snapshotAt: null,
+    completeness: "legacy_single_contact",
+    contacts: [
+      {
+        rosterEntryId: `legacy-${job.id}`,
+        contactId: job.contactId,
+        isTarget: true,
+        email: job.snapshotEmail,
+        phone: job.snapshotPhone,
+        directOutreachNote: job.snapshotDirectOutreachNote,
+        name: job.snapshotName,
+        role: job.snapshotRole,
+        source: job.snapshotSource,
+        notes: job.snapshotNotes,
+        isFullTeam: null,
+      },
+    ],
   };
 }
 
@@ -560,6 +744,7 @@ export async function prepareContactAudit(
         role: true,
         source: true,
         notes: true,
+        isFullTeam: true,
         artist: { select: { name: true } },
       },
     });
@@ -573,21 +758,74 @@ export async function prepareContactAudit(
       },
     });
     if (contacts.length > 0) {
-      await tx.contactAuditJob.createMany({
-        data: contacts.map((contact) => ({
-          id: randomUUID(),
+      const rosterByArtist = new Map<
+        string,
+        {
+          id: string;
+          artistName: string;
+          entryIdByContactId: Map<string, string>;
+        }
+      >();
+      for (const contact of contacts) {
+        if (!rosterByArtist.has(contact.artistId)) {
+          rosterByArtist.set(contact.artistId, {
+            id: randomUUID(),
+            artistName: contact.artist.name,
+            entryIdByContactId: new Map(),
+          });
+        }
+        rosterByArtist
+          .get(contact.artistId)!
+          .entryIdByContactId.set(contact.id, randomUUID());
+      }
+      await tx.contactAuditRosterSnapshot.createMany({
+        data: [...rosterByArtist.entries()].map(([artistId, roster]) => ({
+          id: roster.id,
           runId,
-          contactId: contact.id,
-          artistId: contact.artistId,
-          snapshotArtistName: contact.artist.name,
-          snapshotEmail: contact.email,
-          snapshotPhone: contact.phone,
-          snapshotDirectOutreachNote: contact.directOutreachNote,
-          snapshotName: contact.name,
-          snapshotRole: contact.role,
-          snapshotSource: contact.source,
-          snapshotNotes: contact.notes,
+          snapshotArtistId: artistId,
+          snapshotArtistName: roster.artistName,
+          createdAt: now,
         })),
+      });
+      await tx.contactAuditRosterEntry.createMany({
+        data: contacts.map((contact) => {
+          const roster = rosterByArtist.get(contact.artistId)!;
+          return {
+            id: roster.entryIdByContactId.get(contact.id)!,
+            rosterSnapshotId: roster.id,
+            snapshotContactId: contact.id,
+            snapshotEmail: contact.email,
+            snapshotPhone: contact.phone,
+            snapshotDirectOutreachNote: contact.directOutreachNote,
+            snapshotName: contact.name,
+            snapshotRole: contact.role,
+            snapshotSource: contact.source,
+            snapshotNotes: contact.notes,
+            snapshotIsFullTeam: contact.isFullTeam,
+            createdAt: now,
+          };
+        }),
+      });
+      await tx.contactAuditJob.createMany({
+        data: contacts.map((contact) => {
+          const roster = rosterByArtist.get(contact.artistId)!;
+          return {
+            id: randomUUID(),
+            runId,
+            contactId: contact.id,
+            artistId: contact.artistId,
+            rosterSnapshotId: roster.id,
+            targetRosterEntryId: roster.entryIdByContactId.get(contact.id)!,
+            snapshotArtistName: contact.artist.name,
+            snapshotEmail: contact.email,
+            snapshotPhone: contact.phone,
+            snapshotDirectOutreachNote: contact.directOutreachNote,
+            snapshotName: contact.name,
+            snapshotRole: contact.role,
+            snapshotSource: contact.source,
+            snapshotNotes: contact.notes,
+          };
+        }),
       });
     }
     await tx.contactAuditRequest.update({
@@ -742,7 +980,9 @@ export async function claimContactAuditJobs(
         select: {
           id: true,
           runId: true,
+          contactId: true,
           attemptCount: true,
+          targetRosterEntryId: true,
           snapshotArtistName: true,
           snapshotEmail: true,
           snapshotPhone: true,
@@ -751,32 +991,57 @@ export async function claimContactAuditJobs(
           snapshotRole: true,
           snapshotSource: true,
           snapshotNotes: true,
+          rosterSnapshot: {
+            select: {
+              id: true,
+              createdAt: true,
+              entries: {
+                orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+                select: {
+                  id: true,
+                  snapshotContactId: true,
+                  snapshotEmail: true,
+                  snapshotPhone: true,
+                  snapshotDirectOutreachNote: true,
+                  snapshotName: true,
+                  snapshotRole: true,
+                  snapshotSource: true,
+                  snapshotNotes: true,
+                  snapshotIsFullTeam: true,
+                },
+              },
+            },
+          },
         },
       });
       const jobsById = new Map(jobs.map((job) => [job.id, job]));
       return selected.flatMap((row) => {
         const job = jobsById.get(row.id);
-        return job
-          ? [
-              {
-                id: job.id,
-                runId: job.runId,
-                claimToken: tokenById.get(job.id)!,
-                claimExpiresAt,
-                attemptCount: job.attemptCount,
-                contact: {
-                  artistName: job.snapshotArtistName,
-                  email: job.snapshotEmail,
-                  phone: job.snapshotPhone,
-                  directOutreachNote: job.snapshotDirectOutreachNote,
-                  name: job.snapshotName,
-                  role: job.snapshotRole,
-                  source: job.snapshotSource,
-                  notes: job.snapshotNotes,
-                },
-              },
-            ]
-          : [];
+        if (!job) return [];
+        const contactRoster = buildContactAuditRosterPayload(job);
+        return [
+          {
+            id: job.id,
+            runId: job.runId,
+            claimToken: tokenById.get(job.id)!,
+            claimExpiresAt,
+            attemptCount: job.attemptCount,
+            contact: {
+              artistName: job.snapshotArtistName,
+              email: job.snapshotEmail,
+              phone: job.snapshotPhone,
+              directOutreachNote: job.snapshotDirectOutreachNote,
+              name: job.snapshotName,
+              role: job.snapshotRole,
+              source: job.snapshotSource,
+              notes: job.snapshotNotes,
+              isFullTeam:
+                contactRoster.contacts.find((contact) => contact.isTarget)
+                  ?.isFullTeam ?? null,
+            },
+            contactRoster,
+          },
+        ];
       });
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }
@@ -800,13 +1065,28 @@ export async function submitContactAuditResult(
         id: true,
         runId: true,
         claimToken: true,
+        artistId: true,
         snapshotEmail: true,
+        rosterSnapshot: {
+          select: {
+            entries: {
+              select: {
+                id: true,
+                snapshotEmail: true,
+              },
+            },
+          },
+        },
       },
     });
     if (!job) return { accepted: false, runComplete: false };
     let submission: ContactAuditSubmission;
     try {
-      submission = parseContactAuditSubmission(value, job.snapshotEmail);
+      submission = parseContactAuditSubmission(
+        value,
+        job.snapshotEmail,
+        job.rosterSnapshot?.entries.map((entry) => entry.id)
+      );
     } catch (error) {
       throw new ContactAuditValidationError(
         error instanceof Error ? error.message : String(error)
@@ -815,6 +1095,21 @@ export async function submitContactAuditResult(
     if (submission.claimToken !== job.claimToken) {
       return { accepted: false, runComplete: false };
     }
+    const currentContacts = job.artistId
+      ? await tx.contact.findMany({
+          where: {
+            artistId: job.artistId,
+            state: "active",
+            email: { not: null },
+          },
+          select: { email: true },
+        })
+      : [];
+    validateContactAuditAlternativeEmails(submission.alternatives, [
+      ...(job.rosterSnapshot?.entries.map((entry) => entry.snapshotEmail) ??
+        []),
+      ...currentContacts.map((contact) => contact.email),
+    ]);
 
     await tx.contactAuditAlternative.deleteMany({ where: { jobId } });
     if (submission.alternatives.length > 0) {
@@ -835,6 +1130,10 @@ export async function submitContactAuditResult(
         evidence: submission.evidence,
         confidence: submission.confidence,
         agentNotes: submission.notes,
+        rosterReview:
+          submission.rosterReview.length > 0
+            ? (submission.rosterReview as unknown as Prisma.InputJsonValue)
+            : Prisma.DbNull,
         verifiedAt: now,
         reviewedAt: null,
         claimToken: null,
@@ -979,6 +1278,44 @@ function resolutionError(error: unknown): string {
   return "The decision could not be saved. The contact was not changed; refresh and try again.";
 }
 
+async function contactAuditAlternativeAlreadyStored(
+  tx: Prisma.TransactionClient,
+  input: {
+    artistId: string;
+    targetContactId: string;
+    rosterSnapshotId: string | null;
+    normalizedEmail: string;
+  }
+): Promise<boolean> {
+  const [snapshotDuplicate, currentDuplicate] = await Promise.all([
+    input.rosterSnapshotId
+      ? tx.contactAuditRosterEntry.findFirst({
+          where: {
+            rosterSnapshotId: input.rosterSnapshotId,
+            snapshotContactId: { not: input.targetContactId },
+            snapshotEmail: {
+              equals: input.normalizedEmail,
+              mode: "insensitive",
+            },
+          },
+          select: { id: true },
+        })
+      : null,
+    tx.contact.findFirst({
+      where: {
+        artistId: input.artistId,
+        email: {
+          equals: input.normalizedEmail,
+          mode: "insensitive",
+        },
+        id: { not: input.targetContactId },
+      },
+      select: { id: true },
+    }),
+  ]);
+  return Boolean(snapshotDuplicate || currentDuplicate);
+}
+
 async function releaseContactAuditResolutionClaim(
   jobId: string,
   claimToken: string
@@ -1105,16 +1442,11 @@ async function reserveContactAuditResolution(
       };
     }
     if (alternative) {
-      const duplicate = await tx.contact.findFirst({
-        where: {
-          artistId: job.contact.artistId,
-          email: {
-            equals: alternative.normalizedEmail,
-            mode: "insensitive",
-          },
-          id: { not: job.contact.id },
-        },
-        select: { id: true },
+      const duplicate = await contactAuditAlternativeAlreadyStored(tx, {
+        artistId: job.contact.artistId,
+        targetContactId: job.contact.id,
+        rosterSnapshotId: job.rosterSnapshotId,
+        normalizedEmail: alternative.normalizedEmail,
       });
       if (duplicate) {
         return {
@@ -1122,7 +1454,7 @@ async function reserveContactAuditResolution(
           result: {
             ok: false,
             error:
-              "That artist already has the proposed email address. Resolve the duplicate contact separately; outreach history will not be merged automatically.",
+              "That email is already stored for this artist in the audit roster or current contacts. Existing contacts remain separate, cannot be applied as replacements, and outreach history will not be merged automatically.",
           },
         };
       }
@@ -1229,22 +1561,17 @@ async function finalizeContactAuditResolution(
       };
     }
     if (alternative) {
-      const duplicate = await tx.contact.findFirst({
-        where: {
-          artistId: job.contact.artistId,
-          email: {
-            equals: alternative.normalizedEmail,
-            mode: "insensitive",
-          },
-          id: { not: job.contact.id },
-        },
-        select: { id: true },
+      const duplicate = await contactAuditAlternativeAlreadyStored(tx, {
+        artistId: job.contact.artistId,
+        targetContactId: job.contact.id,
+        rosterSnapshotId: job.rosterSnapshotId,
+        normalizedEmail: alternative.normalizedEmail,
       });
       if (duplicate) {
         return {
           ok: false,
           error:
-            "That artist already has the proposed email address. Resolve the duplicate contact separately; outreach history was not merged.",
+            "That email is already stored for this artist in the audit roster or current contacts. Existing contacts remain separate and were not replaced.",
         };
       }
     }

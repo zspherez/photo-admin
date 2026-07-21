@@ -35,6 +35,13 @@ const requestMigration = readFileSync(
   ),
   "utf8"
 );
+const rosterMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260721123000_contact_audit_rosters/migration.sql",
+    import.meta.url
+  ),
+  "utf8"
+);
 
 test("contact audit workflow polls explicitly requested work and is OIDC-authenticated", () => {
   assert.match(workflow, /workflow_dispatch/);
@@ -82,12 +89,35 @@ test("audit agent and broker preserve review-only manager policy", () => {
   assert.match(agent, /Never propose\s+a booking agent, publicist/);
   assert.match(agent, /Never bypass a login, paywall/);
   assert.match(agent, /submit-result/);
+  assert.match(agent, /immutable snapshot of every active contact/);
+  assert.match(agent, /every supplied roster entry exactly once/);
+  assert.match(agent, /Existing roster contacts must remain separate/);
+  assert.match(agent, /Any active email in the roster is management context/);
+  assert.match(broker, /contactRoster/);
+  assert.match(broker, /rosterReview/);
   assert.doesNotMatch(broker, /contactResearchCandidate/);
   assert.doesNotMatch(
     broker,
     /\/api\/contact-research\/[^"]*\/result/
   );
   assert.match(broker, /\/api\/contact-audit\//);
+});
+
+test("contact audit roster migration is normalized, immutable, and legacy-safe", () => {
+  assert.match(rosterMigration, /^BEGIN;/);
+  assert.match(rosterMigration, /CREATE TABLE "ContactAuditRosterSnapshot"/);
+  assert.match(rosterMigration, /CREATE TABLE "ContactAuditRosterEntry"/);
+  assert.match(
+    rosterMigration,
+    /ContactAuditRosterSnapshot_runId_snapshotArtistId_key/
+  );
+  assert.match(rosterMigration, /ContactAuditJob_roster_link_check/);
+  assert.match(rosterMigration, /target must belong to the job artist roster/);
+  assert.match(rosterMigration, /roster snapshots are immutable/);
+  assert.match(rosterMigration, /"rosterReview" IS DISTINCT FROM/);
+  assert.doesNotMatch(rosterMigration, /UPDATE "ContactAuditJob"/);
+  assert.doesNotMatch(rosterMigration, /DELETE FROM "ContactAudit/);
+  assert.match(rosterMigration, /COMMIT;\s*$/);
 });
 
 test("contact audit migration is explicit and transactional", () => {

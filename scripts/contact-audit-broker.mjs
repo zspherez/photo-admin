@@ -39,6 +39,59 @@ if (
 }
 
 const sourceUrlsSchema = z.array(z.string().url()).min(1);
+const nullableString = z.string().nullable();
+const rosterContactSchema = z
+  .object({
+    rosterEntryId: z.string().min(1),
+    contactId: nullableString,
+    isTarget: z.boolean(),
+    email: nullableString,
+    phone: nullableString,
+    directOutreachNote: nullableString,
+    name: nullableString,
+    role: nullableString,
+    source: nullableString,
+    notes: nullableString,
+    isFullTeam: z.boolean().nullable(),
+  })
+  .strict();
+const claimJobSchema = z
+  .object({
+    id: z.string().min(1),
+    runId: z.string().min(1),
+    claimToken: z.string().min(1),
+    claimExpiresAt: z.string().datetime(),
+    attemptCount: z.number().int().min(1),
+    contact: z
+      .object({
+        artistName: z.string().min(1),
+        email: nullableString,
+        phone: nullableString,
+        directOutreachNote: nullableString,
+        name: nullableString,
+        role: nullableString,
+        source: nullableString,
+        notes: nullableString,
+        isFullTeam: z.boolean().nullable(),
+      })
+      .strict(),
+    contactRoster: z
+      .object({
+        snapshotId: nullableString,
+        snapshotAt: z.string().datetime().nullable(),
+        completeness: z.enum(["complete", "legacy_single_contact"]),
+        contacts: z
+          .array(rosterContactSchema)
+          .min(1)
+          .refine(
+            (contacts) =>
+              contacts.filter((contact) => contact.isTarget).length === 1,
+            "contact roster must identify exactly one target"
+          ),
+      })
+      .strict(),
+  })
+  .strict();
 const alternativeSchema = z
   .object({
     email: z.string().email(),
@@ -85,6 +138,24 @@ const schemas = {
       confidence: z.enum(["high", "medium", "low"]),
       notes: z.string().max(4_000).nullable().optional(),
       alternatives: z.array(alternativeSchema).max(10),
+      rosterReview: z
+        .array(
+          z
+            .object({
+              rosterEntryId: z.string().min(1).max(100),
+              assessment: z.enum([
+                "current",
+                "stale",
+                "coexisting",
+                "conflicting",
+                "unverified",
+              ]),
+              notes: z.string().min(1).max(1_000),
+            })
+            .strict()
+        )
+        .min(1)
+        .max(100),
     })
     .strict()
     .superRefine((value, context) => {
@@ -100,14 +171,10 @@ const schemas = {
           message: "stale findings cannot include alternatives",
         });
       }
-      if (
-        (value.finding === "changed" ||
-          value.finding === "ambiguous") &&
-        value.alternatives.length === 0
-      ) {
+      if (value.finding === "changed" && value.alternatives.length === 0) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `${value.finding} findings require an alternative`,
+          message: "changed findings require an alternative",
         });
       }
     }),
@@ -238,23 +305,17 @@ function publicClaimResponse(value, state) {
     return { jobs: [] };
   }
   const [job] = jobs;
-  if (
-    typeof job?.id !== "string" ||
-    typeof job.claimToken !== "string" ||
-    typeof job.contact?.artistName !== "string"
-  ) {
-    throw new Error("photo-admin returned an invalid claimed job");
-  }
+  const parsedJob = claimJobSchema.parse(job);
   state.claim = { jobId: job.id, claimToken: job.claimToken };
-  metrics.artistBySession[state.sessionId] = job.contact.artistName;
+  metrics.artistBySession[state.sessionId] = parsedJob.contact.artistName;
   metrics.sessions[state.sessionId] = {
-    artist: job.contact.artistName,
+    artist: parsedJob.contact.artistName,
     claimed: true,
     completed: false,
     empty: false,
     stale: false,
   };
-  const { id, ...fields } = job;
+  const { id, ...fields } = parsedJob;
   return { jobs: [{ jobId: id, ...fields }] };
 }
 
@@ -330,6 +391,7 @@ async function runTool(name, input, sessionId) {
             confidence: input.confidence,
             notes: input.notes ?? null,
             alternatives: input.alternatives,
+            rosterReview: input.rosterReview,
           }
         );
       } catch (error) {

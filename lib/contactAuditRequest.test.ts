@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { db } from "./db";
 import {
+  claimContactAuditJobs,
   prepareContactAudit,
   recordContactAuditWorkflowFailure,
   requestContactAudit,
@@ -249,7 +250,7 @@ test("the first poll adopts an active legacy run without changing its snapshot o
   }
 });
 
-test("a request snapshots once and a retry resumes the same audit run", async () => {
+test("concurrent preparation snapshots once and adopts the same audit run", async () => {
   const mutableDb = db as unknown as MutableDb;
   const originalTransaction = mutableDb.$transaction;
   const now = new Date("2026-07-21T01:10:00.000Z");
@@ -276,6 +277,8 @@ test("a request snapshots once and a retry resumes the same audit run", async ()
   let contactReads = 0;
   let runCreates = 0;
   let snapshotCreates = 0;
+  let rosterSnapshotCreates = 0;
+  let rosterEntryCreates = 0;
 
   const tx = {
     contactAuditRequest: {
@@ -302,6 +305,7 @@ test("a request snapshots once and a retry resumes the same audit run", async ()
             role: "management",
             source: "manual",
             notes: null,
+            isFullTeam: false,
             artist: { name: "Artist" },
           },
         ];
@@ -334,15 +338,34 @@ test("a request snapshots once and a retry resumes the same audit run", async ()
         return { count: data.length };
       },
     },
+    contactAuditRosterSnapshot: {
+      createMany: async ({
+        data,
+      }: {
+        data: Array<Record<string, unknown>>;
+      }) => {
+        rosterSnapshotCreates += data.length;
+        return { count: data.length };
+      },
+    },
+    contactAuditRosterEntry: {
+      createMany: async ({
+        data,
+      }: {
+        data: Array<Record<string, unknown>>;
+      }) => {
+        rosterEntryCreates += data.length;
+        return { count: data.length };
+      },
+    },
   };
   mutableDb.$transaction = serialTransaction(tx);
 
   try {
-    const first = await prepareContactAudit("1001", now);
-    const retry = await prepareContactAudit(
-      "1002",
-      new Date(now.getTime() + 60_000)
-    );
+    const [first, retry] = await Promise.all([
+      prepareContactAudit("1001", now),
+      prepareContactAudit("1002", new Date(now.getTime() + 60_000)),
+    ]);
     assert.equal(first.requested, true);
     assert.equal(first.resumed, false);
     assert.equal(retry.resumed, true);
@@ -350,8 +373,122 @@ test("a request snapshots once and a retry resumes the same audit run", async ()
     assert.equal(runCreates, 1);
     assert.equal(contactReads, 1);
     assert.equal(snapshotCreates, 1);
+    assert.equal(rosterSnapshotCreates, 1);
+    assert.equal(rosterEntryCreates, 1);
     assert.equal(request.attemptCount, 2);
     assert.equal(request.lastWorkflowRunId, "1002");
+  } finally {
+    mutableDb.$transaction = originalTransaction;
+  }
+});
+
+test("each claimed target receives the same complete artist roster with exactly one target", async () => {
+  const mutableDb = db as unknown as MutableDb;
+  const originalTransaction = mutableDb.$transaction;
+  let transactionCall = 0;
+  const now = new Date("2026-07-21T16:00:00.000Z");
+  const roster = {
+    id: "roster-1",
+    createdAt: new Date("2026-07-21T15:55:00.000Z"),
+    entries: [
+      {
+        id: "entry-1",
+        snapshotContactId: "contact-1",
+        snapshotEmail: "one@management.example",
+        snapshotPhone: null,
+        snapshotDirectOutreachNote: null,
+        snapshotName: "Manager One",
+        snapshotRole: "legacy",
+        snapshotSource: "sheet",
+        snapshotNotes: null,
+        snapshotIsFullTeam: false,
+      },
+      {
+        id: "entry-2",
+        snapshotContactId: "contact-2",
+        snapshotEmail: "two@management.example",
+        snapshotPhone: "+1 212 555 0100",
+        snapshotDirectOutreachNote: "@manager-two",
+        snapshotName: "Manager Two",
+        snapshotRole: null,
+        snapshotSource: "manual",
+        snapshotNotes: "Full team context",
+        snapshotIsFullTeam: true,
+      },
+    ],
+  };
+  const jobs = [
+    {
+      id: "job-1",
+      runId: "run-1",
+      contactId: "contact-1",
+      attemptCount: 1,
+      targetRosterEntryId: "entry-1",
+      snapshotArtistName: "Somma",
+      snapshotEmail: "one@management.example",
+      snapshotPhone: null,
+      snapshotDirectOutreachNote: null,
+      snapshotName: "Manager One",
+      snapshotRole: "legacy",
+      snapshotSource: "sheet",
+      snapshotNotes: null,
+      rosterSnapshot: roster,
+    },
+    {
+      id: "job-2",
+      runId: "run-1",
+      contactId: "contact-2",
+      attemptCount: 1,
+      targetRosterEntryId: "entry-2",
+      snapshotArtistName: "Somma",
+      snapshotEmail: "two@management.example",
+      snapshotPhone: "+1 212 555 0100",
+      snapshotDirectOutreachNote: "@manager-two",
+      snapshotName: "Manager Two",
+      snapshotRole: null,
+      snapshotSource: "manual",
+      snapshotNotes: "Full team context",
+      rosterSnapshot: roster,
+    },
+  ];
+  mutableDb.$transaction = async (work) => {
+    transactionCall += 1;
+    if (transactionCall === 1) {
+      return work({
+        contactAuditRequest: {
+          findFirst: async () => ({ id: "request-1" }),
+        },
+      });
+    }
+    return work({
+      $queryRaw: async () => [{ id: "job-1" }, { id: "job-2" }],
+      contactAuditJob: {
+        update: async () => ({}),
+        findMany: async () => jobs,
+      },
+    });
+  };
+
+  try {
+    const claimed = await claimContactAuditJobs(2, now);
+    assert.equal(claimed.length, 2);
+    for (const job of claimed) {
+      assert.equal(job.contactRoster.completeness, "complete");
+      assert.deepEqual(
+        job.contactRoster.contacts.map((contact) => contact.email),
+        ["one@management.example", "two@management.example"]
+      );
+      assert.equal(
+        job.contactRoster.contacts.filter((contact) => contact.isTarget)
+          .length,
+        1
+      );
+    }
+    assert.equal(
+      claimed[1].contactRoster.contacts[1].directOutreachNote,
+      "@manager-two"
+    );
+    assert.equal(claimed[1].contactRoster.contacts[1].isFullTeam, true);
   } finally {
     mutableDb.$transaction = originalTransaction;
   }

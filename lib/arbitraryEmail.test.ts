@@ -483,10 +483,16 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
     migrationNames.indexOf(queueMigrationName) <
       migrationNames.indexOf(trajectoryMigrationName),
   );
+  const contactAuditRosterMigrationName =
+    "20260721123000_contact_audit_rosters";
+  assert.ok(
+    migrationNames.indexOf(trajectoryMigrationName) <
+      migrationNames.indexOf(contactAuditRosterMigrationName),
+  );
   const directOutreachMigrationName =
     "20260721170000_agent_direct_outreach";
   assert.ok(
-    migrationNames.indexOf(trajectoryMigrationName) <
+    migrationNames.indexOf(contactAuditRosterMigrationName) <
       migrationNames.indexOf(directOutreachMigrationName),
   );
   const structuredDirectOutreachMigrationName =

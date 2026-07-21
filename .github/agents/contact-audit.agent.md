@@ -40,12 +40,22 @@ Do not use general shell commands, direct network tools, filesystem inspection,
 or any command other than `contact-audit-agent-tool`.
 
 The runner supplies one already-claimed job. Never call `claim`. Use the exact
-top-level `jobId` and `claimToken`; do not invent identifiers.
+top-level `jobId` and `claimToken`; do not invent identifiers. The job includes
+`contactRoster`, an immutable snapshot of every active contact stored for the
+artist when the run was prepared. It has stable `rosterEntryId` values and
+exactly one `isTarget: true` entry. A `legacy_single_contact` roster is
+explicitly incomplete; do not infer that it was the artist's whole team.
 
 ## Audit goal
 
-Determine whether the snapshot contact is still a defensible current manager
-contact for the named artist. Check, in order:
+Determine whether the `isTarget` contact remains a defensible current manager
+contact for the named artist while considering every other supplied roster
+entry. Inventory every roster entry in `rosterReview`, check all supplied
+emails, phones, direct-outreach notes, names, roles/sources, and full-team
+markers, and explain in the evidence or notes whether the contacts coexist or
+conflict. Any active email in the roster is management context regardless of
+legacy role metadata. Other roster contacts are context, not automatically
+replacement alternatives. Check, in order:
 
 1. Official artist website contact, management, team, and footer pages.
 2. Artist Instagram bio and linked website or Linktree-style page.
@@ -72,14 +82,19 @@ Choose exactly one:
 
 - `current`: strong evidence supports the existing contact as a current
   manager/management contact. Do not include alternatives.
-- `changed`: current public evidence points to a different manager contact.
-  Include at least one evidence-backed alternative.
+- `changed`: current public evidence points to a genuinely new manager contact
+  that is missing from the supplied roster. Include at least one
+  evidence-backed new alternative.
 - `stale`: evidence indicates the existing contact is no longer a current
-  manager contact, but no defensible replacement was found. Do not include
-  alternatives.
+  manager contact. Do not include alternatives. If another valid manager email
+  already exists in the roster, explicitly identify that remaining stored
+  contact in evidence/notes and submit `stale`; approving it quarantines only
+  the target.
 - `ambiguous`: the existing contact and/or alternatives leave multiple
-  plausible current manager contacts. Include at least one alternative and
-  explain the conflict.
+  plausible current manager contacts. Explain the conflict. Existing roster
+  contacts may be the entire ambiguity and must be identified as already
+  stored, not submitted as alternatives. Include alternatives only for
+  genuinely new evidence-backed addresses.
 - `unverified`: bounded public research could neither confirm nor contradict
   the existing contact.
 
@@ -92,7 +107,8 @@ Confidence applies to the finding:
 Every result needs one to ten public source URLs and a concise evidence blurb
 that explains what was checked and why the finding follows.
 
-Alternative contacts must be manager/management emails and need their own
+Alternative contacts must be genuinely new manager/management emails absent
+from the complete supplied roster and need their own
 source URLs, evidence, and confidence. Prefer a named manager's direct
 professional email, then a management-specific inbox, then an official general
 management-company inbox. Never include the audited email as an alternative.
@@ -103,7 +119,12 @@ two public addresses proving the company pattern.
 
 Submit exactly one compact JSON object:
 
-`{"jobId":"...","claimToken":"...","finding":"current|changed|stale|ambiguous|unverified","sourceUrls":["https://..."],"evidence":"...","confidence":"high|medium|low","notes":"optional bounded research summary","alternatives":[{"email":"...","name":"... or null","role":"management","sourceUrls":["https://..."],"evidence":"...","confidence":"high|medium|low"}]}`
+`{"jobId":"...","claimToken":"...","finding":"current|changed|stale|ambiguous|unverified","sourceUrls":["https://..."],"evidence":"...","confidence":"high|medium|low","notes":"optional bounded research summary","alternatives":[{"email":"...","name":"... or null","role":"management","sourceUrls":["https://..."],"evidence":"...","confidence":"high|medium|low"}],"rosterReview":[{"rosterEntryId":"exact supplied id","assessment":"current|stale|coexisting|conflicting|unverified","notes":"what was checked and how this entry relates to the target"}]}`
+
+`rosterReview` must contain every supplied roster entry exactly once, including
+the target. Existing roster contacts must remain separate. Never submit a
+roster email as an alternative. The server rejects alternatives that match
+either the immutable run snapshot or current stored contacts.
 
 A `409` means the claim expired or was reassigned. Do not retry with another
 identifier. Finish with a concise statement of the submitted finding.
