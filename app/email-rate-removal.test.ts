@@ -16,7 +16,11 @@ test("email template settings no longer expose rate configuration", () => {
   assert.doesNotMatch(settingsIndex, /default_rate|default rate/i);
   assert.doesNotMatch(templateSettings, /customPrice|["']rate["']/);
   assert.match(templateSettings, /supportedTemplateVars/);
-  assert.match(templateSettings, /normalizeDefaultTemplateContent/);
+  assert.match(templateSettings, /normalizeTemplateContent/);
+
+  const template = source("lib/template.ts");
+  assert.doesNotMatch(template, /LEGACY_(?:FIXED|VARIABLE)_RATE_DEFAULT/);
+  assert.doesNotMatch(template, /htmlBody === LEGACY_/);
 });
 
 test("live, scheduled, follow-up, and preview rendering omit custom prices", () => {

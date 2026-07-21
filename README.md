@@ -382,13 +382,13 @@ Edit and preview each template independently at **Settings → Email template**.
 "Reset to default" restores the selected normal or festival seed; follow-up
 reset copies the current normal-show template. Existing saved normal templates
 are preserved. Legacy rate placeholders are stripped when templates are loaded,
-saved, previewed, or rendered, and unchanged legacy seeds are upgraded
-automatically. Existing contact custom-price data and the legacy default-rate
-setting remain stored for Sheet and database compatibility, but outreach email
-templates no longer use them. Pending legacy scheduled snapshots are normalized
-before their first provider attempt; an existing immutable provider request
-that still contains legacy pricing is blocked for manual review instead of
-being retried.
+saved, previewed, or rendered. Legacy rate blocks are normalized generically
+without matching an entire historical template. Existing contact custom-price
+data and the legacy default-rate setting remain stored for Sheet and database
+compatibility, but outreach email templates no longer use them. Pending legacy
+scheduled snapshots are normalized before their first provider attempt; an
+existing immutable provider request that still contains legacy pricing is
+blocked for manual review instead of being retried.
 
 ## Deploying to Vercel
 

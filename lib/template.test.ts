@@ -11,7 +11,6 @@ import {
   FESTIVAL_TEMPLATE_HTML,
   FESTIVAL_TEMPLATE_SUBJECT,
   FOLLOW_UP_TEMPLATE_NAME,
-  normalizeDefaultTemplateContent,
   normalizeLegacyOutreachSnapshot,
   normalizeLegacyRateTemplateHtml,
   normalizeLegacyRateTemplateVariable,
@@ -261,7 +260,7 @@ test("festival selection and variable validation are purpose-aware", () => {
   );
 });
 
-test("legacy saved templates and built-in defaults normalize without pricing", () => {
+test("legacy saved templates and old default content normalize generically", () => {
   assert.deepEqual(
     normalizeTemplateContent({
       subject: "{{artist}} {{ rate }}",
@@ -273,21 +272,26 @@ test("legacy saved templates and built-in defaults normalize without pricing", (
     },
   );
 
-  const oldDefault = `<html>
-  <body>
-    <p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p>
-    <p>Gave a brief summary of my rates/deliverables below, and I'm happy to work with you to meet your needs!</p>
-    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
-    <p>My standard {{sender_city}} show rate is {{rate}} for photo/video, or $200 for just photo.</p>
-    <p>You can check out some examples of my previous work at <a href="{{portfolio_url}}">{{portfolio_url}}</a></p>
-    <p>I look forward to hearing from you soon!</p>
-    <p>Best,<br>
-       {{sender_name}}<br>
-       <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
-    </p>
-  </body>
-</html>`;
-  const normalized = normalizeDefaultTemplateContent({
+  const oldDefault = DEFAULT_TEMPLATE_HTML
+    .replace(
+      "Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!",
+      "Gave a brief summary of my rates/deliverables below, and I'm happy to work with you to meet your needs!",
+    )
+    .replace(
+      "    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>",
+      `    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
+    <p>My standard {{sender_city}} show rate is {{rate}} for photo/video, or $200 for just photo.</p>`,
+    );
+  assert.notEqual(oldDefault, DEFAULT_TEMPLATE_HTML);
+  assert.match(
+    oldDefault,
+    /Gave a brief summary of my rates\/deliverables below/,
+  );
+  assert.match(
+    oldDefault,
+    /My standard \{\{sender_city\}\} show rate is \{\{rate\}\} for photo\/video, or \$200 for just photo\./,
+  );
+  const normalized = normalizeTemplateContent({
     subject: "{{artist}}",
     htmlBody: oldDefault,
   });
@@ -304,7 +308,7 @@ test("legacy saved templates and built-in defaults normalize without pricing", (
       "$400 for photo/video, or $200 for just photo, more details in my rate card.",
     );
   assert.equal(
-    normalizeDefaultTemplateContent({
+    normalizeTemplateContent({
       subject: "{{artist}}",
       htmlBody: fixedRateDefault,
     }).htmlBody,
@@ -350,7 +354,7 @@ test("follow-up template cloning is a one-time independent snapshot", () => {
   );
   assert.match(
     source,
-    /const original = await ensureDefaultTemplate\(\)[\s\S]*update: \{\},[\s\S]*persistNormalizedTemplate\(template, normalizeDefaultTemplateContent\)/,
+    /const original = await ensureDefaultTemplate\(\)[\s\S]*update: \{\},[\s\S]*persistNormalizedTemplate\(template, normalizeTemplateContent\)/,
   );
   assert.match(
     source,

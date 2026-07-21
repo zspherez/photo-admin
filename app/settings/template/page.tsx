@@ -14,7 +14,6 @@ import {
   ensureFestivalTemplate,
   ensureFollowUpTemplate,
   extractVars,
-  normalizeDefaultTemplateContent,
   normalizeTemplateContent,
   supportedTemplateVars,
   unsupportedTemplateVars,
@@ -78,20 +77,11 @@ function templateUtmKind(kind: TemplateKind): "original" | "follow_up" {
   return kind === "follow_up" ? "follow_up" : "original";
 }
 
-function normalizeTemplateForKind(
-  kind: TemplateKind,
-  content: { subject: string; htmlBody: string },
-) {
-  return kind === "festival"
-    ? normalizeTemplateContent(content)
-    : normalizeDefaultTemplateContent(content);
-}
-
 async function saveTemplate(formData: FormData) {
   "use server";
   await requireServerActionAuth("/settings/template");
   const kind = requiredTemplateKind(formData.get("kind"));
-  const content = normalizeTemplateForKind(kind, {
+  const content = normalizeTemplateContent({
     subject: (formData.get("subject") as string)?.trim() ?? "",
     htmlBody: (formData.get("html") as string) ?? "",
   });

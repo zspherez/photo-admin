@@ -181,6 +181,28 @@ test("later template and contact/default changes cannot hide rate-contextual sna
   }
 });
 
+test("old default-style scheduled content normalizes through generic rate rules", () => {
+  assert.deepEqual(
+    protectLegacyScheduledSnapshot({
+      status: "scheduled",
+      finalSubject: "Artist availability",
+      finalHtml:
+        "<p>Gave a brief summary of my rates/deliverables below, and I'm happy to work with you to meet your needs!</p>" +
+        "<p>My minimum deliverables include 25 photos and 3-5 clips night of show.</p>" +
+        "<p>My standard NYC show rate is $650 for photo/video, or $200 for just photo.</p>" +
+        "<p>Keep me.</p>",
+    }),
+    {
+      kind: "normalize",
+      subject: "Artist availability",
+      html:
+        "<p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p>" +
+        "<p>My minimum deliverables include 25 photos and 3-5 clips night of show.</p>" +
+        "<p>Keep me.</p>",
+    },
+  );
+});
+
 test("immutable retry attempts containing legacy pricing fail closed", () => {
   const immutableRequest = {
     subject: "Artist availability",
