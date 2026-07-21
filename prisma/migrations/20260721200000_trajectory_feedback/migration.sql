@@ -263,6 +263,7 @@ AS $$
 DECLARE
   recommendation_show_id TEXT;
   recommendation_artist_id TEXT;
+  parent_recommendation_id TEXT;
 BEGIN
   IF (
     TG_OP = 'UPDATE'
@@ -291,6 +292,16 @@ BEGIN
   END IF;
   IF recommendation_show_id <> NEW."showId" OR recommendation_artist_id <> NEW."artistId" THEN
     RAISE EXCEPTION 'Outreach and trajectory recommendation attribution do not match';
+  END IF;
+  IF NEW."parentOutreachId" IS NOT NULL THEN
+    SELECT parent."trajectoryRecommendationId"
+    INTO parent_recommendation_id
+    FROM "Outreach" AS parent
+    WHERE parent."id" = NEW."parentOutreachId";
+
+    IF parent_recommendation_id IS DISTINCT FROM NEW."trajectoryRecommendationId" THEN
+      RAISE EXCEPTION 'Follow-up outreach trajectory attribution must match its parent';
+    END IF;
   END IF;
   RETURN NEW;
 END;

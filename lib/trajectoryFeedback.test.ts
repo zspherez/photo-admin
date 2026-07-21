@@ -276,6 +276,34 @@ test("stale recommendations still accept historical outcomes but not new decisio
   );
 });
 
+test("outcome retries remain idempotent after the run stops accepting new outcomes", async () => {
+  const mutableRecommendation = recommendation();
+  const state = fakePersistence({
+    recommendations: [mutableRecommendation],
+  });
+  const input = {
+    ...attribution,
+    attended: true,
+    keeperCount: 4,
+    idempotencyKey: "stable-outcome-key",
+  };
+  const first = await recordTrajectoryOutcome(input, {
+    persistence: state.persistence,
+    now: () => now,
+  });
+
+  mutableRecommendation.runStatus = "failed";
+
+  const retry = await recordTrajectoryOutcome(input, {
+    persistence: state.persistence,
+    now: () => new Date(now.getTime() + 1),
+  });
+  assert.equal(first.created, true);
+  assert.equal(retry.created, false);
+  assert.equal(retry.outcome.id, first.outcome.id);
+  assert.equal(state.outcomes.length, 1);
+});
+
 test("outcome validation enforces utility ranges and attendance consistency", () => {
   assert.throws(() =>
     trajectoryOutcomeInputSchema.parse({

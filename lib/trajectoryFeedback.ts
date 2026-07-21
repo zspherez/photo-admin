@@ -552,7 +552,6 @@ export async function recordTrajectoryOutcome(
       input.recommendationId,
     );
     assertExactAttribution(recommendation, input);
-    assertKnownHistoricalRun(recommendation);
 
     const existing = await tx.findOutcomeByIdempotencyKey(
       input.idempotencyKey,
@@ -561,6 +560,8 @@ export async function recordTrajectoryOutcome(
       assertSameOutcome(existing, input);
       return { created: false, outcome: existing };
     }
+
+    assertKnownHistoricalRun(recommendation);
 
     if (input.supersedesId) {
       const superseded = await tx.findOutcome(input.supersedesId);

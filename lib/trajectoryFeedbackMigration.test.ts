@@ -54,4 +54,8 @@ test("SQL triggers enforce append-only corrections and exact outreach provenance
     migration,
     /Outreach and trajectory recommendation attribution do not match/,
   );
+  assert.match(
+    migration,
+    /Follow-up outreach trajectory attribution must match its parent/,
+  );
 });
