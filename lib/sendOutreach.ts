@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Prisma } from "@prisma/client";
+import { Prisma, type EmailTemplatePurpose } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   festivalLeadTimeError,
@@ -13,6 +13,7 @@ import {
   normalizeLegacyRateTemplateHtml,
   normalizeLegacyOutreachSnapshot,
   normalizeLegacyRateTemplateVariable,
+  originalTemplatePurposeForShow,
 } from "@/lib/template";
 import {
   appendEmailUtmToHtml,
@@ -180,6 +181,7 @@ interface PreparedOutreach {
   artistId: string;
   contactId: string;
   templateId: string;
+  templatePurpose: EmailTemplatePurpose;
   recipients: string[];
   fullTeamSend: boolean;
   subject: string;
@@ -2421,7 +2423,11 @@ async function prepareOriginalOutreach(
   }
   const festivalBlocked = festivalOutreachBlockingReason(show, "original");
   if (festivalBlocked) return { error: festivalBlocked };
+  const templatePurpose = originalTemplatePurposeForShow(show);
   const template = await ensureOriginalTemplateForShow(show);
+  if (template.purpose !== templatePurpose) {
+    return { error: "The selected outreach template purpose is unavailable" };
+  }
   if (!contact) return { error: "Contact not found" };
   if (contact.state !== "active") {
     return { error: "Selected contact is quarantined" };
@@ -2463,6 +2469,7 @@ async function prepareOriginalOutreach(
     artistId: contact.artistId,
     contactId,
     templateId: template.id,
+    templatePurpose,
     recipients: sendability.recipients,
     fullTeamSend: sendability.fullTeamSend,
     subject: normalizedSubjectOverride || applyTemplate(template.subject, vars),
@@ -2539,6 +2546,9 @@ async function prepareFollowUpOutreach(
   if (!parent || parent.kind !== "original") {
     return { error: "Original outreach not found" };
   }
+  if (template.purpose !== "follow_up") {
+    return { error: "The follow-up template purpose is unavailable" };
+  }
   if (parent.show.syncStatus !== "active") {
     return { error: showInactiveError(parent.show.syncStatus) };
   }
@@ -2587,6 +2597,7 @@ async function prepareFollowUpOutreach(
     artistId: parent.artistId,
     contactId: parent.contactId,
     templateId: template.id,
+    templatePurpose: "follow_up",
     recipients: eligibility.recipients,
     fullTeamSend: eligibility.fullTeamSend,
     subject: applyTemplate(template.subject, vars),
@@ -3191,6 +3202,22 @@ async function preparedDeliveryPolicyBlockingReason(
   return null;
 }
 
+export function preparedTemplatePurposeBlockingReason(
+  show: { isFestival: boolean },
+  prep: {
+    kind: OutreachKindValue;
+    templatePurpose: EmailTemplatePurpose;
+  },
+): string | null {
+  const expectedPurpose =
+    prep.kind === "follow_up"
+      ? "follow_up"
+      : originalTemplatePurposeForShow(show);
+  return prep.templatePurpose === expectedPurpose
+    ? null
+    : "Show festival classification changed while preparing outreach; retry to reprepare the correct template";
+}
+
 async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResult> {
   const now = new Date();
   return withSerializableRetry(async (tx) => {
@@ -3217,6 +3244,16 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
     ]);
     if (!show) {
       return { kind: "complete", result: { ok: false, error: "Show not found" } };
+    }
+    const templatePurposeBlocked = preparedTemplatePurposeBlockingReason(
+      show,
+      prep,
+    );
+    if (templatePurposeBlocked) {
+      return {
+        kind: "complete",
+        result: { ok: false, error: templatePurposeBlocked },
+      };
     }
     if (show.syncStatus !== "active") {
       return {
@@ -5077,6 +5114,13 @@ async function schedulePreparedOutreach(
       }),
     ]);
     if (!show) return { ok: false, error: "Show not found" };
+    const templatePurposeBlocked = preparedTemplatePurposeBlockingReason(
+      show,
+      prep,
+    );
+    if (templatePurposeBlocked) {
+      return { ok: false, error: templatePurposeBlocked };
+    }
     if (show.syncStatus !== "active") {
       return { ok: false, error: showInactiveError(show.syncStatus) };
     }

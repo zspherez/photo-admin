@@ -31,6 +31,7 @@ import {
   isProviderAcceptanceUnresolvedAttempt,
   recipientSnapshotConflict,
   protectLegacyScheduledSnapshot,
+  preparedTemplatePurposeBlockingReason,
   schedulingTimeTemplateProvenance,
   type DeliveryPolicyAttempt,
   type EvaluateOutreachDeliveryPolicyInput,
@@ -55,6 +56,44 @@ import {
 
 const NOW = new Date("2026-07-16T04:00:00.000Z");
 const CREDENTIAL_SCOPE = getResendCredentialScope("re_original")!;
+
+test("transactional claims reject original template purpose drift", () => {
+  assert.equal(
+    preparedTemplatePurposeBlockingReason(
+      { isFestival: false },
+      { kind: "original", templatePurpose: "original" },
+    ),
+    null,
+  );
+  assert.equal(
+    preparedTemplatePurposeBlockingReason(
+      { isFestival: true },
+      { kind: "original", templatePurpose: "festival" },
+    ),
+    null,
+  );
+  assert.match(
+    preparedTemplatePurposeBlockingReason(
+      { isFestival: true },
+      { kind: "original", templatePurpose: "original" },
+    ) ?? "",
+    /classification changed.*retry to reprepare/,
+  );
+  assert.match(
+    preparedTemplatePurposeBlockingReason(
+      { isFestival: false },
+      { kind: "original", templatePurpose: "festival" },
+    ) ?? "",
+    /classification changed.*retry to reprepare/,
+  );
+  assert.equal(
+    preparedTemplatePurposeBlockingReason(
+      { isFestival: true },
+      { kind: "follow_up", templatePurpose: "follow_up" },
+    ),
+    null,
+  );
+});
 
 test("historical sent attempts remain untouched by legacy pricing protection", () => {
   const immutableRequest = {

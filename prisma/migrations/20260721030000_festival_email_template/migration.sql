@@ -131,7 +131,7 @@ SELECT
   '<html>
   <body>
     <p>Hi {{manager_name}},</p>
-    <p>I''m reaching out to request photo credentials and permission to photograph {{artist}}''s set at {{festival_name}} on {{date}} in {{location}}.</p>
+    <p>I''m reaching out to request photo credentials and permission to photograph {{artist}}''s set at {{festival_name}} on {{date}}{{location_clause}}.</p>
     <p>I specialize in live music photography and would love to provide polished coverage of the set. You can view recent concert and festival work at <a href="{{portfolio_url}}">{{portfolio_url}}</a>.</p>
     <p>If photo access is coordinated by the festival press team, I''d appreciate being pointed to the right contact or credential instructions.</p>
     <p>Best,<br>

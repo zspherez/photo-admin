@@ -246,7 +246,9 @@ populated from **Settings → General** or the Contact/Show rows:
 - `{{sender_name}}`, `{{sender_email}}`, `{{sender_phone}}`, `{{sender_city}}`,
   `{{portfolio_url}}`
 - Festival outreach also supports `{{festival_name}}` (event name, falling back
-  to venue) and `{{location}}` (city/region, with a venue fallback).
+  to venue), `{{location}}` (city/region, with a venue fallback), and
+  `{{location_clause}}` (a safe optional ` in …`/` at …` phrase for natural
+  punctuation).
 
 Edit and preview each template independently at **Settings → Email template**.
 "Reset to default" restores the selected normal or festival seed; follow-up

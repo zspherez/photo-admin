@@ -48,6 +48,7 @@ export const FESTIVAL_TEMPLATE_VARS = [
   ...COMMON_TEMPLATE_VARS,
   "festival_name",
   "location",
+  "location_clause",
 ] as const;
 
 export const SUPPORTED_TEMPLATE_VARS = FESTIVAL_TEMPLATE_VARS;
@@ -413,7 +414,7 @@ export const FESTIVAL_TEMPLATE_SUBJECT =
 export const FESTIVAL_TEMPLATE_HTML = `<html>
   <body>
     <p>Hi {{manager_name}},</p>
-    <p>I'm reaching out to request photo credentials and permission to photograph {{artist}}'s set at {{festival_name}} on {{date}} in {{location}}.</p>
+    <p>I'm reaching out to request photo credentials and permission to photograph {{artist}}'s set at {{festival_name}} on {{date}}{{location_clause}}.</p>
     <p>I specialize in live music photography and would love to provide polished coverage of the set. You can view recent concert and festival work at <a href="{{portfolio_url}}">{{portfolio_url}}</a>.</p>
     <p>If photo access is coordinated by the festival press team, I'd appreciate being pointed to the right contact or credential instructions.</p>
     <p>Best,<br>
@@ -556,18 +557,37 @@ export interface ShowContext {
   countryName?: string | null;
 }
 
+function usableFestivalText(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  return /^(?:unknown|tba|tbd|n\/a|not available|not provided)$/i.test(trimmed)
+    ? ""
+    : trimmed;
+}
+
 function festivalLocation(ctx: ShowContext): string {
-  const city = ctx.city?.trim() ?? "";
+  const city = usableFestivalText(ctx.city);
   const region =
-    ctx.state?.trim() ||
-    ctx.countryName?.trim() ||
-    ctx.countryCode?.trim() ||
-    "";
+    usableFestivalText(ctx.state) ||
+    usableFestivalText(ctx.countryName) ||
+    usableFestivalText(ctx.countryCode);
   const location = [city, region]
     .filter(Boolean)
     .filter((value, index, values) => values.indexOf(value) === index)
     .join(", ");
-  return location || ctx.venueName.trim() || "the festival venue";
+  return location || usableFestivalText(ctx.venueName) || "the festival venue";
+}
+
+function festivalLocationClause(
+  ctx: ShowContext,
+  festivalName: string,
+  location: string,
+): string {
+  const comparable = (value: string) => value.trim().toLowerCase();
+  if (comparable(location) === comparable(festivalName)) return "";
+  const venue = usableFestivalText(ctx.venueName);
+  return venue && comparable(location) === comparable(venue)
+    ? ` at ${location}`
+    : ` in ${location}`;
 }
 
 export async function buildVarsForShow(
@@ -587,6 +607,11 @@ export async function buildVarsForShow(
     readSetting("sender_phone", ""),
     readSetting("sender_city", ""),
   ]);
+  const festivalName =
+    usableFestivalText(ctx.eventName) ||
+    usableFestivalText(ctx.venueName) ||
+    "the festival";
+  const location = festivalLocation(ctx);
   return {
     artist: ctx.artistName,
     venue: ctx.venueName,
@@ -602,8 +627,8 @@ export async function buildVarsForShow(
     sender_phone: senderPhone,
     sender_city: senderCity,
     manager_name: ctx.managerName?.trim() || "there",
-    festival_name:
-      ctx.eventName?.trim() || ctx.venueName.trim() || "the festival",
-    location: festivalLocation(ctx),
+    festival_name: festivalName,
+    location,
+    location_clause: festivalLocationClause(ctx, festivalName, location),
   };
 }

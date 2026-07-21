@@ -28,6 +28,41 @@ test("every original send path selects the show-purpose template before snapshot
   assert.match(festival, /scheduleOutreach\(\{ showId, contactId \}/);
 });
 
+test("immediate and scheduled claims recheck template purpose before snapshots", () => {
+  const send = source("lib/sendOutreach.ts");
+  const immediate = send.slice(
+    send.indexOf("async function claimImmediateOutreach"),
+    send.indexOf("async function releasePreparationFailure"),
+  );
+  const schedule = send.slice(
+    send.indexOf("async function schedulePreparedOutreach"),
+    send.indexOf("export async function scheduleOutreach"),
+  );
+
+  for (const claim of [immediate, schedule]) {
+    assert.match(claim, /withSerializableRetry/);
+    assert.match(claim, /tx\.show\.findUnique/);
+    assert.match(
+      claim,
+      /preparedTemplatePurposeBlockingReason\(\s*show,\s*prep/,
+    );
+    assert.ok(
+      claim.indexOf("preparedTemplatePurposeBlockingReason") <
+        claim.indexOf("finalSubject: prep.subject"),
+    );
+  }
+  assert.match(send, /templatePurpose,\s*recipients:/);
+  assert.match(send, /templatePurpose: "follow_up"/);
+  assert.match(
+    send,
+    /RESEND_TEST_OVERRIDE|deliverySettings\.testOverride/,
+  );
+  assert.match(
+    send,
+    /isolationLevel: Prisma\.TransactionIsolationLevel\.Serializable/,
+  );
+});
+
 test("Customize uses the festival template and still personalizes each selected manager", () => {
   const page = source(
     "app/dashboard/customize/[showId]/[contactId]/page.tsx",
