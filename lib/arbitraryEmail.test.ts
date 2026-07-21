@@ -501,7 +501,13 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
     migrationNames.indexOf(directOutreachMigrationName) <
       migrationNames.indexOf(structuredDirectOutreachMigrationName),
   );
-  assert.equal(migrationNames.at(-1), structuredDirectOutreachMigrationName);
+  const trajectoryFeedbackMigrationName =
+    "20260721200000_trajectory_feedback";
+  assert.ok(
+    migrationNames.indexOf(structuredDirectOutreachMigrationName) <
+      migrationNames.indexOf(trajectoryFeedbackMigrationName),
+  );
+  assert.equal(migrationNames.at(-1), trajectoryFeedbackMigrationName);
 
   const migration = readFileSync(
     new URL(`${migrationName}/migration.sql`, migrationsDirectory),

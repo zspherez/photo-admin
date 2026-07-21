@@ -93,6 +93,33 @@ enum TrajectoryImportIssueCode {
   show_artist_membership_missing
 }
 
+enum TrajectoryFeedbackAction {
+  selected
+  declined
+  saved
+  dismissed
+  manual_override
+}
+
+enum TrajectoryAccessOutcome {
+  none
+  guestlist
+  photo_pass
+  other
+}
+
+enum TrajectoryShootability {
+  good
+  ok
+  poor
+}
+
+enum TrajectoryVenueAccessibility {
+  high
+  medium
+  low
+}
+
 model TrajectoryModelRun {
   id                    String                     @id @default(cuid())
   producer              String
@@ -179,6 +206,9 @@ model TrajectoryRecommendation {
   rationale         Json?
   sourceFingerprint String
   createdAt         DateTime            @default(now())
+  feedback          TrajectoryFeedbackEvent[]
+  outcomes          TrajectoryShowOutcome[]
+  outreaches        Outreach[]
 
   @@unique([runId, showId, runArtistId, arm])
   @@unique([runId, arm, listRank])
@@ -197,6 +227,46 @@ model TrajectoryImportIssue {
   createdAt         DateTime                  @default(now())
 
   @@index([runId, code])
+}
+
+model TrajectoryFeedbackEvent {
+  id               String                     @id @default(cuid())
+  recommendationId String
+  recommendation   TrajectoryRecommendation   @relation(fields: [recommendationId], references: [id], onDelete: Restrict)
+  action           TrajectoryFeedbackAction
+  propensity       Float?
+  manualOverride   Boolean                    @default(false)
+  notes            String?
+  idempotencyKey   String                     @unique
+  supersedesId     String?                    @unique
+  supersedes       TrajectoryFeedbackEvent?   @relation("TrajectoryFeedbackSupersession", fields: [supersedesId], references: [id], onDelete: Restrict)
+  supersededBy     TrajectoryFeedbackEvent?   @relation("TrajectoryFeedbackSupersession")
+  recordedAt       DateTime                   @default(now())
+
+  @@index([recommendationId, recordedAt])
+  @@index([action, recordedAt])
+}
+
+model TrajectoryShowOutcome {
+  id                   String                          @id @default(cuid())
+  recommendationId     String
+  recommendation       TrajectoryRecommendation        @relation(fields: [recommendationId], references: [id], onDelete: Restrict)
+  attended             Boolean?
+  access               TrajectoryAccessOutcome?
+  keeperCount          Int?
+  relationshipValue    Int?
+  publicationValue     Int?
+  shootability         TrajectoryShootability?
+  venueAccessibility   TrajectoryVenueAccessibility?
+  notes                String?
+  idempotencyKey       String                          @unique
+  supersedesId         String?                         @unique
+  supersedes           TrajectoryShowOutcome?          @relation("TrajectoryOutcomeSupersession", fields: [supersedesId], references: [id], onDelete: Restrict)
+  supersededBy         TrajectoryShowOutcome?          @relation("TrajectoryOutcomeSupersession")
+  recordedAt           DateTime                        @default(now())
+
+  @@index([recommendationId, recordedAt])
+  @@index([recordedAt])
 }
 
 model SpotifyPlaylist {
@@ -678,6 +748,8 @@ model Outreach {
   contact                    Contact?              @relation(fields: [contactId], references: [id], onDelete: SetNull)
   templateId                 String?
   template                   EmailTemplate?        @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  trajectoryRecommendationId String?
+  trajectoryRecommendation   TrajectoryRecommendation? @relation(fields: [trajectoryRecommendationId], references: [id], onDelete: Restrict)
   finalSubject               String
   finalHtml                  String
   recipientEmails            String[]              @default([])
@@ -715,6 +787,7 @@ model Outreach {
   @@index([showId])
   @@index([contactId])
   @@index([artistId])
+  @@index([trajectoryRecommendationId])
   @@index([kind, status, scheduledFor])
   @@index([status, scheduledFor])
   @@index([status, nextAttemptAt])

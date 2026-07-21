@@ -63,6 +63,6 @@ test("trajectory schema remains an additive model-opinion layer", () => {
       /\b(momentum|trajectoryArm|modelStatus|probability|slatePosition)\b/i,
     );
   }
-  assert.doesNotMatch(schema, /model TrajectoryFeedbackEvent/);
-  assert.doesNotMatch(schema, /model TrajectoryShowOutcome/);
+  assert.match(schema, /model TrajectoryFeedbackEvent/);
+  assert.match(schema, /model TrajectoryShowOutcome/);
 });

@@ -58,8 +58,12 @@ async function main(): Promise<void> {
     trajectoryRunArtistProbe,
     trajectoryRecommendationProbe,
     trajectoryImportIssueProbe,
+    trajectoryFeedbackEventProbe,
+    trajectoryShowOutcomeProbe,
     trajectoryConstraintProbe,
     trajectoryReadyIndexProbe,
+    trajectoryFeedbackTriggerProbe,
+    trajectoryFeedbackIndexProbe,
   ] = await Promise.all([
     db.setting.findMany({
       where: {
@@ -116,6 +120,7 @@ async function main(): Promise<void> {
         expectedRecipientArtistId: true,
         expectedRecipientEmail: true,
         expectedRecipientUpdatedAt: true,
+        trajectoryRecommendationId: true,
       },
     }),
     db.$queryRaw<Array<{ constraintName: string; validated: boolean }>>(
@@ -535,6 +540,38 @@ async function main(): Promise<void> {
         createdAt: true,
       },
     }),
+    db.trajectoryFeedbackEvent.findMany({
+      take: 1,
+      select: {
+        id: true,
+        recommendationId: true,
+        action: true,
+        propensity: true,
+        manualOverride: true,
+        notes: true,
+        idempotencyKey: true,
+        supersedesId: true,
+        recordedAt: true,
+      },
+    }),
+    db.trajectoryShowOutcome.findMany({
+      take: 1,
+      select: {
+        id: true,
+        recommendationId: true,
+        attended: true,
+        access: true,
+        keeperCount: true,
+        relationshipValue: true,
+        publicationValue: true,
+        shootability: true,
+        venueAccessibility: true,
+        notes: true,
+        idempotencyKey: true,
+        supersedesId: true,
+        recordedAt: true,
+      },
+    }),
     db.$queryRaw<Array<{ constraintName: string; validated: boolean }>>(
       Prisma.sql`
         SELECT
@@ -549,7 +586,9 @@ async function main(): Promise<void> {
           AND table_row."relname" IN (
             'TrajectoryModelRun',
             'TrajectoryRunArtist',
-            'TrajectoryRecommendation'
+            'TrajectoryRecommendation',
+            'TrajectoryFeedbackEvent',
+            'TrajectoryShowOutcome'
           )
           AND constraint_row."contype" = 'c'
       `,
@@ -562,6 +601,43 @@ async function main(): Promise<void> {
           AND indexname = 'TrajectoryModelRun_one_ready_artist_trajectory_idx'
       `,
     ),
+    db.$queryRaw<
+      Array<{ triggerName: string; enabled: string }>
+    >(Prisma.sql`
+      SELECT
+        trigger_row."tgname" AS "triggerName",
+        trigger_row."tgenabled" AS "enabled"
+      FROM pg_trigger AS trigger_row
+      JOIN pg_class AS table_row
+        ON table_row.oid = trigger_row."tgrelid"
+      JOIN pg_namespace AS namespace_row
+        ON namespace_row.oid = table_row."relnamespace"
+      WHERE namespace_row."nspname" = current_schema()
+        AND NOT trigger_row."tgisinternal"
+        AND trigger_row."tgname" IN (
+          'TrajectoryFeedbackEvent_validate_supersession',
+          'TrajectoryFeedbackEvent_append_only',
+          'TrajectoryShowOutcome_validate_supersession',
+          'TrajectoryShowOutcome_append_only',
+          'Outreach_validate_trajectory_attribution'
+        )
+    `),
+    db.$queryRaw<Array<{ indexName: string }>>(Prisma.sql`
+      SELECT indexname AS "indexName"
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname IN (
+          'TrajectoryFeedbackEvent_idempotencyKey_key',
+          'TrajectoryFeedbackEvent_supersedesId_key',
+          'TrajectoryFeedbackEvent_recommendationId_recordedAt_idx',
+          'TrajectoryFeedbackEvent_action_recordedAt_idx',
+          'TrajectoryShowOutcome_idempotencyKey_key',
+          'TrajectoryShowOutcome_supersedesId_key',
+          'TrajectoryShowOutcome_recommendationId_recordedAt_idx',
+          'TrajectoryShowOutcome_recordedAt_idx',
+          'Outreach_trajectoryRecommendationId_idx'
+        )
+    `),
   ]);
   const values = new Map(settings.map((setting) => [setting.key, setting.value]));
 
@@ -602,8 +678,12 @@ async function main(): Promise<void> {
           trajectoryRunArtistProbe,
           trajectoryRecommendationProbe,
           trajectoryImportIssueProbe,
+          trajectoryFeedbackEventProbe,
+          trajectoryShowOutcomeProbe,
           trajectoryConstraintProbe,
           trajectoryReadyIndexProbe,
+          trajectoryFeedbackTriggerProbe,
+          trajectoryFeedbackIndexProbe,
         ].every(Array.isArray) &&
         contactAuditRosterConstraintProbe.length === 6 &&
         contactAuditRosterConstraintProbe.every(
@@ -622,14 +702,19 @@ async function main(): Promise<void> {
               "Outreach_dispatch_recipient_identity_check" &&
             constraint.validated,
         ) &&
-        trajectoryConstraintProbe.length >= 10 &&
+        trajectoryConstraintProbe.length >= 31 &&
         trajectoryConstraintProbe.every((constraint) => constraint.validated) &&
         trajectoryReadyIndexProbe.some(
           (index) =>
             index.indexDefinition.includes("UNIQUE") &&
             index.indexDefinition.includes("status") &&
             index.indexDefinition.includes("ready"),
-        ),
+        ) &&
+        trajectoryFeedbackTriggerProbe.length === 5 &&
+        trajectoryFeedbackTriggerProbe.every(
+          (trigger) => trigger.enabled === "O",
+        ) &&
+        trajectoryFeedbackIndexProbe.length === 9,
       configuredSpreadsheetId:
         values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,
       configuredSheetTab: values.get(SHEETS_TAB_SETTING) ?? null,
@@ -668,6 +753,11 @@ async function main(): Promise<void> {
         "TrajectoryRunArtist",
         "TrajectoryRecommendation",
         "TrajectoryImportIssue",
+        "TrajectoryFeedbackEvent",
+        "TrajectoryShowOutcome",
+        "Outreach.trajectoryRecommendationId",
+        "Trajectory feedback append-only triggers",
+        "Trajectory feedback indexes",
         "TrajectoryModelRun_one_ready_artist_trajectory_idx",
       ],
     })
