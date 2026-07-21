@@ -73,6 +73,11 @@ test("Customize actions validate the selected contact and preserve failures in p
   );
   assert.match(actions, /sendOutreach\(input\)/);
   assert.match(actions, /scheduleOutreach\(input, getNextMondaySlot\(\)\)/);
+  assert.match(
+    actions,
+    /scheduleOutreach\(input, getNextNormalOutreachDispatch\(\)\)/,
+  );
+  assert.match(actions, /intent === "queue"/);
   assert.match(actions, /return actionError\(selectedContactId/);
   assert.doesNotMatch(
     actions,
@@ -126,10 +131,25 @@ test("immediate, scheduled, and retry delivery use the selected immutable snapsh
   assert.match(immediate, /fullTeamSend: prep\.fullTeamSend/);
   assert.match(schedule, /recipientEmails: prep\.recipients/);
   assert.match(schedule, /fullTeamSend: prep\.fullTeamSend/);
+  assert.match(schedule, /finalSubject: prep\.subject/);
+  assert.match(schedule, /finalHtml: prep\.html/);
+  assert.match(
+    schedule,
+    /expectedRecipientIdentityData\(prep\.expectedRecipientIdentity\)/,
+  );
+  assert.match(schedule, /sameExpectedRecipientIdentity\(/);
+  assert.match(
+    schedule,
+    /scheduled\.finalSubject === prep\.subject[\s\S]*scheduled\.finalHtml === prep\.html[\s\S]*scheduled\.scheduledFor\?\.getTime\(\) === scheduledFor\.getTime\(\)[\s\S]*ok: true/,
+  );
   assert.match(locked, /outreach\.fullTeamSend/);
   assert.match(locked, /stored: outreach/);
   assert.match(locked, /"updatedAt"/);
   assert.match(locked, /customizeRecipientIdentityError/);
+  assert.match(
+    locked,
+    /if \(identityError\)[\s\S]*state: "manual_review"/,
+  );
   assert.match(
     send,
     /preparedDeliveryPolicyBlockingReason[\s\S]*FROM "Contact"[\s\S]*FOR UPDATE/,
@@ -148,8 +168,181 @@ test("immediate, scheduled, and retry delivery use the selected immutable snapsh
   );
   assert.match(
     send,
+    /expectedRecipientIdentity: storedExpectedRecipientIdentity\(row\)/,
+  );
+  assert.match(
+    send,
     /recipients: currentPolicy\.currentRecipients,[\s\S]*fullTeamSend: currentPolicy\.fullTeamSend,[\s\S]*mode: "retry"/,
   );
+});
+
+test("scheduled Customize identity is persisted and constrained as one snapshot", () => {
+  const send = source("lib/sendOutreach.ts");
+  const migration = source(
+    "prisma/migrations/20260721050000_queue_next_dispatch/migration.sql",
+  );
+
+  assert.match(send, /expectedRecipientContactId: identity\?\.contactId/);
+  assert.match(send, /expectedRecipientArtistId: identity\?\.artistId/);
+  assert.match(send, /expectedRecipientEmail: identity\?\.normalizedEmail/);
+  assert.match(
+    send,
+    /expectedRecipientUpdatedAt: identity[\s\S]*new Date\(identity\.updatedAt\)/,
+  );
+  assert.match(
+    send,
+    /updatedAt: row\.expectedRecipientUpdatedAt!\.toISOString\(\)/,
+  );
+  assert.match(
+    migration,
+    /Outreach_expected_recipient_identity_check[\s\S]*expectedRecipientContactId" IS NULL[\s\S]*expectedRecipientUpdatedAt" IS NULL[\s\S]*expectedRecipientContactId" IS NOT NULL[\s\S]*expectedRecipientUpdatedAt" IS NOT NULL/,
+  );
+});
+
+test("legacy contact schedules are safely backfilled without guessing changed identity", () => {
+  const migration = source(
+    "prisma/migrations/20260721050000_queue_next_dispatch/migration.sql",
+  );
+  const quarantine = migration.slice(
+    migration.indexOf('UPDATE "Outreach" AS outreach'),
+    migration.indexOf(
+      'UPDATE "Outreach" AS outreach',
+      migration.indexOf('UPDATE "Outreach" AS outreach') + 1,
+    ),
+  );
+  const backfill = migration.slice(
+    migration.indexOf(
+      'UPDATE "Outreach" AS outreach',
+      migration.indexOf('UPDATE "Outreach" AS outreach') + 1,
+    ),
+    migration.indexOf('ALTER TABLE "Outreach"', 200),
+  );
+
+  for (const block of [quarantine, backfill]) {
+    assert.match(block, /'queued',\s+'scheduled',\s+'retry_scheduled',\s+'failed'/);
+    assert.match(block, /contact\."artistId" = outreach\."artistId"/);
+    assert.match(block, /contact\."state" = 'active'/);
+    assert.match(block, /contact\."updatedAt" <= outreach\."createdAt"/);
+    assert.match(
+      block,
+      /unnest\(outreach\."recipientEmails"\)[\s\S]*lower\(btrim\(recipient\."email"\)\) = lower\(btrim\(contact\."email"\)\)/,
+    );
+    assert.doesNotMatch(block, /fullTeamSend|templateId|singleRecipient/);
+  }
+  assert.match(
+    quarantine,
+    /"status" = 'manual_review'[\s\S]*"contactId" IS NULL[\s\S]*OR NOT EXISTS/,
+  );
+  assert.match(quarantine, /contact\."email" IS NOT NULL/);
+  assert.match(quarantine, /scheduledFor" = NULL/);
+  assert.match(quarantine, /claimToken" = NULL/);
+  assert.match(
+    backfill,
+    /"expectedRecipientContactId" = contact\."id"[\s\S]*"expectedRecipientEmail" = lower\(btrim\(contact\."email"\)\)[\s\S]*"expectedRecipientUpdatedAt" = contact\."updatedAt"/,
+  );
+  assert.doesNotMatch(migration, /UPDATE "OutreachSendAttempt"/);
+});
+
+test("dispatch identity constraint rejects old writers while preserving terminal history", () => {
+  const migration = source(
+    "prisma/migrations/20260721050000_queue_next_dispatch/migration.sql",
+  );
+  const constraint = migration.slice(
+    migration.indexOf(
+      'ADD CONSTRAINT "Outreach_dispatch_recipient_identity_check"',
+    ),
+    migration.indexOf('ALTER TABLE "ArbitraryEmail"'),
+  );
+
+  assert.match(
+    constraint,
+    /"status" NOT IN \('queued', 'scheduled', 'retry_scheduled'\)/,
+  );
+  assert.match(
+    constraint,
+    /OR "contactId" IS NULL[\s\S]*"expectedRecipientContactId" IS NOT NULL[\s\S]*"expectedRecipientUpdatedAt" IS NOT NULL/,
+  );
+  assert.match(
+    constraint,
+    /"expectedRecipientContactId" = "contactId"[\s\S]*"expectedRecipientArtistId" = "artistId"/,
+  );
+  assert.doesNotMatch(constraint, /'sent'|'test'|'cancelled'|'manual_review'/);
+
+  const dispatchIdentityAllowed = ({
+    status,
+    contactId,
+    expectedContactId,
+    expectedArtistId,
+    artistId,
+    expectedEmail,
+    expectedUpdatedAt,
+  }: {
+    status: string;
+    contactId: string | null;
+    expectedContactId: string | null;
+    expectedArtistId: string | null;
+    artistId: string;
+    expectedEmail: string | null;
+    expectedUpdatedAt: Date | null;
+  }) =>
+    !["queued", "scheduled", "retry_scheduled"].includes(status) ||
+    contactId === null ||
+    (expectedContactId !== null &&
+      expectedArtistId !== null &&
+      expectedEmail !== null &&
+      expectedUpdatedAt !== null &&
+      expectedContactId === contactId &&
+      expectedArtistId === artistId);
+
+  const identitylessOldWriter = {
+    status: "scheduled",
+    contactId: "contact-1",
+    expectedContactId: null,
+    expectedArtistId: null,
+    artistId: "artist-1",
+    expectedEmail: null,
+    expectedUpdatedAt: null,
+  };
+  assert.equal(dispatchIdentityAllowed(identitylessOldWriter), false);
+  assert.equal(
+    dispatchIdentityAllowed({ ...identitylessOldWriter, status: "sent" }),
+    true,
+  );
+  assert.equal(
+    dispatchIdentityAllowed({
+      ...identitylessOldWriter,
+      contactId: null,
+    }),
+    true,
+  );
+  assert.equal(
+    dispatchIdentityAllowed({
+      ...identitylessOldWriter,
+      expectedContactId: "contact-1",
+      expectedArtistId: "artist-1",
+      expectedEmail: "manager@example.com",
+      expectedUpdatedAt: new Date("2026-07-20T12:00:00.000Z"),
+    }),
+    true,
+  );
+});
+
+test("Customize exposes the shared next-dispatch target without changing Send now", () => {
+  const page = source(
+    "app/dashboard/customize/[showId]/[contactId]/page.tsx",
+  );
+  const form = source(
+    "app/dashboard/customize/[showId]/[contactId]/customize-form.tsx",
+  );
+
+  assert.match(page, /formatNextDispatchActionLabel\(/);
+  assert.match(page, /getNextNormalOutreachDispatch\(\)/);
+  assert.match(form, /name="intent"[\s\S]*value="send"/);
+  assert.match(form, /name="intent"[\s\S]*value="queue"/);
+  assert.match(form, /\{queueLabel\}/);
+  assert.match(form, /Email queued for \{state\.queuedFor\} ET/);
+  assert.match(form, /subjectValue=\{selectedDraft\.subject\}/);
+  assert.match(form, /htmlValue=\{selectedDraft\.html\}/);
 });
 
 test("default and bulk outreach calls retain existing recipient semantics", () => {
@@ -163,4 +356,26 @@ test("default and bulk outreach calls retain existing recipient semantics", () =
   assert.match(sendNow, /sendOutreach\(\{ showId, contactId \}\)/);
   assert.doesNotMatch(sendNow, /singleRecipient/);
   assert.match(festival, /sendOutreach\(\{ showId, contactId \}\)/);
+
+  const send = source("lib/sendOutreach.ts");
+  const original = send.slice(
+    send.indexOf("async function prepareOriginalOutreach"),
+    send.indexOf("async function prepareFollowUpOutreach"),
+  );
+  const followUp = send.slice(
+    send.indexOf("async function prepareFollowUpOutreach"),
+    send.indexOf("async function currentAttempt"),
+  );
+  assert.match(original, /customizeRecipientIdentity\(contact\)/);
+  assert.match(
+    original,
+    /expectedRecipientIdentity:\s*expectedRecipientIdentity \?\? currentRecipientIdentity/,
+  );
+  assert.match(followUp, /email: true/);
+  assert.match(followUp, /updatedAt: true/);
+  assert.match(
+    followUp,
+    /expectedRecipientIdentity = customizeRecipientIdentity\(parent\.contact\)/,
+  );
+  assert.match(followUp, /expectedRecipientIdentity,/);
 });

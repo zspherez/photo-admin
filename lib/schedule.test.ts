@@ -2,13 +2,18 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  formatNextDispatchActionLabel,
   getNextMondaySlot,
+  getNextNormalOutreachDispatch,
   getOutreachRecoveryCutoff,
   getScheduledDispatchDisposition,
   isOutreachMorningDispatchWindow,
   isStaleOutreachClaim,
   isWeekendET,
   OUTREACH_CLAIM_TIMEOUT_MS,
+  OUTREACH_MORNING_DISPATCH_HOUR,
+  OUTREACH_MORNING_DISPATCH_LABEL,
+  OUTREACH_MORNING_UTC_CANDIDATE_HOURS,
   OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
   SCHEDULED_DISPATCH_MAX_MS,
   SCHEDULED_DISPATCH_ROUTE_TIMEOUT_MS,
@@ -29,6 +34,71 @@ test("next Monday slot handles daylight saving time", () => {
   assert.equal(
     getNextMondaySlot(new Date("2026-12-05T16:00:00Z")).toISOString(),
     "2026-12-07T14:00:00.000Z"
+  );
+});
+
+test("next normal dispatch uses the same weekday morning before cutoff", () => {
+  assert.equal(
+    getNextNormalOutreachDispatch(
+      new Date("2026-07-20T12:59:59.000Z"),
+    ).toISOString(),
+    "2026-07-20T13:00:00.000Z",
+  );
+  assert.equal(
+    getNextNormalOutreachDispatch(
+      new Date("2026-07-20T13:00:00.000Z"),
+    ).toISOString(),
+    "2026-07-21T13:00:00.000Z",
+  );
+});
+
+test("next normal dispatch advances nights and weekends to a weekday", () => {
+  assert.equal(
+    getNextNormalOutreachDispatch(
+      new Date("2026-07-21T02:30:00.000Z"),
+    ).toISOString(),
+    "2026-07-21T13:00:00.000Z",
+  );
+  assert.equal(
+    getNextNormalOutreachDispatch(
+      new Date("2026-07-25T02:30:00.000Z"),
+    ).toISOString(),
+    "2026-07-27T13:00:00.000Z",
+  );
+  assert.equal(
+    getNextNormalOutreachDispatch(
+      new Date("2026-07-25T16:00:00.000Z"),
+    ).toISOString(),
+    "2026-07-27T13:00:00.000Z",
+  );
+  assert.equal(
+    getNextNormalOutreachDispatch(
+      new Date("2026-07-26T16:00:00.000Z"),
+    ).toISOString(),
+    "2026-07-27T13:00:00.000Z",
+  );
+});
+
+test("next normal dispatch is DST-safe across spring and fall boundaries", () => {
+  assert.equal(
+    getNextNormalOutreachDispatch(
+      new Date("2026-03-06T15:30:00.000Z"),
+    ).toISOString(),
+    "2026-03-09T13:00:00.000Z",
+  );
+  assert.equal(
+    getNextNormalOutreachDispatch(
+      new Date("2026-10-30T14:30:00.000Z"),
+    ).toISOString(),
+    "2026-11-02T14:00:00.000Z",
+  );
+});
+
+test("next dispatch label uses the shared cadence", () => {
+  assert.equal(OUTREACH_MORNING_DISPATCH_LABEL, "9:00 AM ET");
+  assert.equal(
+    formatNextDispatchActionLabel(new Date("2026-07-20T13:00:00.000Z")),
+    "Queue for Mon 9:00 AM ET",
   );
 });
 
@@ -123,6 +193,19 @@ test("normal morning dispatch and exceptional recovery stay distinct", () => {
   assert.match(workflow, /cron: "17 \*\/4 \* \* \*"/);
   assert.match(workflow, /TZ=America\/New_York/);
   assert.match(workflow, /local_hour.*!= "09"/);
+  assert.deepEqual(OUTREACH_MORNING_UTC_CANDIDATE_HOURS, [13, 14]);
+  assert.equal(OUTREACH_MORNING_DISPATCH_HOUR, 9);
+  for (const candidateHour of OUTREACH_MORNING_UTC_CANDIDATE_HOURS) {
+    assert.ok(
+      workflow.includes(`cron: "0 ${candidateHour} * * 1-5"`),
+    );
+  }
+  assert.match(
+    workflow,
+    new RegExp(
+      `local_hour.*!= "${String(OUTREACH_MORNING_DISPATCH_HOUR).padStart(2, "0")}"`,
+    ),
+  );
   assert.match(workflow, /dispatch_mode="morning"/);
   assert.match(workflow, /dispatch_mode="recovery"/);
   assert.match(workflow, /send-scheduled\?mode=\$\{dispatch_mode\}/);
@@ -175,6 +258,10 @@ test("normal morning dispatch and exceptional recovery stay distinct", () => {
   assert.match(
     route,
     /status: "queued",\s+nextAttemptAt: \{ lte: now \},\s+OR:/,
+  );
+  assert.match(
+    route,
+    /status: "sending",\s+nextAttemptAt: \{ lte: now \},\s+claimedAt: \{ lte: staleBefore \}/,
   );
   assert.match(route, /isOutreachMorningDispatchWindow\(\)/);
   assert.match(route, /export const maxDuration = 60/);

@@ -5,7 +5,11 @@ import { cache } from "react";
 import { db } from "@/lib/db";
 import { workflowReturnPath } from "@/lib/dashboardReturnUrl";
 import { getOutreachSendabilityBatch } from "@/lib/sendOutreach";
-import { isWeekendET } from "@/lib/schedule";
+import {
+  formatNextDispatchActionLabel,
+  getNextNormalOutreachDispatch,
+  isWeekendET,
+} from "@/lib/schedule";
 import {
   buildVarsForShow,
   ensureOriginalTemplateForShow,
@@ -275,6 +279,9 @@ export default async function CustomizePage({
             returnTo={safeReturnTo}
             recipientOptions={recipientOptions}
             weekend={isWeekendET()}
+            queueLabel={formatNextDispatchActionLabel(
+              getNextNormalOutreachDispatch(),
+            )}
             action={sendCustom.bind(null, {
               showId,
               contextContactId: contactId,

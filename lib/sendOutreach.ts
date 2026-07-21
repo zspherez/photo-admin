@@ -44,6 +44,7 @@ import {
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
 import {
+  customizeRecipientIdentity,
   customizeRecipientIdentityError,
   type CustomizeRecipientIdentity,
 } from "@/lib/customizeRecipients";
@@ -187,6 +188,61 @@ interface PreparedOutreach {
   subject: string;
   html: string;
   expectedRecipientIdentity: CustomizeRecipientIdentity | null;
+}
+
+interface StoredExpectedRecipientIdentity {
+  expectedRecipientContactId: string | null;
+  expectedRecipientArtistId: string | null;
+  expectedRecipientEmail: string | null;
+  expectedRecipientUpdatedAt: Date | null;
+}
+
+function expectedRecipientIdentityData(
+  identity: CustomizeRecipientIdentity | null,
+): StoredExpectedRecipientIdentity {
+  return {
+    expectedRecipientContactId: identity?.contactId ?? null,
+    expectedRecipientArtistId: identity?.artistId ?? null,
+    expectedRecipientEmail: identity?.normalizedEmail ?? null,
+    expectedRecipientUpdatedAt: identity
+      ? new Date(identity.updatedAt)
+      : null,
+  };
+}
+
+function storedExpectedRecipientIdentity(
+  row: StoredExpectedRecipientIdentity,
+): CustomizeRecipientIdentity | null {
+  const values = [
+    row.expectedRecipientContactId,
+    row.expectedRecipientArtistId,
+    row.expectedRecipientEmail,
+    row.expectedRecipientUpdatedAt,
+  ];
+  if (values.every((value) => value === null)) return null;
+  if (values.some((value) => value === null)) {
+    throw new Error("Stored Customize recipient identity is incomplete");
+  }
+  return {
+    contactId: row.expectedRecipientContactId!,
+    artistId: row.expectedRecipientArtistId!,
+    normalizedEmail: row.expectedRecipientEmail!,
+    updatedAt: row.expectedRecipientUpdatedAt!.toISOString(),
+  };
+}
+
+function sameExpectedRecipientIdentity(
+  row: StoredExpectedRecipientIdentity,
+  identity: CustomizeRecipientIdentity | null,
+): boolean {
+  const stored = storedExpectedRecipientIdentity(row);
+  if (!stored || !identity) return stored === identity;
+  return (
+    stored.contactId === identity.contactId &&
+    stored.artistId === identity.artistId &&
+    stored.normalizedEmail === identity.normalizedEmail &&
+    stored.updatedAt === identity.updatedAt
+  );
 }
 
 interface StoredAttempt {
@@ -1535,7 +1591,7 @@ async function evaluateLockedOutreachDeliveryPolicy(
     return {
       decision: {
         ok: false,
-        state: "cancelled",
+        state: "manual_review",
         error: identityError,
       },
       submissionCredential: null,
@@ -2436,6 +2492,10 @@ async function prepareOriginalOutreach(
     ? customizeRecipientIdentityError(contact, expectedRecipientIdentity)
     : null;
   if (identityError) return { error: identityError };
+  const currentRecipientIdentity = customizeRecipientIdentity(contact);
+  if (!currentRecipientIdentity) {
+    return { error: "Selected contact has no valid active recipient address" };
+  }
   const association = await db.showArtist.findUnique({
     where: {
       showId_artistId: { showId, artistId: contact.artistId },
@@ -2487,7 +2547,8 @@ async function prepareOriginalOutreach(
           contact.artist.name,
           utmSettings,
         ),
-    expectedRecipientIdentity: expectedRecipientIdentity ?? null,
+    expectedRecipientIdentity:
+      expectedRecipientIdentity ?? currentRecipientIdentity,
   };
 }
 
@@ -2533,8 +2594,10 @@ async function prepareFollowUpOutreach(
           select: {
             id: true,
             artistId: true,
+            email: true,
             name: true,
             state: true,
+            updatedAt: true,
             artist: { select: { name: true } },
           },
         },
@@ -2567,6 +2630,10 @@ async function prepareFollowUpOutreach(
     return {
       error: "Selected contact no longer belongs to the outreach artist",
     };
+  }
+  const expectedRecipientIdentity = customizeRecipientIdentity(parent.contact);
+  if (!expectedRecipientIdentity) {
+    return { error: "Selected contact has no valid active recipient address" };
   }
   const association = await db.showArtist.findUnique({
     where: {
@@ -2608,7 +2675,7 @@ async function prepareFollowUpOutreach(
       parent.contact.artist.name,
       utmSettings,
     ),
-    expectedRecipientIdentity: null,
+    expectedRecipientIdentity,
   };
 }
 
@@ -2637,6 +2704,10 @@ function claimedOutreach(
     providerMessageId: string | null;
     sentAt: Date | null;
     attemptCount: number;
+    expectedRecipientContactId: string | null;
+    expectedRecipientArtistId: string | null;
+    expectedRecipientEmail: string | null;
+    expectedRecipientUpdatedAt: Date | null;
     contact?: {
       id: string;
       artistId: string;
@@ -2649,7 +2720,6 @@ function claimedOutreach(
   automaticRetry: boolean,
   claimRecovery: OutreachClaimRecoveryState,
   preparationRetryCount = 0,
-  expectedRecipientIdentity: CustomizeRecipientIdentity | null = null,
 ): ClaimedOutreach {
   if (!row.claimToken) throw new Error("Claim token was not persisted");
   return {
@@ -2673,7 +2743,7 @@ function claimedOutreach(
     automaticRetry,
     preparationRetryCount,
     claimRecovery,
-    expectedRecipientIdentity,
+    expectedRecipientIdentity: storedExpectedRecipientIdentity(row),
     contact: row.contact ?? null,
   };
 }
@@ -3455,6 +3525,9 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
                 recipientSnapshotState: "verified",
                 fullTeamSend: prep.fullTeamSend,
                 templateId: prep.templateId,
+                ...expectedRecipientIdentityData(
+                  prep.expectedRecipientIdentity,
+                ),
               }
             : {}),
         },
@@ -3544,6 +3617,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           recipientSnapshotState: "verified",
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
+          ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -3578,6 +3652,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           recipientSnapshotState: "verified",
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
+          ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -3672,6 +3747,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           recipientSnapshotState: "verified",
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
+          ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -3739,6 +3815,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           recipientSnapshotState: "verified",
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
+          ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -3776,6 +3853,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         recipientEmails: prep.recipients,
         recipientSnapshotState: "verified",
         fullTeamSend: prep.fullTeamSend,
+        ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
         status: "queued",
         idempotencyKey: identity.idempotencyKey,
         claimToken,
@@ -5065,7 +5143,6 @@ export async function sendOutreach(
   if ("error" in prep) return { ok: false, error: prep.error };
   const claim = await claimImmediateOutreach(prep);
   if (claim.kind === "complete") return claim.result;
-  claim.outreach.expectedRecipientIdentity = prep.expectedRecipientIdentity;
   return executeClaimedSend(claim.outreach);
 }
 
@@ -5169,6 +5246,27 @@ async function schedulePreparedOutreach(
     }
     const scheduled = active.find((row) => row.status === "scheduled");
     if (scheduled) {
+      if (
+        scheduled.contactId === prep.contactId &&
+        scheduled.templateId === prep.templateId &&
+        scheduled.finalSubject === prep.subject &&
+        scheduled.finalHtml === prep.html &&
+        scheduled.fullTeamSend === prep.fullTeamSend &&
+        scheduled.recipientSnapshotState === "verified" &&
+        sameEmails(scheduled.recipientEmails, prep.recipients) &&
+        sameExpectedRecipientIdentity(
+          scheduled,
+          prep.expectedRecipientIdentity,
+        ) &&
+        scheduled.scheduledFor?.getTime() === scheduledFor.getTime()
+      ) {
+        return {
+          ok: true,
+          outreachId: scheduled.id,
+          scheduled: true,
+          scheduledFor,
+        };
+      }
       return {
         ok: false,
         error: `${preparedOutreachName(prep.kind)} already scheduled`,
@@ -5275,6 +5373,9 @@ async function schedulePreparedOutreach(
                 recipientSnapshotState: "verified",
                 fullTeamSend: prep.fullTeamSend,
                 templateId: prep.templateId,
+                ...expectedRecipientIdentityData(
+                  prep.expectedRecipientIdentity,
+                ),
               }
             : {}),
         },
@@ -5358,6 +5459,7 @@ async function schedulePreparedOutreach(
           recipientSnapshotState: "verified",
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
+          ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5388,6 +5490,7 @@ async function schedulePreparedOutreach(
           recipientSnapshotState: "verified",
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
+          ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5470,6 +5573,7 @@ async function schedulePreparedOutreach(
           recipientSnapshotState: "verified",
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
+          ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5534,6 +5638,7 @@ async function schedulePreparedOutreach(
           recipientSnapshotState: "verified",
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
+          ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5568,6 +5673,7 @@ async function schedulePreparedOutreach(
         recipientEmails: prep.recipients,
         recipientSnapshotState: "verified",
         fullTeamSend: prep.fullTeamSend,
+        ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
         status: "scheduled",
         scheduledFor,
         nextAttemptAt: scheduledFor,

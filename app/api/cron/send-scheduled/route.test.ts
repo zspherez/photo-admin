@@ -60,7 +60,7 @@ test("fresh queued claims remain visible until their claim expiry", () => {
   );
   assert.match(
     source,
-    /claimSummary\._min\.claimedAt\.getTime\(\) \+ OUTREACH_CLAIM_TIMEOUT_MS/,
+    /earliestClaimAt\.getTime\(\) \+ OUTREACH_CLAIM_TIMEOUT_MS/,
   );
   assert.match(source, /pendingClaims,/);
   assert.match(source, /nextClaimExpiryAt,/);
@@ -72,4 +72,19 @@ test("scheduled dispatch remains kind-agnostic so follow-up children reuse it", 
   const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
   assert.match(source, /dispatchScheduledOutreach\(row\.id\)/);
   assert.doesNotMatch(source, /kind:\s*"original"/);
+});
+
+test("the existing morning and recovery dispatcher also drains arbitrary emails", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(source, /db\.arbitraryEmail\.findMany\(/);
+  assert.match(source, /dispatchScheduledArbitraryEmail\(row\.id\)/);
+  assert.match(
+    source,
+    /status: "scheduled",[\s\S]*mode === "recovery" \? recoveryCutoff : now/,
+  );
+  assert.match(
+    source,
+    /status: "queued",[\s\S]*claimedAt: \{ lte: staleBefore \}/,
+  );
+  assert.match(source, /db\.arbitraryEmail\.aggregate\(/);
 });

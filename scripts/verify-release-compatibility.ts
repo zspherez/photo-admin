@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   assertReleaseCompatibility,
@@ -29,6 +30,7 @@ async function main(): Promise<void> {
     directOutreachNoteProbe,
     festivalGeographyProbe,
     outreachKindProbe,
+    outreachDispatchIdentityConstraintProbe,
     outreachAttemptProbe,
     syncLeaseProbe,
     artistClaimProbe,
@@ -79,10 +81,35 @@ async function main(): Promise<void> {
       },
       take: 1,
     }),
-    db.outreach.count({
-      where: { kind: "original", parentOutreachId: null },
+    db.outreach.findMany({
       take: 1,
+      select: {
+        id: true,
+        kind: true,
+        parentOutreachId: true,
+        expectedRecipientContactId: true,
+        expectedRecipientArtistId: true,
+        expectedRecipientEmail: true,
+        expectedRecipientUpdatedAt: true,
+      },
     }),
+    db.$queryRaw<Array<{ constraintName: string; validated: boolean }>>(
+      Prisma.sql`
+        SELECT
+          constraint_row."conname" AS "constraintName",
+          constraint_row."convalidated" AS "validated"
+        FROM pg_constraint AS constraint_row
+        JOIN pg_class AS table_row
+          ON table_row.oid = constraint_row."conrelid"
+        JOIN pg_namespace AS namespace_row
+          ON namespace_row.oid = table_row."relnamespace"
+        WHERE namespace_row."nspname" = current_schema()
+          AND table_row."relname" = 'Outreach'
+          AND constraint_row."conname" =
+            'Outreach_dispatch_recipient_identity_check'
+          AND constraint_row."contype" = 'c'
+      `,
+    ),
     db.outreachSendAttempt.count({ take: 1 }),
     db.integrationSyncLease.count({ take: 1 }),
     db.artistIdentityNameClaim.count({ take: 1 }),
@@ -246,6 +273,15 @@ async function main(): Promise<void> {
         providerRequest: true,
         requestHash: true,
         testSend: true,
+        scheduledFor: true,
+        nextAttemptAt: true,
+        claimedAt: true,
+        claimToken: true,
+        lastAttemptAt: true,
+        firstAttemptAt: true,
+        attemptCount: true,
+        failureDisposition: true,
+        providerCredentialScope: true,
         sentAt: true,
         deliveredAt: true,
         firstOpenedAt: true,
@@ -301,7 +337,6 @@ async function main(): Promise<void> {
         contactProbe,
         directOutreachNoteProbe,
         festivalGeographyProbe,
-        outreachKindProbe,
         outreachAttemptProbe,
         syncLeaseProbe,
         artistClaimProbe,
@@ -310,6 +345,8 @@ async function main(): Promise<void> {
         [
           contactResearchJobProbe,
           contactResearchCandidateProbe,
+          outreachKindProbe,
+          outreachDispatchIdentityConstraintProbe,
           artistResearchSkipProbe,
           agentRuleSetProbe,
           contactAuditRequestProbe,
@@ -321,7 +358,13 @@ async function main(): Promise<void> {
           emailTemplateProbe,
           dashboardShowSnapshotProbe,
           dashboardShowSnapshotMemberProbe,
-        ].every(Array.isArray),
+        ].every(Array.isArray) &&
+        outreachDispatchIdentityConstraintProbe.some(
+          (constraint) =>
+            constraint.constraintName ===
+              "Outreach_dispatch_recipient_identity_check" &&
+            constraint.validated,
+        ),
       configuredSpreadsheetId:
         values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,
       configuredSheetTab: values.get(SHEETS_TAB_SETTING) ?? null,
@@ -341,6 +384,11 @@ async function main(): Promise<void> {
         "ContactAuditAlternative",
         "ArbitraryEmail",
         "ArbitraryEmail.text",
+        "ArbitraryEmail.scheduledFor",
+        "ArbitraryEmail.claimToken",
+        "ArbitraryEmail.providerCredentialScope",
+        "Outreach.expectedRecipientUpdatedAt",
+        "Outreach_dispatch_recipient_identity_check",
         "ResendWebhookEvent.arbitraryEmailId",
         "EmailTemplate.purpose",
         "DashboardShowSnapshot",

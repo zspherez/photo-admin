@@ -95,6 +95,7 @@ test("arbitrary email event updates count engagement and preserve event bounds",
     lastOpenedAt: later,
     openCount: { increment: 1 },
   });
+
   assert.deepEqual(arbitraryEmailEventUpdate(state, "email.clicked", later), {
     status: "sent",
     sentAt: first,
@@ -104,6 +105,63 @@ test("arbitrary email event updates count engagement and preserve event bounds",
     lastClickedAt: later,
     clickCount: { increment: 1 },
   });
+});
+
+test("provider webhooks complete a queued claim without violating scheduler state", () => {
+  const occurredAt = new Date("2026-07-20T13:00:00Z");
+  const queued = {
+    status: "queued",
+    testSend: false,
+    sentAt: null,
+    deliveredAt: null,
+    firstOpenedAt: null,
+    lastOpenedAt: null,
+    openCount: 0,
+    firstClickedAt: null,
+    lastClickedAt: null,
+    clickCount: 0,
+    bouncedAt: null,
+    complainedAt: null,
+  };
+
+  assert.deepEqual(arbitraryEmailEventUpdate(queued, "email.sent", occurredAt), {
+    status: "sent",
+    sentAt: occurredAt,
+    error: null,
+    nextAttemptAt: null,
+    claimedAt: null,
+    claimToken: null,
+  });
+  assert.deepEqual(
+    arbitraryEmailEventUpdate(
+      { ...queued, status: "sending" },
+      "email.sent",
+      occurredAt,
+    ),
+    {
+      status: "sent",
+      sentAt: occurredAt,
+      error: null,
+      nextAttemptAt: null,
+      claimedAt: null,
+      claimToken: null,
+    },
+  );
+  assert.deepEqual(
+    arbitraryEmailEventUpdate(
+      queued,
+      "email.failed",
+      occurredAt,
+      "provider rejected",
+    ),
+    {
+      status: "failed",
+      error: "provider rejected",
+      nextAttemptAt: null,
+      claimedAt: null,
+      claimToken: null,
+    },
+  );
 });
 
 test("arbitrary webhook recipient impact excludes neutral and audit recipients", () => {
@@ -414,6 +472,12 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
         migrationNames.indexOf(laterMigration),
     );
   }
+  const queueMigrationName = "20260721050000_queue_next_dispatch";
+  assert.ok(
+    migrationNames.indexOf("20260721040000_dashboard_show_snapshots") <
+      migrationNames.indexOf(queueMigrationName),
+  );
+  assert.equal(migrationNames.at(-1), queueMigrationName);
 
   const migration = readFileSync(
     new URL(`${migrationName}/migration.sql`, migrationsDirectory),
@@ -438,6 +502,48 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
   assert.match(textMigration, /ADD COLUMN "text" TEXT/);
   assert.match(textMigration, /CONSTRAINT "ArbitraryEmail_text_check"/);
   assert.match(textMigration, /"text" IS NULL OR btrim\("text"\) <> ''/);
+
+  const queueMigration = readFileSync(
+    new URL(`${queueMigrationName}/migration.sql`, migrationsDirectory),
+    "utf8",
+  );
+  assert.match(queueMigration, /^BEGIN;\n/);
+  assert.match(queueMigration, /\nCOMMIT;\s*$/);
+  assert.match(queueMigration, /ADD COLUMN "scheduledFor" TIMESTAMP\(3\)/);
+  assert.match(queueMigration, /ADD COLUMN "claimToken" TEXT/);
+  assert.match(queueMigration, /ADD COLUMN "firstAttemptAt" TIMESTAMP\(3\)/);
+  assert.match(queueMigration, /ADD COLUMN "providerCredentialScope" TEXT/);
+  assert.match(queueMigration, /ALTER COLUMN "providerRequest" DROP NOT NULL/);
+  assert.match(queueMigration, /'scheduled'[\s\S]*'retry_scheduled'/);
+  assert.match(
+    queueMigration,
+    /CONSTRAINT "ArbitraryEmail_provider_snapshot_check"/,
+  );
+  assert.match(queueMigration, /CONSTRAINT "ArbitraryEmail_claim_state_check"/);
+  assert.match(
+    queueMigration,
+    /"status" = 'sending'[\s\S]*"claimedAt" IS NULL[\s\S]*"claimToken" IS NULL[\s\S]*"claimedAt" IS NOT NULL[\s\S]*"claimToken" IS NOT NULL/,
+  );
+  assert.match(
+    queueMigration,
+    /CONSTRAINT "ArbitraryEmail_attempt_timing_check"[\s\S]*"providerCredentialScope" IS NOT NULL/,
+  );
+  assert.match(
+    queueMigration,
+    /ArbitraryEmail providerCredentialScope is immutable once set/,
+  );
+  assert.match(
+    queueMigration,
+    /ADD COLUMN "expectedRecipientContactId" TEXT[\s\S]*ADD COLUMN "expectedRecipientUpdatedAt" TIMESTAMP\(3\)/,
+  );
+  assert.match(
+    queueMigration,
+    /CONSTRAINT "Outreach_expected_recipient_identity_check"[\s\S]*"expectedRecipientContactId" IS NOT NULL[\s\S]*"expectedRecipientArtistId" IS NOT NULL[\s\S]*"expectedRecipientUpdatedAt" IS NOT NULL/,
+  );
+  assert.match(
+    queueMigration,
+    /CREATE INDEX "ArbitraryEmail_status_nextAttemptAt_idx"/,
+  );
 });
 
 test("arbitrary email UI normalizes previews and explains deliverability limits", () => {
@@ -446,7 +552,7 @@ test("arbitrary email UI normalizes previews and explains deliverability limits"
     "utf8",
   );
   const compose = readFileSync(
-    new URL("../app/emails/new/page.tsx", import.meta.url),
+    new URL("../app/emails/new/compose-email-form.tsx", import.meta.url),
     "utf8",
   );
   const dashboard = readFileSync(
@@ -459,6 +565,9 @@ test("arbitrary email UI normalizes previews and explains deliverability limits"
   assert.match(compose, /avoids malformed MIME\/HTML/);
   assert.match(compose, /DNS authentication/);
   assert.match(compose, /quoted-printable message source/);
+  assert.match(compose, /value="queue"/);
+  assert.match(compose, /\{queueLabel\}/);
   assert.match(dashboard, /text: true/);
   assert.match(dashboard, /Canonical HTML source/);
+  assert.match(dashboard, /cancelArbitraryEmailAction/);
 });
