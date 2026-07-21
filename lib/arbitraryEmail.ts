@@ -181,6 +181,16 @@ function later(current: Date | null, candidate: Date): Date {
   return !current || candidate > current ? candidate : current;
 }
 
+function completeQueuedDispatch(status: string): Record<string, unknown> {
+  return status === "queued"
+    ? {
+        nextAttemptAt: null,
+        claimedAt: null,
+        claimToken: null,
+      }
+    : {};
+}
+
 function engagementAcceptanceUpdate(
   email: ArbitraryEmailEventState & { testSend: boolean },
   occurredAt: Date,
@@ -191,6 +201,7 @@ function engagementAcceptanceUpdate(
     sentAt: earlier(email.sentAt, occurredAt),
     deliveredAt: earlier(email.deliveredAt, occurredAt),
     error: null,
+    ...completeQueuedDispatch(email.status),
   };
 }
 
@@ -211,6 +222,7 @@ export function arbitraryEmailEventUpdate(
               : "sent",
         sentAt: earlier(email.sentAt, occurredAt),
         ...(email.status === "failed" ? {} : { error: null }),
+        ...completeQueuedDispatch(email.status),
       };
     case "email.delivered":
       return {
@@ -223,6 +235,7 @@ export function arbitraryEmailEventUpdate(
         sentAt: earlier(email.sentAt, occurredAt),
         deliveredAt: earlier(email.deliveredAt, occurredAt),
         ...(email.status === "failed" ? {} : { error: null }),
+        ...completeQueuedDispatch(email.status),
       };
     case "email.opened":
       return {
@@ -243,21 +256,31 @@ export function arbitraryEmailEventUpdate(
         status: "failed",
         bouncedAt: earlier(email.bouncedAt, occurredAt),
         error: failureReason ?? "bounce",
+        ...completeQueuedDispatch(email.status),
       };
     case "email.complained":
       return {
         status: "failed",
         complainedAt: earlier(email.complainedAt, occurredAt),
         error: "complaint",
+        ...completeQueuedDispatch(email.status),
       };
     case "email.suppressed":
       return email.bouncedAt || email.complainedAt || email.status === "failed"
         ? {}
-        : { status: "failed", error: failureReason ?? type };
+        : {
+            status: "failed",
+            error: failureReason ?? type,
+            ...completeQueuedDispatch(email.status),
+          };
     case "email.failed":
       return email.status === "failed"
         ? {}
-        : { status: "failed", error: failureReason ?? type };
+        : {
+            status: "failed",
+            error: failureReason ?? type,
+            ...completeQueuedDispatch(email.status),
+          };
     case "email.delivery_delayed":
       return email.status === "failed" ? {} : { error: type };
     default:

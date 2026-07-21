@@ -7,6 +7,9 @@ import { EASTERN_TIME_ZONE } from "@/lib/calendarDate";
 
 export const OUTREACH_TIME_ZONE = EASTERN_TIME_ZONE;
 export const OUTREACH_MORNING_DISPATCH_HOUR = 9;
+export const OUTREACH_MORNING_DISPATCH_MINUTE = 0;
+export const OUTREACH_MORNING_DISPATCH_LABEL = "9:00 AM ET";
+export const OUTREACH_MORNING_UTC_CANDIDATE_HOURS = [13, 14] as const;
 export const OUTREACH_RECOVERY_OVERDUE_MS = 2 * 60 * 60 * 1000;
 export const OUTREACH_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
 export const OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS = 30 * 1000;
@@ -80,6 +83,7 @@ interface ZonedParts {
   day: number;
   weekday: string;
   hour: number;
+  minute: number;
 }
 
 function partsInET(date: Date): ZonedParts {
@@ -90,6 +94,7 @@ function partsInET(date: Date): ZonedParts {
     day: "2-digit",
     weekday: "short",
     hour: "2-digit",
+    minute: "2-digit",
     hourCycle: "h23",
   }).formatToParts(date);
   const value = (type: Intl.DateTimeFormatPartTypes) =>
@@ -100,6 +105,7 @@ function partsInET(date: Date): ZonedParts {
     day: Number(value("day")),
     weekday: value("weekday"),
     hour: Number(value("hour")),
+    minute: Number(value("minute")),
   };
 }
 
@@ -163,8 +169,56 @@ export function getNextMondaySlot(now: Date = new Date()): Date {
     target.getUTCFullYear(),
     target.getUTCMonth() + 1,
     target.getUTCDate(),
-    9
+    OUTREACH_MORNING_DISPATCH_HOUR,
   );
+}
+
+function isWeekday(weekday: string): boolean {
+  return weekday !== "Sat" && weekday !== "Sun";
+}
+
+/**
+ * Returns the next normal weekday 09:00 ET dispatch instant.
+ * Before 09:00 on a weekday, the same day's dispatch is still upcoming.
+ * At or after 09:00, the target advances to the next weekday.
+ */
+export function getNextNormalOutreachDispatch(now: Date = new Date()): Date {
+  const et = partsInET(now);
+  const currentMinuteOfDay = et.hour * 60 + et.minute;
+  const dispatchMinuteOfDay =
+    OUTREACH_MORNING_DISPATCH_HOUR * 60 +
+    OUTREACH_MORNING_DISPATCH_MINUTE;
+  let daysToAdd =
+    isWeekday(et.weekday) &&
+    currentMinuteOfDay < dispatchMinuteOfDay
+      ? 0
+      : 1;
+
+  while (true) {
+    const target = new Date(
+      Date.UTC(et.year, et.month - 1, et.day + daysToAdd),
+    );
+    const targetWeekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][
+      target.getUTCDay()
+    ];
+    if (isWeekday(targetWeekday)) {
+      return localETToUtc(
+        target.getUTCFullYear(),
+        target.getUTCMonth() + 1,
+        target.getUTCDate(),
+        OUTREACH_MORNING_DISPATCH_HOUR,
+      );
+    }
+    daysToAdd += 1;
+  }
+}
+
+export function formatNextDispatchActionLabel(utcDate: Date): string {
+  const weekday = utcDate.toLocaleString("en-US", {
+    timeZone: OUTREACH_TIME_ZONE,
+    weekday: "short",
+  });
+  return `Queue for ${weekday} ${OUTREACH_MORNING_DISPATCH_LABEL}`;
 }
 
 export function isStaleOutreachClaim(

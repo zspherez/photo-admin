@@ -33,12 +33,14 @@ export function CustomizeForm({
   returnTo,
   recipientOptions,
   weekend,
+  queueLabel,
   action,
 }: {
   contextContactId: string;
   returnTo: string;
   recipientOptions: CustomizeRecipientOption[];
   weekend: boolean;
+  queueLabel: string;
   action: (
     previousState: CustomizeActionState,
     formData: FormData,
@@ -51,6 +53,7 @@ export function CustomizeForm({
   );
   const initialState: CustomizeActionState = {
     error: null,
+    queuedFor: null,
     selectedContactId: contextContactId,
   };
   const [state, formAction] = useActionState(action, initialState);
@@ -128,6 +131,16 @@ export function CustomizeForm({
           {visibleError}
         </div>
       )}
+      {state.queuedFor && state.selectedContactId === selectedContactId && (
+        <div
+          role="status"
+          className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+        >
+          Email queued for {state.queuedFor} ET. The immutable recipient and
+          composed content snapshots will be rechecked against current sending
+          policy at dispatch.
+        </div>
+      )}
       {selected && !selected.sendable && (
         <div
           role="alert"
@@ -186,9 +199,11 @@ export function CustomizeForm({
         </div>
       )}
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <PendingSubmitButton
           variant="primary"
+          name="intent"
+          value="send"
           disabled={!selected?.sendable || !selectedDraft}
           pendingLabel={
             isRetry
@@ -207,6 +222,15 @@ export function CustomizeForm({
             : weekend
               ? "Schedule Monday"
               : "Send now"}
+        </PendingSubmitButton>
+        <PendingSubmitButton
+          variant="secondary"
+          name="intent"
+          value="queue"
+          disabled={!selected?.sendable || !selectedDraft}
+          pendingLabel="Queueing…"
+        >
+          {queueLabel}
         </PendingSubmitButton>
         <LinkButton href={returnTo} variant="secondary">
           Cancel

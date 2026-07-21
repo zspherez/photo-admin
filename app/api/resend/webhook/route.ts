@@ -197,6 +197,17 @@ async function processEvent(
               messageArbitraryEmail,
               messageOutreachAttempt,
             );
+            const arbitraryTestSend = arbitraryEmail?.testSend;
+            if (
+              !conflict &&
+              arbitraryEmail &&
+              (typeof arbitraryTestSend !== "boolean" ||
+                !arbitraryEmail.providerRequest ||
+                !arbitraryEmail.requestHash)
+            ) {
+              conflict =
+                "arbitrary email has no immutable provider request snapshot";
+            }
             if (
               !conflict &&
               arbitraryEmail &&
@@ -250,7 +261,7 @@ async function processEvent(
                 correlationStatus: "matched",
               },
             });
-            if (!arbitraryEmail.testSend) {
+            if (arbitraryTestSend === false) {
               await applySuppression(
                 tx,
                 eventId,
@@ -266,7 +277,7 @@ async function processEvent(
               );
             if (intendedRecipientImpact.affectsAggregate) {
               const update = arbitraryEmailEventUpdate(
-                arbitraryEmail,
+                { ...arbitraryEmail, testSend: arbitraryTestSend as boolean },
                 parsed.type,
                 providerCreatedAt,
                 isDeliveryProblemEvent(parsed.type)

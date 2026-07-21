@@ -5169,6 +5169,23 @@ async function schedulePreparedOutreach(
     }
     const scheduled = active.find((row) => row.status === "scheduled");
     if (scheduled) {
+      if (
+        scheduled.contactId === prep.contactId &&
+        scheduled.templateId === prep.templateId &&
+        scheduled.finalSubject === prep.subject &&
+        scheduled.finalHtml === prep.html &&
+        scheduled.fullTeamSend === prep.fullTeamSend &&
+        scheduled.recipientSnapshotState === "verified" &&
+        sameEmails(scheduled.recipientEmails, prep.recipients) &&
+        scheduled.scheduledFor?.getTime() === scheduledFor.getTime()
+      ) {
+        return {
+          ok: true,
+          outreachId: scheduled.id,
+          scheduled: true,
+          scheduledFor,
+        };
+      }
       return {
         ok: false,
         error: `${preparedOutreachName(prep.kind)} already scheduled`,

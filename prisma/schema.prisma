@@ -593,9 +593,15 @@ model ArbitraryEmail {
   error             String?
   providerMessageId String?              @unique
   idempotencyKey    String               @unique
-  providerRequest   Json
-  requestHash       String
-  testSend          Boolean              @default(false)
+  providerRequest   Json?
+  requestHash       String?
+  testSend          Boolean?
+  scheduledFor      DateTime?
+  nextAttemptAt     DateTime?
+  claimedAt         DateTime?
+  claimToken        String?              @unique
+  lastAttemptAt     DateTime?
+  attemptCount      Int                  @default(0)
   sentAt            DateTime?
   deliveredAt       DateTime?
   firstOpenedAt     DateTime?
@@ -612,6 +618,8 @@ model ArbitraryEmail {
 
   @@index([createdAt])
   @@index([status, createdAt])
+  @@index([status, nextAttemptAt])
+  @@index([status, claimedAt])
 }
 
 model Setting {

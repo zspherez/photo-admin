@@ -73,6 +73,11 @@ test("Customize actions validate the selected contact and preserve failures in p
   );
   assert.match(actions, /sendOutreach\(input\)/);
   assert.match(actions, /scheduleOutreach\(input, getNextMondaySlot\(\)\)/);
+  assert.match(
+    actions,
+    /scheduleOutreach\(input, getNextNormalOutreachDispatch\(\)\)/,
+  );
+  assert.match(actions, /intent === "queue"/);
   assert.match(actions, /return actionError\(selectedContactId/);
   assert.doesNotMatch(
     actions,
@@ -126,6 +131,12 @@ test("immediate, scheduled, and retry delivery use the selected immutable snapsh
   assert.match(immediate, /fullTeamSend: prep\.fullTeamSend/);
   assert.match(schedule, /recipientEmails: prep\.recipients/);
   assert.match(schedule, /fullTeamSend: prep\.fullTeamSend/);
+  assert.match(schedule, /finalSubject: prep\.subject/);
+  assert.match(schedule, /finalHtml: prep\.html/);
+  assert.match(
+    schedule,
+    /scheduled\.finalSubject === prep\.subject[\s\S]*scheduled\.finalHtml === prep\.html[\s\S]*scheduled\.scheduledFor\?\.getTime\(\) === scheduledFor\.getTime\(\)[\s\S]*ok: true/,
+  );
   assert.match(locked, /outreach\.fullTeamSend/);
   assert.match(locked, /stored: outreach/);
   assert.match(locked, /"updatedAt"/);
@@ -150,6 +161,24 @@ test("immediate, scheduled, and retry delivery use the selected immutable snapsh
     send,
     /recipients: currentPolicy\.currentRecipients,[\s\S]*fullTeamSend: currentPolicy\.fullTeamSend,[\s\S]*mode: "retry"/,
   );
+});
+
+test("Customize exposes the shared next-dispatch target without changing Send now", () => {
+  const page = source(
+    "app/dashboard/customize/[showId]/[contactId]/page.tsx",
+  );
+  const form = source(
+    "app/dashboard/customize/[showId]/[contactId]/customize-form.tsx",
+  );
+
+  assert.match(page, /formatNextDispatchActionLabel\(/);
+  assert.match(page, /getNextNormalOutreachDispatch\(\)/);
+  assert.match(form, /name="intent"[\s\S]*value="send"/);
+  assert.match(form, /name="intent"[\s\S]*value="queue"/);
+  assert.match(form, /\{queueLabel\}/);
+  assert.match(form, /Email queued for \{state\.queuedFor\} ET/);
+  assert.match(form, /subjectValue=\{selectedDraft\.subject\}/);
+  assert.match(form, /htmlValue=\{selectedDraft\.html\}/);
 });
 
 test("default and bulk outreach calls retain existing recipient semantics", () => {

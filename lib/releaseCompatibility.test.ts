@@ -250,6 +250,12 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "providerRequest",
       "requestHash",
       "testSend",
+      "scheduledFor",
+      "nextAttemptAt",
+      "claimedAt",
+      "claimToken",
+      "lastAttemptAt",
+      "attemptCount",
       "sentAt",
       "deliveredAt",
       "firstOpenedAt",
@@ -289,10 +295,6 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*\]/,
-  );
-  assert.match(
-    source,
-    /"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember"/,
+    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*\]/,
   );
 });

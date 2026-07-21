@@ -4,8 +4,11 @@ import { redirect } from "next/navigation";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { LinkButton } from "@/components/ui/button";
+import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { cancelArbitraryEmailAction } from "@/app/emails/actions";
 import { db } from "@/lib/db";
 import { getPagination } from "@/lib/match";
+import { formatScheduledTime } from "@/lib/schedule";
 import {
   firstSearchParam,
   positiveIntegerSearchParam,
@@ -21,6 +24,13 @@ function statusTone(status: string): BadgeTone {
   if (status === "failed") return "danger";
   if (status === "manual_review") return "warning";
   if (status === "test") return "warning";
+  if (
+    status === "scheduled" ||
+    status === "retry_scheduled" ||
+    status === "queued"
+  ) {
+    return "warning";
+  }
   if (status === "sent") return "success";
   return "default";
 }
@@ -35,13 +45,23 @@ export default async function EmailsPage({
   searchParams: Promise<{
     page?: SearchParamValue;
     sent?: SearchParamValue;
+    queued?: SearchParamValue;
+    cancelled?: SearchParamValue;
     error?: SearchParamValue;
   }>;
 }) {
   const sp = await searchParams;
   const requestedPage = positiveIntegerSearchParam(sp.page);
   const sent = firstSearchParam(sp.sent);
+  const queued = firstSearchParam(sp.queued);
+  const cancelled = firstSearchParam(sp.cancelled);
   const error = firstSearchParam(sp.error);
+  const queuedEmail = queued
+    ? await db.arbitraryEmail.findUnique({
+        where: { id: queued },
+        select: { scheduledFor: true },
+      })
+    : null;
   const [total, delivered, opened, clicked] = await Promise.all([
     db.arbitraryEmail.count(),
     db.arbitraryEmail.count({ where: { deliveredAt: { not: null } } }),
@@ -64,6 +84,8 @@ export default async function EmailsPage({
       status: true,
       error: true,
       sentAt: true,
+      scheduledFor: true,
+      nextAttemptAt: true,
       createdAt: true,
       deliveredAt: true,
       openCount: true,
@@ -83,13 +105,23 @@ export default async function EmailsPage({
         <LinkButton href="/emails/new">Compose</LinkButton>
       </div>
 
-      {(sent || error) && (
+      {(sent || queued || cancelled || error) && (
         <div className={`mt-5 rounded-lg border px-4 py-3 text-sm ${
           error
             ? "border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
             : "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
         }`}>
-          {error ? `Send failed: ${error}` : "Email sent."}
+          {error
+            ? `Email action failed: ${error}`
+            : queued
+              ? queuedEmail?.scheduledFor
+                ? `Email queued for ${formatScheduledTime(
+                    queuedEmail.scheduledFor,
+                  )} ET.`
+                : "Email queued."
+              : cancelled
+                ? "Queued email cancelled."
+                : "Email sent."}
         </div>
       )}
 
@@ -122,7 +154,7 @@ export default async function EmailsPage({
                   <th className="px-4 py-3">Delivered</th>
                   <th className="px-4 py-3">Opens</th>
                   <th className="px-4 py-3">Clicks</th>
-                  <th className="px-4 py-3">Sent</th>
+                  <th className="px-4 py-3">Target / sent</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -165,12 +197,33 @@ export default async function EmailsPage({
                     </td>
                     <td className="px-4 py-3">
                       <Badge tone={statusTone(email.status)}>{email.status.replace("_", " ")}</Badge>
+                      {["scheduled", "retry_scheduled"].includes(
+                        email.status,
+                      ) && (
+                        <form
+                          action={cancelArbitraryEmailAction}
+                          className="mt-2"
+                        >
+                          <input type="hidden" name="id" value={email.id} />
+                          <PendingSubmitButton
+                            variant="ghost"
+                            size="sm"
+                            pendingLabel="Cancelling…"
+                          >
+                            Cancel
+                          </PendingSubmitButton>
+                        </form>
+                      )}
                     </td>
                     <td className="px-4 py-3">{email.deliveredAt ? "Yes" : "—"}</td>
                     <td className="px-4 py-3">{email.openCount}</td>
                     <td className="px-4 py-3">{email.clickCount}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-zinc-500">
-                      {(email.sentAt ?? email.createdAt).toLocaleString()}
+                      {email.sentAt
+                        ? email.sentAt.toLocaleString()
+                        : email.nextAttemptAt
+                          ? `${formatScheduledTime(email.nextAttemptAt)} ET`
+                          : email.createdAt.toLocaleString()}
                     </td>
                   </tr>
                 ))}

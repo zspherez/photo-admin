@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isValidCronAuthorization } from "@/lib/cron-auth";
 import { db } from "@/lib/db";
 import { dispatchScheduledOutreach } from "@/lib/sendOutreach";
+import { dispatchScheduledArbitraryEmail } from "@/lib/sendArbitraryEmail";
 import {
   getScheduledDispatchDisposition,
   getScheduledDispatchHttpStatus,
@@ -62,6 +63,7 @@ export async function GET(request: NextRequest) {
   const startedAt = Date.now();
   const results: {
     id: string;
+    kind?: "outreach" | "arbitrary_email";
     ok: boolean;
     disposition: ScheduledDispatchDisposition;
     skipped?: boolean;
@@ -76,32 +78,86 @@ export async function GET(request: NextRequest) {
     const now = new Date();
     const staleBefore = new Date(now.getTime() - OUTREACH_CLAIM_TIMEOUT_MS);
     const recoveryCutoff = getOutreachRecoveryCutoff(now);
-    let due: { id: string }[];
+    let due: {
+      id: string;
+      kind: "outreach" | "arbitrary_email";
+      nextAttemptAt: Date | null;
+      createdAt: Date;
+    }[];
     try {
-      due = await db.outreach.findMany({
-        where: {
-          OR: [
-            {
-              status: "scheduled",
-              nextAttemptAt: {
-                lte: mode === "recovery" ? recoveryCutoff : now,
+      const [outreachDue, arbitraryDue] = await Promise.all([
+        db.outreach.findMany({
+          where: {
+            OR: [
+              {
+                status: "scheduled",
+                nextAttemptAt: {
+                  lte: mode === "recovery" ? recoveryCutoff : now,
+                },
               },
-            },
-            {
-              status: "retry_scheduled",
-              nextAttemptAt: { lte: now },
-            },
-            {
-              status: "queued",
-              nextAttemptAt: { lte: now },
-              OR: [{ claimedAt: null }, { claimedAt: { lte: staleBefore } }],
-            },
+              {
+                status: "retry_scheduled",
+                nextAttemptAt: { lte: now },
+              },
+              {
+                status: "queued",
+                nextAttemptAt: { lte: now },
+                OR: [{ claimedAt: null }, { claimedAt: { lte: staleBefore } }],
+              },
+            ],
+          },
+          select: { id: true, nextAttemptAt: true, createdAt: true },
+          orderBy: [
+            { nextAttemptAt: "asc" },
+            { createdAt: "asc" },
+            { id: "asc" },
           ],
-        },
-        select: { id: true },
-        orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-        take: Math.min(10, SCHEDULED_DISPATCH_MAX_ROWS - results.length),
-      });
+          take: Math.min(10, SCHEDULED_DISPATCH_MAX_ROWS - results.length),
+        }),
+        db.arbitraryEmail.findMany({
+          where: {
+            OR: [
+              {
+                status: "scheduled",
+                nextAttemptAt: {
+                  lte: mode === "recovery" ? recoveryCutoff : now,
+                },
+              },
+              {
+                status: "retry_scheduled",
+                nextAttemptAt: { lte: now },
+              },
+              {
+                status: "queued",
+                nextAttemptAt: { lte: now },
+                claimedAt: { lte: staleBefore },
+              },
+            ],
+          },
+          select: { id: true, nextAttemptAt: true, createdAt: true },
+          orderBy: [
+            { nextAttemptAt: "asc" },
+            { createdAt: "asc" },
+            { id: "asc" },
+          ],
+          take: Math.min(10, SCHEDULED_DISPATCH_MAX_ROWS - results.length),
+        }),
+      ]);
+      due = [
+        ...outreachDue.map((row) => ({ ...row, kind: "outreach" as const })),
+        ...arbitraryDue.map((row) => ({
+          ...row,
+          kind: "arbitrary_email" as const,
+        })),
+      ]
+        .sort(
+          (left, right) =>
+            (left.nextAttemptAt?.getTime() ?? 0) -
+              (right.nextAttemptAt?.getTime() ?? 0) ||
+            left.createdAt.getTime() - right.createdAt.getTime() ||
+            left.id.localeCompare(right.id),
+        )
+        .slice(0, Math.min(10, SCHEDULED_DISPATCH_MAX_ROWS - results.length));
     } catch (error) {
       results.push({
         id: "dispatcher",
@@ -116,17 +172,23 @@ export async function GET(request: NextRequest) {
     for (const row of due) {
       if (!shouldContinueScheduledDispatch(startedAt, results.length)) break;
       try {
-        const result = await dispatchScheduledOutreach(row.id);
+        const result =
+          row.kind === "outreach"
+            ? await dispatchScheduledOutreach(row.id)
+            : await dispatchScheduledArbitraryEmail(row.id);
         results.push({
           id: row.id,
+          kind: row.kind,
           ok: result.ok,
           disposition: getScheduledDispatchDisposition(result),
           skipped: result.skipped || undefined,
           retryScheduled: result.retryScheduled || undefined,
           nextAttemptAt: result.nextAttemptAt,
-          warnings: result.warnings,
+          warnings: "warnings" in result ? result.warnings : undefined,
           rateCardAttachmentOmitted:
-            result.rateCardAttachmentOmitted || undefined,
+            ("rateCardAttachmentOmitted" in result &&
+              result.rateCardAttachmentOmitted) ||
+            undefined,
           error: result.error,
         });
       } catch (error) {
@@ -149,7 +211,12 @@ export async function GET(request: NextRequest) {
     const staleBefore = new Date(
       summaryNow.getTime() - OUTREACH_CLAIM_TIMEOUT_MS,
     );
-    const [retrySummary, claimSummary] = await Promise.all([
+    const [
+      outreachRetrySummary,
+      outreachClaimSummary,
+      arbitraryRetrySummary,
+      arbitraryClaimSummary,
+    ] = await Promise.all([
       db.outreach.aggregate({
         where: {
           status: "retry_scheduled",
@@ -167,13 +234,43 @@ export async function GET(request: NextRequest) {
         _count: { _all: true },
         _min: { claimedAt: true },
       }),
+      db.arbitraryEmail.aggregate({
+        where: {
+          status: "retry_scheduled",
+          nextAttemptAt: { not: null },
+        },
+        _count: { _all: true },
+        _min: { nextAttemptAt: true },
+      }),
+      db.arbitraryEmail.aggregate({
+        where: {
+          status: "queued",
+          claimedAt: { gt: staleBefore },
+          nextAttemptAt: { not: null },
+        },
+        _count: { _all: true },
+        _min: { claimedAt: true },
+      }),
     ]);
-    scheduledRetries = retrySummary._count._all;
-    nextRetryAt = retrySummary._min.nextAttemptAt;
-    pendingClaims = claimSummary._count._all;
-    nextClaimExpiryAt = claimSummary._min.claimedAt
+    scheduledRetries =
+      outreachRetrySummary._count._all + arbitraryRetrySummary._count._all;
+    nextRetryAt = [
+      outreachRetrySummary._min.nextAttemptAt,
+      arbitraryRetrySummary._min.nextAttemptAt,
+    ]
+      .filter((value): value is Date => value !== null)
+      .sort((left, right) => left.getTime() - right.getTime())[0] ?? null;
+    pendingClaims =
+      outreachClaimSummary._count._all + arbitraryClaimSummary._count._all;
+    const earliestClaimAt = [
+      outreachClaimSummary._min.claimedAt,
+      arbitraryClaimSummary._min.claimedAt,
+    ]
+      .filter((value): value is Date => value !== null)
+      .sort((left, right) => left.getTime() - right.getTime())[0] ?? null;
+    nextClaimExpiryAt = earliestClaimAt
       ? new Date(
-          claimSummary._min.claimedAt.getTime() + OUTREACH_CLAIM_TIMEOUT_MS,
+          earliestClaimAt.getTime() + OUTREACH_CLAIM_TIMEOUT_MS,
         )
       : null;
   } catch (error) {

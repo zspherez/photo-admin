@@ -20,11 +20,17 @@ import {
   sendOutreach,
 } from "@/lib/sendOutreach";
 import { normalizeEmail } from "@/lib/resend";
-import { getNextMondaySlot, isWeekendET } from "@/lib/schedule";
+import {
+  formatScheduledTime,
+  getNextMondaySlot,
+  getNextNormalOutreachDispatch,
+  isWeekendET,
+} from "@/lib/schedule";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
 
 export interface CustomizeActionState {
   error: string | null;
+  queuedFor: string | null;
   selectedContactId: string;
 }
 
@@ -40,7 +46,7 @@ function actionError(
   selectedContactId: string,
   error: string,
 ): CustomizeActionState {
-  return { error, selectedContactId };
+  return { error, queuedFor: null, selectedContactId };
 }
 
 export async function sendCustom(
@@ -66,6 +72,10 @@ export async function sendCustom(
   ).trim();
   const subjectOverride = String(formData.get("subject") ?? "");
   const htmlOverride = String(formData.get("html") ?? "");
+  const intent = String(formData.get("intent") ?? "send");
+  if (intent !== "send" && intent !== "queue") {
+    return actionError(selectedContactId, "Unknown email action");
+  }
 
   if (!showId || !contextContactId || !selectedContactId) {
     return actionError(selectedContactId, "Select an email recipient");
@@ -187,9 +197,12 @@ export async function sendCustom(
     singleRecipient: true,
     expectedRecipientIdentity,
   };
-  const result = isWeekendET()
-    ? await scheduleOutreach(input, getNextMondaySlot())
-    : await sendOutreach(input);
+  const result =
+    intent === "queue"
+      ? await scheduleOutreach(input, getNextNormalOutreachDispatch())
+      : isWeekendET()
+        ? await scheduleOutreach(input, getNextMondaySlot())
+        : await sendOutreach(input);
   if (!result.ok) {
     return actionError(
       selectedContactId,
@@ -198,6 +211,13 @@ export async function sendCustom(
   }
 
   refreshWorkflowViews(returnTo, ["/outreach", festivalReturnPath(showId)]);
+  if (intent === "queue" && result.scheduledFor) {
+    return {
+      error: null,
+      queuedFor: formatScheduledTime(result.scheduledFor),
+      selectedContactId,
+    };
+  }
   redirect(
     dashboardResultHref(
       returnTo,
