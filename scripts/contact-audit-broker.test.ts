@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
-  mkdirSync,
+  mkdtempSync,
   readFileSync,
   rmSync,
 } from "node:fs";
@@ -100,11 +100,7 @@ test("audit broker isolates credentials and submits only audit results", async (
   const apiAddress = api.address();
   assert.ok(apiAddress && typeof apiAddress === "object");
 
-  const directory = join(
-    process.cwd(),
-    `.ca-${process.pid}-${Date.now().toString(36)}`
-  );
-  mkdirSync(directory);
+  const directory = mkdtempSync(join(process.cwd(), ".ca-"));
   const socketPath = join(directory, "broker.sock");
   const metricsFile = join(directory, "metrics.json");
   t.after(() => rmSync(directory, { recursive: true, force: true }));

@@ -134,7 +134,7 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
   const apiAddress = api.address();
   assert.ok(apiAddress && typeof apiAddress === "object");
 
-  const directory = mkdtempSync(join(process.cwd(), ".broker-test-"));
+  const directory = mkdtempSync(join(process.cwd(), ".br-"));
   const socketPath = join(directory, "broker.sock");
   const metricsFile = join(directory, "metrics.json");
   t.after(() => rmSync(directory, { recursive: true, force: true }));

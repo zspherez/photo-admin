@@ -2,11 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   ContactAuditValidationError,
   isValidContactAuditAuthorization,
-  noteContactAuditPrepareFailure,
-  prepareContactAudit,
+  recordContactAuditWorkflowFailure,
 } from "@/lib/contactAudit";
-
-export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   if (
@@ -17,32 +14,35 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  let workflowRunId: unknown;
+  let value: unknown;
   try {
-    const value = await request.json();
-    workflowRunId =
-      typeof value === "object" && value !== null && !Array.isArray(value)
-        ? Reflect.get(value, "workflowRunId")
-        : undefined;
+    value = await request.json();
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return NextResponse.json({ error: "invalid request body" }, { status: 400 });
+  }
 
   try {
-    return NextResponse.json(await prepareContactAudit(workflowRunId));
+    const accepted = await recordContactAuditWorkflowFailure(
+      Reflect.get(value, "runId"),
+      Reflect.get(value, "workflowRunId"),
+      Reflect.get(value, "error")
+    );
+    return NextResponse.json({ ok: true, accepted });
   } catch (error) {
     if (error instanceof ContactAuditValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
-    await noteContactAuditPrepareFailure(workflowRunId, error).catch(() => {});
     console.error(
       JSON.stringify({
-        event: "contact_audit_prepare_failed",
+        event: "contact_audit_attempt_failure_record_failed",
         error: error instanceof Error ? error.message : String(error),
       })
     );
     return NextResponse.json(
-      { error: "unable to prepare contact audit" },
+      { error: "unable to record contact audit workflow failure" },
       { status: 500 }
     );
   }

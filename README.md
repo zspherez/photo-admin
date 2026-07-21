@@ -96,7 +96,7 @@ The full list is in `.env.example`. Minimum to boot:
 | `RESEND_WEBHOOK_SECRET` | for webhooks | `whsec_...` from Resend → Webhooks. The webhook route fails closed when this is blank. |
 | `CRON_SECRET` | for scheduled jobs | Bearer token Vercel Cron and the scheduled GitHub Actions workflow present on `/api/cron/*`. Cron routes fail closed when this is blank. |
 | `CONTACT_RESEARCH_AGENT_TOKEN` | optional local contact research | Dedicated bearer token for a local worker. Hosted GitHub Actions research reuses `CRON_SECRET` to avoid production secret drift. |
-| `CONTACT_AUDIT_AGENT_TOKEN` | optional local contact audit | Dedicated bearer token for a local audit worker. Hosted manual audits use short-lived GitHub Actions OIDC. |
+| `CONTACT_AUDIT_AGENT_TOKEN` | optional local contact audit | Dedicated bearer token for a local audit worker. Hosted scheduled and diagnostic audits use short-lived GitHub Actions OIDC. |
 | `EDMTRAIN_API_KEY` | for show sync | Request a key at <https://edmtrain.com/api>. |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | for Spotify | Create an app at <https://developer.spotify.com/dashboard>. Redirect URI is `${APP_BASE_URL}/api/spotify/callback`. Spotify rejects `http://localhost`, so use `http://127.0.0.1:3000` locally. |
 | `STATSFM_TOKEN` | for Stats.fm | No public API — grab a session token from DevTools (Application → Local Storage → `token`) after logging into stats.fm. |
@@ -207,12 +207,15 @@ to a generic inbox.
 
 ## Existing contact audit
 
-Open **Audit** in the app and use **Run contact audit** to open the manual
-GitHub Actions workflow. Each dispatch snapshots every active contact, then
-Copilot verifies each snapshot against current public artist and management
-sources. Results are stored separately from contacts as `current`, `changed`,
-`stale`, `ambiguous`, or `unverified`, with source URLs, reasoning, confidence,
-verification time, and evidence-backed manager alternatives.
+Open **Audit** in the app and choose **Queue full contact audit**. The request
+is stored durably and the GitHub Actions workflow polls every 10 minutes, so
+startup can take up to roughly one polling interval. Repeated clicks keep the
+same pending or running request. One requested audit snapshots every active
+contact exactly once, then Copilot verifies each snapshot against current
+public artist and management sources. Results are stored separately from
+contacts as `current`, `changed`, `stale`, `ambiguous`, or `unverified`, with
+source URLs, reasoning, confidence, verification time, and evidence-backed
+manager alternatives.
 
 The audit is strictly review-only: neither the workflow nor its API can edit,
 replace, approve, or deactivate a contact. The review surface links to the
@@ -220,11 +223,21 @@ normal contact editor only after showing the saved evidence. The agent retains
 the manager-only policy, excludes booking/publicist contacts, and never
 bypasses credentials, paywalls, robots restrictions, or CAPTCHAs.
 
-The workflow is `.github/workflows/contact-audit.yml` and runs only through
-`workflow_dispatch`. Configure the same `APP_BASE_URL` Actions secret used by
-contact research. Hosted workers authenticate to the app with a short-lived
-OIDC token pinned to this repository, main branch, workflow file, and manual
-dispatch event.
+The workflow is `.github/workflows/contact-audit.yml`. Its 10-minute schedule
+is a lightweight no-op unless an explicit app request is pending or a requested
+run needs recovery; it exits before checkout, dependency installation, or
+Copilot use when idle. `workflow_dispatch` remains available for diagnostics
+and recovery, but it also requires an app request and does not create audits on
+its own. Configure the same `APP_BASE_URL` Actions secret used by contact
+research. Hosted workers authenticate to the app with a short-lived OIDC token
+pinned to this repository, main branch, exact workflow file, audience, and
+either the scheduled or manual-dispatch event.
+
+The page shows pending, running, completed, and failure/retry metadata. Failed
+worker attempts release their claims and keep the same request and audit run
+queued, so the next poll resumes the existing snapshot. After completion, the
+button can create a new request. This queue is independent of the manager
+research queue.
 
 For a local audit worker:
 

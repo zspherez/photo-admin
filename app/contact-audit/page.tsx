@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireServerActionAuth } from "@/lib/auth";
 import {
+  requestContactAudit,
   resolveContactAuditJob,
   type ContactAuditResolution,
 } from "@/lib/contactAudit";
@@ -67,6 +68,31 @@ function actionContext(formData: FormData): {
   };
 }
 
+async function queueContactAuditAction() {
+  "use server";
+  await requireServerActionAuth("/contact-audit");
+  let result:
+    | Awaited<ReturnType<typeof requestContactAudit>>
+    | null = null;
+  let error: string | null = null;
+  try {
+    result = await requestContactAudit();
+  } catch (caught) {
+    console.error(
+      JSON.stringify({
+        event: "contact_audit_request_failed",
+        error: caught instanceof Error ? caught.message : String(caught),
+      })
+    );
+    error = "Unable to queue the contact audit. Please try again.";
+  }
+  revalidatePath("/contact-audit");
+  const params = new URLSearchParams();
+  if (result) params.set("request", result.created ? "queued" : "existing");
+  if (error) params.set("requestError", error.slice(0, 300));
+  redirect(`/contact-audit?${params.toString()}`);
+}
+
 async function approveContactAuditAction(formData: FormData) {
   "use server";
   await requireServerActionAuth("/contact-audit");
@@ -111,6 +137,8 @@ export default async function ContactAuditPage({
     page?: SearchParamValue;
     resolved?: SearchParamValue;
     error?: SearchParamValue;
+    request?: SearchParamValue;
+    requestError?: SearchParamValue;
   }>;
 }) {
   const raw = await searchParams;
@@ -122,11 +150,33 @@ export default async function ContactAuditPage({
       ? rawResolved
       : null;
   const actionError = firstSearchParam(raw.error);
+  const requestResult = firstSearchParam(raw.request);
+  const requestError = firstSearchParam(raw.requestError);
   const runs = await db.contactAuditRun.findMany({
     orderBy: { createdAt: "desc" },
     take: 10,
     include: { _count: { select: { jobs: true } } },
   });
+  const latestRequest = await db.contactAuditRequest.findFirst({
+    orderBy: { requestedAt: "desc" },
+    select: {
+      id: true,
+      status: true,
+      requestedAt: true,
+      startedAt: true,
+      completedAt: true,
+      runId: true,
+      attemptCount: true,
+      lastAttemptAt: true,
+      lastWorkflowRunId: true,
+      lastError: true,
+    },
+  });
+  const requestActive =
+    latestRequest?.status === "pending" || latestRequest?.status === "running";
+  const diagnosticWorkflowUrl = latestRequest?.lastWorkflowRunId
+    ? `https://github.com/zspherez/photo-admin/actions/runs/${latestRequest.lastWorkflowRunId}`
+    : WORKFLOW_URL;
   const selectedRun =
     (requestedRunId
       ? runs.find((run) => run.id === requestedRunId) ??
@@ -197,15 +247,48 @@ export default async function ContactAuditPage({
             replacement or reject the finding here.
           </p>
         </div>
-        <LinkButton
-          href={WORKFLOW_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Run contact audit ↗
-        </LinkButton>
+        <div className="flex flex-wrap items-center gap-2">
+          <form action={queueContactAuditAction}>
+            <PendingSubmitButton
+              pendingLabel="Queueing audit…"
+              disabled={requestActive}
+            >
+              {requestActive
+                ? latestRequest?.status === "running"
+                  ? "Full audit running"
+                  : "Full audit queued"
+                : "Queue full contact audit"}
+            </PendingSubmitButton>
+          </form>
+          <LinkButton
+            href={diagnosticWorkflowUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            variant="secondary"
+          >
+            Workflow diagnostics ↗
+          </LinkButton>
+        </div>
       </div>
 
+      {(requestResult === "queued" || requestResult === "existing") && (
+        <div
+          className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+          role="status"
+        >
+          {requestResult === "queued"
+            ? "Full contact audit queued. GitHub Actions polls every 10 minutes."
+            : "A full contact audit was already queued or running; the existing request was kept."}
+        </div>
+      )}
+      {requestError && (
+        <div
+          className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+          role="alert"
+        >
+          {requestError}
+        </div>
+      )}
       {resolved && (
         <div
           className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
@@ -222,6 +305,60 @@ export default async function ContactAuditPage({
         >
           {actionError}
         </div>
+      )}
+
+      {latestRequest && (
+        <Card className="mt-5">
+          <CardBody className="p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  Full audit request
+                </p>
+                <p className="mt-1 text-sm font-medium capitalize">
+                  {latestRequest.status}
+                </p>
+              </div>
+              <Badge
+                tone={
+                  latestRequest.status === "failed"
+                    ? "danger"
+                    : latestRequest.status === "completed"
+                      ? "info"
+                      : "warning"
+                }
+              >
+                {latestRequest.status}
+              </Badge>
+            </div>
+            <p className="mt-2 text-xs text-zinc-500">
+              Requested {formatTimestamp(latestRequest.requestedAt)}
+              {latestRequest.startedAt
+                ? ` · started ${formatTimestamp(latestRequest.startedAt)}`
+                : ""}
+              {latestRequest.completedAt
+                ? ` · completed ${formatTimestamp(latestRequest.completedAt)}`
+                : ""}
+              {latestRequest.lastAttemptAt
+                ? ` · last poll ${formatTimestamp(latestRequest.lastAttemptAt)}`
+                : ""}
+              {` · ${latestRequest.attemptCount} attempt${
+                latestRequest.attemptCount === 1 ? "" : "s"
+              }`}
+            </p>
+            {latestRequest.lastError && (
+              <p
+                className="mt-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-800 dark:bg-red-950/40 dark:text-red-200"
+                role="alert"
+              >
+                Last attempt: {latestRequest.lastError}.{" "}
+                {requestActive
+                  ? "The request remains queued for retry."
+                  : "Queue another full audit when the issue is resolved."}
+              </p>
+            )}
+          </CardBody>
+        </Card>
       )}
 
       {runs.length > 0 && (
@@ -243,8 +380,8 @@ export default async function ContactAuditPage({
       {!selectedRun ? (
         <Card className="mt-6">
           <CardBody className="py-12 text-center text-sm text-zinc-500">
-            No audit has been run yet. Start the manual GitHub workflow to
-            snapshot and verify every active contact.
+            No audit has been run yet. Queue a full audit above; the next
+            scheduled poll will snapshot and verify every active contact.
           </CardBody>
         </Card>
       ) : (

@@ -173,7 +173,7 @@ test("contact audit authorization fails closed", async () => {
   );
 });
 
-test("GitHub OIDC trust is pinned to manual audit workflow dispatches", () => {
+test("GitHub OIDC trust accepts only scheduled or manual main-branch audit workflow runs", () => {
   const trusted = {
     aud: CONTACT_AUDIT_OIDC_AUDIENCE,
     repository: "zspherez/photo-admin",
@@ -188,13 +188,27 @@ test("GitHub OIDC trust is pinned to manual audit workflow dispatches", () => {
       ...trusted,
       event_name: "schedule",
     }),
-    false
+    true
   );
   assert.equal(
     isTrustedContactAuditOidcClaims({
       ...trusted,
       workflow_ref:
         "zspherez/photo-admin/.github/workflows/contact-research.yml@refs/heads/main",
+    }),
+    false
+  );
+  assert.equal(
+    isTrustedContactAuditOidcClaims({
+      ...trusted,
+      ref: "refs/heads/feature",
+    }),
+    false
+  );
+  assert.equal(
+    isTrustedContactAuditOidcClaims({
+      ...trusted,
+      event_name: "push",
     }),
     false
   );
