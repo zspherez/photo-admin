@@ -44,6 +44,7 @@ import {
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
 import {
+  customizeRecipientIdentity,
   customizeRecipientIdentityError,
   type CustomizeRecipientIdentity,
 } from "@/lib/customizeRecipients";
@@ -2491,6 +2492,10 @@ async function prepareOriginalOutreach(
     ? customizeRecipientIdentityError(contact, expectedRecipientIdentity)
     : null;
   if (identityError) return { error: identityError };
+  const currentRecipientIdentity = customizeRecipientIdentity(contact);
+  if (!currentRecipientIdentity) {
+    return { error: "Selected contact has no valid active recipient address" };
+  }
   const association = await db.showArtist.findUnique({
     where: {
       showId_artistId: { showId, artistId: contact.artistId },
@@ -2542,7 +2547,8 @@ async function prepareOriginalOutreach(
           contact.artist.name,
           utmSettings,
         ),
-    expectedRecipientIdentity: expectedRecipientIdentity ?? null,
+    expectedRecipientIdentity:
+      expectedRecipientIdentity ?? currentRecipientIdentity,
   };
 }
 
@@ -2588,8 +2594,10 @@ async function prepareFollowUpOutreach(
           select: {
             id: true,
             artistId: true,
+            email: true,
             name: true,
             state: true,
+            updatedAt: true,
             artist: { select: { name: true } },
           },
         },
@@ -2622,6 +2630,10 @@ async function prepareFollowUpOutreach(
     return {
       error: "Selected contact no longer belongs to the outreach artist",
     };
+  }
+  const expectedRecipientIdentity = customizeRecipientIdentity(parent.contact);
+  if (!expectedRecipientIdentity) {
+    return { error: "Selected contact has no valid active recipient address" };
   }
   const association = await db.showArtist.findUnique({
     where: {
@@ -2663,7 +2675,7 @@ async function prepareFollowUpOutreach(
       parent.contact.artist.name,
       utmSettings,
     ),
-    expectedRecipientIdentity: null,
+    expectedRecipientIdentity,
   };
 }
 

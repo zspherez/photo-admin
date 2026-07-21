@@ -114,6 +114,14 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "expectedRecipientUpdatedAt",
     ],
   );
+  assert.match(
+    source,
+    /FROM pg_constraint AS constraint_row[\s\S]*table_row\."relname" = 'Outreach'[\s\S]*Outreach_dispatch_recipient_identity_check[\s\S]*constraint_row\."contype" = 'c'/,
+  );
+  assert.match(
+    source,
+    /outreachDispatchIdentityConstraintProbe\.some\([\s\S]*constraint\.validated/,
+  );
   assert.match(source, /directOutreachNote: \{ not: null \}/);
   assert.match(
     source,
@@ -149,7 +157,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*outreachKindProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,
@@ -306,6 +314,6 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ArbitraryEmail\.providerCredentialScope",[\s\S]*"Outreach\.expectedRecipientUpdatedAt",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*\]/,
+    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ArbitraryEmail\.providerCredentialScope",[\s\S]*"Outreach\.expectedRecipientUpdatedAt",[\s\S]*"Outreach_dispatch_recipient_identity_check",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*\]/,
   );
 });
