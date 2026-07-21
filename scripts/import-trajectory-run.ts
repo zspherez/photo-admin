@@ -127,9 +127,12 @@ function humanSummary(summary: TrajectoryImportSummary): string {
     `  manifest SHA-256: ${summary.artifactSha256}`,
     `  bytes: ${summary.artifactByteLength}`,
     `  recommendations: ${summary.mappedRecommendationCount}/${summary.recommendationCount}`,
+    `  suggested mappings: ${summary.mappedSuggestedRecommendationCount}/${summary.suggestedRecommendationCount}`,
+    `  non-suggested mappings: ${summary.mappedNonSuggestedRecommendationCount}/${summary.nonSuggestedRecommendationCount}`,
     `  mapping validation: ${summary.mappingValidation}`,
     `  import issues: ${summary.issueCount}`,
     `  unresolved non-suggested rate: ${(summary.unresolvedNonSuggestedRate * 100).toFixed(2)}%`,
+    `  maximum unresolved rate: ${(summary.maximumUnmappedRate * 100).toFixed(2)}%`,
     `  model opinion valid until: ${summary.validUntil}`,
     `  superseded ready runs: ${summary.previousReadyRunsSuperseded}`,
   ].join("\n");

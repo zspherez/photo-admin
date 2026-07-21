@@ -312,6 +312,11 @@ test("exact EDMTrain mappings and ShowArtist membership import atomically", asyn
 
   assert.equal(summary.status, "imported");
   assert.equal(summary.mappingValidation, "transaction-revalidated");
+  assert.equal(summary.suggestedRecommendationCount, 1);
+  assert.equal(summary.mappedSuggestedRecommendationCount, 1);
+  assert.equal(summary.nonSuggestedRecommendationCount, 1);
+  assert.equal(summary.mappedNonSuggestedRecommendationCount, 1);
+  assert.equal(summary.maximumUnmappedRate, 0.02);
   assert.equal(summary.previousReadyRunsSuperseded, 1);
   assert.equal(persistence.runs.find((run) => run.id === "old-ready")?.status, "superseded");
   assert.equal(persistence.runs.filter((run) => run.status === "ready").length, 1);

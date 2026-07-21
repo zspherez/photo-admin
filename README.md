@@ -24,6 +24,9 @@ code is hopefully readable enough to fork.
   `/api/cron/send-scheduled`** —
   authenticated scheduled jobs split between Vercel Cron and GitHub Actions.
 - **`/api/resend/webhook`** — receives delivery/bounce/open events from Resend.
+- **`POST /api/integrations/trajectory-runs`** — validates and promotes a
+  trusted slim artist-trajectory manifest; the model repository never receives
+  database credentials.
 
 ## Stack
 
@@ -97,6 +100,11 @@ The full list is in `.env.example`. Minimum to boot:
 | `CRON_SECRET` | for scheduled jobs | Bearer token Vercel Cron and the scheduled GitHub Actions workflow present on `/api/cron/*`. Cron routes fail closed when this is blank. |
 | `CONTACT_RESEARCH_AGENT_TOKEN` | optional local contact research | Dedicated bearer token for an explicitly configured local/development worker. Production agent mutation endpoints ignore it and require workflow-scoped GitHub Actions OIDC. |
 | `CONTACT_AUDIT_AGENT_TOKEN` | optional local contact audit | Dedicated bearer token for an explicitly configured local/development audit worker. Production agent mutation endpoints ignore it and require workflow-scoped GitHub Actions OIDC. |
+| `TRAJECTORY_INGEST_AUTH_MODE` | trajectory promotion | Defaults to preferred `oidc`; `hmac` or `oidc-or-hmac` must be selected explicitly when the producer has no GitHub identity. |
+| `TRAJECTORY_INGEST_GITHUB_REPOSITORY` | OIDC trajectory promotion | Exact `owner/repository` of the producer. |
+| `TRAJECTORY_INGEST_GITHUB_WORKFLOW_REF` | OIDC trajectory promotion | Exact `owner/repository/.github/workflows/file.yml@refs/heads/main` identity. Only `workflow_dispatch` is accepted. |
+| `TRAJECTORY_INGEST_RECEIPT_SECRET` | trajectory promotion | Photo-admin-only random value of at least 32 bytes used to sign short-lived successful dry-run receipts. It is never shared with the producer. |
+| `TRAJECTORY_INGEST_HMAC_SECRET` | explicit direct fallback only | Dedicated random HMAC secret of at least 32 bytes. Never reuse admin/session, cron, Resend, Google, or other provider credentials. |
 | `EDMTRAIN_API_KEY` | for show sync | Request a key at <https://edmtrain.com/api>. |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | for Spotify | Create an app at <https://developer.spotify.com/dashboard>. Redirect URI is `${APP_BASE_URL}/api/spotify/callback`. Spotify rejects `http://localhost`, so use `http://127.0.0.1:3000` locally. |
 | `STATSFM_TOKEN` | for Stats.fm | No public API — grab a session token from DevTools (Application → Local Storage → `token`) after logging into stats.fm. |
@@ -135,6 +143,77 @@ and quarantined rather than deleted.
 If the overrides are absent, both existing database settings must already be
 complete. `SPREADSHEET_ID` is only the interactive setup fallback and is never
 a protected-release bootstrap.
+
+## Trusted artist-trajectory promotion
+
+The manual importer remains available as
+`npm run trajectory:import -- --manifest <path> --digest-file <path> --dry-run`.
+Production automation uses only
+`POST /api/integrations/trajectory-runs`; it accepts raw
+`application/json` slim manifests up to 1,000,000 bytes. The endpoint streams
+and bounds the request, checks `Content-Length`, raw SHA-256, contract,
+freshness, exact EDMTrain mappings, the shared import threshold, and the
+existing promotion lease. It never accepts a full artifact or database
+credentials.
+
+Preferred authentication is GitHub Actions OIDC with audience
+`photo-admin-trajectory-ingest`. Configure the exact producer repository and
+workflow ref in the variables above. Tokens are accepted only from that
+repository owner, `refs/heads/main`, the exact workflow file,
+`workflow_dispatch`, and the manifest's exact 40-character producer revision.
+OIDC tokens expire normally and are additionally limited to a five-minute
+token age. Do not add a schedule until repeated production dry-runs prove that
+all suggested recommendations map and the unresolved non-suggested rate stays
+at or below the returned `maximumUnmappedRate`.
+
+Each request must include:
+
+- `Content-Type: application/json` and exact `Content-Length`;
+- a unique `Idempotency-Key`;
+- fresh UTC `X-Produced-At`;
+- lowercase `X-Content-SHA256`;
+- `X-Trajectory-Mode: dry-run` or `apply`;
+- `Authorization: Bearer <GitHub OIDC token>` in OIDC mode.
+
+Dry-run responses report suggested and non-suggested totals, mapped totals,
+issues, unresolved rate, and threshold without any database writes. They also
+return a short-lived signed `dryRunReceipt`. Apply is rejected unless
+`X-Trajectory-Dry-Run-Receipt` proves a successful dry-run for that exact
+run/digest and threshold. It also requires
+`X-Trajectory-Apply-Confirmation: apply:<producer-run-id>:<manifest-sha256>`.
+The same apply idempotency key and request safely replays its stored successful
+response; different content conflicts. Repeated dry-runs safely recalculate
+without writes. A concurrent identical apply or busy import lease returns a
+retryable conflict. Same run/digest imports are no-ops, while same
+run/different digest conflicts. Failures leave the current ready run active.
+
+If the producer has no GitHub repository identity, set
+`TRAJECTORY_INGEST_AUTH_MODE=hmac` explicitly and configure only the dedicated
+`TRAJECTORY_INGEST_HMAC_SECRET`. `X-Signature` is
+`sha256=<HMAC-SHA256>` over these newline-separated values:
+
+```text
+POST
+/api/integrations/trajectory-runs
+<Idempotency-Key>
+<X-Produced-At>
+<X-Content-SHA256>
+<X-Trajectory-Mode>
+<Content-Length>
+<X-Trajectory-Apply-Confirmation or empty>
+<X-Trajectory-Dry-Run-Receipt or empty>
+```
+
+The producer workflow must remain manual initially and have
+`permissions: { contents: read, id-token: write }`. Before contacting this
+endpoint it must generate and validate the full artifact and slim manifest,
+verify both digests, run ID, `GITHUB_SHA`, freshness and the 1 MB raw limit,
+then upload both as immutable GitHub Actions artifacts. Generated artifacts
+must not be committed. The dry-run job calls the endpoint without writes. An
+apply dispatch must require an explicit confirmation input and may run only
+after the endpoint's exact-digest dry-run gate succeeds. The producer needs
+only the endpoint URL (and the dedicated HMAC secret only in fallback mode);
+it must never receive `DATABASE_URL` or `DIRECT_URL`.
 
 ## Contact research agent
 
