@@ -14,6 +14,7 @@ const ITEMS: { href: string; label: string; match: (p: string) => boolean }[] = 
   { href: "/contact-audit", label: "Audit", match: (p) => p === "/contact-audit" },
   { href: "/outreach", label: "Sent", match: (p) => p === "/outreach" || p.startsWith("/outreach/") },
   { href: "/emails", label: "Emails", match: (p) => p === "/emails" || p.startsWith("/emails/") },
+  { href: "/shows", label: "All shows / Sync", match: (p) => p === "/shows" },
   { href: "/settings", label: "Settings", match: (p) => p === "/settings" || p.startsWith("/settings/") },
 ];
 

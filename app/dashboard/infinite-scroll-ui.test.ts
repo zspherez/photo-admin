@@ -7,10 +7,6 @@ const source = fs.readFileSync(
   path.join(process.cwd(), "app/dashboard/dashboard-client.tsx"),
   "utf8"
 );
-const navSource = fs.readFileSync(
-  path.join(process.cwd(), "components/nav.tsx"),
-  "utf8"
-);
 
 test("dashboard replaces page navigation with infinite loading states", () => {
   assert.doesNotMatch(source, /Dashboard pages|← Previous|Next →/);
@@ -24,7 +20,6 @@ test("dashboard replaces page navigation with infinite loading states", () => {
 
 test("all NYC cards keep badges optional and new outreach actions eligibility-gated", () => {
   assert.match(source, /key: "all-nyc", label: "All NYC shows"/);
-  assert.doesNotMatch(navSource, /href: "\/shows", label: "All shows"/);
   assert.match(source, /\{artist\.topSignal && \(/);
   assert.match(
     source,
