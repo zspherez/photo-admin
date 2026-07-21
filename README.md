@@ -379,21 +379,23 @@ populated from **Settings → General** or the Contact/Show rows:
   punctuation).
 
 Edit and preview each template independently at **Settings → Email template**.
-"Reset to default" restores the selected normal or festival seed; follow-up
-reset copies the current normal-show template. Existing saved normal and
-festival templates are preserved. The canonical normal-show seed introduces the
-sender as a photographer and videographer and summarizes the standard
-deliverables. The canonical festival seed introduces the sender as a
-photographer and videographer specializing in electronic music and uses the
-festival-name fallback described above. Both seeds open portfolio links safely
-in a new tab. Legacy rate placeholders are stripped when templates are loaded,
-saved, previewed, or rendered. Legacy rate blocks are normalized generically
-without matching an entire historical template. Existing contact custom-price
-data and the legacy default-rate setting remain stored for Sheet and database
-compatibility, but outreach email templates no longer use them. Pending legacy
-scheduled snapshots are normalized before their first provider attempt; an
-existing immutable provider request that still contains legacy pricing is
-blocked for manual review instead of being retried.
+"Reset to default" restores the selected normal, festival, or follow-up seed.
+Existing saved templates for all three purposes are preserved. The canonical
+normal-show seed introduces the sender as a photographer and videographer and
+summarizes the standard deliverables. The canonical festival seed introduces
+the sender as a photographer and videographer specializing in electronic music
+and uses the festival-name fallback described above. The canonical follow-up
+seed adds a follow-up introduction before the original rate-free outreach copy.
+All three seeds open portfolio links safely in a new tab. Template saves reject
+malformed placeholder braces such as `{artist}}`. Legacy rate placeholders are
+stripped when templates are loaded, saved, previewed, or rendered. Legacy rate
+blocks are normalized generically without matching an entire historical
+template. Existing contact custom-price data and the legacy default-rate
+setting remain stored for Sheet and database compatibility, but outreach email
+templates no longer use them. Pending legacy scheduled snapshots are normalized
+before their first provider attempt; an existing immutable provider request
+that still contains legacy pricing is blocked for manual review instead of
+being retried.
 
 ## Deploying to Vercel
 

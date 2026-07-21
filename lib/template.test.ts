@@ -5,12 +5,15 @@ import {
   applyHtmlTemplate,
   applyTemplate,
   buildVarsForShow,
-  cloneTemplateContent,
   DEFAULT_TEMPLATE_HTML,
+  DEFAULT_TEMPLATE_SUBJECT,
   extractVars,
   FESTIVAL_TEMPLATE_HTML,
   FESTIVAL_TEMPLATE_SUBJECT,
+  FOLLOW_UP_TEMPLATE_HTML,
   FOLLOW_UP_TEMPLATE_NAME,
+  FOLLOW_UP_TEMPLATE_SUBJECT,
+  malformedTemplateVariableTokens,
   normalizeLegacyOutreachSnapshot,
   normalizeLegacyRateTemplateHtml,
   normalizeLegacyRateTemplateVariable,
@@ -282,6 +285,20 @@ test("festival selection and variable validation are purpose-aware", () => {
     `${FESTIVAL_TEMPLATE_SUBJECT} ${FESTIVAL_TEMPLATE_HTML}`,
     /\{\{\s*rate\s*\}\}|\brate card\b|custom price|\$[0-9]/i,
   );
+  assert.deepEqual(
+    malformedTemplateVariableTokens({
+      subject: "Follow up about {artist}}",
+      htmlBody: "<p>Hi {{manager_name}}</p><p>{{{sender_name}}}</p>",
+    }),
+    ["{artist}}", "{{{sender_name}}}"],
+  );
+  assert.deepEqual(
+    malformedTemplateVariableTokens({
+      subject: FESTIVAL_TEMPLATE_SUBJECT,
+      htmlBody: FESTIVAL_TEMPLATE_HTML,
+    }),
+    [],
+  );
 });
 
 test("standard original default and preview use the canonical rate-free copy", () => {
@@ -388,19 +405,31 @@ test("ambiguous rendered rate placement fails closed instead of guessing", () =>
   );
 });
 
-test("follow-up template cloning is a one-time independent snapshot", () => {
-  const original = {
-    subject: "Current original",
-    htmlBody: "<p>Current original</p>",
-  };
-  const followUp = cloneTemplateContent(original);
-  original.subject = "Later original edit";
-  original.htmlBody = "<p>Later original edit</p>";
-
-  assert.deepEqual(followUp, {
-    subject: "Current original",
-    htmlBody: "<p>Current original</p>",
+test("follow-up default and preview use the canonical rate-free copy", () => {
+  assert.equal(FOLLOW_UP_TEMPLATE_SUBJECT, DEFAULT_TEMPLATE_SUBJECT);
+  assert.equal(
+    FOLLOW_UP_TEMPLATE_HTML,
+    `<p>Hey {{manager_name}}, sending over a followup about the {{artist}} show in {{sender_city}} in a few weeks. Included my original email below for your reference!</p><hr><p>Hey {{manager_name}}, wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>I look forward to hearing from you soon!</p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`,
+  );
+  const preview = applyHtmlTemplate(FOLLOW_UP_TEMPLATE_HTML, {
+    artist: "Artist",
+    manager_name: "Manager",
+    portfolio_url: "https://portfolio.example",
+    sender_city: "New York",
+    sender_email: "photo@example.com",
+    sender_name: "Photographer",
+    sender_phone: "555-0100",
   });
+  assert.match(preview, /sending over a followup about the Artist show/);
+  assert.match(preview, /<hr>/);
+  assert.doesNotMatch(preview, /\{\{|\{artist\}\}|\brate\b|customPrice|\$[0-9]/i);
+  assert.deepEqual(
+    malformedTemplateVariableTokens({
+      subject: FOLLOW_UP_TEMPLATE_SUBJECT,
+      htmlBody: FOLLOW_UP_TEMPLATE_HTML,
+    }),
+    [],
+  );
   assert.equal(FOLLOW_UP_TEMPLATE_NAME, "follow_up");
 
   const source = readFileSync(new URL("./template.ts", import.meta.url), "utf8");
@@ -410,7 +439,7 @@ test("follow-up template cloning is a one-time independent snapshot", () => {
   );
   assert.match(
     source,
-    /const original = await ensureDefaultTemplate\(\)[\s\S]*update: \{\},[\s\S]*persistNormalizedTemplate\(template, normalizeTemplateContent\)/,
+    /where: \{ purpose: "follow_up" \},[\s\S]*update: \{\},[\s\S]*subject: FOLLOW_UP_TEMPLATE_SUBJECT,[\s\S]*htmlBody: FOLLOW_UP_TEMPLATE_HTML/,
   );
   assert.match(
     source,
@@ -422,15 +451,17 @@ test("follow-up template cloning is a one-time independent snapshot", () => {
   );
 });
 
-test("follow-up reset clones the current original template", () => {
+test("follow-up reset restores its independent built-in default", () => {
   const source = readFileSync(
     new URL("../app/settings/template/page.tsx", import.meta.url),
     "utf8",
   );
   assert.match(
     source,
-    /kind === "follow_up"[\s\S]*cloneTemplateContent\(await ensureDefaultTemplate\(\)\)/,
+    /kind === "follow_up"[\s\S]*subject: FOLLOW_UP_TEMPLATE_SUBJECT,[\s\S]*htmlBody: FOLLOW_UP_TEMPLATE_HTML/,
   );
+  assert.match(source, /malformedTemplateVariableTokens\(content\)/);
+  assert.match(source, /Malformed \$\{templateLabel\(kind\)\.toLowerCase\(\)\} variable token/);
   assert.match(source, /searchParams: Promise<\{ kind\?: SearchParamValue \}>/);
   assert.match(source, /aria-label="Email template type"/);
   assert.match(source, /"Normal show outreach"/);

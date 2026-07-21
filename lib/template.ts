@@ -14,6 +14,10 @@ const LEGACY_RENDERED_RATE_PARAGRAPH =
 const LEGACY_RATE_SUMMARY_PARAGRAPH =
   /<p\b[^>]*>Gave a brief summary of my rates\/deliverables below, and (?:attached my full rate card to this email but )?I'm happy to work with you to meet your needs!<\/p\s*>/gi;
 const TEMPLATE_VARIABLE = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+const TEMPLATE_VARIABLE_CANDIDATE =
+  /\{+\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}+/g;
+const WELL_FORMED_TEMPLATE_VARIABLE =
+  /^\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}$/;
 const LEGACY_RATE_TEMPLATE_VARIABLE_TEST = /\{\{\s*rate\s*\}\}/i;
 const HTML_PARAGRAPH =
   /<p\b[^>]*>(?:(?!<\/?p\b)[\s\S])*?<\/p\s*>/gi;
@@ -68,6 +72,20 @@ export function unsupportedTemplateVars(
   const supported = new Set<string>(supportedTemplateVars(purpose));
   return extractVars(`${template.subject} ${template.htmlBody}`).filter(
     (variable) => !supported.has(variable),
+  );
+}
+
+export function malformedTemplateVariableTokens(
+  template: TemplateContent,
+): string[] {
+  return Array.from(
+    new Set(
+      (`${template.subject} ${template.htmlBody}`.match(
+        TEMPLATE_VARIABLE_CANDIDATE,
+      ) ?? []).filter(
+        (token) => !WELL_FORMED_TEMPLATE_VARIABLE.test(token),
+      ),
+    ),
   );
 }
 
@@ -383,6 +401,10 @@ export const DEFAULT_TEMPLATE_SUBJECT =
 
 export const DEFAULT_TEMPLATE_HTML = `<p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a photographer and videographer local to {{sender_city}} and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My standard deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>I look forward to hearing from you soon!</p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`;
 
+export const FOLLOW_UP_TEMPLATE_SUBJECT = DEFAULT_TEMPLATE_SUBJECT;
+
+export const FOLLOW_UP_TEMPLATE_HTML = `<p>Hey {{manager_name}}, sending over a followup about the {{artist}} show in {{sender_city}} in a few weeks. Included my original email below for your reference!</p><hr><p>Hey {{manager_name}}, wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>I look forward to hearing from you soon!</p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`;
+
 export const FESTIVAL_TEMPLATE_SUBJECT =
   "Photo coverage request: {{artist}} at {{festival_name}}";
 
@@ -399,15 +421,6 @@ export function normalizeTemplateContent(
   return {
     subject: normalizeLegacyRateTemplateVariable(template.subject),
     htmlBody: normalizeLegacyRateTemplateHtml(template.htmlBody),
-  };
-}
-
-export function cloneTemplateContent(
-  template: TemplateContent
-): TemplateContent {
-  return {
-    subject: template.subject,
-    htmlBody: template.htmlBody,
   };
 }
 
@@ -459,15 +472,14 @@ export async function ensureFestivalTemplate() {
 }
 
 export async function ensureFollowUpTemplate() {
-  const original = await ensureDefaultTemplate();
-  const content = cloneTemplateContent(original);
   const template = await db.emailTemplate.upsert({
     where: { purpose: "follow_up" },
     update: {},
     create: {
       name: FOLLOW_UP_TEMPLATE_NAME,
       purpose: "follow_up",
-      ...content,
+      subject: FOLLOW_UP_TEMPLATE_SUBJECT,
+      htmlBody: FOLLOW_UP_TEMPLATE_HTML,
       isDefault: false,
     },
   });
