@@ -41,6 +41,76 @@ function findingTone(finding: string | null): BadgeTone {
   return "info";
 }
 
+type RosterReview = {
+  rosterEntryId: string;
+  assessment: string;
+  notes: string;
+};
+
+function rosterReviews(value: Prisma.JsonValue | null): Map<string, RosterReview> {
+  if (!Array.isArray(value)) return new Map();
+  return new Map(
+    value.flatMap((item) => {
+      if (
+        typeof item !== "object" ||
+        item === null ||
+        Array.isArray(item) ||
+        typeof item.rosterEntryId !== "string" ||
+        typeof item.assessment !== "string" ||
+        typeof item.notes !== "string"
+      ) {
+        return [];
+      }
+      const review = item as RosterReview;
+      return [[review.rosterEntryId, review] as const];
+    })
+  );
+}
+
+function contactLabel(contact: {
+  email: string | null;
+  phone: string | null;
+  directOutreachNote: string | null;
+}): string {
+  return (
+    contact.email ??
+    contact.phone ??
+    contact.directOutreachNote ??
+    "No contact channel"
+  );
+}
+
+function rosterContactChanged(
+  snapshot: {
+    snapshotEmail: string | null;
+    snapshotPhone: string | null;
+    snapshotDirectOutreachNote: string | null;
+    snapshotName: string | null;
+    snapshotRole: string | null;
+    snapshotSource: string | null;
+    snapshotIsFullTeam: boolean;
+  },
+  current: {
+    email: string | null;
+    phone: string | null;
+    directOutreachNote: string | null;
+    name: string | null;
+    role: string | null;
+    source: string | null;
+    isFullTeam: boolean;
+  }
+): boolean {
+  return (
+    snapshot.snapshotEmail !== current.email ||
+    snapshot.snapshotPhone !== current.phone ||
+    snapshot.snapshotDirectOutreachNote !== current.directOutreachNote ||
+    snapshot.snapshotName !== current.name ||
+    snapshot.snapshotRole !== current.role ||
+    snapshot.snapshotSource !== current.source ||
+    snapshot.snapshotIsFullTeam !== current.isFullTeam
+  );
+}
+
 function auditHref(
   runId: string,
   page = 1,
@@ -215,6 +285,13 @@ export default async function ContactAuditPage({
         take: PAGE_SIZE,
         include: {
           alternatives: { orderBy: { createdAt: "asc" } },
+          rosterSnapshot: {
+            include: {
+              entries: {
+                orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+              },
+            },
+          },
           contact: {
             select: {
               id: true,
@@ -231,6 +308,34 @@ export default async function ContactAuditPage({
         },
       })
     : [];
+  const currentRosterContacts = jobs.length
+    ? await db.contact.findMany({
+        where: {
+          id: {
+            in: jobs.flatMap(
+              (job) =>
+                job.rosterSnapshot?.entries.map(
+                  (entry) => entry.snapshotContactId
+                ) ?? []
+            ),
+          },
+        },
+        select: {
+          id: true,
+          email: true,
+          phone: true,
+          directOutreachNote: true,
+          name: true,
+          role: true,
+          source: true,
+          state: true,
+          isFullTeam: true,
+        },
+      })
+    : [];
+  const currentRosterContactById = new Map(
+    currentRosterContacts.map((contact) => [contact.id, contact])
+  );
   const countByStatus = new Map(
     statusCounts.map((row) => [row.status, row._count._all])
   );
@@ -451,35 +556,158 @@ export default async function ContactAuditPage({
                       </div>
                     </div>
 
-                    <div className="mt-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                    <div className="mt-3 rounded-lg border-2 border-amber-300 bg-amber-50/60 p-3 dark:border-amber-800 dark:bg-amber-950/20">
                       <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                        Current contact
+                        Exact contact under review
                       </p>
-                      {job.contact ? (
-                        <>
-                          <p className="mt-1 break-all text-sm font-medium">
-                            {job.contact.name
-                              ? `${job.contact.name} · `
-                              : ""}
-                            {job.contact.email ??
-                              job.contact.phone ??
-                              job.contact.directOutreachNote ??
-                              "No contact target"}
-                          </p>
-                          <p className="mt-1 text-xs text-zinc-500">
-                            {job.contact.role ?? "No role"}
-                            {job.contact.source
-                              ? ` · source: ${job.contact.source}`
-                              : ""}
-                            {` · ${job.contact.state}`}
-                          </p>
-                        </>
-                      ) : (
+                      <p className="mt-1 break-all text-sm font-medium">
+                        {job.snapshotName ? `${job.snapshotName} · ` : ""}
+                        {contactLabel({
+                          email: job.snapshotEmail,
+                          phone: job.snapshotPhone,
+                          directOutreachNote:
+                            job.snapshotDirectOutreachNote,
+                        })}
+                      </p>
+                      <p className="mt-1 text-xs text-zinc-500">
+                        Snapshot role: {job.snapshotRole ?? "not recorded"}
+                        {job.snapshotSource
+                          ? ` · source: ${job.snapshotSource}`
+                          : ""}
+                        {job.contact ? ` · now ${job.contact.state}` : ""}
+                      </p>
+                      {!job.contact && (
                         <p className="mt-1 text-sm text-red-700 dark:text-red-300">
                           This contact no longer exists. Run a new audit before
                           resolving this finding.
                         </p>
                       )}
+                    </div>
+
+                    <div className="mt-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                          {job.rosterSnapshot
+                            ? "Complete snapshotted artist roster"
+                            : "Legacy/incomplete contact context"}
+                        </p>
+                        <Badge tone={job.rosterSnapshot ? "info" : "warning"}>
+                          {job.rosterSnapshot
+                            ? `${job.rosterSnapshot.entries.length} stored`
+                            : "target only"}
+                        </Badge>
+                      </div>
+                      {!job.rosterSnapshot && (
+                        <p className="mt-2 text-xs text-amber-800 dark:text-amber-300">
+                          This run predates complete roster snapshots. Its
+                          single-contact context was preserved and was not
+                          resnapshotted.
+                        </p>
+                      )}
+                      <div className="mt-2 space-y-2">
+                        {(job.rosterSnapshot?.entries ?? []).map((entry) => {
+                          const current = currentRosterContactById.get(
+                            entry.snapshotContactId
+                          );
+                          const review = rosterReviews(job.rosterReview).get(
+                            entry.id
+                          );
+                          const isTarget =
+                            entry.id === job.targetRosterEntryId;
+                          return (
+                            <div
+                              key={entry.id}
+                              className={`rounded-md border p-2 ${
+                                isTarget
+                                  ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"
+                                  : "border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900"
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="break-all text-sm font-medium">
+                                  {entry.snapshotName
+                                    ? `${entry.snapshotName} · `
+                                    : ""}
+                                  {contactLabel({
+                                    email: entry.snapshotEmail,
+                                    phone: entry.snapshotPhone,
+                                    directOutreachNote:
+                                      entry.snapshotDirectOutreachNote,
+                                  })}
+                                </span>
+                                <Badge tone={isTarget ? "warning" : "muted"}>
+                                  {isTarget
+                                    ? "Audited target"
+                                    : "Already stored contact"}
+                                </Badge>
+                                {entry.snapshotIsFullTeam && (
+                                  <Badge tone="info">Full team</Badge>
+                                )}
+                                {review && (
+                                  <Badge tone="muted">
+                                    Agent: {review.assessment}
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="mt-1 text-xs text-zinc-500">
+                                {entry.snapshotEmail
+                                  ? `Email: ${entry.snapshotEmail}`
+                                  : ""}
+                                {entry.snapshotPhone
+                                  ? `${
+                                      entry.snapshotEmail ? " · " : ""
+                                    }Phone: ${entry.snapshotPhone}`
+                                  : ""}
+                                {entry.snapshotDirectOutreachNote
+                                  ? `${
+                                      entry.snapshotEmail ||
+                                      entry.snapshotPhone
+                                        ? " · "
+                                        : ""
+                                    }Direct outreach: ${entry.snapshotDirectOutreachNote}`
+                                  : ""}
+                              </p>
+                              <p className="mt-1 text-xs text-zinc-500">
+                                Snapshot role:{" "}
+                                {entry.snapshotRole ?? "not recorded"}
+                                {entry.snapshotSource
+                                  ? ` · source: ${entry.snapshotSource}`
+                                  : ""}
+                                {current
+                                  ? ` · current status: ${current.state}${
+                                      rosterContactChanged(entry, current)
+                                        ? " (changed since snapshot)"
+                                        : ""
+                                    }`
+                                  : " · current status: deleted"}
+                              </p>
+                              {review && (
+                                <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                                  {review.notes}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {!job.rosterSnapshot && (
+                          <div className="rounded-md border border-amber-200 bg-amber-50 p-2 dark:border-amber-900 dark:bg-amber-950/20">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="break-all text-sm font-medium">
+                                {job.snapshotName
+                                  ? `${job.snapshotName} · `
+                                  : ""}
+                                {contactLabel({
+                                  email: job.snapshotEmail,
+                                  phone: job.snapshotPhone,
+                                  directOutreachNote:
+                                    job.snapshotDirectOutreachNote,
+                                })}
+                              </span>
+                              <Badge tone="warning">Audited target</Badge>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {job.evidence && (
@@ -520,8 +748,20 @@ export default async function ContactAuditPage({
                       job.finding === "ambiguous") && (
                       <div className="mt-4">
                         <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                          Proposed manager contacts
+                          New proposed manager contacts
                         </h2>
+                        <p className="mt-1 text-xs text-zinc-500">
+                          These are new evidence-backed addresses, not contacts
+                          already stored in the roster above.
+                        </p>
+                        {job.finding === "ambiguous" &&
+                          job.alternatives.length === 0 && (
+                            <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                              No new alternative was proposed. This ambiguity is
+                              among already stored roster contacts and can only
+                              be rejected here.
+                            </p>
+                          )}
                         <div className="mt-2 space-y-2">
                           {job.alternatives.map((alternative) => (
                             <div

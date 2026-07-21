@@ -264,16 +264,51 @@ model Contact {
 }
 
 model ContactAuditRun {
-  id           String               @id @default(cuid())
-  status       String               @default("running")
-  contactCount Int
-  completedAt  DateTime?
-  request      ContactAuditRequest?
-  jobs         ContactAuditJob[]
-  createdAt    DateTime             @default(now())
-  updatedAt    DateTime             @updatedAt
+  id              String                       @id @default(cuid())
+  status          String                       @default("running")
+  contactCount    Int
+  completedAt     DateTime?
+  request         ContactAuditRequest?
+  jobs            ContactAuditJob[]
+  rosterSnapshots ContactAuditRosterSnapshot[]
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
 
   @@index([status, createdAt])
+}
+
+model ContactAuditRosterSnapshot {
+  id                 String                    @id @default(cuid())
+  runId              String
+  run                ContactAuditRun           @relation(fields: [runId], references: [id], onDelete: Restrict)
+  snapshotArtistId   String
+  snapshotArtistName String
+  entries            ContactAuditRosterEntry[]
+  jobs               ContactAuditJob[]
+  createdAt          DateTime                  @default(now())
+
+  @@unique([runId, snapshotArtistId])
+  @@index([snapshotArtistId])
+}
+
+model ContactAuditRosterEntry {
+  id                         String                     @id @default(cuid())
+  rosterSnapshotId           String
+  rosterSnapshot             ContactAuditRosterSnapshot @relation(fields: [rosterSnapshotId], references: [id], onDelete: Cascade)
+  snapshotContactId          String
+  snapshotEmail              String?
+  snapshotPhone              String?
+  snapshotDirectOutreachNote String?
+  snapshotName               String?
+  snapshotRole               String?
+  snapshotSource             String?
+  snapshotNotes              String?
+  snapshotIsFullTeam         Boolean                    @default(false)
+  targetedByJob              ContactAuditJob?           @relation("ContactAuditTargetRosterEntry")
+  createdAt                  DateTime                   @default(now())
+
+  @@unique([rosterSnapshotId, snapshotContactId])
+  @@index([snapshotContactId])
 }
 
 model ContactAuditRequest {
@@ -296,13 +331,17 @@ model ContactAuditRequest {
 }
 
 model ContactAuditJob {
-  id                         String                    @id @default(cuid())
+  id                         String                      @id @default(cuid())
   runId                      String
-  run                        ContactAuditRun           @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run                        ContactAuditRun             @relation(fields: [runId], references: [id], onDelete: Cascade)
   contactId                  String?
-  contact                    Contact?                  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  contact                    Contact?                    @relation(fields: [contactId], references: [id], onDelete: SetNull)
   artistId                   String?
-  artist                     Artist?                   @relation(fields: [artistId], references: [id], onDelete: SetNull)
+  artist                     Artist?                     @relation(fields: [artistId], references: [id], onDelete: SetNull)
+  rosterSnapshotId           String?
+  rosterSnapshot             ContactAuditRosterSnapshot? @relation(fields: [rosterSnapshotId], references: [id], onDelete: Restrict)
+  targetRosterEntryId        String?                     @unique
+  targetRosterEntry          ContactAuditRosterEntry?    @relation("ContactAuditTargetRosterEntry", fields: [targetRosterEntryId], references: [id], onDelete: Restrict)
   snapshotArtistName         String
   snapshotEmail              String?
   snapshotPhone              String?
@@ -311,22 +350,24 @@ model ContactAuditJob {
   snapshotRole               String?
   snapshotSource             String?
   snapshotNotes              String?
-  status                     String                    @default("pending")
-  attemptCount               Int                       @default(0)
+  snapshotIsFullTeam         Boolean?
+  status                     String                      @default("pending")
+  attemptCount               Int                         @default(0)
   claimedAt                  DateTime?
   claimExpiresAt             DateTime?
-  claimToken                 String?                   @unique
+  claimToken                 String?                     @unique
   finding                    String?
-  sourceUrls                 String[]                  @default([])
+  sourceUrls                 String[]                    @default([])
   evidence                   String?
   confidence                 String?
   agentNotes                 String?
+  rosterReview               Json?
   verifiedAt                 DateTime?
   reviewedAt                 DateTime?
   resolution                 String?
   resolvedAt                 DateTime?
   selectedAlternativeId      String?
-  selectedAlternative        ContactAuditAlternative?  @relation("ContactAuditSelectedAlternative", fields: [selectedAlternativeId], references: [id], onDelete: Restrict)
+  selectedAlternative        ContactAuditAlternative?    @relation("ContactAuditSelectedAlternative", fields: [selectedAlternativeId], references: [id], onDelete: Restrict)
   resolvedContactId          String?
   resolvedArtistId           String?
   resolvedArtistName         String?
@@ -337,11 +378,11 @@ model ContactAuditJob {
   resolvedRole               String?
   resolvedSource             String?
   resolvedState              String?
-  resolutionClaimToken       String?                   @unique
+  resolutionClaimToken       String?                     @unique
   resolutionClaimedAt        DateTime?
   alternatives               ContactAuditAlternative[]
-  createdAt                  DateTime                  @default(now())
-  updatedAt                  DateTime                  @updatedAt
+  createdAt                  DateTime                    @default(now())
+  updatedAt                  DateTime                    @updatedAt
 
   @@unique([runId, contactId])
   @@index([runId, status, createdAt])
@@ -350,6 +391,7 @@ model ContactAuditJob {
   @@index([finding, reviewedAt, verifiedAt])
   @@index([contactId])
   @@index([artistId])
+  @@index([rosterSnapshotId])
 }
 
 model ContactAuditAlternative {

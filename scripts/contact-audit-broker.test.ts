@@ -62,6 +62,18 @@ async function brokerRequest(
 test("audit broker isolates credentials and submits only audit results", async (t) => {
   let authorization: string | undefined;
   const requests: Array<{ url: string; body: unknown }> = [];
+  const rosterReview = [
+    {
+      rosterEntryId: "entry-1",
+      assessment: "stale",
+      notes: "The audited target is no longer listed.",
+    },
+    {
+      rosterEntryId: "entry-2",
+      assessment: "coexisting",
+      notes: "The other stored manager remains on the team.",
+    },
+  ];
   const api = createServer((apiRequest, response) => {
     authorization = apiRequest.headers.authorization;
     const chunks: Buffer[] = [];
@@ -79,10 +91,51 @@ test("audit broker isolates credentials and submits only audit results", async (
                     id: "job-1",
                     runId: "run-1",
                     claimToken: "claim-1",
+                    claimExpiresAt: "2026-07-21T18:00:00.000Z",
+                    attemptCount: 1,
                     contact: {
                       artistName: "Example Artist",
                       email: "old@example.com",
+                      phone: null,
+                      directOutreachNote: null,
                       name: "Old Manager",
+                      role: "management",
+                      source: "manual",
+                      notes: null,
+                      isFullTeam: false,
+                    },
+                    contactRoster: {
+                      snapshotId: "roster-1",
+                      snapshotAt: "2026-07-21T17:00:00.000Z",
+                      completeness: "complete",
+                      contacts: [
+                        {
+                          rosterEntryId: "entry-1",
+                          contactId: "contact-1",
+                          isTarget: true,
+                          email: "old@example.com",
+                          phone: null,
+                          directOutreachNote: null,
+                          name: "Old Manager",
+                          role: "management",
+                          source: "manual",
+                          notes: null,
+                          isFullTeam: false,
+                        },
+                        {
+                          rosterEntryId: "entry-2",
+                          contactId: "contact-2",
+                          isTarget: false,
+                          email: "other@example.com",
+                          phone: "+1 212 555 0100",
+                          directOutreachNote: "@othermanager",
+                          name: "Other Manager",
+                          role: "legacy",
+                          source: "sheet",
+                          notes: "Full team contact.",
+                          isFullTeam: true,
+                        },
+                      ],
                     },
                   },
                 ],
@@ -129,10 +182,51 @@ test("audit broker isolates credentials and submits only audit results", async (
         jobId: "job-1",
         runId: "run-1",
         claimToken: "claim-1",
+        claimExpiresAt: "2026-07-21T18:00:00.000Z",
+        attemptCount: 1,
         contact: {
           artistName: "Example Artist",
           email: "old@example.com",
+          phone: null,
+          directOutreachNote: null,
           name: "Old Manager",
+          role: "management",
+          source: "manual",
+          notes: null,
+          isFullTeam: false,
+        },
+        contactRoster: {
+          snapshotId: "roster-1",
+          snapshotAt: "2026-07-21T17:00:00.000Z",
+          completeness: "complete",
+          contacts: [
+            {
+              rosterEntryId: "entry-1",
+              contactId: "contact-1",
+              isTarget: true,
+              email: "old@example.com",
+              phone: null,
+              directOutreachNote: null,
+              name: "Old Manager",
+              role: "management",
+              source: "manual",
+              notes: null,
+              isFullTeam: false,
+            },
+            {
+              rosterEntryId: "entry-2",
+              contactId: "contact-2",
+              isTarget: false,
+              email: "other@example.com",
+              phone: "+1 212 555 0100",
+              directOutreachNote: "@othermanager",
+              name: "Other Manager",
+              role: "legacy",
+              source: "sheet",
+              notes: "Full team contact.",
+              isFullTeam: true,
+            },
+          ],
         },
       },
     ],
@@ -159,6 +253,7 @@ test("audit broker isolates credentials and submits only audit results", async (
         confidence: "medium",
       },
     ],
+    rosterReview,
   });
   assert.equal(invalidStale.status, 400);
   const wrongJob = await brokerRequest(socketPath, "/submit-result", {
@@ -169,6 +264,7 @@ test("audit broker isolates credentials and submits only audit results", async (
     evidence: "The artist now lists a different management company.",
     confidence: "medium",
     alternatives: [],
+    rosterReview,
   });
   assert.equal(wrongJob.status, 409);
   const submitted = await brokerRequest(socketPath, "/submit-result", {
@@ -189,6 +285,7 @@ test("audit broker isolates credentials and submits only audit results", async (
         confidence: "high",
       },
     ],
+    rosterReview,
   });
   assert.equal(submitted.status, 200);
   assert.deepEqual(submitted.value, { ok: true, runComplete: true });
@@ -225,6 +322,7 @@ test("audit broker isolates credentials and submits only audit results", async (
             confidence: "high",
           },
         ],
+        rosterReview,
       },
     },
   ]);

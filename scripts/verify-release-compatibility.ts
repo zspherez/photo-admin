@@ -43,8 +43,12 @@ async function main(): Promise<void> {
     edmtrainVenueProbe,
     contactAuditRequestProbe,
     contactAuditRunProbe,
+    contactAuditRosterSnapshotProbe,
+    contactAuditRosterEntryProbe,
     contactAuditJobProbe,
     contactAuditAlternativeProbe,
+    contactAuditRosterConstraintProbe,
+    contactAuditRosterIndexProbe,
     arbitraryEmailProbe,
     resendWebhookArbitraryEmailProbe,
     emailTemplateProbe,
@@ -235,6 +239,33 @@ async function main(): Promise<void> {
         updatedAt: true,
       },
     }),
+    db.contactAuditRosterSnapshot.findMany({
+      take: 1,
+      select: {
+        id: true,
+        runId: true,
+        snapshotArtistId: true,
+        snapshotArtistName: true,
+        createdAt: true,
+      },
+    }),
+    db.contactAuditRosterEntry.findMany({
+      take: 1,
+      select: {
+        id: true,
+        rosterSnapshotId: true,
+        snapshotContactId: true,
+        snapshotEmail: true,
+        snapshotPhone: true,
+        snapshotDirectOutreachNote: true,
+        snapshotName: true,
+        snapshotRole: true,
+        snapshotSource: true,
+        snapshotNotes: true,
+        snapshotIsFullTeam: true,
+        createdAt: true,
+      },
+    }),
     db.contactAuditJob.findMany({
       take: 1,
       select: {
@@ -242,6 +273,8 @@ async function main(): Promise<void> {
         runId: true,
         contactId: true,
         artistId: true,
+        rosterSnapshotId: true,
+        targetRosterEntryId: true,
         snapshotArtistName: true,
         snapshotEmail: true,
         snapshotPhone: true,
@@ -250,6 +283,7 @@ async function main(): Promise<void> {
         snapshotRole: true,
         snapshotSource: true,
         snapshotNotes: true,
+        snapshotIsFullTeam: true,
         status: true,
         attemptCount: true,
         claimedAt: true,
@@ -260,6 +294,7 @@ async function main(): Promise<void> {
         evidence: true,
         confidence: true,
         agentNotes: true,
+        rosterReview: true,
         verifiedAt: true,
         reviewedAt: true,
         resolution: true,
@@ -297,6 +332,47 @@ async function main(): Promise<void> {
         updatedAt: true,
       },
     }),
+    db.$queryRaw<Array<{ constraintName: string; validated: boolean }>>(
+      Prisma.sql`
+        SELECT
+          constraint_row."conname" AS "constraintName",
+          constraint_row."convalidated" AS "validated"
+        FROM pg_constraint AS constraint_row
+        JOIN pg_class AS table_row
+          ON table_row.oid = constraint_row."conrelid"
+        JOIN pg_namespace AS namespace_row
+          ON namespace_row.oid = table_row."relnamespace"
+        WHERE namespace_row."nspname" = current_schema()
+          AND table_row."relname" IN (
+            'ContactAuditRosterSnapshot',
+            'ContactAuditRosterEntry',
+            'ContactAuditJob'
+          )
+          AND constraint_row."conname" IN (
+            'ContactAuditRosterSnapshot_runId_fkey',
+            'ContactAuditRosterEntry_rosterSnapshotId_fkey',
+            'ContactAuditJob_roster_link_check',
+            'ContactAuditJob_rosterReview_check',
+            'ContactAuditJob_rosterSnapshotId_fkey',
+            'ContactAuditJob_targetRosterEntryId_fkey'
+          )
+      `,
+    ),
+    db.$queryRaw<Array<{ indexName: string; indexDefinition: string }>>(
+      Prisma.sql`
+        SELECT
+          indexname AS "indexName",
+          indexdef AS "indexDefinition"
+        FROM pg_indexes
+        WHERE schemaname = current_schema()
+          AND indexname IN (
+            'ContactAuditRosterSnapshot_runId_snapshotArtistId_key',
+            'ContactAuditRosterEntry_rosterSnapshotId_snapshotContactId_key',
+            'ContactAuditRosterEntry_rosterSnapshotId_email_idx',
+            'ContactAuditJob_targetRosterEntryId_key'
+          )
+      `,
+    ),
     db.arbitraryEmail.findMany({
       take: 1,
       select: {
@@ -511,8 +587,12 @@ async function main(): Promise<void> {
           agentRuleSetProbe,
           contactAuditRequestProbe,
           contactAuditRunProbe,
+          contactAuditRosterSnapshotProbe,
+          contactAuditRosterEntryProbe,
           contactAuditJobProbe,
           contactAuditAlternativeProbe,
+          contactAuditRosterConstraintProbe,
+          contactAuditRosterIndexProbe,
           arbitraryEmailProbe,
           resendWebhookArbitraryEmailProbe,
           emailTemplateProbe,
@@ -525,6 +605,17 @@ async function main(): Promise<void> {
           trajectoryConstraintProbe,
           trajectoryReadyIndexProbe,
         ].every(Array.isArray) &&
+        contactAuditRosterConstraintProbe.length === 6 &&
+        contactAuditRosterConstraintProbe.every(
+          (constraint) => constraint.validated,
+        ) &&
+        contactAuditRosterIndexProbe.length === 4 &&
+        contactAuditRosterIndexProbe.some(
+          (index) =>
+            index.indexName ===
+              "ContactAuditRosterEntry_rosterSnapshotId_email_idx" &&
+            index.indexDefinition.includes("lower"),
+        ) &&
         outreachDispatchIdentityConstraintProbe.some(
           (constraint) =>
             constraint.constraintName ===
@@ -556,8 +647,12 @@ async function main(): Promise<void> {
         "Contact.agentDirectOutreachProvenance",
         "ContactAuditRequest",
         "ContactAuditRun",
+        "ContactAuditRosterSnapshot",
+        "ContactAuditRosterEntry",
         "ContactAuditJob",
         "ContactAuditAlternative",
+        "ContactAuditRoster constraints",
+        "ContactAuditRoster indexes",
         "ArbitraryEmail",
         "ArbitraryEmail.text",
         "ArbitraryEmail.scheduledFor",

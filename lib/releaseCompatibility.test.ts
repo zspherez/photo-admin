@@ -174,7 +174,15 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*contactResearchDirectOutreachProbe,\s*directOutreachProvenanceProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*contactResearchDirectOutreachProbe,\s*directOutreachProvenanceProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditRosterSnapshotProbe,\s*contactAuditRosterEntryProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*contactAuditRosterConstraintProbe,\s*contactAuditRosterIndexProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*\]\.every\(Array\.isArray\)/,
+  );
+  assert.match(
+    source,
+    /contactAuditRosterConstraintProbe\.length === 6[\s\S]*contactAuditRosterConstraintProbe\.every\([\s\S]*constraint\.validated/,
+  );
+  assert.match(
+    source,
+    /contactAuditRosterIndexProbe\.length === 4[\s\S]*ContactAuditRosterEntry_rosterSnapshotId_email_idx[\s\S]*indexDefinition\.includes\("lower"\)/,
   );
   assert.match(
     source,
@@ -202,12 +210,41 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
     ["id", "status", "contactCount", "completedAt", "createdAt", "updatedAt"],
   );
   assert.deepEqual(
+    selectedScalarFields(source, "contactAuditRosterSnapshot"),
+    [
+      "id",
+      "runId",
+      "snapshotArtistId",
+      "snapshotArtistName",
+      "createdAt",
+    ],
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "contactAuditRosterEntry"),
+    [
+      "id",
+      "rosterSnapshotId",
+      "snapshotContactId",
+      "snapshotEmail",
+      "snapshotPhone",
+      "snapshotDirectOutreachNote",
+      "snapshotName",
+      "snapshotRole",
+      "snapshotSource",
+      "snapshotNotes",
+      "snapshotIsFullTeam",
+      "createdAt",
+    ],
+  );
+  assert.deepEqual(
     selectedScalarFields(source, "contactAuditJob"),
     [
       "id",
       "runId",
       "contactId",
       "artistId",
+      "rosterSnapshotId",
+      "targetRosterEntryId",
       "snapshotArtistName",
       "snapshotEmail",
       "snapshotPhone",
@@ -216,6 +253,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "snapshotRole",
       "snapshotSource",
       "snapshotNotes",
+      "snapshotIsFullTeam",
       "status",
       "attemptCount",
       "claimedAt",
@@ -226,6 +264,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "evidence",
       "confidence",
       "agentNotes",
+      "rosterReview",
       "verifiedAt",
       "reviewedAt",
       "resolution",
