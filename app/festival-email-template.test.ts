@@ -110,16 +110,30 @@ test("scheduled sends and retries retain stored festival snapshots", () => {
 
 test("Settings edits, previews, and resets normal and festival templates independently", () => {
   const settings = source("app/settings/template/page.tsx");
+  const templates = source("lib/template.ts");
 
   assert.match(settings, /\["original", "festival", "follow_up"\]/);
   assert.match(settings, /if \(kind === "festival"\) return ensureFestivalTemplate\(\)/);
   assert.match(settings, /isFestival: kind === "festival"/);
   assert.match(settings, /supportedTemplateVars\(kind\)/);
   assert.match(settings, /unsupportedTemplateVars\(content, kind\)/);
+  assert.match(settings, /malformedTemplateVariableTokens\(content\)/);
+  assert.match(settings, /subject: DEFAULT_TEMPLATE_SUBJECT/);
+  assert.match(settings, /htmlBody: DEFAULT_TEMPLATE_HTML/);
+  assert.match(settings, /subject: FOLLOW_UP_TEMPLATE_SUBJECT/);
+  assert.match(settings, /htmlBody: FOLLOW_UP_TEMPLATE_HTML/);
   assert.match(settings, /subject: FESTIVAL_TEMPLATE_SUBJECT/);
   assert.match(settings, /htmlBody: FESTIVAL_TEMPLATE_HTML/);
   assert.match(settings, /where: \{ id: existing\.id \}/);
   assert.match(settings, /templateUtmKind\(kind\)/);
+  assert.match(
+    settings,
+    /previewHtml = renderTrackedEmailHtml\([\s\S]*template\.htmlBody/,
+  );
+  assert.match(
+    templates,
+    /where: \{ purpose: "festival" \},[\s\S]*update: \{\},[\s\S]*htmlBody: FESTIVAL_TEMPLATE_HTML/,
+  );
 });
 
 test("festival template migration is transactional, preserving, constrained, and release-probed", () => {

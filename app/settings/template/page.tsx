@@ -7,14 +7,15 @@ import {
   DEFAULT_TEMPLATE_SUBJECT,
   FESTIVAL_TEMPLATE_HTML,
   FESTIVAL_TEMPLATE_SUBJECT,
+  FOLLOW_UP_TEMPLATE_HTML,
+  FOLLOW_UP_TEMPLATE_SUBJECT,
   applyTemplate,
   buildVarsForShow,
-  cloneTemplateContent,
   ensureDefaultTemplate,
   ensureFestivalTemplate,
   ensureFollowUpTemplate,
   extractVars,
-  normalizeDefaultTemplateContent,
+  malformedTemplateVariableTokens,
   normalizeTemplateContent,
   supportedTemplateVars,
   unsupportedTemplateVars,
@@ -78,25 +79,22 @@ function templateUtmKind(kind: TemplateKind): "original" | "follow_up" {
   return kind === "follow_up" ? "follow_up" : "original";
 }
 
-function normalizeTemplateForKind(
-  kind: TemplateKind,
-  content: { subject: string; htmlBody: string },
-) {
-  return kind === "festival"
-    ? normalizeTemplateContent(content)
-    : normalizeDefaultTemplateContent(content);
-}
-
 async function saveTemplate(formData: FormData) {
   "use server";
   await requireServerActionAuth("/settings/template");
   const kind = requiredTemplateKind(formData.get("kind"));
-  const content = normalizeTemplateForKind(kind, {
+  const content = normalizeTemplateContent({
     subject: (formData.get("subject") as string)?.trim() ?? "",
     htmlBody: (formData.get("html") as string) ?? "",
   });
   const { subject, htmlBody } = content;
   if (!subject || !htmlBody) return;
+  const malformed = malformedTemplateVariableTokens(content);
+  if (malformed.length > 0) {
+    throw new Error(
+      `Malformed ${templateLabel(kind).toLowerCase()} variable token(s): ${malformed.join(", ")}`,
+    );
+  }
   const unsupported = unsupportedTemplateVars(content, kind);
   if (unsupported.length > 0) {
     throw new Error(
@@ -121,7 +119,10 @@ async function resetToDefault(formData: FormData) {
   const existing = await ensureTemplate(kind);
   const content =
     kind === "follow_up"
-      ? cloneTemplateContent(await ensureDefaultTemplate())
+      ? {
+          subject: FOLLOW_UP_TEMPLATE_SUBJECT,
+          htmlBody: FOLLOW_UP_TEMPLATE_HTML,
+        }
       : kind === "festival"
         ? {
             subject: FESTIVAL_TEMPLATE_SUBJECT,
@@ -282,9 +283,7 @@ export default async function TemplateSettingsPage({
       <form action={resetToDefault} className="mt-3">
         <input type="hidden" name="kind" value={kind} />
         <button type="submit" className="text-xs text-zinc-500 hover:underline">
-          {kind === "follow_up"
-            ? "Reset from current normal show outreach"
-            : "Reset to built-in default"}
+          Reset to built-in default
         </button>
       </form>
 

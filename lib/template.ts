@@ -14,6 +14,13 @@ const LEGACY_RENDERED_RATE_PARAGRAPH =
 const LEGACY_RATE_SUMMARY_PARAGRAPH =
   /<p\b[^>]*>Gave a brief summary of my rates\/deliverables below, and (?:attached my full rate card to this email but )?I'm happy to work with you to meet your needs!<\/p\s*>/gi;
 const TEMPLATE_VARIABLE = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
+const BRACED_TEMPLATE_IDENTIFIER =
+  /(\{+)\s*[a-zA-Z_][a-zA-Z0-9_]*\s*(\}+)/g;
+const UNTERMINATED_DOUBLE_BRACE_IDENTIFIER =
+  /\{\{+\s*[a-zA-Z_][a-zA-Z0-9_]*\b(?!\s*\})/g;
+const UNOPENED_DOUBLE_BRACE_IDENTIFIER =
+  /\b[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}+/g;
+const DOUBLE_BRACE_DELIMITER = /\{\{|\}\}/g;
 const LEGACY_RATE_TEMPLATE_VARIABLE_TEST = /\{\{\s*rate\s*\}\}/i;
 const HTML_PARAGRAPH =
   /<p\b[^>]*>(?:(?!<\/?p\b)[\s\S])*?<\/p\s*>/gi;
@@ -71,15 +78,81 @@ export function unsupportedTemplateVars(
   );
 }
 
+export function malformedTemplateVariableTokens(
+  template: TemplateContent,
+): string[] {
+  const source = `${template.subject} ${template.htmlBody}`;
+  const coveredRanges: Array<{ start: number; end: number }> = [];
+  const malformed: Array<{ start: number; token: string }> = [];
+
+  for (const match of source.matchAll(BRACED_TEMPLATE_IDENTIFIER)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    coveredRanges.push({ start, end });
+    const openingBraces = match[1].length;
+    const closingBraces = match[2].length;
+    if (
+      (openingBraces === 1 && closingBraces === 1) ||
+      (openingBraces === 2 && closingBraces === 2)
+    ) {
+      continue;
+    }
+    malformed.push({ start, token: match[0].trim() });
+  }
+
+  const overlapsCoveredRange = (start: number, end: number) =>
+    coveredRanges.some((range) => start < range.end && end > range.start);
+  for (const pattern of [
+    UNTERMINATED_DOUBLE_BRACE_IDENTIFIER,
+    UNOPENED_DOUBLE_BRACE_IDENTIFIER,
+  ]) {
+    for (const match of source.matchAll(pattern)) {
+      const start = match.index;
+      const end = start + match[0].length;
+      if (!overlapsCoveredRange(start, end)) {
+        malformed.push({ start, token: match[0].trim() });
+        coveredRanges.push({ start, end });
+      }
+    }
+  }
+  for (const match of source.matchAll(DOUBLE_BRACE_DELIMITER)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (!overlapsCoveredRange(start, end)) {
+      malformed.push({ start, token: match[0] });
+    }
+  }
+
+  malformed.sort((left, right) => left.start - right.start);
+  return Array.from(new Set(malformed.map(({ token }) => token)));
+}
+
 export function normalizeLegacyRateTemplateVariable(template: string): string {
   return template.replace(LEGACY_RATE_TEMPLATE_VARIABLE, "");
 }
 
+function removeMatchingHtmlParagraphs(
+  template: string,
+  paragraphPattern: RegExp,
+): string {
+  const standaloneParagraphPattern = new RegExp(
+    `^[\\t ]*${paragraphPattern.source}[\\t ]*(?:\\r?\\n|$)`,
+    "gim",
+  );
+  return template
+    .replace(standaloneParagraphPattern, "")
+    .replace(paragraphPattern, "");
+}
+
 export function normalizeLegacyRateTemplateHtml(template: string): string {
   return normalizeLegacyRateTemplateVariable(
-    template
-      .replace(LEGACY_RATE_TEMPLATE_PARAGRAPH, "")
-      .replace(LEGACY_RENDERED_RATE_PARAGRAPH, "")
+    removeMatchingHtmlParagraphs(
+      removeMatchingHtmlParagraphs(
+        template,
+        LEGACY_RATE_TEMPLATE_PARAGRAPH,
+      ),
+      LEGACY_RENDERED_RATE_PARAGRAPH,
+    )
       .replace(
         LEGACY_RATE_SUMMARY_PARAGRAPH,
         DEFAULT_DELIVERABLES_SUMMARY,
@@ -364,65 +437,16 @@ export const FOLLOW_UP_TEMPLATE_NAME = "follow_up";
 export const DEFAULT_TEMPLATE_SUBJECT =
   "{{artist}} {{sender_city}} Photo/Video";
 
-const LEGACY_FIXED_RATE_DEFAULT_TEMPLATE_HTML = `<html>
-  <body>
-    <p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p>
-    <p>Gave a brief summary of my rates/deliverables below, and attached my full rate card to this email but I'm happy to work with you to meet your needs!</p>
-    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
-    <p>My standard {{sender_city}} show rate is $400 for photo/video, or $200 for just photo, more details in my rate card.</p>
-    <p>You can check out some examples of my previous work at <a href="{{portfolio_url}}">{{portfolio_url}}</a></p>
-    <p>I look forward to hearing from you soon!</p>
-    <p>Best,<br>
-       {{sender_name}}<br>
-       <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
-    </p>
-  </body>
-</html>`;
+export const DEFAULT_TEMPLATE_HTML = `<p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a photographer and videographer local to {{sender_city}} and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My standard deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>I look forward to hearing from you soon!</p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`;
 
-const LEGACY_VARIABLE_RATE_DEFAULT_TEMPLATE_HTML = `<html>
-  <body>
-    <p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p>
-    <p>Gave a brief summary of my rates/deliverables below, and I'm happy to work with you to meet your needs!</p>
-    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
-    <p>My standard {{sender_city}} show rate is {{rate}} for photo/video, or $200 for just photo.</p>
-    <p>You can check out some examples of my previous work at <a href="{{portfolio_url}}">{{portfolio_url}}</a></p>
-    <p>I look forward to hearing from you soon!</p>
-    <p>Best,<br>
-       {{sender_name}}<br>
-       <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
-    </p>
-  </body>
-</html>`;
+export const FOLLOW_UP_TEMPLATE_SUBJECT = DEFAULT_TEMPLATE_SUBJECT;
 
-export const DEFAULT_TEMPLATE_HTML = `<html>
-  <body>
-    <p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p>
-    ${DEFAULT_DELIVERABLES_SUMMARY}
-    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
-    <p>You can check out some examples of my previous work at <a href="{{portfolio_url}}">{{portfolio_url}}</a></p>
-    <p>I look forward to hearing from you soon!</p>
-    <p>Best,<br>
-       {{sender_name}}<br>
-       <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
-    </p>
-  </body>
-</html>`;
+export const FOLLOW_UP_TEMPLATE_HTML = `<p>Hey {{manager_name}}, sending over a followup about the {{artist}} show in {{sender_city}} in a few weeks. Included my original email below for your reference!</p><hr><p>Hey {{manager_name}}, wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>I look forward to hearing from you soon!</p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`;
 
 export const FESTIVAL_TEMPLATE_SUBJECT =
   "Photo coverage request: {{artist}} at {{festival_name}}";
 
-export const FESTIVAL_TEMPLATE_HTML = `<html>
-  <body>
-    <p>Hi {{manager_name}},</p>
-    <p>I'm reaching out to request photo credentials and permission to photograph {{artist}}'s set at {{festival_name}} on {{date}}{{location_clause}}.</p>
-    <p>I specialize in live music photography and would love to provide polished coverage of the set. You can view recent concert and festival work at <a href="{{portfolio_url}}">{{portfolio_url}}</a>.</p>
-    <p>If photo access is coordinated by the festival press team, I'd appreciate being pointed to the right contact or credential instructions.</p>
-    <p>Best,<br>
-       {{sender_name}}<br>
-       <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
-    </p>
-  </body>
-</html>`;
+export const FESTIVAL_TEMPLATE_HTML = `<p>Hi {{manager_name}}, wanted to shoot a quick message over regarding the {{artist}} set at {{festival_name}} in a few weeks! I am a photographer and videographer specializing in the electronic music space and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`;
 
 export interface TemplateContent {
   subject: string;
@@ -435,31 +459,6 @@ export function normalizeTemplateContent(
   return {
     subject: normalizeLegacyRateTemplateVariable(template.subject),
     htmlBody: normalizeLegacyRateTemplateHtml(template.htmlBody),
-  };
-}
-
-export function normalizeDefaultTemplateContent(
-  template: TemplateContent
-): TemplateContent {
-  const normalized = normalizeTemplateContent(template);
-  if (
-    template.htmlBody === LEGACY_FIXED_RATE_DEFAULT_TEMPLATE_HTML ||
-    template.htmlBody === LEGACY_VARIABLE_RATE_DEFAULT_TEMPLATE_HTML
-  ) {
-    return {
-      subject: normalized.subject,
-      htmlBody: DEFAULT_TEMPLATE_HTML,
-    };
-  }
-  return normalized;
-}
-
-export function cloneTemplateContent(
-  template: TemplateContent
-): TemplateContent {
-  return {
-    subject: template.subject,
-    htmlBody: template.htmlBody,
   };
 }
 
@@ -492,7 +491,7 @@ export async function ensureDefaultTemplate() {
       isDefault: true,
     },
   });
-  return persistNormalizedTemplate(template, normalizeDefaultTemplateContent);
+  return persistNormalizedTemplate(template, normalizeTemplateContent);
 }
 
 export async function ensureFestivalTemplate() {
@@ -511,19 +510,18 @@ export async function ensureFestivalTemplate() {
 }
 
 export async function ensureFollowUpTemplate() {
-  const original = await ensureDefaultTemplate();
-  const content = cloneTemplateContent(original);
   const template = await db.emailTemplate.upsert({
     where: { purpose: "follow_up" },
     update: {},
     create: {
       name: FOLLOW_UP_TEMPLATE_NAME,
       purpose: "follow_up",
-      ...content,
+      subject: FOLLOW_UP_TEMPLATE_SUBJECT,
+      htmlBody: FOLLOW_UP_TEMPLATE_HTML,
       isDefault: false,
     },
   });
-  return persistNormalizedTemplate(template, normalizeDefaultTemplateContent);
+  return persistNormalizedTemplate(template, normalizeTemplateContent);
 }
 
 export function originalTemplatePurposeForShow(

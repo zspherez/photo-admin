@@ -5,13 +5,15 @@ import {
   applyHtmlTemplate,
   applyTemplate,
   buildVarsForShow,
-  cloneTemplateContent,
   DEFAULT_TEMPLATE_HTML,
+  DEFAULT_TEMPLATE_SUBJECT,
   extractVars,
   FESTIVAL_TEMPLATE_HTML,
   FESTIVAL_TEMPLATE_SUBJECT,
+  FOLLOW_UP_TEMPLATE_HTML,
   FOLLOW_UP_TEMPLATE_NAME,
-  normalizeDefaultTemplateContent,
+  FOLLOW_UP_TEMPLATE_SUBJECT,
+  malformedTemplateVariableTokens,
   normalizeLegacyOutreachSnapshot,
   normalizeLegacyRateTemplateHtml,
   normalizeLegacyRateTemplateVariable,
@@ -215,9 +217,33 @@ test("festival locations ignore provider sentinels and avoid duplicate punctuati
   assert.equal(rendered.match(/Waterfront Park/g)?.length, 1);
   assert.match(
     rendered,
-    /set at Waterfront Park on Saturday, August 1\.<\/p>/,
+    /Artist set at Waterfront Park in a few weeks!/,
   );
-  assert.doesNotMatch(rendered, /\bUnknown\b|August 1\s+(?:in|at)\s*[.,<]/i);
+  assert.doesNotMatch(rendered, /\bUnknown\b|undefined|null/i);
+});
+
+test("festival default and preview use the canonical rate-free copy", () => {
+  assert.equal(
+    FESTIVAL_TEMPLATE_HTML,
+    `<p>Hi {{manager_name}}, wanted to shoot a quick message over regarding the {{artist}} set at {{festival_name}} in a few weeks! I am a photographer and videographer specializing in the electronic music space and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`,
+  );
+  const preview = applyHtmlTemplate(FESTIVAL_TEMPLATE_HTML, {
+    artist: "Artist",
+    festival_name: "Summer Sound",
+    manager_name: "Manager",
+    portfolio_url: "https://portfolio.example",
+    sender_email: "photo@example.com",
+    sender_name: "Photographer",
+    sender_phone: "555-0100",
+  });
+  assert.match(preview, /Artist set at Summer Sound in a few weeks!/);
+  assert.match(preview, /specializing in the electronic music space/);
+  assert.match(preview, /My minimum deliverables include 25 photos/);
+  assert.match(
+    preview,
+    /<a target="_blank" rel="noopener noreferrer nofollow" href="https:\/\/portfolio\.example">/,
+  );
+  assert.doesNotMatch(preview, /\{\{|\brate\b|customPrice|\$[0-9]/i);
 });
 
 test("festival selection and variable validation are purpose-aware", () => {
@@ -261,7 +287,75 @@ test("festival selection and variable validation are purpose-aware", () => {
   );
 });
 
-test("legacy saved templates and built-in defaults normalize without pricing", () => {
+test("template validation allows single-brace prose and rejects damaged placeholders", () => {
+  assert.deepEqual(
+    malformedTemplateVariableTokens({
+      subject:
+        "Follow up about {artist}} {{artist} {{artist artist}} {{{sender_name}}} then {{! and !}}",
+      htmlBody: "<p>Hi {{manager_name}}</p>",
+    }),
+    [
+      "{artist}}",
+      "{{artist}",
+      "{{artist",
+      "artist}}",
+      "{{{sender_name}}}",
+      "{{",
+      "}}",
+    ],
+  );
+  assert.deepEqual(
+    malformedTemplateVariableTokens({
+      subject:
+        "Use {braces} and the literal {artist} label when describing notation.",
+      htmlBody:
+        "<p>Code: const point = {x}; const object = { value: 1 }.</p><p>Math: {x + y} and set {a, b}.</p>",
+    }),
+    [],
+  );
+  assert.deepEqual(
+    unsupportedTemplateVars(
+      {
+        subject: "{{unknown_supported_typo}}",
+        htmlBody: "<p>{{artist}}</p>",
+      },
+      "follow_up",
+    ),
+    ["unknown_supported_typo"],
+  );
+  assert.deepEqual(
+    malformedTemplateVariableTokens({
+      subject: FESTIVAL_TEMPLATE_SUBJECT,
+      htmlBody: FESTIVAL_TEMPLATE_HTML,
+    }),
+    [],
+  );
+});
+
+test("standard original default and preview use the canonical rate-free copy", () => {
+  assert.equal(
+    DEFAULT_TEMPLATE_HTML,
+    `<p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a photographer and videographer local to {{sender_city}} and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My standard deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>I look forward to hearing from you soon!</p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`,
+  );
+  const preview = applyHtmlTemplate(DEFAULT_TEMPLATE_HTML, {
+    artist: "Artist",
+    manager_name: "Manager",
+    portfolio_url: "https://portfolio.example",
+    sender_city: "New York",
+    sender_email: "photo@example.com",
+    sender_name: "Photographer",
+    sender_phone: "555-0100",
+  });
+  assert.match(preview, /I am a photographer and videographer local to New York/);
+  assert.match(preview, /My standard deliverables include 25 photos/);
+  assert.match(
+    preview,
+    /<a target="_blank" rel="noopener noreferrer nofollow" href="https:\/\/portfolio\.example">/,
+  );
+  assert.doesNotMatch(preview, /\{\{|\brate\b|customPrice|\$[0-9]/i);
+});
+
+test("legacy saved templates and old default content normalize generically", () => {
   assert.deepEqual(
     normalizeTemplateContent({
       subject: "{{artist}} {{ rate }}",
@@ -287,11 +381,22 @@ test("legacy saved templates and built-in defaults normalize without pricing", (
     </p>
   </body>
 </html>`;
-  const normalized = normalizeDefaultTemplateContent({
+  assert.notEqual(oldDefault, DEFAULT_TEMPLATE_HTML);
+  assert.match(
+    oldDefault,
+    /Gave a brief summary of my rates\/deliverables below/,
+  );
+  assert.match(
+    oldDefault,
+    /My standard \{\{sender_city\}\} show rate is \{\{rate\}\} for photo\/video, or \$200 for just photo\./,
+  );
+  const normalized = normalizeTemplateContent({
     subject: "{{artist}}",
     htmlBody: oldDefault,
   });
-  assert.equal(normalized.htmlBody, DEFAULT_TEMPLATE_HTML);
+  assert.match(normalized.htmlBody, /multimedia creative specialist/);
+  assert.match(normalized.htmlBody, /My minimum deliverables include/);
+  assert.notEqual(normalized.htmlBody, DEFAULT_TEMPLATE_HTML);
   assert.doesNotMatch(normalized.htmlBody, /\brate\b|\$[0-9]/i);
 
   const fixedRateDefault = oldDefault
@@ -303,13 +408,16 @@ test("legacy saved templates and built-in defaults normalize without pricing", (
       "{{rate}} for photo/video, or $200 for just photo.",
       "$400 for photo/video, or $200 for just photo, more details in my rate card.",
     );
-  assert.equal(
-    normalizeDefaultTemplateContent({
-      subject: "{{artist}}",
-      htmlBody: fixedRateDefault,
-    }).htmlBody,
-    DEFAULT_TEMPLATE_HTML,
+  const normalizedFixedRateDefault = normalizeTemplateContent({
+    subject: "{{artist}}",
+    htmlBody: fixedRateDefault,
+  }).htmlBody;
+  assert.match(
+    normalizedFixedRateDefault,
+    /multimedia creative specialist/,
   );
+  assert.notEqual(normalizedFixedRateDefault, DEFAULT_TEMPLATE_HTML);
+  assert.doesNotMatch(normalizedFixedRateDefault, /\brate\b|\$[0-9]/i);
   assert.doesNotMatch(DEFAULT_TEMPLATE_HTML, /\{\{\s*rate\s*\}\}|\$[0-9]/i);
 });
 
@@ -328,19 +436,31 @@ test("ambiguous rendered rate placement fails closed instead of guessing", () =>
   );
 });
 
-test("follow-up template cloning is a one-time independent snapshot", () => {
-  const original = {
-    subject: "Current original",
-    htmlBody: "<p>Current original</p>",
-  };
-  const followUp = cloneTemplateContent(original);
-  original.subject = "Later original edit";
-  original.htmlBody = "<p>Later original edit</p>";
-
-  assert.deepEqual(followUp, {
-    subject: "Current original",
-    htmlBody: "<p>Current original</p>",
+test("follow-up default and preview use the canonical rate-free copy", () => {
+  assert.equal(FOLLOW_UP_TEMPLATE_SUBJECT, DEFAULT_TEMPLATE_SUBJECT);
+  assert.equal(
+    FOLLOW_UP_TEMPLATE_HTML,
+    `<p>Hey {{manager_name}}, sending over a followup about the {{artist}} show in {{sender_city}} in a few weeks. Included my original email below for your reference!</p><hr><p>Hey {{manager_name}}, wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>I look forward to hearing from you soon!</p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`,
+  );
+  const preview = applyHtmlTemplate(FOLLOW_UP_TEMPLATE_HTML, {
+    artist: "Artist",
+    manager_name: "Manager",
+    portfolio_url: "https://portfolio.example",
+    sender_city: "New York",
+    sender_email: "photo@example.com",
+    sender_name: "Photographer",
+    sender_phone: "555-0100",
   });
+  assert.match(preview, /sending over a followup about the Artist show/);
+  assert.match(preview, /<hr>/);
+  assert.doesNotMatch(preview, /\{\{|\{artist\}\}|\brate\b|customPrice|\$[0-9]/i);
+  assert.deepEqual(
+    malformedTemplateVariableTokens({
+      subject: FOLLOW_UP_TEMPLATE_SUBJECT,
+      htmlBody: FOLLOW_UP_TEMPLATE_HTML,
+    }),
+    [],
+  );
   assert.equal(FOLLOW_UP_TEMPLATE_NAME, "follow_up");
 
   const source = readFileSync(new URL("./template.ts", import.meta.url), "utf8");
@@ -350,7 +470,11 @@ test("follow-up template cloning is a one-time independent snapshot", () => {
   );
   assert.match(
     source,
-    /const original = await ensureDefaultTemplate\(\)[\s\S]*update: \{\},[\s\S]*persistNormalizedTemplate\(template, normalizeDefaultTemplateContent\)/,
+    /where: \{ purpose: "follow_up" \},[\s\S]*update: \{\},[\s\S]*subject: FOLLOW_UP_TEMPLATE_SUBJECT,[\s\S]*htmlBody: FOLLOW_UP_TEMPLATE_HTML/,
+  );
+  assert.match(
+    source,
+    /where: \{ purpose: "original" \},[\s\S]*update: \{\},[\s\S]*htmlBody: DEFAULT_TEMPLATE_HTML/,
   );
   assert.match(
     source,
@@ -358,15 +482,17 @@ test("follow-up template cloning is a one-time independent snapshot", () => {
   );
 });
 
-test("follow-up reset clones the current original template", () => {
+test("follow-up reset restores its independent built-in default", () => {
   const source = readFileSync(
     new URL("../app/settings/template/page.tsx", import.meta.url),
     "utf8",
   );
   assert.match(
     source,
-    /kind === "follow_up"[\s\S]*cloneTemplateContent\(await ensureDefaultTemplate\(\)\)/,
+    /kind === "follow_up"[\s\S]*subject: FOLLOW_UP_TEMPLATE_SUBJECT,[\s\S]*htmlBody: FOLLOW_UP_TEMPLATE_HTML/,
   );
+  assert.match(source, /malformedTemplateVariableTokens\(content\)/);
+  assert.match(source, /Malformed \$\{templateLabel\(kind\)\.toLowerCase\(\)\} variable token/);
   assert.match(source, /searchParams: Promise<\{ kind\?: SearchParamValue \}>/);
   assert.match(source, /aria-label="Email template type"/);
   assert.match(source, /"Normal show outreach"/);
