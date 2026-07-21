@@ -8,8 +8,8 @@ import {
 import {
   applyTemplate,
   buildVarsForShow,
-  ensureDefaultTemplate,
   ensureFollowUpTemplate,
+  ensureOriginalTemplateForShow,
   normalizeLegacyRateTemplateHtml,
   normalizeLegacyOutreachSnapshot,
   normalizeLegacyRateTemplateVariable,
@@ -2407,13 +2407,12 @@ async function prepareOriginalOutreach(
     return { error: sendability.reason ?? "Outreach is not sendable" };
   }
 
-  const [show, contact, template, utmSettings] = await Promise.all([
+  const [show, contact, utmSettings] = await Promise.all([
     db.show.findUnique({ where: { id: showId } }),
     db.contact.findUnique({
       where: { id: contactId },
       include: { artist: true },
     }),
-    ensureDefaultTemplate(),
     readEmailUtmSettingsSnapshot(),
   ]);
   if (!show) return { error: "Show not found" };
@@ -2422,6 +2421,7 @@ async function prepareOriginalOutreach(
   }
   const festivalBlocked = festivalOutreachBlockingReason(show, "original");
   if (festivalBlocked) return { error: festivalBlocked };
+  const template = await ensureOriginalTemplateForShow(show);
   if (!contact) return { error: "Contact not found" };
   if (contact.state !== "active") {
     return { error: "Selected contact is quarantined" };
@@ -2443,6 +2443,11 @@ async function prepareOriginalOutreach(
     venueName: show.venueName,
     showDate: show.date,
     managerName: contact.name,
+    eventName: show.eventName,
+    city: show.city,
+    state: show.state,
+    countryCode: show.countryCode,
+    countryName: show.countryName,
   });
   const normalizedSubjectOverride = normalizeLegacyRateTemplateVariable(
     subjectOverride?.trim() ?? "",
@@ -2506,6 +2511,11 @@ async function prepareFollowUpOutreach(
           select: {
             venueName: true,
             date: true,
+            eventName: true,
+            city: true,
+            state: true,
+            countryCode: true,
+            countryName: true,
             syncStatus: true,
             isFestival: true,
             festivalNycStatus: true,
@@ -2564,6 +2574,11 @@ async function prepareFollowUpOutreach(
     venueName: parent.show.venueName,
     showDate: parent.show.date,
     managerName: parent.contact.name,
+    eventName: parent.show.eventName,
+    city: parent.show.city,
+    state: parent.show.state,
+    countryCode: parent.show.countryCode,
+    countryName: parent.show.countryName,
   });
   return {
     kind: "follow_up",

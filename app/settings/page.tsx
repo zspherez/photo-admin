@@ -89,7 +89,7 @@ export default async function SettingsIndex() {
       href: "/settings/template",
       status: template ? "Saved" : "Not saved",
       ok: !!template,
-      description: "Subject + HTML body with variables.",
+      description: "Normal show, festival, and follow-up outreach templates.",
     },
     {
       title: "EDMTrain shows",

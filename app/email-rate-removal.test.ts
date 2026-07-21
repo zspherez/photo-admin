@@ -15,7 +15,7 @@ test("email template settings no longer expose rate configuration", () => {
   assert.doesNotMatch(generalSettings, /key: "default_rate"/);
   assert.doesNotMatch(settingsIndex, /default_rate|default rate/i);
   assert.doesNotMatch(templateSettings, /customPrice|["']rate["']/);
-  assert.match(templateSettings, /SUPPORTED_TEMPLATE_VARS/);
+  assert.match(templateSettings, /supportedTemplateVars/);
   assert.match(templateSettings, /normalizeDefaultTemplateContent/);
 });
 

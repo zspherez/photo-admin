@@ -42,6 +42,7 @@ async function main(): Promise<void> {
     contactAuditAlternativeProbe,
     arbitraryEmailProbe,
     resendWebhookArbitraryEmailProbe,
+    emailTemplateProbe,
   ] = await Promise.all([
     db.setting.findMany({
       where: {
@@ -245,6 +246,12 @@ async function main(): Promise<void> {
         arbitraryEmailId: true,
       },
     }),
+    db.emailTemplate.findMany({
+      take: 1,
+      select: {
+        purpose: true,
+      },
+    }),
   ]);
   const values = new Map(settings.map((setting) => [setting.key, setting.value]));
 
@@ -270,6 +277,7 @@ async function main(): Promise<void> {
           contactAuditAlternativeProbe,
           arbitraryEmailProbe,
           resendWebhookArbitraryEmailProbe,
+          emailTemplateProbe,
         ].every(Array.isArray),
       configuredSpreadsheetId:
         values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,
@@ -290,6 +298,7 @@ async function main(): Promise<void> {
         "ArbitraryEmail",
         "ArbitraryEmail.text",
         "ResendWebhookEvent.arbitraryEmailId",
+        "EmailTemplate.purpose",
       ],
     })
   );

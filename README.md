@@ -234,18 +234,24 @@ export CONTACT_AUDIT_AGENT_TOKEN="..."
 npm run contact-audit:agent
 ```
 
-## Email template
+## Email templates
 
-The default outreach template is defined in `lib/template.ts` and seeded into
-the DB on first request. It references these variables, all populated from
-**Settings → General** or the Contact/Show rows:
+Normal-show and festival outreach have distinct editable templates defined in
+`lib/template.ts`. They are provisioned idempotently and selected from the
+show's `isFestival` value before an immutable outreach snapshot is created.
+Follow-ups remain a separate template. The templates reference these variables,
+populated from **Settings → General** or the Contact/Show rows:
 
 - `{{artist}}`, `{{venue}}`, `{{date}}`, `{{manager_name}}`
 - `{{sender_name}}`, `{{sender_email}}`, `{{sender_phone}}`, `{{sender_city}}`,
   `{{portfolio_url}}`
+- Festival outreach also supports `{{festival_name}}` (event name, falling back
+  to venue) and `{{location}}` (city/region, with a venue fallback).
 
-Edit the template at **Settings → Email template**. "Reset to default" reverts
-to the seed. Legacy rate placeholders are stripped when templates are loaded,
+Edit and preview each template independently at **Settings → Email template**.
+"Reset to default" restores the selected normal or festival seed; follow-up
+reset copies the current normal-show template. Existing saved normal templates
+are preserved. Legacy rate placeholders are stripped when templates are loaded,
 saved, previewed, or rendered, and unchanged legacy seeds are upgraded
 automatically. Existing contact custom-price data and the legacy default-rate
 setting remain stored for Sheet and database compatibility, but outreach email

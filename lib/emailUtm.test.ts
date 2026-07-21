@@ -199,6 +199,6 @@ test("send snapshots and settings previews share the tracked HTML renderer", () 
   );
   assert.match(
     previewSource,
-    /previewHtml = renderTrackedEmailHtml\([\s\S]*?kind,[\s\S]*?matched\.artist\.name,[\s\S]*?utmSettings/,
+    /previewHtml = renderTrackedEmailHtml\([\s\S]*?templateUtmKind\(kind\),[\s\S]*?matched\.artist\.name,[\s\S]*?utmSettings/,
   );
 });

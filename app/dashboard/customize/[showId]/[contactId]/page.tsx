@@ -8,7 +8,7 @@ import { getOutreachSendabilityBatch } from "@/lib/sendOutreach";
 import { isWeekendET } from "@/lib/schedule";
 import {
   buildVarsForShow,
-  ensureDefaultTemplate,
+  ensureOriginalTemplateForShow,
 } from "@/lib/template";
 import { Card, CardBody } from "@/components/ui/card";
 import { formatShowDate } from "@/lib/formatDate";
@@ -85,11 +85,9 @@ export default async function CustomizePage({
   const { showId, contactId } = await params;
   const search = await searchParams;
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
-  const [[show, contact], template] = await Promise.all([
-    getCustomizeContext(showId, contactId),
-    ensureDefaultTemplate(),
-  ]);
+  const [show, contact] = await getCustomizeContext(showId, contactId);
   if (!show || !contact) return notFound();
+  const template = await ensureOriginalTemplateForShow(show);
 
   const artistContacts = await db.contact.findMany({
     where: { artistId: contact.artistId },
@@ -166,6 +164,11 @@ export default async function CustomizePage({
           venueName: show.venueName,
           showDate: show.date,
           managerName: candidate.name,
+          eventName: show.eventName,
+          city: show.city,
+          state: show.state,
+          countryCode: show.countryCode,
+          countryName: show.countryName,
         });
         return [
           candidate.id,
