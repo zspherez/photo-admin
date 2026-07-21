@@ -11,6 +11,7 @@ import {
   encodeRecommendationCursor,
 } from "@/lib/trajectoryRecommendationCursor";
 import {
+  buildRecommendationHref,
   parseRecommendationQuery,
 } from "@/lib/trajectoryRecommendationQuery";
 import {
@@ -213,6 +214,7 @@ export default async function RecommendationsPage({
 
       {result.availability === "ready" && result.run && (
         <RecommendationsClient
+          key={`${result.run.id}:${buildRecommendationHref(query)}`}
           initialRecommendations={result.recommendations}
           initialNextCursor={nextCursor}
           total={result.total}

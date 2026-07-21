@@ -40,10 +40,7 @@ test("recommendations are read-only and expose no mutation or send controls", ()
     /sendNowAction|setInterestedAction|dismissShowAction|restoreShowAction|markSentAction|unmarkSentAction|sendFollowUpAction|cancelScheduledAction|SendButton|FollowUpButton/,
   );
   assert.doesNotMatch(combined, /<form|action=\{/);
-  assert.equal(
-    fs.existsSync(path.join(process.cwd(), "app/recommendations/actions.ts")),
-    false,
-  );
+  assert.doesNotMatch(combined, /from ["']\.\/actions["']/);
 });
 
 test("header always states provisional status and never presents a forecast field", () => {
@@ -74,7 +71,12 @@ test("cards show canonical workflow evidence, analog context, details, and same-
 });
 
 test("recommendation batches have accessible infinite loading and duplicate guards", () => {
+  const page = source("app/recommendations/page.tsx");
   const client = source("app/recommendations/recommendations-client.tsx");
+  assert.match(
+    page,
+    /key=\{`\$\{result\.run\.id\}:\$\{buildRecommendationHref\(query\)\}`\}/,
+  );
   assert.doesNotMatch(client, /from "@\/lib\/trajectoryRecommendations"/);
   assert.match(client, /new IntersectionObserver/);
   assert.match(client, /rootMargin: "600px 0px"/);
@@ -82,6 +84,15 @@ test("recommendation batches have accessible infinite loading and duplicate guar
   assert.match(client, /aria-live="polite"/);
   assert.match(client, /mergeUniqueByKey/);
   assert.match(client, /identityKey/);
+});
+
+test("artist workflow links preserve the active recommendation filters", () => {
+  const client = source("app/recommendations/recommendations-client.tsx");
+  assert.match(client, /returnTo=\{buildRecommendationHref\(query\)\}/);
+  assert.doesNotMatch(
+    client,
+    /workflow: "all"[\s\S]*dateBand: "all"/,
+  );
 });
 
 test("navigation and loading state expose the recommendations route", () => {

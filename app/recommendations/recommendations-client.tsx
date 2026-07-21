@@ -81,15 +81,12 @@ function contactTone(
 function RecommendationCard({
   recommendation,
   role,
+  returnTo,
 }: {
   recommendation: RecommendationView;
   role: "primary" | "backup";
+  returnTo: string;
 }) {
-  const returnTo = buildRecommendationHref({
-    tab: recommendation.isSuggested ? "suggested" : recommendation.arm,
-    workflow: "all",
-    dateBand: "all",
-  });
   return (
     <Card data-recommendation-identity={recommendation.identityKey}>
       <CardBody className="space-y-4">
@@ -465,6 +462,7 @@ export function RecommendationsClient({
                     key={recommendation.identityKey}
                     recommendation={recommendation}
                     role={recommendation.sameNightRole}
+                    returnTo={buildRecommendationHref(query)}
                   />
                 ))}
               </div>

@@ -426,6 +426,40 @@ test("interested, dismissed, sent, opened, and clicked filters use canonical wor
   }
 });
 
+test("cards preserve canonical non-success outreach states", async () => {
+  const expected = [
+    ["failed", "Failed"],
+    ["manual_review", "Manual review"],
+    ["queued", "Queued"],
+    ["cancelled", "Cancelled"],
+    ["test", "Test sent"],
+  ] as const;
+  for (const [status, label] of expected) {
+    const row = recommendation(status, {
+      show: {
+        ...recommendation(status).show,
+        outreaches: [
+          {
+            artistId: `artist_${status}`,
+            kind: "original",
+            status,
+            sentAt: status === "test" ? NOW : null,
+            deliveredAt: null,
+            openCount: 0,
+            clickCount: 0,
+          },
+        ],
+      },
+    });
+    const result = await getTrajectoryRecommendationPage(QUERY, {
+      now: NOW,
+      store: store({ recommendations: [row] }),
+      sendability: sendable,
+    });
+    assert.deepEqual(result.recommendations[0].outreachLabels, [label]);
+  }
+});
+
 test("same-night alternatives group by canonical date without deduplicating different shows", () => {
   const base = {
     showDate: "2026-08-01T00:00:00.000Z",

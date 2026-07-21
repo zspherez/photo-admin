@@ -460,19 +460,24 @@ function rationaleFor(row: RecommendationRecord): string[] {
 }
 
 function outreachLabels(rows: readonly OutreachRecord[]): string[] {
-  const labels: string[] = [];
-  if (rows.some((row) => row.status === "scheduled")) labels.push("Scheduled");
-  else if (rows.some((row) => row.status === "retry_scheduled")) {
-    labels.push("Retry scheduled");
-  } else if (rows.some((row) => row.sentAt || row.status === "sent")) {
-    labels.push("Sent");
+  const labels = new Set<string>();
+  for (const row of rows) {
+    if (row.status === "failed") labels.add("Failed");
+    else if (row.status === "manual_review") labels.add("Manual review");
+    else if (row.status === "queued") labels.add("Queued");
+    else if (row.status === "scheduled") labels.add("Scheduled");
+    else if (row.status === "retry_scheduled") labels.add("Retry scheduled");
+    else if (row.status === "cancelled") labels.add("Cancelled");
+    else if (row.status === "test") labels.add("Test sent");
+    else if (row.sentAt || row.status === "sent") labels.add("Sent");
+    else labels.add(row.status.replaceAll("_", " "));
   }
-  if (rows.some((row) => row.deliveredAt)) labels.push("Delivered");
+  if (rows.some((row) => row.deliveredAt)) labels.add("Delivered");
   const opens = rows.reduce((total, row) => total + row.openCount, 0);
   const clicks = rows.reduce((total, row) => total + row.clickCount, 0);
-  if (opens > 0) labels.push(opens === 1 ? "Opened" : `Opened (${opens})`);
-  if (clicks > 0) labels.push(clicks === 1 ? "Clicked" : `Clicked (${clicks})`);
-  return labels.length > 0 ? labels : ["No outreach"];
+  if (opens > 0) labels.add(opens === 1 ? "Opened" : `Opened (${opens})`);
+  if (clicks > 0) labels.add(clicks === 1 ? "Clicked" : `Clicked (${clicks})`);
+  return labels.size > 0 ? [...labels] : ["No outreach"];
 }
 
 function stringArray(value: unknown): string[] {
