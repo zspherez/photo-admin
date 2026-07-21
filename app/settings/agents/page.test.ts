@@ -9,6 +9,9 @@ test("agent rules settings clearly separate global and artist-specific scope", (
   assert.match(source, /Artist-specific research notes remain separate/);
   assert.match(source, /GLOBAL_AGENT_RULES_MAX_LENGTH/);
   assert.match(source, /maxLength=\{GLOBAL_AGENT_RULES_MAX_LENGTH\}/);
+  assert.match(source, /Structured direct-outreach rules/);
+  assert.match(source, /DIRECT_OUTREACH/);
+  assert.match(source, /Ordinary global instruction lines never authorize/);
 });
 
 test("agent rules settings document versioned claim snapshot behavior", () => {

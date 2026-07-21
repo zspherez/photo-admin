@@ -6,8 +6,10 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import {
   approveContactResearchCandidate,
+  approveContactResearchDirectOutreach,
   refreshContactResearchQueue,
   rejectContactResearchCandidate,
+  rejectContactResearchDirectOutreach,
   retryAllExhaustedContactResearchJobs,
   retryAllReviewContactResearchJobs,
   retryContactResearchJob,
@@ -119,6 +121,7 @@ async function rejectCandidateAction(formData: FormData) {
   if (!candidateId) {
     redirect(researchStatusHref(filter, { error: "missing_candidate" }));
   }
+
   const result = await rejectContactResearchCandidate(candidateId);
   revalidatePath("/research");
   revalidatePath("/settings");
@@ -127,6 +130,53 @@ async function rejectCandidateAction(formData: FormData) {
       researchStatusHref(filter, {
         error: "reject_failed",
         detail: result.error ?? "Candidate could not be rejected",
+      })
+    );
+  }
+
+}
+
+async function approveDirectOutreachAction(formData: FormData) {
+  "use server";
+  await requireServerActionAuth(
+    researchStatusHref(actionResearchFilter(formData))
+  );
+  const filter = actionResearchFilter(formData);
+  const proposalId = String(formData.get("proposalId") ?? "").trim();
+  if (!proposalId) {
+    redirect(researchStatusHref(filter, { error: "missing_proposal" }));
+  }
+  const result = await approveContactResearchDirectOutreach(proposalId);
+  revalidatePath("/research");
+  revalidatePath("/dashboard");
+  revalidatePath("/contacts");
+  if (!result.ok) {
+    redirect(
+      researchStatusHref(filter, {
+        error: "approve_failed",
+        detail: result.error ?? "Direct outreach could not be approved",
+      })
+    );
+  }
+}
+
+async function rejectDirectOutreachAction(formData: FormData) {
+  "use server";
+  await requireServerActionAuth(
+    researchStatusHref(actionResearchFilter(formData))
+  );
+  const filter = actionResearchFilter(formData);
+  const proposalId = String(formData.get("proposalId") ?? "").trim();
+  if (!proposalId) {
+    redirect(researchStatusHref(filter, { error: "missing_proposal" }));
+  }
+  const result = await rejectContactResearchDirectOutreach(proposalId);
+  revalidatePath("/research");
+  if (!result.ok) {
+    redirect(
+      researchStatusHref(filter, {
+        error: "reject_failed",
+        detail: result.error ?? "Direct outreach could not be rejected",
       })
     );
   }
@@ -356,6 +406,9 @@ export default async function ContactResearchPage({
         candidates: {
           none: { status: { in: ["approved", "superseded"] } },
         },
+        directOutreachProposals: {
+          none: { status: "pending" },
+        },
       },
     }),
     db.$queryRaw<
@@ -442,6 +495,9 @@ export default async function ContactResearchPage({
         },
       },
       candidates: {
+        orderBy: [{ status: "asc" }, { createdAt: "asc" }],
+      },
+      directOutreachProposals: {
         orderBy: [{ status: "asc" }, { createdAt: "asc" }],
       },
     },
@@ -644,6 +700,14 @@ export default async function ContactResearchPage({
             const hasApprovalHistory = job.candidates.some((candidate) =>
               ["approved", "superseded"].includes(candidate.status)
             );
+            const pendingDirectOutreach =
+              job.directOutreachProposals.filter(
+                (proposal) => proposal.status === "pending",
+              );
+            const hasReviewedDirectOutreach =
+              job.directOutreachProposals.some(
+                (proposal) => proposal.status !== "pending",
+              );
             const activeSkip = job.artist.researchSkips[0] ?? null;
             return (
               <Card key={job.id} id={`job-${job.id}`}>
@@ -708,6 +772,87 @@ export default async function ContactResearchPage({
                       {pendingCandidates.length} awaiting review
                     </p>
                   )}
+
+                  {pendingDirectOutreach.map((proposal) => (
+                    <div
+                      key={proposal.id}
+                      className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold">
+                          Direct outreach proposal
+                        </span>
+                        <Badge tone="warning">trusted rule review</Badge>
+                      </div>
+                      <p className="mt-2">{proposal.note}</p>
+                      <p className="mt-1 text-xs">
+                        Manager: {proposal.managerName}
+                        {proposal.managerCompany
+                          ? ` · ${proposal.managerCompany}`
+                          : ""}
+                      </p>
+                      <p className="mt-1 text-xs">
+                        Rule {proposal.ruleId} · version{" "}
+                        {proposal.ruleVersion}: {proposal.canonicalRule}
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {proposal.evidenceQuotes.map((quote, index) => (
+                          <div key={`${proposal.id}-${index}`}>
+                            <p className="text-xs">{quote}</p>
+                            <a
+                              href={proposal.sourceUrls[index]}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="break-all text-xs underline"
+                            >
+                              Evidence {index + 1} ↗
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                      {!activeSkip && (
+                        <div className="mt-3 flex gap-2">
+                          <form action={approveDirectOutreachAction}>
+                            <input
+                              type="hidden"
+                              name="proposalId"
+                              value={proposal.id}
+                            />
+                            <input
+                              type="hidden"
+                              name="status"
+                              value={activeFilter}
+                            />
+                            <PendingSubmitButton
+                              size="sm"
+                              pendingLabel="Approving…"
+                            >
+                              Approve direct outreach
+                            </PendingSubmitButton>
+                          </form>
+                          <form action={rejectDirectOutreachAction}>
+                            <input
+                              type="hidden"
+                              name="proposalId"
+                              value={proposal.id}
+                            />
+                            <input
+                              type="hidden"
+                              name="status"
+                              value={activeFilter}
+                            />
+                            <PendingSubmitButton
+                              variant="secondary"
+                              size="sm"
+                              pendingLabel="Rejecting…"
+                            >
+                              Reject
+                            </PendingSubmitButton>
+                          </form>
+                        </div>
+                      )}
+                    </div>
+                  ))}
 
                   {pendingCandidates.length > 0 && (
                     <div className="mt-4 space-y-3">
@@ -791,7 +936,11 @@ export default async function ContactResearchPage({
 
                   {(job.status === "exhausted" ||
                     (job.status === "review" &&
-                      !hasApprovalHistory)) && (
+                     pendingDirectOutreach.length === 0 &&
+                     pendingCandidates.length === 0 &&
+                     (!hasApprovalHistory ||
+                       (hasReviewedDirectOutreach &&
+                          approvedCandidateCount === 0)))) && (
                     <form action={retryJobAction} className="mt-3">
                       <input type="hidden" name="jobId" value={job.id} />
                       <input

@@ -30,6 +30,7 @@ import {
   cancelScheduledAction,
   sendFollowUpAction,
 } from "@/app/dashboard/actions";
+import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
 
 export const dynamic = "force-dynamic";
 
@@ -234,16 +235,7 @@ async function saveContact(formData: FormData) {
         customPrice,
         notes,
         ...(clearsAgentProvenance
-          ? {
-              directOutreachIdentity: null,
-              directOutreachSourceJobId: null,
-              directOutreachRuleVersion: null,
-              directOutreachRuleText: null,
-              directOutreachManagerName: null,
-              directOutreachManagerCompany: null,
-              directOutreachEvidenceUrls: [],
-              directOutreachEvidence: null,
-            }
+          ? CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE
           : {}),
         ...(prior.source === "sheet"
           ? {

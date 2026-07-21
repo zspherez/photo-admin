@@ -3,49 +3,55 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { Prisma } from "@prisma/client";
 import {
+  approveContactResearchDirectOutreach,
   type ContactResearchTransactionRunner,
-  needsManagerContactResearch,
-  normalizeDirectOutreachIdentity,
   normalizeTrustedDirectOutreach,
   parseContactResearchSubmission,
+  rejectContactResearchDirectOutreach,
   submitContactResearchResult,
 } from "./contactResearch";
+import { parseDirectOutreachAgentRules } from "./agentRules";
 
-const rule =
-  "Any artist managed by Leif Fosse should have direct outreach noting that I have his number.";
+const canonicalRule =
+  'DIRECT_OUTREACH {"id":"leif-fosse","manager":"Leif Fosse","note":"Use the number already on file"}';
+const structuredRule = parseDirectOutreachAgentRules(canonicalRule)[0];
 
 function directOutreach(overrides: Record<string, unknown> = {}) {
   return {
-    note: "Direct outreach: contact Leif Fosse using the number already on file",
+    ruleId: "leif-fosse",
     ruleVersion: 4,
-    ruleText: rule,
+    canonicalRule,
     managerName: "Leif Fosse",
     managerCompany: "Fosse Management",
-    sourceUrls: ["https://artist.example/team"],
-    relationshipEvidence:
-      "The official artist team page identifies Leif Fosse as the artist manager.",
-    relationshipStatus: "confirmed",
+    evidence: [
+      {
+        sourceUrl: "https://artist.example/team",
+        quote: "The artist is managed by Leif Fosse.",
+      },
+    ],
     ...overrides,
   };
 }
 
 function runWithTransaction(
-  tx: unknown
+  tx: unknown,
 ): ContactResearchTransactionRunner {
   return async (work) => work(tx as Prisma.TransactionClient);
 }
 
-function claimedJob() {
+function claimedJob(overrides: Record<string, unknown> = {}) {
   return {
     id: "job-1",
     artistId: "artist-1",
     artist: { name: "Example Artist" },
-    claimedAgentRules: rule,
+    claimedAgentRules: "Prefer official sources.",
     claimedAgentRulesVersion: 4,
+    claimedDirectOutreachRules: [structuredRule],
+    ...overrides,
   };
 }
 
-test("direct outreach payload requires confirmed evidence and never accepts a submitted phone", () => {
+test("structured direct outreach accepts positive quotes and rejects self-asserted or negative relationships", () => {
   const parsed = parseContactResearchSubmission({
     outcome: "candidates",
     claimToken: "claim-1",
@@ -53,59 +59,109 @@ test("direct outreach payload requires confirmed evidence and never accepts a su
     directOutreach: directOutreach(),
   });
   assert.equal(parsed.outcome, "candidates");
-  assert.equal(parsed.candidates.length, 0);
-  assert.equal(parsed.directOutreach?.managerName, "Leif Fosse");
+  assert.equal(parsed.directOutreach?.ruleId, "leif-fosse");
+  assert.equal(parsed.directOutreach?.evidence.length, 1);
 
-  assert.throws(
-    () =>
-      normalizeTrustedDirectOutreach(
-        directOutreach({ relationshipStatus: "ambiguous" })
-      ),
-    /confirmed manager relationship/
-  );
-  assert.throws(
-    () =>
-      normalizeTrustedDirectOutreach(
-        directOutreach({
-          note: "Direct outreach: call Leif Fosse at +1 (212) 555-0199",
-        })
-      ),
-    /cannot submit a phone number/
-  );
-  assert.throws(
-    () =>
-      normalizeTrustedDirectOutreach({
-        ...directOutreach(),
-        phone: "+1 212 555 0199",
-      }),
-    /unsupported field: phone/
-  );
+  for (const quote of [
+    "Leif Fosse is confirmed.",
+    "Leif Fosse is not the artist manager.",
+    "Former manager: Leif Fosse.",
+    "It is rumored that management is Leif Fosse.",
+  ]) {
+    assert.throws(
+      () =>
+        normalizeTrustedDirectOutreach(
+          directOutreach({
+            evidence: [
+              {
+                sourceUrl: "https://artist.example/team",
+                quote,
+              },
+            ],
+          }),
+        ),
+      /positive published manager statement/,
+    );
+  }
+});
+
+test("every agent-controlled field rejects phone numbers and safe IDs remain valid", () => {
+  for (const overrides of [
+    { managerName: "Leif +1 (212) 555-0199" },
+    { managerCompany: "Fosse 020/7123/4567" },
+    {
+      canonicalRule:
+        'DIRECT_OUTREACH {"id":"leif-fosse","manager":"Leif Fosse","note":"Call ＋٤٤／٢٠／٧١٢٣／٤٥٦٧"}',
+    },
+    {
+      evidence: [
+        {
+          sourceUrl: "https://artist.example/team",
+          quote: "Managed by Leif Fosse at １２３.４５６.７８９０.",
+        },
+      ],
+    },
+    {
+      evidence: [
+        {
+          sourceUrl:
+            "https://artist.example/contact/%2B1-212-555-0199",
+          quote: "Managed by Leif Fosse.",
+        },
+      ],
+    },
+    {
+      evidence: [
+        {
+          sourceUrl: "https://artist.example/team?phone=2125550199",
+          quote: "Managed by Leif Fosse.",
+        },
+      ],
+    },
+  ]) {
+    assert.throws(
+      () => normalizeTrustedDirectOutreach(directOutreach(overrides)),
+      /cannot contain a phone number/,
+    );
+  }
   assert.throws(
     () =>
       parseContactResearchSubmission({
-        outcome: "exhausted",
+        outcome: "candidates",
         claimToken: "claim-1",
+        candidates: [],
+        notes: "Manager line: 5550199",
         directOutreach: directOutreach(),
       }),
-    /cannot include direct outreach/
+    /notes cannot contain a phone number/,
+  );
+  assert.doesNotThrow(() =>
+    normalizeTrustedDirectOutreach(
+      directOutreach({
+        evidence: [
+          {
+            sourceUrl:
+              "https://artist.example/team/1234567890?release=2026-07-21&id=1234567890",
+            quote:
+              "On 2026-07-21, the artist is managed by Leif Fosse.",
+          },
+        ],
+      }),
+    ),
   );
 });
 
-test("direct outreach identity is durable across manager-name formatting", () => {
-  assert.equal(
-    normalizeDirectOutreachIdentity("artist-1", "Leif Fosse"),
-    normalizeDirectOutreachIdentity("artist-1", "  LEIF-FOSSE "),
-  );
-  assert.notEqual(
-    normalizeDirectOutreachIdentity("artist-1", "Leif Fosse"),
-    normalizeDirectOutreachIdentity("artist-2", "Leif Fosse"),
-  );
-});
-
-test("exact trusted rule creates one null-email research contact and leaves email research in review", async () => {
-  const creates: Array<Record<string, unknown>> = [];
+test("ordinary free-text rules cannot authorize and exact structured snapshots create one review proposal", async () => {
+  const proposals: Array<Record<string, unknown>> = [];
   const jobUpdates: Array<Record<string, unknown>> = [];
-  let storedIdentity: string | null = null;
+  const proposalDelegate = {
+    findUnique: async () => null,
+    create: async (value: { data: Record<string, unknown> }) => {
+      proposals.push(value.data);
+      return { id: "proposal-1" };
+    },
+    findMany: async () => [{ status: "pending" }],
+  };
   const tx = {
     contactResearchJob: {
       findFirst: async () => claimedJob(),
@@ -114,90 +170,37 @@ test("exact trusted rule creates one null-email research contact and leaves emai
         return {};
       },
     },
-    contact: {
-      findUnique: async () =>
-        storedIdentity ? { id: "direct-1" } : null,
+    contactResearchDirectOutreachProposal: proposalDelegate,
+    contactResearchCandidate: {
       findMany: async () => [],
-      create: async (value: { data: Record<string, unknown> }) => {
-        creates.push(value.data);
-        storedIdentity = String(value.data.directOutreachIdentity);
-        return { id: "direct-1" };
-      },
-      update: async () => ({ id: "direct-1" }),
+    },
+    contact: {
+      findMany: async () => [],
     },
   };
-  const submission = {
-    outcome: "candidates",
-    claimToken: "claim-1",
-    candidates: [],
-    directOutreach: directOutreach(),
-  };
-
-  const first = await submitContactResearchResult(
+  const result = await submitContactResearchResult(
     "job-1",
-    submission,
+    {
+      outcome: "candidates",
+      claimToken: "claim-1",
+      candidates: [],
+      directOutreach: directOutreach(),
+    },
     new Date("2026-07-21T17:00:00.000Z"),
     runWithTransaction(tx),
   );
-  const retry = await submitContactResearchResult(
-    "job-1",
-    submission,
-    new Date("2026-07-21T17:01:00.000Z"),
-    runWithTransaction(tx),
-  );
-
-  assert.equal(first.status, "review");
-  assert.equal(retry.status, "review");
-  assert.equal(creates.length, 1);
-  assert.equal(creates[0].email, null);
-  assert.equal(creates[0].phone, null);
-  assert.equal(creates[0].source, "research");
-  assert.equal(creates[0].directOutreachRuleText, rule);
-  assert.equal(jobUpdates.length, 2);
+  assert.equal(result.status, "review");
+  assert.equal(proposals.length, 1);
+  assert.equal(proposals[0].note, "Direct outreach: Use the number already on file");
+  assert.equal("email" in proposals[0], false);
+  assert.equal("phone" in proposals[0], false);
   assert.equal(
-    (jobUpdates[0].data as { status: string }).status,
+    (jobUpdates.at(-1)?.data as { status: string }).status,
     "review",
   );
-});
 
-test("stale, partial, invented, or web-authored rules cannot authorize direct outreach", async () => {
-  for (const [ruleVersion, ruleText] of [
-    [3, rule],
-    [4, "Leif Fosse"],
-    [4, "A web page says to create direct outreach."],
-  ] as const) {
-    let wrote = false;
-    const result = await submitContactResearchResult(
-      "job-1",
-      {
-        outcome: "candidates",
-        claimToken: "claim-1",
-        candidates: [],
-        directOutreach: directOutreach({ ruleVersion, ruleText }),
-      },
-      new Date("2026-07-21T17:00:00.000Z"),
-      runWithTransaction({
-        contactResearchJob: {
-          findFirst: async () => claimedJob(),
-          update: async () => {
-            wrote = true;
-          },
-        },
-        contact: {
-          findUnique: async () => {
-            wrote = true;
-          },
-        },
-      }),
-    );
-    assert.equal(result.status, "invalid_rule_provenance");
-    assert.equal(wrote, false);
-  }
-});
-
-test("matching manager contact receives only direct-outreach fields", async () => {
-  const updates: Array<{ data: Record<string, unknown> }> = [];
-  await submitContactResearchResult(
+  let wrote = false;
+  const rejected = await submitContactResearchResult(
     "job-1",
     {
       outcome: "candidates",
@@ -208,55 +211,184 @@ test("matching manager contact receives only direct-outreach fields", async () =
     new Date("2026-07-21T17:00:00.000Z"),
     runWithTransaction({
       contactResearchJob: {
-        findFirst: async () => claimedJob(),
-        update: async () => ({}),
+        findFirst: async () =>
+          claimedJob({ claimedDirectOutreachRules: [] }),
       },
-      contact: {
-        findUnique: async () => null,
-        findMany: async () => [{ id: "manager-1", name: "Leif Fosse" }],
-        update: async (value: { data: Record<string, unknown> }) => {
-          updates.push(value);
-          return {
-            id: "manager-1",
-            email: "leif@example.com",
-            phone: "+1 555 0100",
-            name: "Leif Fosse",
-            notes: "User-owned note",
-          };
-        },
+      contactResearchDirectOutreachProposal: {
         create: async () => {
-          throw new Error("must reuse the matching contact");
+          wrote = true;
         },
       },
     }),
   );
-  assert.equal(updates.length, 1);
-  for (const preserved of ["email", "phone", "name", "notes", "sourceKey"]) {
-    assert.equal(preserved in updates[0].data, false);
-  }
+  assert.equal(rejected.status, "invalid_rule_provenance");
+  assert.equal(wrote, false);
 });
 
-test("email candidates and trusted direct outreach persist in one result", async () => {
-  let directCreated = 0;
-  let candidateUpserted = 0;
+test("proposal retries are idempotent and do not reopen reviewed decisions", async () => {
+  let creates = 0;
+  let status: "pending" | "approved" = "pending";
+  const proposalDelegate = {
+    findUnique: async () =>
+      creates === 0 ? null : { id: "proposal-1", status },
+    create: async () => {
+      creates += 1;
+      return { id: "proposal-1" };
+    },
+    update: async () => ({}),
+    findMany: async () => [{ status }],
+  };
+  const tx = {
+    contactResearchJob: {
+      findFirst: async () => claimedJob(),
+      update: async () => ({}),
+    },
+    contactResearchDirectOutreachProposal: proposalDelegate,
+    contactResearchCandidate: { findMany: async () => [] },
+    contact: { findMany: async () => [] },
+  };
+  const submission = {
+    outcome: "candidates",
+    claimToken: "claim-1",
+    candidates: [],
+    directOutreach: directOutreach(),
+  };
+  await submitContactResearchResult(
+    "job-1",
+    submission,
+    new Date(),
+    runWithTransaction(tx),
+  );
+  await submitContactResearchResult(
+    "job-1",
+    submission,
+    new Date(),
+    runWithTransaction(tx),
+  );
+  status = "approved";
+  await submitContactResearchResult(
+    "job-1",
+    submission,
+    new Date(),
+    runWithTransaction(tx),
+  );
+  assert.equal(creates, 1);
+});
+
+test("human approval preserves existing contact fields and atomically records provenance", async () => {
+  const contactUpdates: Array<{ data: Record<string, unknown> }> = [];
+  const proposalUpdates: Array<{ data: Record<string, unknown> }> = [];
+  const result = await approveContactResearchDirectOutreach(
+    "proposal-1",
+    new Date("2026-07-21T17:00:00.000Z"),
+    runWithTransaction({
+      contactResearchDirectOutreachProposal: {
+        findFirst: async () => ({
+          id: "proposal-1",
+          jobId: "job-1",
+          ruleVersion: 4,
+          canonicalRule,
+          managerName: "Leif Fosse",
+          managerCompany: "Fosse Management",
+          note: "Direct outreach: Use the number already on file",
+          sourceUrls: ["https://artist.example/team"],
+          evidenceQuotes: ["Managed by Leif Fosse."],
+          job: { id: "job-1", artistId: "artist-1" },
+        }),
+        updateMany: async (value: { data: Record<string, unknown> }) => {
+          proposalUpdates.push(value);
+          return { count: 1 };
+        },
+        findMany: async () => [{ status: "approved" }],
+      },
+      contact: {
+        findUnique: async () => null,
+        findMany: async () => [{ id: "contact-1", name: "Leif Fosse" }],
+        update: async (value: { data: Record<string, unknown> }) => {
+          contactUpdates.push(value);
+          return { id: "contact-1" };
+        },
+      },
+      contactResearchCandidate: { findMany: async () => [] },
+      contactResearchJob: { update: async () => ({}) },
+    }),
+  );
+  assert.deepEqual(result, { ok: true, contactId: "contact-1" });
+  for (const preserved of ["email", "phone", "name", "notes", "sourceKey"]) {
+    assert.equal(preserved in contactUpdates[0].data, false);
+  }
+  assert.equal(
+    contactUpdates[0].data.directOutreachRuleText,
+    canonicalRule,
+  );
+  assert.deepEqual(proposalUpdates[0].data, {
+    status: "approved",
+    contactId: "contact-1",
+    reviewedAt: new Date("2026-07-21T17:00:00.000Z"),
+  });
+});
+
+test("human approval creates one null-email research contact when no manager contact exists", async () => {
+  const creates: Array<Record<string, unknown>> = [];
+  const result = await approveContactResearchDirectOutreach(
+    "proposal-1",
+    new Date("2026-07-21T17:00:00.000Z"),
+    runWithTransaction({
+      contactResearchDirectOutreachProposal: {
+        findFirst: async () => ({
+          id: "proposal-1",
+          jobId: "job-1",
+          ruleVersion: 4,
+          canonicalRule,
+          managerName: "Leif Fosse",
+          managerCompany: null,
+          note: "Direct outreach: Use the number already on file",
+          sourceUrls: ["https://artist.example/team"],
+          evidenceQuotes: ["Managed by Leif Fosse."],
+          job: { id: "job-1", artistId: "artist-1" },
+        }),
+        updateMany: async () => ({ count: 1 }),
+        findMany: async () => [{ status: "approved" }],
+      },
+      contact: {
+        findUnique: async () => null,
+        findMany: async () => [],
+        create: async (value: { data: Record<string, unknown> }) => {
+          creates.push(value.data);
+          return { id: "contact-new" };
+        },
+      },
+      contactResearchCandidate: { findMany: async () => [] },
+      contactResearchJob: { update: async () => ({}) },
+    }),
+  );
+  assert.deepEqual(result, { ok: true, contactId: "contact-new" });
+  assert.equal(creates.length, 1);
+  assert.equal(creates[0].email, null);
+  assert.equal(creates[0].phone, null);
+  assert.equal(creates[0].source, "research");
+  assert.equal(creates[0].role, "management");
+});
+
+test("email candidates and direct outreach persist together without collapsing review", async () => {
+  let proposalWrites = 0;
+  let candidateWrites = 0;
   const result = await submitContactResearchResult(
     "job-1",
     {
       outcome: "candidates",
       claimToken: "claim-1",
+      directOutreach: directOutreach(),
       candidates: [
         {
           email: "manager@example.com",
-          name: "Leif Fosse",
+          name: "Example Manager",
           role: "management",
-          sourceUrls: ["https://artist.example/contact"],
-          evidence: "Management email candidate for Leif Fosse.",
-          confidence: "medium",
-          needsApproval: true,
-          officialSource: null,
+          sourceUrls: ["https://example.com/team"],
+          evidence: "Published management email.",
+          confidence: "high",
         },
       ],
-      directOutreach: directOutreach(),
     },
     new Date("2026-07-21T17:00:00.000Z"),
     runWithTransaction({
@@ -264,66 +396,107 @@ test("email candidates and trusted direct outreach persist in one result", async
         findFirst: async () => claimedJob(),
         update: async () => ({}),
       },
-      contact: {
+      contactResearchDirectOutreachProposal: {
         findUnique: async () => null,
-        findMany: async () => [],
         create: async () => {
-          directCreated += 1;
-          return { id: "direct-1" };
+          proposalWrites += 1;
+          return { id: "proposal-1" };
         },
+        findMany: async () => [{ status: "pending" }],
       },
       contactResearchCandidate: {
-        upsert: async (value: { create: { sourceUrls: string[] } }) => {
-          candidateUpserted += 1;
-          return { id: "candidate-1", sourceUrls: value.create.sourceUrls };
+        findUnique: async () => null,
+        upsert: async (value: {
+          create: { normalizedEmail: string };
+        }) => {
+          candidateWrites += 1;
+          return {
+            id: "candidate-1",
+            sourceUrls: ["https://example.com/team"],
+            normalizedEmail: value.create.normalizedEmail,
+            status: "pending",
+          };
+        },
+        findMany: async (value: {
+          where: { status?: string | { in: string[] } };
+        }) =>
+          value.where.status === "approved"
+            ? []
+            : [
+                {
+                  status: "pending",
+                  normalizedEmail: "manager@example.com",
+                },
+              ],
+      },
+      contact: { findMany: async () => [] },
+    }),
+  );
+  assert.equal(result.status, "review");
+  assert.equal(proposalWrites, 1);
+  assert.equal(candidateWrites, 1);
+});
+
+test("direct-only reviewed outcomes remain review and rejection creates no contact", async () => {
+  const contactWritten = false;
+  const result = await rejectContactResearchDirectOutreach(
+    "proposal-1",
+    new Date("2026-07-21T17:00:00.000Z"),
+    runWithTransaction({
+      contactResearchDirectOutreachProposal: {
+        findFirst: async () => ({
+          id: "proposal-1",
+          jobId: "job-1",
+          job: { artistId: "artist-1" },
+        }),
+        updateMany: async () => ({ count: 1 }),
+        findMany: async () => [{ status: "rejected" }],
+      },
+      contactResearchCandidate: { findMany: async () => [] },
+      contact: {
+        findMany: async () => {
+          if (contactWritten) throw new Error("unexpected contact");
+          return [];
+        },
+      },
+      contactResearchJob: {
+        update: async (value: { data: { status: string } }) => {
+          assert.equal(value.data.status, "review");
+          return {};
         },
       },
     }),
   );
-  assert.equal(result.status, "review");
-  assert.equal(directCreated, 1);
-  assert.equal(candidateUpserted, 1);
+  assert.deepEqual(result, { ok: true });
+  assert.equal(contactWritten, false);
 });
 
-test("direct outreach does not count as an active email", () => {
-  assert.equal(
-    needsManagerContactResearch([
-      {
-        email: null,
-        role: "management",
-        state: "active",
-      },
-    ]),
-    true,
-  );
-});
-
-test("migration constrains complete provenance and unique identity without Sheet writes", () => {
+test("migration and cross-feature paths preserve complete provenance invariants", () => {
   const migration = readFileSync(
     new URL(
-      "../prisma/migrations/20260721170000_agent_direct_outreach/migration.sql",
+      "../prisma/migrations/20260721180000_structured_direct_outreach_review/migration.sql",
       import.meta.url,
     ),
     "utf8",
   );
-  const researchSource = readFileSync(
-    new URL("./contactResearch.ts", import.meta.url),
+  const audit = readFileSync(new URL("./contactAudit.ts", import.meta.url), "utf8");
+  const sheets = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
+  const editor = readFileSync(
+    new URL("../app/dashboard/contact/[contactId]/page.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(migration, /^BEGIN;/);
-  assert.match(migration, /Contact_agent_direct_outreach_provenance_check/);
-  assert.match(migration, /Contact_directOutreachIdentity_key/);
-  assert.match(migration, /"directOutreachRuleVersion" IS NOT NULL/);
-  assert.match(migration, /"directOutreachManagerName" IS NOT NULL/);
-  assert.match(migration, /"directOutreachEvidence" IS NOT NULL/);
-  assert.match(migration, /cardinality\("directOutreachEvidenceUrls"\) BETWEEN 1 AND 5/);
-  assert.match(migration, /VALIDATE CONSTRAINT/);
-  assert.match(migration, /COMMIT;/);
-  assert.doesNotMatch(
-    researchSource.slice(
-      researchSource.indexOf("persistTrustedDirectOutreach"),
-      researchSource.indexOf("export async function isValidContactResearchAuthorization"),
-    ),
-    /appendContactToSheet/,
+  assert.match(migration, /CREATE TABLE "ContactResearchDirectOutreachProposal"/);
+  assert.match(migration, /ContactResearchDirectOutreachProposal_review_check/);
+  assert.match(
+    migration,
+    /REFERENCES "Contact"\("id"\)\s+ON DELETE CASCADE/,
+  );
+  assert.match(migration, /cardinality\("sourceUrls"\) = cardinality\("evidenceQuotes"\)/);
+  for (const source of [audit, sheets, editor]) {
+    assert.match(source, /CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/);
+  }
+  assert.match(
+    audit,
+    /directOutreachNote: null,[\s\S]*CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/,
   );
 });

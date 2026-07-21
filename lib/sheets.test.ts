@@ -58,6 +58,15 @@ test("Sheet rows distinguish empty, email, direct outreach, and invalid identiti
   assert.match(source, /"missing_artist"/);
 });
 
+test("Sheet ownership reconciliation clears agent direct-outreach provenance", () => {
+  const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
+  assert.match(source, /CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/);
+  assert.match(
+    source,
+    /directOutreachNote: plan\.directOutreachNote,[\s\S]*\.\.\.CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/,
+  );
+});
+
 test("same canonical artist and email aliases are deduplicated during Sheet planning", () => {
   const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
   assert.match(source, /event: "sheet_contact_duplicate_skipped"/);

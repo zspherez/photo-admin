@@ -73,6 +73,10 @@ test("review and exhausted jobs have separate bulk requeue actions", () => {
     source,
     /none: \{ status: \{ in: \["approved", "superseded"\] \} \}/
   );
+  assert.match(
+    source,
+    /directOutreachProposals: \{\s*none: \{ status: "pending" \}/
+  );
 });
 
 test("research page links to the trusted queue-draining workflow", () => {

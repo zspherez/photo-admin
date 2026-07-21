@@ -15,7 +15,15 @@ import {
 import { activeListenSignalWhere } from "@/lib/listenSignal";
 import { appendContactToSheet, parseSheetEmails } from "@/lib/sheets";
 import { constantTimeEqual } from "@/lib/auth";
-import { readGlobalAgentRulesInTransaction } from "@/lib/agentRules";
+import {
+  readGlobalAgentRulesInTransaction,
+  readStoredDirectOutreachAgentRules,
+  type DirectOutreachAgentRule,
+} from "@/lib/agentRules";
+import {
+  assertAgentSafeSourceUrl,
+  assertNoPhoneLikeNumber,
+} from "@/lib/phoneSafety";
 import {
   festivalLeadTimeSql,
   festivalLeadTimeWhere,
@@ -69,15 +77,18 @@ export interface ContactResearchCandidateInput {
   officialSourceEvidence: string | null;
 }
 
+export interface DirectOutreachEvidenceInput {
+  sourceUrl: string;
+  quote: string;
+}
+
 export interface TrustedDirectOutreachInput {
-  note: string;
+  ruleId: string;
   ruleVersion: number;
-  ruleText: string;
+  canonicalRule: string;
   managerName: string;
   managerCompany: string | null;
-  sourceUrls: string[];
-  relationshipEvidence: string;
-  relationshipStatus: "confirmed";
+  evidence: DirectOutreachEvidenceInput[];
 }
 
 export type ContactResearchSubmission =
@@ -151,6 +162,15 @@ const ACTIVE_EMAIL_CONTACT_WHERE = {
   state: "active",
   email: { not: null },
 } satisfies Prisma.ContactWhereInput;
+
+const DIRECT_OUTREACH_KEYS = new Set([
+  "ruleId",
+  "ruleVersion",
+  "canonicalRule",
+  "managerName",
+  "managerCompany",
+  "evidence",
+]);
 
 export function isContactResearchApprovalEffective(
   normalizedEmail: string,
@@ -232,17 +252,6 @@ async function supersedeObsoleteContactResearchApprovals(
     data: { status: "superseded" },
   });
 }
-const DIRECT_OUTREACH_KEYS = new Set([
-  "note",
-  "ruleVersion",
-  "ruleText",
-  "managerName",
-  "managerCompany",
-  "sourceUrls",
-  "relationshipEvidence",
-  "relationshipStatus",
-]);
-
 function optionalString(
   value: unknown,
   maxLength: number,
@@ -360,14 +369,75 @@ export function normalizeDirectOutreachIdentity(
     .digest("hex");
 }
 
-function containsSubmittedPhoneNumber(value: string): boolean {
-  return (
-    /\btel\s*:/i.test(value) ||
-    /\+\s*\d(?:[\s().-]*\d){6,}/.test(value) ||
-    /\(\d{3}\)\s*\d{3}[-.\s]\d{4}/.test(value) ||
-    /\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b/.test(value) ||
-    /\b\d{3}[-.\s]\d{4}\b/.test(value) ||
-    /\b\d{10,15}\b/.test(value)
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeDirectOutreachEvidence(
+  value: unknown,
+  managerName: string,
+): DirectOutreachEvidenceInput[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("direct outreach needs at least one evidence quote");
+  }
+  if (value.length > 5) {
+    throw new Error("direct outreach may have at most 5 evidence quotes");
+  }
+  const normalizedManagerName = normalizedIdentityText(managerName);
+  const escapedManagerName = escapeRegExp(normalizedManagerName);
+  const positiveRelationship = new RegExp(
+    `(?:managed by|manager|management) ${escapedManagerName}\\b|\\b${escapedManagerName} (?:manages|management|is (?:the )?.*manager)\\b`,
+  );
+  const negativeRelationship =
+    /\b(?:not|no longer|former|formerly|previous|previously|ex|unconfirmed|rumou?r|denied|denies|incorrect)\b/;
+  const evidence = value.map((entry, index) => {
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      Array.isArray(entry)
+    ) {
+      throw new Error(
+        `direct outreach evidence ${index + 1} must be an object`,
+      );
+    }
+    const input = entry as Record<string, unknown>;
+    if (Object.keys(input).sort().join(",") !== "quote,sourceUrl") {
+      throw new Error(
+        `direct outreach evidence ${index + 1} must contain exactly sourceUrl and quote`,
+      );
+    }
+    const sourceUrl = normalizeResearchSourceUrl(input.sourceUrl);
+    assertAgentSafeSourceUrl(
+      sourceUrl,
+      `direct outreach evidence ${index + 1} sourceUrl`,
+    );
+    const quote = requiredString(
+      input.quote,
+      2_000,
+      `direct outreach evidence ${index + 1} quote`,
+    );
+    assertNoPhoneLikeNumber(
+      quote,
+      `direct outreach evidence ${index + 1} quote`,
+    );
+    const normalizedQuote = normalizedIdentityText(quote);
+    if (
+      negativeRelationship.test(normalizedQuote) ||
+      !positiveRelationship.test(normalizedQuote)
+    ) {
+      throw new Error(
+        `direct outreach evidence ${index + 1} must be a positive published manager statement`,
+      );
+    }
+    return { sourceUrl, quote };
+  });
+  return Array.from(
+    new Map(
+      evidence.map((entry) => [
+        `${entry.sourceUrl}\u0000${entry.quote}`,
+        entry,
+      ]),
+    ).values(),
   );
 }
 
@@ -393,17 +463,23 @@ export function normalizeTrustedDirectOutreach(
   ) {
     throw new Error("direct outreach ruleVersion must be a positive integer");
   }
-  if (input.relationshipStatus !== "confirmed") {
-    throw new Error(
-      "direct outreach requires a confirmed manager relationship"
-    );
+  const ruleId = requiredString(
+    input.ruleId,
+    64,
+    "direct outreach ruleId",
+  );
+  if (!/^[a-z0-9][a-z0-9_-]{1,63}$/.test(ruleId)) {
+    throw new Error("direct outreach ruleId is invalid");
   }
-  const note = requiredString(input.note, 1_000, "direct outreach note");
-  if (!note.startsWith("Direct outreach:")) {
-    throw new Error(
-      "direct outreach note must start with Direct outreach:"
-    );
-  }
+  const canonicalRule = requiredString(
+    input.canonicalRule,
+    8_000,
+    "direct outreach canonicalRule",
+  );
+  assertNoPhoneLikeNumber(
+    canonicalRule,
+    "direct outreach canonicalRule",
+  );
   const managerName = requiredString(
     input.managerName,
     200,
@@ -420,55 +496,21 @@ export function normalizeTrustedDirectOutreach(
     200,
     "direct outreach managerCompany"
   );
-  const relationshipEvidence = requiredString(
-    input.relationshipEvidence,
-    4_000,
-    "direct outreach relationshipEvidence"
-  );
-  const normalizedRelationshipEvidence = normalizedIdentityText(
-    relationshipEvidence
-  );
-  if (
-    !` ${normalizedRelationshipEvidence} `.includes(
-      ` ${normalizedManagerName} `
-    )
-  ) {
-    throw new Error(
-      "direct outreach relationshipEvidence must identify the manager"
+  assertNoPhoneLikeNumber(ruleId, "direct outreach ruleId");
+  assertNoPhoneLikeNumber(managerName, "direct outreach managerName");
+  if (managerCompany !== null) {
+    assertNoPhoneLikeNumber(
+      managerCompany,
+      "direct outreach managerCompany",
     );
-  }
-  if (
-    containsSubmittedPhoneNumber(note) ||
-    containsSubmittedPhoneNumber(relationshipEvidence) ||
-    containsSubmittedPhoneNumber(managerName) ||
-    (managerCompany !== null &&
-      containsSubmittedPhoneNumber(managerCompany))
-  ) {
-    throw new Error(
-      "direct outreach cannot submit a phone number; refer to the channel already on file"
-    );
-  }
-  if (!Array.isArray(input.sourceUrls) || input.sourceUrls.length === 0) {
-    throw new Error("direct outreach needs at least one source URL");
-  }
-  if (input.sourceUrls.length > 5) {
-    throw new Error("direct outreach may have at most 5 source URLs");
   }
   return {
-    note,
+    ruleId,
     ruleVersion: input.ruleVersion,
-    ruleText: requiredString(
-      input.ruleText,
-      8_000,
-      "direct outreach ruleText"
-    ),
+    canonicalRule,
     managerName,
     managerCompany,
-    sourceUrls: Array.from(
-      new Set(input.sourceUrls.map(normalizeResearchSourceUrl))
-    ),
-    relationshipEvidence,
-    relationshipStatus: "confirmed",
+    evidence: normalizeDirectOutreachEvidence(input.evidence, managerName),
   };
 }
 
@@ -1068,6 +1110,9 @@ export function parseContactResearchSubmission(
     input.directOutreach == null
       ? null
       : normalizeTrustedDirectOutreach(input.directOutreach);
+  if (directOutreach !== null && notes !== null) {
+    assertNoPhoneLikeNumber(notes, "notes");
+  }
   const candidateValues = input.candidates ?? [];
   if (!Array.isArray(candidateValues)) {
     throw new Error("candidates must be an array");
@@ -1172,25 +1217,111 @@ export function isTrustedAgentSkipRuleProvenance(
   );
 }
 
-async function persistTrustedDirectOutreach(
+function trustedDirectOutreachRule(
+  claimedRuleVersion: number | null,
+  claimedRules: Prisma.JsonValue | null,
+  directOutreach: TrustedDirectOutreachInput,
+): DirectOutreachAgentRule | null {
+  if (
+    claimedRuleVersion === null ||
+    claimedRuleVersion < 1 ||
+    claimedRuleVersion !== directOutreach.ruleVersion
+  ) {
+    return null;
+  }
+  const rule = readStoredDirectOutreachAgentRules(
+    claimedRules ?? [],
+  ).find((candidate) => candidate.id === directOutreach.ruleId);
+  if (
+    !rule ||
+    rule.action !== "direct_outreach" ||
+    rule.canonicalRule !== directOutreach.canonicalRule ||
+    rule.managerName !== directOutreach.managerName
+  ) {
+    return null;
+  }
+  return rule;
+}
+
+async function persistTrustedDirectOutreachProposal(
+  tx: Prisma.TransactionClient,
+  job: { id: string },
+  directOutreach: TrustedDirectOutreachInput,
+  rule: DirectOutreachAgentRule,
+): Promise<void> {
+  const normalizedManagerName = normalizedIdentityText(
+    directOutreach.managerName,
+  );
+  const existing =
+    await tx.contactResearchDirectOutreachProposal.findUnique({
+      where: {
+        jobId_ruleId_normalizedManagerName: {
+          jobId: job.id,
+          ruleId: rule.id,
+          normalizedManagerName,
+        },
+      },
+      select: { id: true, status: true },
+    });
+  if (existing && existing.status !== "pending") return;
+  const data = {
+    ruleVersion: directOutreach.ruleVersion,
+    canonicalRule: rule.canonicalRule,
+    managerName: rule.managerName,
+    managerCompany: directOutreach.managerCompany,
+    note: `Direct outreach: ${rule.note}`,
+    sourceUrls: directOutreach.evidence.map(
+      (evidence) => evidence.sourceUrl,
+    ),
+    evidenceQuotes: directOutreach.evidence.map(
+      (evidence) => evidence.quote,
+    ),
+  };
+  if (existing) {
+    await tx.contactResearchDirectOutreachProposal.update({
+      where: { id: existing.id },
+      data,
+    });
+    return;
+  }
+  await tx.contactResearchDirectOutreachProposal.create({
+    data: {
+      jobId: job.id,
+      ruleId: rule.id,
+      normalizedManagerName,
+      status: "pending",
+      ...data,
+    },
+  });
+}
+
+async function applyApprovedDirectOutreach(
   tx: Prisma.TransactionClient,
   job: { id: string; artistId: string },
-  directOutreach: TrustedDirectOutreachInput
-): Promise<void> {
+  proposal: {
+    ruleVersion: number;
+    canonicalRule: string;
+    managerName: string;
+    managerCompany: string | null;
+    note: string;
+    sourceUrls: string[];
+    evidenceQuotes: string[];
+  },
+): Promise<{ id: string }> {
   const directOutreachIdentity = normalizeDirectOutreachIdentity(
     job.artistId,
-    directOutreach.managerName
+    proposal.managerName,
   );
   const provenance = {
-    directOutreachNote: directOutreach.note,
+    directOutreachNote: proposal.note,
     directOutreachIdentity,
     directOutreachSourceJobId: job.id,
-    directOutreachRuleVersion: directOutreach.ruleVersion,
-    directOutreachRuleText: directOutreach.ruleText,
-    directOutreachManagerName: directOutreach.managerName,
-    directOutreachManagerCompany: directOutreach.managerCompany,
-    directOutreachEvidenceUrls: directOutreach.sourceUrls,
-    directOutreachEvidence: directOutreach.relationshipEvidence,
+    directOutreachRuleVersion: proposal.ruleVersion,
+    directOutreachRuleText: proposal.canonicalRule,
+    directOutreachManagerName: proposal.managerName,
+    directOutreachManagerCompany: proposal.managerCompany,
+    directOutreachEvidenceUrls: proposal.sourceUrls,
+    directOutreachEvidence: proposal.evidenceQuotes.join("\n"),
   };
   const existingIdentity = await tx.contact.findUnique({
     where: { directOutreachIdentity },
@@ -1201,7 +1332,7 @@ async function persistTrustedDirectOutreach(
       where: { id: existingIdentity.id },
       data: { ...provenance, state: "active" },
     });
-    return;
+    return existingIdentity;
   }
 
   const attachableContacts = await tx.contact.findMany({
@@ -1220,7 +1351,7 @@ async function persistTrustedDirectOutreach(
     orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
   });
   const normalizedManagerName = normalizedIdentityText(
-    directOutreach.managerName
+    proposal.managerName,
   );
   const matchingContact = attachableContacts.find(
     (contact) =>
@@ -1232,20 +1363,21 @@ async function persistTrustedDirectOutreach(
       where: { id: matchingContact.id },
       data: provenance,
     });
-    return;
+    return matchingContact;
   }
 
-  await tx.contact.create({
+  return tx.contact.create({
     data: {
       artistId: job.artistId,
       email: null,
       phone: null,
-      name: directOutreach.managerName,
+      name: proposal.managerName,
       role: "management",
       source: "research",
       state: "active",
       ...provenance,
     },
+    select: { id: true },
   });
 }
 
@@ -1802,6 +1934,12 @@ export async function claimContactResearchJobs(
         )
         AND NOT EXISTS (
           SELECT 1
+          FROM "ContactResearchDirectOutreachProposal" direct_outreach
+          WHERE direct_outreach."jobId" = job."id"
+            AND direct_outreach."status" = 'pending'
+        )
+        AND NOT EXISTS (
+          SELECT 1
           FROM "ContactResearchCandidate" candidate
           JOIN "Contact" approved_contact
             ON approved_contact."artistId" = job."artistId"
@@ -1856,6 +1994,8 @@ export async function claimContactResearchJobs(
             attemptCount: { increment: 1 },
             claimedAgentRules: globalAgentRules.instructions,
             claimedAgentRulesVersion: globalAgentRules.version,
+            claimedDirectOutreachRules:
+              globalAgentRules.directOutreachRules as unknown as Prisma.InputJsonValue,
           },
         });
       }
@@ -1933,6 +2073,10 @@ export async function claimContactResearchJobs(
               scope: globalAgentRules.scope,
               version: job.claimedAgentRulesVersion ?? 0,
               instructions: job.claimedAgentRules ?? "",
+              directOutreachRules:
+                readStoredDirectOutreachAgentRules(
+                  job.claimedDirectOutreachRules ?? [],
+                ),
             },
             researchInstructions: job.userNotes,
             artist: {
@@ -1989,6 +2133,7 @@ export async function submitContactResearchResult(
         artist: { select: { name: true } },
         claimedAgentRules: true,
         claimedAgentRulesVersion: true,
+        claimedDirectOutreachRules: true,
       },
     });
     if (!job) {
@@ -1999,15 +2144,19 @@ export async function submitContactResearchResult(
       };
     }
 
+    const matchedDirectOutreachRule =
+      submission.outcome === "candidates" &&
+      submission.directOutreach !== null
+        ? trustedDirectOutreachRule(
+            job.claimedAgentRulesVersion,
+            job.claimedDirectOutreachRules,
+            submission.directOutreach,
+          )
+        : null;
     if (
       submission.outcome === "candidates" &&
       submission.directOutreach !== null &&
-      !isTrustedAgentSkipRuleProvenance(
-        job.claimedAgentRulesVersion,
-        job.claimedAgentRules,
-        submission.directOutreach.ruleVersion,
-        submission.directOutreach.ruleText
-      )
+      matchedDirectOutreachRule === null
     ) {
       return {
         accepted: false,
@@ -2022,7 +2171,7 @@ export async function submitContactResearchResult(
           job.claimedAgentRulesVersion,
           job.claimedAgentRules,
           submission.ruleVersion,
-          submission.ruleText
+          submission.ruleText,
         )
       ) {
         return {
@@ -2081,8 +2230,16 @@ export async function submitContactResearchResult(
     await supersedeObsoleteContactResearchApprovals(tx, {
       jobIds: [jobId],
     });
-    if (submission.directOutreach !== null) {
-      await persistTrustedDirectOutreach(tx, job, submission.directOutreach);
+    if (
+      submission.directOutreach !== null &&
+      matchedDirectOutreachRule !== null
+    ) {
+      await persistTrustedDirectOutreachProposal(
+        tx,
+        job,
+        submission.directOutreach,
+        matchedDirectOutreachRule,
+      );
     }
 
     const autoApproveCandidates: Array<{
@@ -2284,6 +2441,32 @@ interface ApprovedResearchContact {
 
 class ContactResearchCandidateConflictError extends Error {}
 
+async function directOutreachProposalState(
+  tx: Prisma.TransactionClient,
+  jobId: string,
+): Promise<{ pending: number; total: number }> {
+  const delegate = (
+    tx as unknown as {
+      contactResearchDirectOutreachProposal?: {
+        findMany: (args: {
+          where: { jobId: string };
+          select: { status: true };
+        }) => Promise<Array<{ status: string }>>;
+      };
+    }
+  ).contactResearchDirectOutreachProposal;
+  if (!delegate) return { pending: 0, total: 0 };
+  const proposals = await delegate.findMany({
+    where: { jobId },
+    select: { status: true },
+  });
+  return {
+    pending: proposals.filter((proposal) => proposal.status === "pending")
+      .length,
+    total: proposals.length,
+  };
+}
+
 async function resolveContactResearchJob(
   tx: Prisma.TransactionClient,
   jobId: string,
@@ -2310,8 +2493,15 @@ async function resolveContactResearchJob(
         activeContacts
       )
   ).length;
+  const directOutreach = await directOutreachProposalState(tx, jobId);
   const status =
-    pending > 0 ? "review" : approved > 0 ? "complete" : "exhausted";
+    pending > 0 || directOutreach.pending > 0
+      ? "review"
+      : approved > 0
+        ? "complete"
+        : directOutreach.total > 0
+          ? "review"
+          : "exhausted";
   await tx.contactResearchJob.update({
     where: { id: jobId },
     data: {
@@ -2324,6 +2514,99 @@ async function resolveContactResearchJob(
     },
   });
   return status;
+}
+
+export async function approveContactResearchDirectOutreach(
+  proposalId: string,
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work),
+): Promise<{ ok: boolean; contactId?: string; error?: string }> {
+  return runTransaction(async (tx) => {
+    const proposal =
+      await tx.contactResearchDirectOutreachProposal.findFirst({
+        where: {
+          id: proposalId,
+          status: "pending",
+          job: { status: "review" },
+        },
+        include: {
+          job: { select: { id: true, artistId: true } },
+        },
+      });
+    if (!proposal) {
+      return { ok: false, error: "Direct outreach is no longer reviewable" };
+    }
+    const contact = await applyApprovedDirectOutreach(
+      tx,
+      proposal.job,
+      proposal,
+    );
+    const reviewed =
+      await tx.contactResearchDirectOutreachProposal.updateMany({
+        where: { id: proposal.id, status: "pending" },
+        data: {
+          status: "approved",
+          contactId: contact.id,
+          reviewedAt: now,
+        },
+      });
+    if (reviewed.count !== 1) {
+      throw new ContactResearchCandidateConflictError();
+    }
+    await resolveContactResearchJob(
+      tx,
+      proposal.jobId,
+      proposal.job.artistId,
+      now,
+    );
+    return { ok: true, contactId: contact.id };
+  });
+}
+
+export async function rejectContactResearchDirectOutreach(
+  proposalId: string,
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work),
+): Promise<{ ok: boolean; error?: string }> {
+  return runTransaction(async (tx) => {
+    const proposal =
+      await tx.contactResearchDirectOutreachProposal.findFirst({
+        where: {
+          id: proposalId,
+          status: "pending",
+          job: { status: "review" },
+        },
+        select: {
+          id: true,
+          jobId: true,
+          job: { select: { artistId: true } },
+        },
+      });
+    if (!proposal) {
+      return { ok: false, error: "Direct outreach is no longer reviewable" };
+    }
+    const reviewed =
+      await tx.contactResearchDirectOutreachProposal.updateMany({
+        where: { id: proposal.id, status: "pending" },
+        data: {
+          status: "rejected",
+          contactId: null,
+          reviewedAt: now,
+        },
+      });
+    if (reviewed.count !== 1) {
+      throw new ContactResearchCandidateConflictError();
+    }
+    await resolveContactResearchJob(
+      tx,
+      proposal.jobId,
+      proposal.job.artistId,
+      now,
+    );
+    return { ok: true };
+  });
 }
 
 async function appendApprovedResearchContactsToSheet(

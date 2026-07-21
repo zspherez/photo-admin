@@ -19,6 +19,7 @@ import {
   updateAuditedContactInSheet,
 } from "@/lib/sheets";
 import { CONTACT_AUDIT_RESOLUTION_CLAIM_TTL_MS } from "@/lib/contactAuditResolutionPolicy";
+import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
 
 export const CONTACT_AUDIT_DEFAULT_CLAIM_LIMIT = 1;
 export const CONTACT_AUDIT_MAX_CLAIM_LIMIT = 10;
@@ -1262,6 +1263,7 @@ async function finalizeContactAuditResolution(
           email: alternative.normalizedEmail,
           phone: null,
           directOutreachNote: null,
+          ...CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE,
           name: alternative.name,
           role: "management",
           state: "active",

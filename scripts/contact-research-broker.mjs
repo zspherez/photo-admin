@@ -82,21 +82,22 @@ const reviewedEmailSchema = z
   );
 const directOutreachSchema = z
   .object({
-    note: z
-      .string()
-      .min(1)
-      .max(1_000)
-      .refine(
-        (value) => value.startsWith("Direct outreach:"),
-        "direct outreach note must start with Direct outreach:"
-      ),
+    ruleId: z.string().regex(/^[a-z0-9][a-z0-9_-]{1,63}$/),
     ruleVersion: z.number().int().min(1),
-    ruleText: z.string().min(1).max(8_000),
+    canonicalRule: z.string().min(1).max(8_000),
     managerName: z.string().min(1).max(200),
     managerCompany: z.string().min(1).max(200).nullable().optional(),
-    sourceUrls: z.array(z.string().url()).min(1).max(5),
-    relationshipEvidence: z.string().min(1).max(4_000),
-    relationshipStatus: z.literal("confirmed"),
+    evidence: z
+      .array(
+        z
+          .object({
+            sourceUrl: z.string().url(),
+            quote: z.string().min(1).max(2_000),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(5),
   })
   .strict();
 

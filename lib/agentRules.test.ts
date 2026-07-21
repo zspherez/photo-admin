@@ -5,8 +5,11 @@ import type { Prisma } from "@prisma/client";
 import {
   GLOBAL_AGENT_RULES_MAX_LENGTH,
   normalizeGlobalAgentRules,
+  parseDirectOutreachAgentRules,
   readGlobalAgentRulesInTransaction,
+  saveGlobalAgentRuleSet,
   saveGlobalAgentRules,
+  serializeDirectOutreachAgentRules,
   type AgentRulesTransactionRunner,
 } from "./agentRules";
 
@@ -14,6 +17,7 @@ class MemoryAgentRuleStore {
   row: {
     scope: string;
     instructions: string;
+    directOutreachRules: Prisma.JsonValue;
     version: number;
     createdAt: Date;
     updatedAt: Date;
@@ -34,10 +38,12 @@ class MemoryAgentRuleStore {
           create: {
             scope: string;
             instructions: string;
+            directOutreachRules: Prisma.InputJsonValue;
             version: number;
           };
           update: {
             instructions: string;
+            directOutreachRules?: Prisma.InputJsonValue;
             version: { increment: number };
           };
         }) => {
@@ -46,11 +52,16 @@ class MemoryAgentRuleStore {
             ? {
                 ...this.row,
                 instructions: args.update.instructions,
+                directOutreachRules:
+                  (args.update.directOutreachRules ??
+                    this.row.directOutreachRules) as Prisma.JsonValue,
                 version: this.row.version + args.update.version.increment,
                 updatedAt: now,
               }
             : {
                 ...args.create,
+                directOutreachRules:
+                  args.create.directOutreachRules as Prisma.JsonValue,
                 createdAt: now,
                 updatedAt: now,
               };
@@ -91,6 +102,7 @@ test("global agent rule saves are versioned and readable by claim transactions",
     {
       scope: "global",
       instructions: "",
+      directOutreachRules: [],
       version: 0,
       updatedAt: null,
     },
@@ -108,6 +120,7 @@ test("global agent rule saves are versioned and readable by claim transactions",
   assert.equal(first.version, 1);
   assert.equal(second.version, 2);
   assert.equal(second.instructions, "Prefer named contacts.");
+  assert.deepEqual(second.directOutreachRules, []);
   assert.equal(store.lockCount, 2);
   assert.deepEqual(
     await readGlobalAgentRulesInTransaction(
@@ -119,6 +132,44 @@ test("global agent rule saves are versioned and readable by claim transactions",
     ),
     second,
   );
+});
+
+test("structured direct outreach rules require explicit action data and canonicalize durably", async () => {
+  const source =
+    'DIRECT_OUTREACH {"id":"leif-fosse","manager":"Leif Fosse","note":"Use the number already on file"}';
+  const rules = parseDirectOutreachAgentRules(source);
+  assert.deepEqual(rules, [
+    {
+      id: "leif-fosse",
+      action: "direct_outreach",
+      managerName: "Leif Fosse",
+      note: "Use the number already on file",
+      canonicalRule: source,
+    },
+  ]);
+  assert.equal(serializeDirectOutreachAgentRules(rules), source);
+  assert.throws(
+    () => parseDirectOutreachAgentRules("Prefer official sources."),
+    /must start with DIRECT_OUTREACH/,
+  );
+  assert.throws(
+    () =>
+      parseDirectOutreachAgentRules(
+        'DIRECT_OUTREACH {"id":"leif-fosse","manager":"Leif Fosse","note":"Call +1 212 555 0199"}',
+      ),
+    /cannot contain a phone number/,
+  );
+
+  const store = new MemoryAgentRuleStore();
+  const saved = await saveGlobalAgentRuleSet(
+    {
+      instructions: "Prefer official sources.",
+      directOutreachRules: source,
+    },
+    store.runTransaction,
+  );
+  assert.equal(saved.version, 1);
+  assert.deepEqual(saved.directOutreachRules, rules);
 });
 
 test("global agent rules migration enforces scope, length, and claim snapshots", () => {
@@ -134,4 +185,20 @@ test("global agent rules migration enforces scope, length, and claim snapshots",
   assert.match(migration, /char_length\("instructions"\) <= 8000/);
   assert.match(migration, /ADD COLUMN "claimedAgentRules" TEXT/);
   assert.match(migration, /ADD COLUMN "claimedAgentRulesVersion" INTEGER/);
+  const structuredMigration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260721180000_structured_direct_outreach_review/migration.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(structuredMigration, /ADD COLUMN "directOutreachRules" JSONB/);
+  assert.match(
+    structuredMigration,
+    /ADD COLUMN "claimedDirectOutreachRules" JSONB/,
+  );
+  assert.match(
+    structuredMigration,
+    /CREATE TABLE "ContactResearchDirectOutreachProposal"/,
+  );
 });

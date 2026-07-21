@@ -94,5 +94,5 @@ test("agent-created direct outreach provenance appears on research and contact s
 
   const editor = source("app/dashboard/contact/[contactId]/page.tsx");
   assert.match(editor, /clearsAgentProvenance/);
-  assert.match(editor, /directOutreachEvidenceUrls: \[\]/);
+  assert.match(editor, /CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/);
 });

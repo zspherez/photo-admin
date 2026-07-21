@@ -23,6 +23,7 @@ import {
 } from "@/lib/integrationUtils";
 import { normalizeEmail } from "@/lib/resend";
 import { CONTACT_AUDIT_RESOLUTION_CLAIM_TTL_MS } from "@/lib/contactAuditResolutionPolicy";
+import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
 
 const SHEET_SOURCE_ID_HEADER = "photo_admin_id";
 const SHEET_SYNC_LEASE_WAIT_MS = 2 * 60 * 1_000;
@@ -1884,6 +1885,7 @@ async function syncContactsAtTarget(
           artistId: plan.artistId,
           email: plan.email,
           directOutreachNote: plan.directOutreachNote,
+          ...CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE,
           name: plan.row.name,
           role: plan.row.role,
           customPrice: plan.row.customPrice,

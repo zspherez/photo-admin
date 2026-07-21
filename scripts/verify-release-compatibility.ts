@@ -37,6 +37,7 @@ async function main(): Promise<void> {
     artistClaimProbe,
     contactResearchJobProbe,
     contactResearchCandidateProbe,
+    contactResearchDirectOutreachProbe,
     artistResearchSkipProbe,
     agentRuleSetProbe,
     edmtrainVenueProbe,
@@ -138,6 +139,7 @@ async function main(): Promise<void> {
       select: {
         claimedAgentRules: true,
         claimedAgentRulesVersion: true,
+        claimedDirectOutreachRules: true,
       },
     }),
     db.contactResearchCandidate.findMany({
@@ -148,6 +150,27 @@ async function main(): Promise<void> {
         officialSourceUrl: true,
         officialManagementLabel: true,
         officialSourceEvidence: true,
+      },
+    }),
+    db.contactResearchDirectOutreachProposal.findMany({
+      take: 1,
+      select: {
+        id: true,
+        jobId: true,
+        ruleId: true,
+        ruleVersion: true,
+        canonicalRule: true,
+        normalizedManagerName: true,
+        managerName: true,
+        managerCompany: true,
+        note: true,
+        sourceUrls: true,
+        evidenceQuotes: true,
+        status: true,
+        contactId: true,
+        reviewedAt: true,
+        createdAt: true,
+        updatedAt: true,
       },
     }),
     db.artistResearchSkip.findMany({
@@ -172,6 +195,7 @@ async function main(): Promise<void> {
       select: {
         scope: true,
         instructions: true,
+        directOutreachRules: true,
         version: true,
         createdAt: true,
         updatedAt: true,
@@ -479,6 +503,7 @@ async function main(): Promise<void> {
         [
           contactResearchJobProbe,
           contactResearchCandidateProbe,
+          contactResearchDirectOutreachProbe,
           directOutreachProvenanceProbe,
           outreachKindProbe,
           outreachDispatchIdentityConstraintProbe,
@@ -527,6 +552,7 @@ async function main(): Promise<void> {
       sheetAdoptionRequired: requireSheetAdoption,
       addedRuntimeRoleProbes: [
         "ArtistResearchSkip",
+        "ContactResearchDirectOutreachProposal",
         "Contact.agentDirectOutreachProvenance",
         "ContactAuditRequest",
         "ContactAuditRun",
