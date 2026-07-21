@@ -87,6 +87,69 @@ function safelyDecode(value: string): string {
   }
 }
 
+const PHONE_LABELS = new Set([
+  "call",
+  "cell",
+  "dial",
+  "fax",
+  "hotline",
+  "mobile",
+  "phone",
+  "sms",
+  "tel",
+  "telephone",
+  "text",
+  "whatsapp",
+]);
+
+const PHONE_LABEL_COMPOUNDS = new Set([
+  "cellnumber",
+  "mobilenumber",
+  "phonenumber",
+  "telephonenumber",
+  "whatsappnumber",
+]);
+
+function containsPhoneLabel(value: string): boolean {
+  const normalized = normalizeUnicodeDigits(value).normalize("NFKC").toLowerCase();
+  const tokens = normalized.split(/[^\p{L}]+/u).filter(Boolean);
+  const compact = tokens.join("");
+  return (
+    tokens.some((token) => PHONE_LABELS.has(token)) ||
+    PHONE_LABEL_COMPOUNDS.has(compact)
+  );
+}
+
+function normalizedHostname(value: string): string {
+  return value.toLowerCase().replace(/^www\./, "");
+}
+
+function isKnownProviderPathId(
+  url: URL,
+  segments: readonly string[],
+  index: number,
+): boolean {
+  const segment = normalizeUnicodeDigits(segments[index]);
+  if (!/^\d{7,20}$/.test(segment)) return false;
+  const host = normalizedHostname(url.hostname);
+  const previous = segments[index - 1]?.toLowerCase() ?? "";
+  if (host === "edmtrain.com" || host.endsWith(".edmtrain.com")) {
+    return /^(?:artist|artists|event|events|venue|venues)$/.test(previous);
+  }
+  if (host === "instagram.com" || host.endsWith(".instagram.com")) {
+    return (
+      (index === 0 && segments.length === 1) ||
+      /^(?:accounts|p|reel|stories)$/.test(previous)
+    );
+  }
+  return false;
+}
+
+function isSafeNumericQueryId(key: string): boolean {
+  const compact = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return /^(?:artistid|eventid|id|mediaid|releaseid|venueid)$/.test(compact);
+}
+
 export function assertAgentSafeSourceUrl(value: string, field: string): void {
   let url: URL;
   try {
@@ -94,21 +157,44 @@ export function assertAgentSafeSourceUrl(value: string, field: string): void {
   } catch {
     throw new Error(`${field} is invalid`);
   }
-  const phoneKey = /^(?:phone|tel|telephone|mobile|cell|call|sms|whatsapp)$/i;
-  for (const segment of url.pathname.split("/").filter(Boolean)) {
+  for (const label of normalizedHostname(url.hostname).split(".")) {
+    if (containsPhoneLikeNumber(safelyDecode(label))) {
+      throw new Error(`${field} cannot contain a phone number`);
+    }
+  }
+  const segments = url.pathname
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => safelyDecode(segment));
+  for (const [index, segment] of segments.entries()) {
     if (
-      containsPhoneLikeNumber(safelyDecode(segment), {
-        allowStandaloneNumericId: true,
+      (containsPhoneLabel(segment) ||
+        (index > 0 && containsPhoneLabel(segments[index - 1]))) &&
+      containsPhoneLikeNumber(segment)
+    ) {
+      throw new Error(`${field} cannot contain a phone number`);
+    }
+    if (
+      containsPhoneLikeNumber(segment, {
+        allowStandaloneNumericId: isKnownProviderPathId(
+          url,
+          segments,
+          index,
+        ),
       })
     ) {
       throw new Error(`${field} cannot contain a phone number`);
     }
   }
   for (const [key, rawValue] of url.searchParams) {
+    if (containsPhoneLabel(key)) {
+      throw new Error(`${field} cannot contain a phone number`);
+    }
     const decoded = safelyDecode(rawValue);
     if (
       containsPhoneLikeNumber(decoded, {
-        allowStandaloneNumericId: !phoneKey.test(key),
+        allowStandaloneNumericId:
+          isSafeNumericQueryId(key) && !containsPhoneLabel(decoded),
       })
     ) {
       throw new Error(`${field} cannot contain a phone number`);

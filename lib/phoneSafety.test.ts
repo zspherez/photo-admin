@@ -40,8 +40,20 @@ test("phone safety permits dates, short versions, and ordinary prose", () => {
 test("agent source URLs reject phone paths and queries but permit durable IDs", () => {
   for (const value of [
     "https://example.com/contact/%2B1-212-555-0199",
+    "https://example.com/tel/2125550199",
+    "https://example.com/phone/１２１２５５５０１９９",
+    "https://example.com/mobile/02071234567",
+    "https://example.com/call/2125550199",
+    "https://example.com/sms/2125550199",
+    "https://example.com/whatsapp/2125550199",
     "https://example.com/team?phone=2125550199",
+    "https://example.com/team?phone=",
     "https://example.com/team?q=%2B44%2020%207123%204567",
+    "https://example.com/team?q=telephone%202125550199",
+    "https://2125550199.example.com/team",
+    "https://１２１２５５５０１９９.example.com/team",
+    "https://phone-212-555-0199.example.com/team",
+    "https://example.com/artists/2125550199",
   ]) {
     assert.throws(
       () => assertAgentSafeSourceUrl(value, "source URL"),
@@ -50,7 +62,19 @@ test("agent source URLs reject phone paths and queries but permit durable IDs", 
   }
   assert.doesNotThrow(() =>
     assertAgentSafeSourceUrl(
-      "https://example.com/artists/1234567890?release=2026-07-21&id=1234567890",
+      "https://edmtrain.com/artists/1234567890?eventId=1234567890",
+      "source URL",
+    ),
+  );
+  assert.doesNotThrow(() =>
+    assertAgentSafeSourceUrl(
+      "https://instagram.com/1234567890/?id=1234567890",
+      "source URL",
+    ),
+  );
+  assert.doesNotThrow(() =>
+    assertAgentSafeSourceUrl(
+      "https://example.com/releases/2026-07-21?id=1234567890",
       "source URL",
     ),
   );

@@ -141,7 +141,7 @@ test("every agent-controlled field rejects phone numbers and safe IDs remain val
         evidence: [
           {
             sourceUrl:
-              "https://artist.example/team/1234567890?release=2026-07-21&id=1234567890",
+              "https://edmtrain.com/artists/1234567890?eventId=1234567890",
             quote:
               "On 2026-07-21, the artist is managed by Leif Fosse.",
           },
@@ -278,6 +278,7 @@ test("proposal retries are idempotent and do not reopen reviewed decisions", asy
 test("human approval preserves existing contact fields and atomically records provenance", async () => {
   const contactUpdates: Array<{ data: Record<string, unknown> }> = [];
   const proposalUpdates: Array<{ data: Record<string, unknown> }> = [];
+  const jobStatuses: string[] = [];
   const result = await approveContactResearchDirectOutreach(
     "proposal-1",
     new Date("2026-07-21T17:00:00.000Z"),
@@ -310,7 +311,12 @@ test("human approval preserves existing contact fields and atomically records pr
         },
       },
       contactResearchCandidate: { findMany: async () => [] },
-      contactResearchJob: { update: async () => ({}) },
+      contactResearchJob: {
+        update: async (value: { data: { status: string } }) => {
+          jobStatuses.push(value.data.status);
+          return {};
+        },
+      },
     }),
   );
   assert.deepEqual(result, { ok: true, contactId: "contact-1" });
@@ -326,6 +332,7 @@ test("human approval preserves existing contact fields and atomically records pr
     contactId: "contact-1",
     reviewedAt: new Date("2026-07-21T17:00:00.000Z"),
   });
+  assert.deepEqual(jobStatuses, ["review"]);
 });
 
 test("human approval creates one null-email research contact when no manager contact exists", async () => {

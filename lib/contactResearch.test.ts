@@ -33,6 +33,7 @@ import {
   isOfficialManagementAutoApprovalEligible,
   isContactResearchApprovalEffective,
   refreshContactResearchQueue,
+  retryAllReviewContactResearchJobs,
   retryContactResearchJob,
   skipContactResearchArtist,
   skipContactResearchArtistByArtistId,
@@ -46,6 +47,11 @@ function runWithTransaction(
   tx: unknown
 ): ContactResearchTransactionRunner {
   return async (work) => work(tx as Prisma.TransactionClient);
+}
+
+function sqlText(value: unknown): string {
+  const strings = (value as { strings?: readonly string[] }).strings;
+  return strings ? strings.join("?") : String(value);
 }
 
 interface CandidateResolutionState {
@@ -690,6 +696,78 @@ test("direct exhausted retry supersedes obsolete approval history", async () => 
 
   assert.equal(retried, true);
   assert.equal(state.candidateStatus, "superseded");
+});
+
+test("pending direct outreach blocks per-job and bulk review requeue until reviewed", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  for (const proposalStatus of ["pending", "approved", "rejected"] as const) {
+    const runTransaction = runWithTransaction({
+      contactResearchCandidate: { findMany: async () => [] },
+      $executeRaw: async (query: unknown) => {
+        const source = sqlText(query);
+        assert.match(
+          source,
+          /ContactResearchDirectOutreachProposal[\s\S]*direct_outreach\."status" = 'pending'/,
+        );
+        return proposalStatus === "pending" ? 0 : 1;
+      },
+    });
+    assert.equal(
+      await retryContactResearchJob("job-1", now, runTransaction),
+      proposalStatus !== "pending",
+    );
+    assert.equal(
+      await retryAllReviewContactResearchJobs(now, runTransaction),
+      proposalStatus === "pending" ? 0 : 1,
+    );
+  }
+});
+
+test("pending direct outreach cannot be reclaimed, while reviewed proposals can", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  for (const proposalStatus of ["pending", "approved", "rejected"] as const) {
+    const claims = await claimContactResearchJobs(
+      1,
+      now,
+      runWithTransaction({
+        agentRuleSet: { findUnique: async () => null },
+        $queryRaw: async (query: unknown) => {
+          const source = sqlText(query);
+          assert.match(
+            source,
+            /ContactResearchDirectOutreachProposal[\s\S]*direct_outreach\."status" = 'pending'/,
+          );
+          return proposalStatus === "pending" ? [] : [{ id: "job-1" }];
+        },
+        contactResearchCandidate: { findMany: async () => [] },
+        contactResearchJob: {
+          update: async () => ({}),
+          findMany: async () => [
+            {
+              id: "job-1",
+              attemptCount: 1,
+              priority: 100,
+              claimedAgentRules: "",
+              claimedAgentRulesVersion: 0,
+              claimedDirectOutreachRules: [],
+              userNotes: null,
+              artist: {
+                id: "artist-1",
+                name: "Example Artist",
+                spotifyId: null,
+                edmtrainId: null,
+                genres: null,
+                popularity: 50,
+                contacts: [],
+                shows: [],
+              },
+            },
+          ],
+        },
+      }),
+    );
+    assert.equal(claims.length, proposalStatus === "pending" ? 0 : 1);
+  }
 });
 
 test("claim observes a concurrent audit quarantine atomically", async () => {
@@ -3554,11 +3632,11 @@ test("claims require current eligibility and unexpired ownership", () => {
   );
   assert.match(
     source,
-    /retryAllExhaustedContactResearchJobs[\s\S]*retryContactResearchJobsByStatus\("exhausted"\)/
+    /retryAllExhaustedContactResearchJobs[\s\S]*retryContactResearchJobsByStatus\("exhausted", now, runTransaction\)/
   );
   assert.match(
     source,
-    /retryAllReviewContactResearchJobs[\s\S]*retryContactResearchJobsByStatus\("review"\)/
+    /retryAllReviewContactResearchJobs[\s\S]*retryContactResearchJobsByStatus\("review", now, runTransaction\)/
   );
   assert.match(
     source,
@@ -3567,5 +3645,9 @@ test("claims require current eligibility and unexpired ownership", () => {
   assert.match(
     source,
     /retryEligibleContactResearchJobs[\s\S]*ArtistResearchSkip[\s\S]*research_skip\."clearedAt" IS NULL/
+  );
+  assert.match(
+    source,
+    /retryEligibleContactResearchJobs[\s\S]*ContactResearchDirectOutreachProposal[\s\S]*direct_outreach\."status" = 'pending'/,
   );
 });

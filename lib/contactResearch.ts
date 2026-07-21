@@ -3343,12 +3343,14 @@ export async function retryContactResearchJob(
 
 async function retryContactResearchJobsByStatus(
   status: "exhausted" | "review",
-  now: Date = new Date()
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work)
 ): Promise<number> {
   return retryEligibleContactResearchJobs(
     Prisma.sql`job."status" = ${status}`,
     now,
-    (work) => withSerializableRetry(work)
+    runTransaction
   );
 }
 
@@ -3385,6 +3387,12 @@ async function retryEligibleContactResearchJobs(
         FROM "ArtistResearchSkip" research_skip
         WHERE research_skip."artistId" = job."artistId"
           AND research_skip."clearedAt" IS NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "ContactResearchDirectOutreachProposal" direct_outreach
+        WHERE direct_outreach."jobId" = job."id"
+          AND direct_outreach."status" = 'pending'
       )
       AND NOT EXISTS (
         SELECT 1
@@ -3428,10 +3436,16 @@ async function retryEligibleContactResearchJobs(
   });
 }
 
-export function retryAllExhaustedContactResearchJobs(): Promise<number> {
-  return retryContactResearchJobsByStatus("exhausted");
+export function retryAllExhaustedContactResearchJobs(
+  now: Date = new Date(),
+  runTransaction?: ContactResearchTransactionRunner
+): Promise<number> {
+  return retryContactResearchJobsByStatus("exhausted", now, runTransaction);
 }
 
-export function retryAllReviewContactResearchJobs(): Promise<number> {
-  return retryContactResearchJobsByStatus("review");
+export function retryAllReviewContactResearchJobs(
+  now: Date = new Date(),
+  runTransaction?: ContactResearchTransactionRunner
+): Promise<number> {
+  return retryContactResearchJobsByStatus("review", now, runTransaction);
 }

@@ -135,7 +135,11 @@ test("status count cards are accessible links with a visible active state", () =
 test("review and exhausted jobs can be requeued", () => {
   assert.match(
     source,
-    /job\.status === "exhausted" \|\|[\s\S]*job\.status === "review"[\s\S]*!hasApprovalHistory/
+    /job\.status === "exhausted" \|\|[\s\S]*job\.status === "review"[\s\S]*pendingDirectOutreach\.length === 0[\s\S]*pendingCandidates\.length === 0[\s\S]*!hasApprovalHistory/
+  );
+  assert.match(
+    source,
+    /hasReviewedDirectOutreach[\s\S]*approvedCandidateCount === 0/,
   );
   assert.match(source, />\s*Requeue research\s*</);
 });
