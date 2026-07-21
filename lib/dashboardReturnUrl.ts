@@ -14,6 +14,10 @@ import {
   parseFestivalListView,
   type FestivalListView,
 } from "@/lib/festivalView";
+import {
+  buildRecommendationHref,
+  parseRecommendationQuery,
+} from "@/lib/trajectoryRecommendationQuery";
 
 const DASHBOARD_ORIGIN = "https://dashboard.local";
 const FESTIVAL_PATH = /^\/festivals\/([A-Za-z0-9_-]+)$/;
@@ -148,6 +152,21 @@ function contactsReturnPath(url: URL): string {
   return query ? `/contacts?${query}` : "/contacts";
 }
 
+function recommendationsReturnPath(url: URL): string {
+  const values: Record<string, string> = {};
+  for (const key of ["tab", "workflow", "date"]) {
+    const value = url.searchParams.get(key);
+    if (value !== null) values[key] = value;
+  }
+  const path = buildRecommendationHref(parseRecommendationQuery(values));
+  const returnTo = url.searchParams.get("returnTo");
+  if (!returnTo) return path;
+  const destination = dashboardReturnPath(returnTo);
+  const recommendationUrl = new URL(path, DASHBOARD_ORIGIN);
+  recommendationUrl.searchParams.set("returnTo", destination);
+  return `${recommendationUrl.pathname}${recommendationUrl.search}`;
+}
+
 function nestedWorkflowReturnPath(value: unknown): string {
   const nested = parsedLocalUrl(value);
   if (
@@ -165,6 +184,9 @@ export function workflowReturnPath(value: unknown): string {
   if (!url) return "/dashboard";
   if (url.pathname === "/dashboard") return dashboardReturnPath(value);
   if (url.pathname === "/contacts") return contactsReturnPath(url);
+  if (url.pathname === "/recommendations") {
+    return recommendationsReturnPath(url);
+  }
   if (url.pathname === "/outreach") return outreachReturnPath(url);
   if (url.pathname === "/festivals") {
     return festivalListPath(

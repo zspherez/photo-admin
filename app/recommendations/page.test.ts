@@ -31,16 +31,42 @@ test("recommendations UI carries every required tab, queue, and date band", () =
   }
 });
 
-test("recommendations are read-only and expose no mutation or send controls", () => {
+test("recommendations reuse explicit authenticated workflow controls without auto outreach", () => {
   const page = source("app/recommendations/page.tsx");
   const client = source("app/recommendations/recommendations-client.tsx");
+  const actions = source("app/dashboard/actions.ts");
+  const send = source("lib/sendOutreach.ts");
   const combined = `${page}\n${client}`;
-  assert.doesNotMatch(
-    combined,
-    /sendNowAction|setInterestedAction|dismissShowAction|restoreShowAction|markSentAction|unmarkSentAction|sendFollowUpAction|cancelScheduledAction|SendButton|FollowUpButton/,
-  );
-  assert.doesNotMatch(combined, /<form|action=\{/);
-  assert.doesNotMatch(combined, /from ["']\.\/actions["']/);
+  for (const control of [
+    "sendNowAction",
+    "setInterestedAction",
+    "dismissShowAction",
+    "restoreShowAction",
+    "markSentAction",
+    "unmarkSentAction",
+    "sendFollowUpAction",
+    "cancelScheduledAction",
+    "SendButton",
+    "FollowUpButton",
+    "Customize",
+    "Add contact",
+    "Research contact",
+  ]) {
+    assert.match(combined, new RegExp(control));
+  }
+  for (const field of [
+    "recommendationId",
+    "runId",
+    "showId",
+    "artistId",
+    "trajectoryActionId",
+  ]) {
+    assert.match(client, new RegExp(`name(?::|=)["{ ]*"?${field}`));
+  }
+  assert.match(actions, /requireServerActionAuth/);
+  assert.match(actions, /requireActionableTrajectoryRecommendation/);
+  assert.match(send, /trajectoryContext\?\.recommendationId \?\? null/);
+  assert.doesNotMatch(client, /void sendNowAction\(|sendNowAction\(\)/);
 });
 
 test("header always states provisional status and never presents a forecast field", () => {
@@ -88,7 +114,10 @@ test("recommendation batches have accessible infinite loading and duplicate guar
 
 test("artist workflow links preserve the active recommendation filters", () => {
   const client = source("app/recommendations/recommendations-client.tsx");
-  assert.match(client, /returnTo=\{buildRecommendationHref\(query\)\}/);
+  assert.match(
+    client,
+    /returnTo=\{buildRecommendationHref\([\s\S]*dashboardReturnTo/,
+  );
   assert.doesNotMatch(
     client,
     /workflow: "all"[\s\S]*dateBand: "all"/,

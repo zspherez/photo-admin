@@ -81,6 +81,7 @@ export function parseRecommendationQuery(
 export function buildRecommendationHref(
   query: RecommendationQuery,
   pathname = "/recommendations",
+  returnTo?: string | null,
 ): string {
   const params = new URLSearchParams();
   if (query.tab !== DEFAULT_RECOMMENDATION_QUERY.tab) {
@@ -92,6 +93,7 @@ export function buildRecommendationHref(
   if (query.dateBand !== DEFAULT_RECOMMENDATION_QUERY.dateBand) {
     params.set("date", query.dateBand);
   }
+  if (returnTo) params.set("returnTo", returnTo);
   const queryString = params.toString();
   return queryString ? `${pathname}?${queryString}` : pathname;
 }

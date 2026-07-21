@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { cookies } from "next/headers";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody } from "@/components/ui/card";
@@ -7,6 +8,7 @@ import {
   getAuthConfiguration,
 } from "@/lib/auth";
 import { dashboardSessionIdentity } from "@/lib/dashboardSession";
+import { dashboardReturnPath } from "@/lib/dashboardReturnUrl";
 import {
   encodeRecommendationCursor,
 } from "@/lib/trajectoryRecommendationCursor";
@@ -21,6 +23,9 @@ import {
   type RecommendationRun,
 } from "@/lib/trajectoryRecommendations";
 import { RecommendationsClient } from "./recommendations-client";
+import { isWeekendET } from "@/lib/schedule";
+import { firstSearchParam } from "@/lib/searchParams";
+import { getTestOverride } from "@/lib/resend";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Trajectory recommendations" };
@@ -182,12 +187,38 @@ export default async function RecommendationsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const query = parseRecommendationQuery(await searchParams);
+  const params = await searchParams;
+  const query = parseRecommendationQuery(params);
+  const rawReturnTo = firstSearchParam(params.returnTo);
+  const dashboardReturnTo = rawReturnTo
+    ? dashboardReturnPath(rawReturnTo)
+    : null;
   const now = new Date();
+  const resultMessage =
+    firstSearchParam(params.error) ??
+    (firstSearchParam(params.sent)
+      ? "Email sent."
+      : firstSearchParam(params.scheduled)
+        ? "Email scheduled."
+        : firstSearchParam(params.cancelled)
+          ? "Scheduled outreach cancelled."
+          : firstSearchParam(params.followup_sent)
+            ? "Follow-up sent."
+            : firstSearchParam(params.followup_scheduled)
+              ? "Follow-up scheduled."
+              : firstSearchParam(params.marked)
+                ? "Marked as sent."
+                : firstSearchParam(params.unmarked)
+                  ? "Manual mark removed."
+                  : null);
+  const resultIsError = Boolean(firstSearchParam(params.error));
   const configuration = getAuthConfiguration();
   const cookieValue = (await cookies()).get(SESSION_COOKIE)?.value;
   const ownerKey = dashboardSessionIdentity(cookieValue, configuration).ownerKey;
-  const result = await getTrajectoryRecommendationPage(query, { now });
+  const [result, testOverride] = await Promise.all([
+    getTrajectoryRecommendationPage(query, { now }),
+    getTestOverride(),
+  ]);
   const nextCursor =
     result.run && result.nextOffset !== null
       ? encodeRecommendationCursor(
@@ -201,14 +232,40 @@ export default async function RecommendationsPage({
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
       <div className="mb-6">
+        {dashboardReturnTo && (
+          <Link
+            href={dashboardReturnTo}
+            className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+          >
+            ← Back to matched shows
+          </Link>
+        )}
         <h1 className="text-2xl font-semibold tracking-tight">
           Trajectory recommendations
         </h1>
         <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          Read-only model evidence joined to current photo-admin show, contact,
-          and outreach state.
+          Model evidence joined to current photo-admin workflow state. Outreach
+          changes happen only when you choose an action below.
         </p>
       </div>
+
+      {resultMessage && (
+        <div
+          className={`mb-4 rounded-lg border px-4 py-2 text-sm ${
+            resultIsError
+              ? "border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+              : "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+          }`}
+        >
+          {resultIsError ? `Action failed: ${resultMessage}` : resultMessage}
+        </div>
+      )}
+      {testOverride && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          Test override active — all email actions send to{" "}
+          <b>{testOverride}</b>.
+        </div>
+      )}
 
       <RunHeader availability={result.availability} run={result.run} />
 
@@ -219,6 +276,8 @@ export default async function RecommendationsPage({
           initialNextCursor={nextCursor}
           total={result.total}
           query={query}
+          isWeekend={isWeekendET(now)}
+          dashboardReturnTo={dashboardReturnTo}
         />
       )}
     </main>

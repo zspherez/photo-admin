@@ -33,6 +33,10 @@ import {
   type CustomizeRecipientOption,
 } from "./customize-form";
 import { sendCustom } from "./actions";
+import {
+  requireActionableTrajectoryRecommendation,
+  type TrajectoryActionContext,
+} from "@/lib/trajectoryActiveRun";
 
 export const dynamic = "force-dynamic";
 
@@ -84,13 +88,48 @@ export default async function CustomizePage({
   searchParams,
 }: {
   params: Promise<{ showId: string; contactId: string }>;
-  searchParams: Promise<{ returnTo?: SearchParamValue }>;
+  searchParams: Promise<{
+    returnTo?: SearchParamValue;
+    recommendationId?: SearchParamValue;
+    runId?: SearchParamValue;
+    artistId?: SearchParamValue;
+  }>;
 }) {
   const { showId, contactId } = await params;
   const search = await searchParams;
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
   const [show, contact] = await getCustomizeContext(showId, contactId);
   if (!show || !contact) return notFound();
+  const trajectoryValues = {
+    recommendationId: firstSearchParam(search.recommendationId) ?? "",
+    runId: firstSearchParam(search.runId) ?? "",
+    artistId: firstSearchParam(search.artistId) ?? "",
+  };
+  const hasTrajectoryContext = Object.values(trajectoryValues).some(Boolean);
+  const trajectoryContext: TrajectoryActionContext | null =
+    hasTrajectoryContext &&
+    trajectoryValues.recommendationId &&
+    trajectoryValues.runId &&
+    trajectoryValues.artistId
+      ? { ...trajectoryValues, showId }
+      : null;
+  let trajectoryError: string | null = null;
+  if (hasTrajectoryContext && !trajectoryContext) {
+    trajectoryError = "Recommendation attribution is incomplete.";
+  } else if (trajectoryContext) {
+    if (trajectoryContext.artistId !== contact.artistId) {
+      trajectoryError = "Recommendation does not match this artist.";
+    } else {
+      try {
+        await requireActionableTrajectoryRecommendation(trajectoryContext);
+      } catch (error) {
+        trajectoryError =
+          error instanceof Error
+            ? error.message
+            : "Recommendation is no longer actionable.";
+      }
+    }
+  }
   const template = await ensureOriginalTemplateForShow(show);
 
   const artistContacts = await db.contact.findMany({
@@ -274,23 +313,31 @@ export default async function CustomizePage({
       )}
       <Card className="mt-6">
         <CardBody>
-          <CustomizeForm
-            contextContactId={contactId}
-            returnTo={safeReturnTo}
-            recipientOptions={recipientOptions}
-            weekend={isWeekendET()}
-            queueLabel={formatNextDispatchActionLabel(
-              getNextNormalOutreachDispatch(),
-            )}
-            action={sendCustom.bind(null, {
-              showId,
-              contextContactId: contactId,
-              contextArtistId: contact.artistId,
-              returnTo: safeReturnTo,
-              retryContactId:
-                routeSendability?.mode === "retry" ? contactId : null,
-            })}
-          />
+          {trajectoryError ? (
+            <p className="text-sm text-amber-800 dark:text-amber-200">
+              {trajectoryError} Return to recommendations and refresh before
+              sending.
+            </p>
+          ) : (
+            <CustomizeForm
+              contextContactId={contactId}
+              returnTo={safeReturnTo}
+              recipientOptions={recipientOptions}
+              weekend={isWeekendET()}
+              queueLabel={formatNextDispatchActionLabel(
+                getNextNormalOutreachDispatch(),
+              )}
+              action={sendCustom.bind(null, {
+                showId,
+                contextContactId: contactId,
+                contextArtistId: contact.artistId,
+                returnTo: safeReturnTo,
+                retryContactId:
+                  routeSendability?.mode === "retry" ? contactId : null,
+                trajectoryContext,
+              })}
+            />
+          )}
         </CardBody>
       </Card>
     </main>

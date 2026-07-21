@@ -27,6 +27,7 @@ import {
   isWeekendET,
 } from "@/lib/schedule";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
+import type { TrajectoryActionContext } from "@/lib/trajectoryActiveRun";
 
 export interface CustomizeActionState {
   error: string | null;
@@ -40,6 +41,7 @@ export interface CustomizeActionContext {
   contextArtistId: string;
   returnTo: string;
   retryContactId: string | null;
+  trajectoryContext: TrajectoryActionContext | null;
 }
 
 function actionError(
@@ -196,6 +198,7 @@ export async function sendCustom(
     htmlOverride,
     singleRecipient: true,
     expectedRecipientIdentity,
+    trajectoryContext: context.trajectoryContext ?? undefined,
   };
   const result =
     intent === "queue"

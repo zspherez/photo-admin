@@ -68,6 +68,11 @@ import {
   parseDashboardRestoreState,
   type DashboardRestoreState,
 } from "@/lib/dashboardRestore";
+import type { DashboardRecommendationBadge } from "@/lib/dashboardTrajectoryRecommendations";
+import {
+  buildRecommendationHref,
+  DEFAULT_RECOMMENDATION_QUERY,
+} from "@/lib/trajectoryRecommendationQuery";
 import {
   sendNowAction,
   dismissShowAction,
@@ -88,6 +93,7 @@ interface Props {
   isWeekend: boolean;
   sendabilityRows: OutreachSendability[];
   followUpEligibilityRows: FollowUpEligibility[];
+  recommendationBadges: DashboardRecommendationBadge[];
 }
 
 interface OutreachState {
@@ -164,6 +170,7 @@ export function DashboardClient({
   isWeekend,
   sendabilityRows: initialSendabilityRows,
   followUpEligibilityRows: initialFollowUpEligibilityRows,
+  recommendationBadges: initialRecommendationBadges,
 }: Props) {
   const { modeCounts } = data;
   const [shows, setShows] = useState(data.shows);
@@ -173,6 +180,9 @@ export function DashboardClient({
   );
   const [followUpEligibilityRows, setFollowUpEligibilityRows] = useState(
     initialFollowUpEligibilityRows
+  );
+  const [recommendationBadges, setRecommendationBadges] = useState(
+    initialRecommendationBadges
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -196,6 +206,16 @@ export function DashboardClient({
   const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filters = query.filters;
   const returnTo = buildDashboardHref(query);
+  const recommendationBadgeByTarget = useMemo(
+    () =>
+      new Map(
+        recommendationBadges.map((badge) => [
+          `${badge.showId}\u0000${badge.artistId}`,
+          badge,
+        ]),
+      ),
+    [recommendationBadges],
+  );
   const storageKey = useMemo(
     () => dashboardRestoreStorageKey(persistenceScope, returnTo),
     [persistenceScope, returnTo]
@@ -469,6 +489,7 @@ export function DashboardClient({
       setNextCursor(data.nextCursor);
       setSendabilityRows(initialSendabilityRows);
       setFollowUpEligibilityRows(initialFollowUpEligibilityRows);
+      setRecommendationBadges(initialRecommendationBadges);
       setLoading(false);
       setError(null);
       setAnnouncement("");
@@ -486,6 +507,7 @@ export function DashboardClient({
     data.shows,
     data.snapshotId,
     initialFollowUpEligibilityRows,
+    initialRecommendationBadges,
     initialSendabilityRows,
     readRestoreState,
   ]);
@@ -571,6 +593,13 @@ export function DashboardClient({
           current,
           payload.followUpEligibilityRows,
           (row) => row.parentOutreachId
+        ).items
+      );
+      setRecommendationBadges((current) =>
+        mergeUniqueByKey(
+          current,
+          payload.recommendationBadges,
+          (row) => `${row.showId}\u0000${row.artistId}`,
         ).items
       );
       if (announce) {
@@ -1107,6 +1136,24 @@ export function DashboardClient({
                               : "Scheduled",
                         }
                       : null;
+                  const recommendationBadge =
+                    recommendationBadgeByTarget.get(
+                      `${show.id}\u0000${artist.id}`,
+                    );
+                  const recommendationHref = recommendationBadge
+                    ? `${buildRecommendationHref(
+                        {
+                          ...DEFAULT_RECOMMENDATION_QUERY,
+                          tab: recommendationBadge.isSuggested
+                            ? "suggested"
+                            : recommendationBadge.arm === "momentum"
+                              ? "momentum"
+                              : recommendationBadge.arm,
+                        },
+                        "/recommendations",
+                        returnTo,
+                      )}#recommendation-${recommendationBadge.recommendationId}`
+                    : null;
 
                   return (
                     <div
@@ -1128,6 +1175,14 @@ export function DashboardClient({
                               artist.topSignal.rank
                             )}
                           </Badge>
+                        )}
+                        {recommendationHref && (
+                          <Link
+                            href={recommendationHref}
+                            className="inline-flex items-center rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700 ring-1 ring-violet-200 transition hover:bg-violet-100 dark:bg-violet-950/40 dark:text-violet-300 dark:ring-violet-900 dark:hover:bg-violet-950"
+                          >
+                            Model recommendation
+                          </Link>
                         )}
                         {!artist.topSignal && artist.popularity != null && (
                           <Badge

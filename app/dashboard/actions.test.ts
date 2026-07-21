@@ -105,8 +105,14 @@ test("follow-up action derives identity from the parent and preserves workflow r
   assert.match(followUp, /formData\.get\("parentOutreachId"\)/);
   assert.doesNotMatch(followUp, /formData\.get\("(showId|contactId)"\)/);
   assert.match(followUp, /isWeekendET\(\)/);
-  assert.match(followUp, /scheduleFollowUp\(parentOutreachId/);
-  assert.match(followUp, /sendFollowUp\(parentOutreachId\)/);
+  assert.match(
+    followUp,
+    /scheduleFollowUp\(\s*parentOutreachId,[\s\S]*recommendation \?\? undefined/,
+  );
+  assert.match(
+    followUp,
+    /sendFollowUp\(parentOutreachId, recommendation \?\? undefined\)/,
+  );
   assert.match(followUp, /refreshWorkflowViews\(returnTo/);
   assert.ok(
     followUp.indexOf("refreshWorkflowViews(returnTo") <
