@@ -156,14 +156,24 @@ export function isContactResearchApprovalEffective(
 
 async function supersedeObsoleteContactResearchApprovals(
   tx: Prisma.TransactionClient,
-  artistIds?: readonly string[]
+  scope: {
+    artistIds?: readonly string[];
+    jobIds?: readonly string[];
+  } = {}
 ): Promise<void> {
-  if (artistIds?.length === 0) return;
+  if (scope.artistIds?.length === 0 || scope.jobIds?.length === 0) return;
   const approvals = await tx.contactResearchCandidate.findMany({
     where: {
       status: "approved",
-      ...(artistIds
-        ? { job: { artistId: { in: [...artistIds] } } }
+      ...(scope.artistIds || scope.jobIds
+        ? {
+            job: {
+              ...(scope.artistIds
+                ? { artistId: { in: [...scope.artistIds] } }
+                : {}),
+              ...(scope.jobIds ? { id: { in: [...scope.jobIds] } } : {}),
+            },
+          }
         : {}),
     },
     select: {
@@ -1388,7 +1398,7 @@ export async function enqueueFestivalManagerResearch(
     if (!festival) throw new Error("Festival is inactive or unavailable");
 
     const artistIds = festival.artists.map((row) => row.artistId);
-    await supersedeObsoleteContactResearchApprovals(tx, artistIds);
+    await supersedeObsoleteContactResearchApprovals(tx, { artistIds });
     const existing =
       artistIds.length === 0
         ? []
@@ -1505,7 +1515,9 @@ function parseGenres(value: string | null): string[] {
 
 export async function claimContactResearchJobs(
   limit: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work)
 ) {
   const claimLimit = parseContactResearchClaimLimit(limit);
   const claimExpiresAt = new Date(now.getTime() + CONTACT_RESEARCH_CLAIM_TTL_MS);
@@ -1513,7 +1525,7 @@ export async function claimContactResearchJobs(
   const end = parseDateOnly(
     addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
   );
-  return db.$transaction(
+  return runTransaction(
     async (tx) => {
       const globalAgentRules =
         await readGlobalAgentRulesInTransaction(tx);
@@ -1581,6 +1593,10 @@ export async function claimContactResearchJobs(
         LIMIT ${claimLimit}
         FOR UPDATE SKIP LOCKED
       `);
+      if (selected.length === 0) return [];
+      await supersedeObsoleteContactResearchApprovals(tx, {
+        jobIds: selected.map((row) => row.id),
+      });
       const tokenById = new Map<string, string>();
       for (const row of selected) {
         const claimToken = randomUUID();
@@ -1598,8 +1614,6 @@ export async function claimContactResearchJobs(
           },
         });
       }
-      if (selected.length === 0) return [];
-
       const jobs = await tx.contactResearchJob.findMany({
         where: { id: { in: selected.map((row) => row.id) } },
         include: {
@@ -1681,8 +1695,7 @@ export async function claimContactResearchJobs(
           },
         ];
       });
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }
+    }
   );
 }
 
@@ -1795,6 +1808,9 @@ export async function submitContactResearchResult(
       };
     }
 
+    await supersedeObsoleteContactResearchApprovals(tx, {
+      jobIds: [jobId],
+    });
     const autoApproveCandidates: Array<{
       id: string;
       input: ContactResearchCandidateInput;
@@ -1813,7 +1829,24 @@ export async function submitContactResearchResult(
           },
           select: { status: true },
         });
-      const preserveApproval = existingCandidate?.status === "approved";
+      const approvalContact =
+        existingCandidate?.status === "approved"
+          ? await tx.contact.findUnique({
+              where: {
+                artistId_email: {
+                  artistId: job.artistId,
+                  email: candidate.normalizedEmail,
+                },
+              },
+            })
+          : null;
+      const preserveApproval =
+        existingCandidate?.status === "approved" &&
+        approvalContact !== null &&
+        isContactResearchApprovalEffective(
+          candidate.normalizedEmail,
+          [approvalContact]
+        );
       const storedCandidate = await tx.contactResearchCandidate.upsert({
         where: {
           jobId_normalizedEmail: {
@@ -1837,6 +1870,7 @@ export async function submitContactResearchResult(
           officialSourceUrl: candidate.officialSourceUrl,
           officialManagementLabel: candidate.officialManagementLabel,
           officialSourceEvidence: candidate.officialSourceEvidence,
+          // Rediscovery starts a fresh review after supersession.
           ...(!preserveApproval
             ? { status: "pending", reviewedAt: null }
             : {}),
@@ -2735,13 +2769,17 @@ export async function unskipContactResearchArtistByArtistId(
 
 export async function retryContactResearchJob(
   jobId: string,
-  now: Date = new Date()
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work)
 ): Promise<boolean> {
   return (
     (await retryEligibleContactResearchJobs(
       Prisma.sql`job."id" = ${jobId}
         AND job."status" IN ('exhausted', 'review')`,
-      now
+      now,
+      runTransaction,
+      [jobId]
     )) === 1
   );
 }
@@ -2752,24 +2790,32 @@ async function retryContactResearchJobsByStatus(
 ): Promise<number> {
   return retryEligibleContactResearchJobs(
     Prisma.sql`job."status" = ${status}`,
-    now
+    now,
+    (work) => withSerializableRetry(work)
   );
 }
 
 async function retryEligibleContactResearchJobs(
   statusWhere: Prisma.Sql,
-  now: Date
+  now: Date,
+  runTransaction: ContactResearchTransactionRunner,
+  jobIds?: readonly string[]
 ): Promise<number> {
   const today = easternTodayStoredDate(now);
   const end = parseDateOnly(
     addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
   );
-  return db.$executeRaw(Prisma.sql`
-    UPDATE "ContactResearchJob" AS job
-    SET
-      "status" = 'pending',
-      "updatedAt" = ${now}
-    WHERE ${statusWhere}
+  return runTransaction(async (tx) => {
+    await supersedeObsoleteContactResearchApprovals(
+      tx,
+      jobIds ? { jobIds } : {}
+    );
+    return tx.$executeRaw(Prisma.sql`
+      UPDATE "ContactResearchJob" AS job
+      SET
+        "status" = 'pending',
+        "updatedAt" = ${now}
+      WHERE ${statusWhere}
       AND NOT EXISTS (
         SELECT 1
         FROM "Contact" contact
@@ -2821,7 +2867,8 @@ async function retryEligibleContactResearchJobs(
             OR job."requestedShowId" = show."id"
           )
       )
-  `);
+    `);
+  });
 }
 
 export function retryAllExhaustedContactResearchJobs(): Promise<number> {

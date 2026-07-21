@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { festivalLeadTimeWhere } from "./festivalEligibility";
 import {
   type ContactResearchTransactionRunner,
+  claimContactResearchJobs,
   contactResearchPriority,
   CONTACT_RESEARCH_OIDC_AUDIENCE,
   CONTACT_RESEARCH_WORKFLOW_REF,
@@ -32,6 +33,7 @@ import {
   isOfficialManagementAutoApprovalEligible,
   isContactResearchApprovalEffective,
   refreshContactResearchQueue,
+  retryContactResearchJob,
   skipContactResearchArtist,
   skipContactResearchArtistByArtistId,
   submitContactResearchResult,
@@ -146,16 +148,26 @@ function createCandidateResolutionHarness(
           where: {
             id?: { in: string[] };
             jobId?: string;
-            status?: { in: string[] };
+            status?: string | { in: string[] };
+            job?: { id?: { in: string[] } };
           };
         };
         return [...candidates.values()]
-          .filter((candidate) =>
-            input.where.id?.in
-              ? input.where.id.in.includes(candidate.id)
-              : candidate.jobId === input.where.jobId &&
-                input.where.status?.in.includes(candidate.status)
-          )
+          .filter((candidate) => {
+            const status = input.where.status;
+            return (
+              (!input.where.id?.in ||
+                input.where.id.in.includes(candidate.id)) &&
+              (!input.where.jobId ||
+                candidate.jobId === input.where.jobId) &&
+              (!input.where.job?.id?.in ||
+                input.where.job.id.in.includes(candidate.jobId)) &&
+              (!status ||
+                (typeof status === "string"
+                  ? candidate.status === status
+                  : status.in.includes(candidate.status)))
+            );
+          })
           .map((candidate) => ({
             ...candidate,
             job: {
@@ -286,6 +298,7 @@ function createCandidateResolutionHarness(
         [...contacts.values()]
           .filter((contact) => contact.state === "active")
           .map((contact) => ({
+            artistId: job.artistId,
             email: contact.email,
             state: contact.state,
           })),
@@ -366,6 +379,18 @@ function officialCandidate(email: string) {
       managementLabel: "management",
       evidence: `Official SoundCloud: management ${email}`,
     },
+  };
+}
+
+function manualCandidate(email: string) {
+  return {
+    email,
+    name: "Possible Manager",
+    role: "management",
+    sourceUrls: ["https://agency.example/team"],
+    evidence: "Agency roster associates this manager with the artist.",
+    confidence: "medium",
+    needsApproval: true,
   };
 }
 
@@ -496,6 +521,100 @@ async function runApprovalRefreshScenario(input: {
   return { result, state };
 }
 
+async function runDirectClaimScenario(input: {
+  contactState: "active" | "quarantined";
+  beforeTransaction?: () => Promise<void>;
+}) {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const state = {
+    contactState: input.contactState,
+    candidateStatus: "approved",
+    jobStatus: "pending",
+    attemptCount: 0,
+  };
+  const claims = await claimContactResearchJobs(
+    1,
+    now,
+    async (work) => {
+      await input.beforeTransaction?.();
+      state.contactState = input.contactState;
+      return work({
+        agentRuleSet: { findUnique: async () => null },
+        $queryRaw: async () =>
+          state.contactState === "active" ? [] : [{ id: "job-1" }],
+        contactResearchCandidate: {
+          findMany: async () =>
+            state.candidateStatus === "approved"
+              ? [
+                  {
+                    id: "candidate-1",
+                    normalizedEmail: "manager@example.com",
+                    job: { artistId: "artist-1" },
+                  },
+                ]
+              : [],
+          updateMany: async (value: unknown) => {
+            state.candidateStatus = (
+              value as { data: { status: string } }
+            ).data.status;
+            return { count: 1 };
+          },
+        },
+        contact: {
+          findMany: async () =>
+            state.contactState === "active"
+              ? [
+                  {
+                    artistId: "artist-1",
+                    email: "manager@example.com",
+                    state: "active",
+                  },
+                ]
+              : [],
+        },
+        contactResearchJob: {
+          update: async (value: unknown) => {
+            const update = value as {
+              data: {
+                status: string;
+                claimToken: string;
+                claimExpiresAt: Date;
+                attemptCount: { increment: number };
+                claimedAgentRules: string;
+                claimedAgentRulesVersion: number;
+              };
+            };
+            state.jobStatus = update.data.status;
+            state.attemptCount += update.data.attemptCount.increment;
+            return {};
+          },
+          findMany: async () => [
+            {
+              id: "job-1",
+              attemptCount: state.attemptCount,
+              priority: 100,
+              claimedAgentRules: "",
+              claimedAgentRulesVersion: 0,
+              userNotes: null,
+              artist: {
+                id: "artist-1",
+                name: "Example Artist",
+                spotifyId: null,
+                edmtrainId: null,
+                genres: null,
+                popularity: 50,
+                contacts: [],
+                shows: [],
+              },
+            },
+          ],
+        },
+      } as unknown as Prisma.TransactionClient);
+    }
+  );
+  return { claims, state };
+}
+
 test("effective approvals require an active same-email artist contact", () => {
   assert.equal(
     isContactResearchApprovalEffective("manager@example.com", [
@@ -517,6 +636,91 @@ test("effective approvals require an active same-email artist contact", () => {
     ]),
     false
   );
+});
+
+test("direct claim supersedes an ineffective approval without refresh", async () => {
+  const { claims, state } = await runDirectClaimScenario({
+    contactState: "quarantined",
+  });
+
+  assert.equal(claims.length, 1);
+  assert.equal(state.candidateStatus, "superseded");
+  assert.equal(state.jobStatus, "claimed");
+});
+
+test("direct claim preserves effective approvals and does not claim", async () => {
+  const { claims, state } = await runDirectClaimScenario({
+    contactState: "active",
+  });
+
+  assert.deepEqual(claims, []);
+  assert.equal(state.candidateStatus, "approved");
+  assert.equal(state.jobStatus, "pending");
+});
+
+test("direct exhausted retry supersedes obsolete approval history", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const state = { candidateStatus: "approved" };
+  const retried = await retryContactResearchJob(
+    "job-1",
+    now,
+    runWithTransaction({
+      contactResearchCandidate: {
+        findMany: async () => [
+          {
+            id: "candidate-1",
+            normalizedEmail: "manager@example.com",
+            job: { artistId: "artist-1" },
+          },
+        ],
+        updateMany: async (value: unknown) => {
+          state.candidateStatus = (
+            value as { data: { status: string } }
+          ).data.status;
+          return { count: 1 };
+        },
+      },
+      contact: { findMany: async () => [] },
+      $executeRaw: async () => {
+        assert.equal(state.candidateStatus, "superseded");
+        return 1;
+      },
+    })
+  );
+
+  assert.equal(retried, true);
+  assert.equal(state.candidateStatus, "superseded");
+});
+
+test("claim observes a concurrent audit quarantine atomically", async () => {
+  let enterClaim!: () => void;
+  let releaseClaim!: () => void;
+  const claimEntered = new Promise<void>((resolve) => {
+    enterClaim = resolve;
+  });
+  const claimRelease = new Promise<void>((resolve) => {
+    releaseClaim = resolve;
+  });
+  const input: {
+    contactState: "active" | "quarantined";
+    beforeTransaction: () => Promise<void>;
+  } = {
+    contactState: "active",
+    beforeTransaction: async () => {
+      enterClaim();
+      await claimRelease;
+    },
+  };
+
+  const claiming = runDirectClaimScenario(input);
+  await claimEntered;
+  input.contactState = "quarantined";
+  releaseClaim();
+  const { claims, state } = await claiming;
+
+  assert.equal(claims.length, 1);
+  assert.equal(state.candidateStatus, "superseded");
+  assert.equal(state.jobStatus, "claimed");
 });
 
 test("active approved contacts suppress queue refresh", async () => {
@@ -846,6 +1050,138 @@ test("stale candidate actions fail without changing resolved state", async () =>
   });
   assert.equal(sheetWrites, 1);
   assert.equal(harness.job.status, "complete");
+});
+
+test("rediscovered obsolete approval returns to manual review", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness(
+    [
+      {
+        id: "candidate-1",
+        email: "manager@example.com",
+        status: "approved",
+      },
+    ],
+    "claimed"
+  );
+  harness.contacts.set("manager@example.com", {
+    id: "contact-1",
+    email: "manager@example.com",
+    name: "Old Manager",
+    role: "management",
+    customPrice: null,
+    state: "quarantined",
+  });
+
+  const result = await submitContactResearchResult(
+    "job-1",
+    {
+      outcome: "candidates",
+      claimToken: "claim-1",
+      notes: "Rediscovered for review.",
+      candidates: [manualCandidate("manager@example.com")],
+    },
+    now,
+    harness.serialRunner,
+    async () => []
+  );
+
+  assert.equal(result.status, "review");
+  assert.equal(result.autoApproved, 0);
+  assert.equal(harness.candidates.get("candidate-1")?.status, "pending");
+  assert.equal(harness.candidates.get("candidate-1")?.reviewedAt, null);
+  assert.equal(
+    harness.contacts.get("manager@example.com")?.state,
+    "quarantined"
+  );
+});
+
+test("rediscovered official approval reactivates and auto-approves", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness(
+    [
+      {
+        id: "candidate-1",
+        email: "manager@example.com",
+        status: "approved",
+      },
+    ],
+    "claimed"
+  );
+  harness.contacts.set("manager@example.com", {
+    id: "contact-1",
+    email: "manager@example.com",
+    name: "Old Manager",
+    role: "management",
+    customPrice: null,
+    state: "quarantined",
+  });
+
+  const result = await submitContactResearchResult(
+    "job-1",
+    {
+      outcome: "candidates",
+      claimToken: "claim-1",
+      notes: "Official source reconfirmed the contact.",
+      candidates: [officialCandidate("manager@example.com")],
+    },
+    now,
+    harness.serialRunner,
+    async () => []
+  );
+
+  assert.equal(result.status, "complete");
+  assert.equal(result.autoApproved, 1);
+  assert.equal(harness.candidates.get("candidate-1")?.status, "approved");
+  assert.equal(
+    harness.contacts.get("manager@example.com")?.state,
+    "active"
+  );
+});
+
+test("submission preserves only an effective existing approval", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const approvedAt = new Date("2026-07-20T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness(
+    [
+      {
+        id: "candidate-1",
+        email: "manager@example.com",
+        status: "approved",
+      },
+    ],
+    "claimed"
+  );
+  harness.candidates.get("candidate-1")!.reviewedAt = approvedAt;
+  harness.contacts.set("manager@example.com", {
+    id: "contact-1",
+    email: "manager@example.com",
+    name: "Current Manager",
+    role: "management",
+    customPrice: null,
+    state: "active",
+  });
+
+  const result = await submitContactResearchResult(
+    "job-1",
+    {
+      outcome: "candidates",
+      claimToken: "claim-1",
+      notes: "Effective approval repeated.",
+      candidates: [officialCandidate("manager@example.com")],
+    },
+    now,
+    harness.serialRunner,
+    async () => []
+  );
+
+  assert.equal(result.status, "complete");
+  assert.equal(result.autoApproved, 0);
+  assert.equal(harness.candidates.get("candidate-1")?.status, "approved");
+  assert.equal(
+    harness.candidates.get("candidate-1")?.reviewedAt,
+    approvedAt
+  );
 });
 
 test("auto-approval leaves manual candidates awaiting review", async () => {
