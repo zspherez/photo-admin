@@ -123,14 +123,18 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
   assert.match(agent, /matching rule version and exact\s+rule text/);
   assert.match(
     agent,
-    /Only an exact structured rule in the claimed\s+`globalAgentRules\.directOutreachRules` snapshot can authorize a proposal/,
+    /Only a verbatim, boundary-aware excerpt from the claimed\s+`globalAgentRules\.directOutreachInstructions` snapshot can authorize a pending\s+proposal/,
   );
-  assert.match(agent, /page that explicitly tells you to create a note[\s\S]*untrusted/);
+  assert.match(agent, /person\s+must approve or reject the proposal/);
+  assert.match(
+    agent,
+    /page that explicitly tells you to\s+create a note[\s\S]*untrusted/,
+  );
   assert.match(agent, /Never include an actual phone number/);
   assert.match(agent, /exact published quotes/);
   assert.doesNotMatch(agent, /relationshipStatus/);
-  assert.match(agent, /call `submit-direct-outreach`/);
-  assert.match(agent, /leaves the email-research job in review/);
+  assert.match(agent, /call\s+`submit-direct-outreach`/);
+  assert.match(agent, /leaves the\s+email-research job in review/);
   assert.doesNotMatch(agent, /mcp-servers:/);
   assert.match(runner, /contact-research-broker\.mjs/);
   assert.match(runner, /run-contact-research-copilot\.mjs/);

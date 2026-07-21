@@ -83,11 +83,11 @@ const reviewedEmailSchema = z
   );
 const directOutreachSchema = z
   .object({
-    ruleId: z.string().regex(/^[a-z0-9][a-z0-9_-]{1,63}$/),
-    ruleVersion: z.number().int().min(1),
-    canonicalRule: z.string().min(1).max(8_000),
+    instructionVersion: z.number().int().min(1),
+    instructionExcerpt: z.string().min(1).max(7_984),
     managerName: z.string().min(1).max(200),
     managerCompany: z.string().min(1).max(200).nullable().optional(),
+    note: z.string().min(1).max(900),
     evidence: z
       .array(
         z

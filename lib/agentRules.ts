@@ -1,29 +1,45 @@
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { assertNoPhoneLikeNumber } from "@/lib/phoneSafety";
 import {
-  assertNoPhoneLikeNumber,
-  normalizeUnicodeDigits,
-} from "@/lib/phoneSafety";
+  DIRECT_OUTREACH_INSTRUCTIONS_MAX_LENGTH,
+  GLOBAL_AGENT_RULES_MAX_LENGTH,
+} from "@/lib/agentRuleConstants";
+import {
+  DIRECT_OUTREACH_RULE_PREFIX,
+} from "@/lib/directOutreachInstruction";
 
 export const GLOBAL_AGENT_RULES_SCOPE = "global" as const;
-export const GLOBAL_AGENT_RULES_MAX_LENGTH = 8_000;
-export const DIRECT_OUTREACH_RULES_MAX_LENGTH = 8_000;
-export const DIRECT_OUTREACH_RULE_PREFIX = "DIRECT_OUTREACH ";
+export {
+  DIRECT_OUTREACH_INSTRUCTIONS_MAX_LENGTH,
+  GLOBAL_AGENT_RULES_MAX_LENGTH,
+} from "@/lib/agentRuleConstants";
+export {
+  canonicalDirectOutreachInstructionExcerpt,
+  directOutreachInstructionExcerptFromCanonical,
+  DIRECT_OUTREACH_RULE_PREFIX,
+} from "@/lib/directOutreachInstruction";
 
-export interface DirectOutreachAgentRule {
+const DIRECT_OUTREACH_INSTRUCTIONS_ACTION =
+  "direct_outreach_instructions" as const;
+
+interface LegacyDirectOutreachRule {
   id: string;
-  action: "direct_outreach";
   managerName: string;
   note: string;
-  canonicalRule: string;
 }
 
 export interface GlobalAgentRulesSnapshot {
   scope: typeof GLOBAL_AGENT_RULES_SCOPE;
   instructions: string;
-  directOutreachRules: DirectOutreachAgentRule[];
+  directOutreachInstructions: string;
   version: number;
   updatedAt: Date | null;
+}
+
+export interface GlobalAgentRulesEditorSnapshot
+  extends GlobalAgentRulesSnapshot {
+  directOutreachStorageError: string | null;
 }
 
 export type AgentRulesTransactionRunner = <T>(
@@ -46,173 +62,56 @@ export function normalizeGlobalAgentRules(value: unknown): string {
   return instructions;
 }
 
-function normalizedRuleManager(value: string): string {
-  return normalizeUnicodeDigits(value)
-    .normalize("NFKD")
-    .replace(/\p{M}/gu, "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()
-    .replace(/\s+/g, " ");
+function looksLikeStructuredRuleSyntax(value: string): boolean {
+  if (
+    value
+      .split(/\r?\n/)
+      .some((line) => /^DIRECT_OUTREACH\s*(?:\{|$)/.test(line.trim()))
+  ) {
+    return true;
+  }
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return typeof parsed === "object" && parsed !== null;
+  } catch {
+    return false;
+  }
 }
 
-function canonicalDirectOutreachRule(input: {
-  id: string;
-  managerName: string;
-  note: string;
-}): string {
-  return `${DIRECT_OUTREACH_RULE_PREFIX}${JSON.stringify({
-    id: input.id,
-    manager: input.managerName,
-    note: input.note,
-  })}`;
-}
-
-function normalizeDirectOutreachRuleObject(
-  value: unknown,
-  lineNumber: number,
-): DirectOutreachAgentRule {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+export function normalizeDirectOutreachInstructions(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("Direct outreach rules must be plain-language text.");
+  }
+  const instructions = value.trim();
+  if (instructions.length > DIRECT_OUTREACH_INSTRUCTIONS_MAX_LENGTH) {
     throw new Error(
-      `Direct outreach rule line ${lineNumber} must contain one JSON object.`,
+      `Direct outreach rules must be ${DIRECT_OUTREACH_INSTRUCTIONS_MAX_LENGTH.toLocaleString()} characters or fewer.`,
     );
+  }
+  if (looksLikeStructuredRuleSyntax(instructions)) {
+    throw new Error(
+      "Direct outreach rules must use plain-language sentences.",
+    );
+  }
+  assertNoPhoneLikeNumber(instructions, "Direct outreach rules");
+  return instructions;
+}
+
+function normalizeLegacyRuleObject(
+  value: unknown,
+  position: number,
+): LegacyDirectOutreachRule {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Stored direct outreach rule ${position} is invalid.`);
   }
   const input = value as Record<string, unknown>;
-  const keys = Object.keys(input).sort();
-  if (keys.join(",") !== "id,manager,note") {
-    throw new Error(
-      `Direct outreach rule line ${lineNumber} must contain exactly id, manager, and note.`,
-    );
-  }
-  if (typeof input.id !== "string") {
-    throw new Error(`Direct outreach rule line ${lineNumber} needs an id.`);
-  }
-  const id = input.id.trim();
-  if (!/^[a-z0-9][a-z0-9_-]{1,63}$/.test(id)) {
-    throw new Error(
-      `Direct outreach rule line ${lineNumber} id must be 2-64 lowercase letters, numbers, hyphens, or underscores.`,
-    );
-  }
-  if (typeof input.manager !== "string") {
-    throw new Error(
-      `Direct outreach rule line ${lineNumber} needs a manager name.`,
-    );
-  }
-  const managerName = input.manager.trim();
-  if (
-    managerName.length < 2 ||
-    managerName.length > 200 ||
-    normalizedRuleManager(managerName).length < 2
-  ) {
-    throw new Error(
-      `Direct outreach rule line ${lineNumber} manager must identify one named manager.`,
-    );
-  }
-  if (typeof input.note !== "string") {
-    throw new Error(`Direct outreach rule line ${lineNumber} needs a note.`);
-  }
-  const note = input.note.trim();
-  if (!note || note.length > 900) {
-    throw new Error(
-      `Direct outreach rule line ${lineNumber} note must be 1-900 characters.`,
-    );
-  }
-  assertNoPhoneLikeNumber(id, `Direct outreach rule line ${lineNumber} id`);
-  assertNoPhoneLikeNumber(
-    managerName,
-    `Direct outreach rule line ${lineNumber} manager`,
-  );
-  assertNoPhoneLikeNumber(
-    note,
-    `Direct outreach rule line ${lineNumber} note`,
-  );
-  return {
-    id,
-    action: "direct_outreach",
-    managerName,
-    note,
-    canonicalRule: canonicalDirectOutreachRule({
-      id,
-      managerName,
-      note,
-    }),
-  };
-}
-
-export function parseDirectOutreachAgentRules(
-  value: unknown,
-): DirectOutreachAgentRule[] {
-  if (typeof value !== "string") {
-    throw new Error("Direct outreach rules must be text.");
-  }
-  const source = value.trim();
-  if (source.length > DIRECT_OUTREACH_RULES_MAX_LENGTH) {
-    throw new Error(
-      `Direct outreach rules must be ${DIRECT_OUTREACH_RULES_MAX_LENGTH.toLocaleString()} characters or fewer.`,
-    );
-  }
-  if (!source) return [];
-  const rules = source.split(/\r?\n/).flatMap((line, index) => {
-    const trimmed = line.trim();
-    if (!trimmed) return [];
-    if (!trimmed.startsWith(DIRECT_OUTREACH_RULE_PREFIX)) {
-      throw new Error(
-        `Direct outreach rule line ${index + 1} must start with ${DIRECT_OUTREACH_RULE_PREFIX.trim()}.`,
-      );
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed.slice(DIRECT_OUTREACH_RULE_PREFIX.length));
-    } catch {
-      throw new Error(
-        `Direct outreach rule line ${index + 1} contains invalid JSON.`,
-      );
-    }
-    return [normalizeDirectOutreachRuleObject(parsed, index + 1)];
-  });
-  const ids = new Set<string>();
-  const managers = new Set<string>();
-  for (const rule of rules) {
-    if (ids.has(rule.id)) {
-      throw new Error(`Direct outreach rule id ${rule.id} is duplicated.`);
-    }
-    const manager = normalizedRuleManager(rule.managerName);
-    if (managers.has(manager)) {
-      throw new Error(
-        `Direct outreach manager ${rule.managerName} has more than one rule.`,
-      );
-    }
-    ids.add(rule.id);
-    managers.add(manager);
-  }
-  return rules;
-}
-
-export function serializeDirectOutreachAgentRules(
-  rules: readonly DirectOutreachAgentRule[],
-): string {
-  return rules.map((rule) => rule.canonicalRule).join("\n");
-}
-
-export function readStoredDirectOutreachAgentRules(
-  value: Prisma.JsonValue,
-): DirectOutreachAgentRule[] {
-  if (!Array.isArray(value)) {
-    throw new Error("Stored direct outreach rules are invalid.");
-  }
-  return value.map((entry, index) => {
-    if (
-      typeof entry !== "object" ||
-      entry === null ||
-      Array.isArray(entry)
-    ) {
-      throw new Error("Stored direct outreach rules are invalid.");
-    }
-    const input = entry as Record<string, unknown>;
-    const canonicalRule =
-      typeof input.canonicalRule === "string" ? input.canonicalRule : "";
+  const canonicalRule =
+    typeof input.canonicalRule === "string" ? input.canonicalRule : null;
+  if (canonicalRule) {
     if (!canonicalRule.startsWith(DIRECT_OUTREACH_RULE_PREFIX)) {
-      throw new Error("Stored direct outreach rules are invalid.");
+      throw new Error(`Stored direct outreach rule ${position} is invalid.`);
     }
     let parsed: unknown;
     try {
@@ -220,20 +119,122 @@ export function readStoredDirectOutreachAgentRules(
         canonicalRule.slice(DIRECT_OUTREACH_RULE_PREFIX.length),
       );
     } catch {
-      throw new Error("Stored direct outreach rules are invalid.");
+      throw new Error(`Stored direct outreach rule ${position} is invalid.`);
     }
-    const normalized = normalizeDirectOutreachRuleObject(parsed, index + 1);
+    return normalizeLegacyRuleObject(parsed, position);
+  }
+  const id = typeof input.id === "string" ? input.id.trim() : "";
+  const managerValue =
+    typeof input.manager === "string" ? input.manager : input.managerName;
+  const managerName =
+    typeof managerValue === "string" ? managerValue.trim() : "";
+  const note = typeof input.note === "string" ? input.note.trim() : "";
+  if (
+    !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(id) ||
+    managerName.length < 2 ||
+    managerName.length > 200 ||
+    !note ||
+    note.length > 900
+  ) {
+    throw new Error(`Stored direct outreach rule ${position} is invalid.`);
+  }
+  assertNoPhoneLikeNumber(managerName, "Stored direct outreach manager");
+  assertNoPhoneLikeNumber(note, "Stored direct outreach note");
+  return { id, managerName, note };
+}
+
+function parseLegacyRuleLine(
+  value: string,
+  position: number,
+): LegacyDirectOutreachRule {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith(DIRECT_OUTREACH_RULE_PREFIX)) {
+    throw new Error(`Stored direct outreach rule ${position} is invalid.`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed.slice(DIRECT_OUTREACH_RULE_PREFIX.length));
+  } catch {
+    throw new Error(`Stored direct outreach rule ${position} is invalid.`);
+  }
+  return normalizeLegacyRuleObject(parsed, position);
+}
+
+function legacyRuleToPlainLanguage(rule: LegacyDirectOutreachRule): string {
+  const note = /[.!?]$/.test(rule.note) ? rule.note : `${rule.note}.`;
+  return `When an artist is managed by ${rule.managerName}, add this direct outreach note: ${note}`;
+}
+
+function parseStoredDirectOutreachInstructions(
+  value: Prisma.JsonValue,
+): string {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    if (!trimmed.startsWith(DIRECT_OUTREACH_RULE_PREFIX)) {
+      return normalizeDirectOutreachInstructions(trimmed);
+    }
+    return normalizeDirectOutreachInstructions(
+      trimmed
+        .split(/\r?\n/)
+        .filter((line) => line.trim())
+        .map((line, index) =>
+          legacyRuleToPlainLanguage(parseLegacyRuleLine(line, index + 1)),
+        )
+        .join("\n"),
+    );
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("Stored direct outreach rules are invalid.");
+  }
+  if (value.length === 0) return "";
+  if (value.length === 1) {
+    const entry = value[0];
     if (
-      input.id !== normalized.id ||
-      input.action !== normalized.action ||
-      input.managerName !== normalized.managerName ||
-      input.note !== normalized.note ||
-      canonicalRule !== normalized.canonicalRule
+      typeof entry === "object" &&
+      entry !== null &&
+      !Array.isArray(entry)
     ) {
-      throw new Error("Stored direct outreach rules are invalid.");
+      const input = entry as Record<string, unknown>;
+      if (
+        input.action === DIRECT_OUTREACH_INSTRUCTIONS_ACTION &&
+        typeof input.instructions === "string" &&
+        Object.keys(input).sort().join(",") === "action,instructions"
+      ) {
+        return normalizeDirectOutreachInstructions(input.instructions);
+      }
     }
-    return normalized;
-  });
+  }
+  return normalizeDirectOutreachInstructions(
+    value
+      .map((entry, index) => {
+        const rule =
+          typeof entry === "string"
+            ? parseLegacyRuleLine(entry, index + 1)
+            : normalizeLegacyRuleObject(entry, index + 1);
+        return legacyRuleToPlainLanguage(rule);
+      })
+      .join("\n"),
+  );
+}
+
+export function readStoredDirectOutreachInstructions(
+  value: Prisma.JsonValue,
+): string {
+  return parseStoredDirectOutreachInstructions(value);
+}
+
+export function directOutreachInstructionsStorage(
+  instructions: string,
+): Prisma.JsonArray {
+  return instructions
+    ? [
+        {
+          action: DIRECT_OUTREACH_INSTRUCTIONS_ACTION,
+          instructions,
+        },
+      ]
+    : [];
 }
 
 function snapshotFromRow(row: {
@@ -245,7 +246,7 @@ function snapshotFromRow(row: {
   return {
     scope: GLOBAL_AGENT_RULES_SCOPE,
     instructions: row.instructions,
-    directOutreachRules: readStoredDirectOutreachAgentRules(
+    directOutreachInstructions: readStoredDirectOutreachInstructions(
       row.directOutreachRules,
     ),
     version: row.version,
@@ -264,7 +265,7 @@ export async function readGlobalAgentRulesInTransaction(
     : {
         scope: GLOBAL_AGENT_RULES_SCOPE,
         instructions: "",
-        directOutreachRules: [],
+        directOutreachInstructions: "",
         version: 0,
         updatedAt: null,
       };
@@ -279,24 +280,58 @@ export async function readGlobalAgentRules(): Promise<GlobalAgentRulesSnapshot> 
     : {
         scope: GLOBAL_AGENT_RULES_SCOPE,
         instructions: "",
-        directOutreachRules: [],
+        directOutreachInstructions: "",
         version: 0,
         updatedAt: null,
       };
 }
 
+export async function readGlobalAgentRulesForEditing(): Promise<GlobalAgentRulesEditorSnapshot> {
+  const row = await db.agentRuleSet.findUnique({
+    where: { scope: GLOBAL_AGENT_RULES_SCOPE },
+  });
+  if (!row) {
+    return {
+      scope: GLOBAL_AGENT_RULES_SCOPE,
+      instructions: "",
+      directOutreachInstructions: "",
+      directOutreachStorageError: null,
+      version: 0,
+      updatedAt: null,
+    };
+  }
+  try {
+    return {
+      ...snapshotFromRow(row),
+      directOutreachStorageError: null,
+    };
+  } catch {
+    return {
+      scope: GLOBAL_AGENT_RULES_SCOPE,
+      instructions: row.instructions,
+      directOutreachInstructions: "",
+      directOutreachStorageError:
+        "Stored legacy direct outreach rules could not be converted. Replace them with plain-language instructions and save.",
+      version: row.version,
+      updatedAt: row.updatedAt,
+    };
+  }
+}
+
 export async function saveGlobalAgentRuleSet(
   values: {
     instructions: unknown;
-    directOutreachRules?: unknown;
+    directOutreachInstructions?: unknown;
   },
   runTransaction: AgentRulesTransactionRunner = runDefaultTransaction,
 ): Promise<GlobalAgentRulesSnapshot> {
   const instructions = normalizeGlobalAgentRules(values.instructions);
-  const directOutreachRules =
-    values.directOutreachRules === undefined
+  const directOutreachInstructions =
+    values.directOutreachInstructions === undefined
       ? undefined
-      : parseDirectOutreachAgentRules(values.directOutreachRules);
+      : normalizeDirectOutreachInstructions(
+          values.directOutreachInstructions,
+        );
   return runTransaction(async (tx) => {
     await tx.$executeRaw(
       Prisma.sql`LOCK TABLE "AgentRuleSet" IN SHARE ROW EXCLUSIVE MODE`,
@@ -306,16 +341,18 @@ export async function saveGlobalAgentRuleSet(
       create: {
         scope: GLOBAL_AGENT_RULES_SCOPE,
         instructions,
-        directOutreachRules: (directOutreachRules ??
-          []) as unknown as Prisma.InputJsonValue,
+        directOutreachRules: directOutreachInstructionsStorage(
+          directOutreachInstructions ?? "",
+        ),
         version: 1,
       },
       update: {
         instructions,
-        ...(directOutreachRules !== undefined
+        ...(directOutreachInstructions !== undefined
           ? {
-              directOutreachRules:
-                directOutreachRules as unknown as Prisma.InputJsonValue,
+              directOutreachRules: directOutreachInstructionsStorage(
+                directOutreachInstructions,
+              ),
             }
           : {}),
         version: { increment: 1 },

@@ -4,25 +4,26 @@ import test from "node:test";
 import type { Prisma } from "@prisma/client";
 import {
   approveContactResearchDirectOutreach,
+  isTrustedDirectOutreachInstructionProvenance,
   type ContactResearchTransactionRunner,
   normalizeTrustedDirectOutreach,
   parseContactResearchSubmission,
   rejectContactResearchDirectOutreach,
   submitContactResearchResult,
 } from "./contactResearch";
-import { parseDirectOutreachAgentRules } from "./agentRules";
+import { directOutreachInstructionsStorage } from "./agentRules";
 
-const canonicalRule =
-  'DIRECT_OUTREACH {"id":"leif-fosse","manager":"Leif Fosse","note":"Use the number already on file"}';
-const structuredRule = parseDirectOutreachAgentRules(canonicalRule)[0];
+const instruction =
+  "When an artist is managed by Leif Fosse, add a direct outreach note that I have his number.";
+const canonicalRule = `DIRECT_OUTREACH ${instruction}`;
 
 function directOutreach(overrides: Record<string, unknown> = {}) {
   return {
-    ruleId: "leif-fosse",
-    ruleVersion: 4,
-    canonicalRule,
+    instructionVersion: 4,
+    instructionExcerpt: instruction,
     managerName: "Leif Fosse",
     managerCompany: "Fosse Management",
+    note: "I have Leif Fosse's number",
     evidence: [
       {
         sourceUrl: "https://fossemanagement.com/team",
@@ -46,7 +47,8 @@ function claimedJob(overrides: Record<string, unknown> = {}) {
     artist: { name: "Example Artist" },
     claimedAgentRules: "Prefer official sources.",
     claimedAgentRulesVersion: 4,
-    claimedDirectOutreachRules: [structuredRule],
+    claimedDirectOutreachRules:
+      directOutreachInstructionsStorage(instruction),
     ...overrides,
   };
 }
@@ -59,7 +61,7 @@ test("structured direct outreach accepts positive quotes and rejects self-assert
     directOutreach: directOutreach(),
   });
   assert.equal(parsed.outcome, "candidates");
-  assert.equal(parsed.directOutreach?.ruleId, "leif-fosse");
+  assert.equal(parsed.directOutreach?.instructionExcerpt, instruction);
   assert.equal(parsed.directOutreach?.evidence.length, 1);
 
   for (const quote of [
@@ -90,9 +92,10 @@ test("every agent-controlled field rejects phone numbers and safe IDs remain val
     { managerName: "Leif +1 (212) 555-0199" },
     { managerCompany: "Fosse 020/7123/4567" },
     {
-      canonicalRule:
-        'DIRECT_OUTREACH {"id":"leif-fosse","manager":"Leif Fosse","note":"Call ＋٤٤／٢٠／٧١٢٣／٤٥٦٧"}',
+      instructionExcerpt:
+        "When managed by Leif Fosse, call ＋٤٤／٢٠／٧١٢٣／٤٥٦٧.",
     },
+    { note: "Call +1 212 555 0199" },
     {
       evidence: [
         {
@@ -151,7 +154,7 @@ test("every agent-controlled field rejects phone numbers and safe IDs remain val
   );
 });
 
-test("ordinary free-text rules cannot authorize and exact structured snapshots create one review proposal", async () => {
+test("only the direct outreach snapshot authorizes a pending human-reviewed proposal", async () => {
   const proposals: Array<Record<string, unknown>> = [];
   const jobUpdates: Array<Record<string, unknown>> = [];
   const proposalDelegate = {
@@ -191,7 +194,13 @@ test("ordinary free-text rules cannot authorize and exact structured snapshots c
   );
   assert.equal(result.status, "review");
   assert.equal(proposals.length, 1);
-  assert.equal(proposals[0].note, "Direct outreach: Use the number already on file");
+  assert.equal(
+    proposals[0].note,
+    "Direct outreach: I have Leif Fosse's number",
+  );
+  assert.equal(proposals[0].canonicalRule, canonicalRule);
+  assert.equal(proposals[0].ruleVersion, 4);
+  assert.equal(proposals[0].status, "pending");
   assert.equal("email" in proposals[0], false);
   assert.equal("phone" in proposals[0], false);
   assert.equal(
@@ -223,6 +232,58 @@ test("ordinary free-text rules cannot authorize and exact structured snapshots c
   );
   assert.equal(rejected.status, "invalid_rule_provenance");
   assert.equal(wrote, false);
+});
+
+test("instruction provenance requires versioned boundary-aware verbatim excerpts", () => {
+  const claimed = directOutreachInstructionsStorage(
+    `${instruction}\nFor other managers, continue normal research.`,
+  );
+  assert.equal(
+    isTrustedDirectOutreachInstructionProvenance(
+      4,
+      claimed,
+      directOutreach(),
+    ),
+    true,
+  );
+  assert.equal(
+    isTrustedDirectOutreachInstructionProvenance(
+      4,
+      claimed,
+      directOutreach({ managerName: "Another Manager" }),
+    ),
+    true,
+    "provenance validation must not pretend to semantically prove the condition",
+  );
+  assert.equal(
+    isTrustedDirectOutreachInstructionProvenance(
+      5,
+      claimed,
+      directOutreach(),
+    ),
+    false,
+  );
+  assert.equal(
+    isTrustedDirectOutreachInstructionProvenance(
+      4,
+      claimed,
+      directOutreach({
+        instructionExcerpt: "managed by Lei",
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    isTrustedDirectOutreachInstructionProvenance(
+      4,
+      claimed,
+      directOutreach({
+        instructionExcerpt:
+          "Prefer official sources.",
+      }),
+    ),
+    false,
+  );
 });
 
 test("proposal retries are idempotent and do not reopen reviewed decisions", async () => {

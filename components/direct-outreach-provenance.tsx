@@ -1,3 +1,5 @@
+import { directOutreachInstructionExcerptFromCanonical } from "@/lib/directOutreachInstruction";
+
 interface DirectOutreachProvenanceData {
   directOutreachIdentity: string | null;
   directOutreachRuleVersion: number | null;
@@ -37,8 +39,10 @@ export function DirectOutreachProvenance({
           : ""}
       </p>
       <p className="mt-1">
-        Trusted rule v{contact.directOutreachRuleVersion}:{" "}
-        {contact.directOutreachRuleText}
+        Trusted instruction v{contact.directOutreachRuleVersion}:{" "}
+        {directOutreachInstructionExcerptFromCanonical(
+          contact.directOutreachRuleText,
+        )}
       </p>
       <p className="mt-1">{contact.directOutreachEvidence}</p>
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
