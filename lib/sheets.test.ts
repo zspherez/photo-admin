@@ -1136,7 +1136,6 @@ test("protected release stages and verifies the exact target before pausing", ()
     "Adopt and verify configured Sheet contacts with new code",
     "Verify new-code ownership and database compatibility",
     "Unpause verified exact target",
-    "Catch up production data after resume",
   ];
   invariantSteps.reduce((previous, step) => {
     const current = source.indexOf(step);
@@ -1172,7 +1171,6 @@ test("protected release stages and verifies the exact target before pausing", ()
     "Apply expand-compatible production migrations",
     "Backfill Unicode-normalized artist names",
     "Unpause verified exact target",
-    "Catch up production data after resume",
   ]) {
     const start = source.indexOf(`      - name: ${step}`);
     assert.ok(start >= 0, `missing conditional migration step ${step}`);
@@ -1183,14 +1181,15 @@ test("protected release stages and verifies the exact target before pausing", ()
       /if: steps\.database-targets\.outputs\.schema_change_required == 'true'/
     );
   }
-  assert.match(
-    source,
-    /if ! call_catch_up "Show sync"[\s\S]*if ! call_catch_up "Listen sync"[\s\S]*if ! call_catch_up "Contact research queue"[\s\S]*if ! call_catch_up "Top-playlist refresh"/
-  );
-  assert.match(
-    source,
-    /Production release succeeded, but post-resume catch-up remains incomplete/
-  );
+  assert.doesNotMatch(source, /\bcall_catch_up\b/);
+  for (const route of [
+    "/api/cron/sync-shows",
+    "/api/cron/sync-listens",
+    "/api/cron/contact-research",
+    "/api/cron/refresh-top-playlist",
+  ]) {
+    assert.ok(!source.includes(route), `${route} must not run during release`);
+  }
   assert.match(source, /VERCEL_TOKEN: \$\{\{ secrets\.VERCEL_TOKEN \}\}/);
   assert.doesNotMatch(source, /VERCEL_AUTOMATION_BYPASS_SECRET/);
   assert.doesNotMatch(source, /vercel env pull/);
@@ -1288,9 +1287,17 @@ test("release uses one reviewed job and a main-only recovery environment", () =>
   assert.doesNotMatch(recoverySource, /^\s+name: production$/m);
 
   const releaseSource = source.slice(releaseJob, recoveryJob);
-  assert.ok(
-    releaseSource.indexOf("Catch up production data after resume") >
-      releaseSource.indexOf("Unpause verified exact target")
+  const releaseTailSteps = [
+    ...releaseSource.matchAll(/^      - name: (.+)$/gm),
+  ].map((match) => match[1]);
+  assert.deepEqual(
+    releaseTailSteps.slice(-3),
+    [
+      "Unpause verified exact target",
+      "Attempt safe in-job recovery with approved credentials",
+      "Remove pulled production settings",
+    ],
+    "unpause must be the final normal release operation before recovery and cleanup"
   );
   assert.match(releaseSource, /schema_ready/);
   assert.match(releaseSource, /RELEASE_SCHEMA_READY/);
