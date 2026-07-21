@@ -260,6 +260,29 @@ test("festival selection and variable validation are purpose-aware", () => {
   );
 });
 
+test("standard original default and preview use the canonical rate-free copy", () => {
+  assert.equal(
+    DEFAULT_TEMPLATE_HTML,
+    `<p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a photographer and videographer local to {{sender_city}} and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My standard deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>I look forward to hearing from you soon!</p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`,
+  );
+  const preview = applyHtmlTemplate(DEFAULT_TEMPLATE_HTML, {
+    artist: "Artist",
+    manager_name: "Manager",
+    portfolio_url: "https://portfolio.example",
+    sender_city: "New York",
+    sender_email: "photo@example.com",
+    sender_name: "Photographer",
+    sender_phone: "555-0100",
+  });
+  assert.match(preview, /I am a photographer and videographer local to New York/);
+  assert.match(preview, /My standard deliverables include 25 photos/);
+  assert.match(
+    preview,
+    /<a target="_blank" rel="noopener noreferrer nofollow" href="https:\/\/portfolio\.example">/,
+  );
+  assert.doesNotMatch(preview, /\{\{|\brate\b|customPrice|\$[0-9]/i);
+});
+
 test("legacy saved templates and old default content normalize generically", () => {
   assert.deepEqual(
     normalizeTemplateContent({
@@ -272,16 +295,20 @@ test("legacy saved templates and old default content normalize generically", () 
     },
   );
 
-  const oldDefault = DEFAULT_TEMPLATE_HTML
-    .replace(
-      "Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!",
-      "Gave a brief summary of my rates/deliverables below, and I'm happy to work with you to meet your needs!",
-    )
-    .replace(
-      "    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>",
-      `    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
-    <p>My standard {{sender_city}} show rate is {{rate}} for photo/video, or $200 for just photo.</p>`,
-    );
+  const oldDefault = `<html>
+  <body>
+    <p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p>
+    <p>Gave a brief summary of my rates/deliverables below, and I'm happy to work with you to meet your needs!</p>
+    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
+    <p>My standard {{sender_city}} show rate is {{rate}} for photo/video, or $200 for just photo.</p>
+    <p>You can check out some examples of my previous work at <a href="{{portfolio_url}}">{{portfolio_url}}</a></p>
+    <p>I look forward to hearing from you soon!</p>
+    <p>Best,<br>
+       {{sender_name}}<br>
+       <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
+    </p>
+  </body>
+</html>`;
   assert.notEqual(oldDefault, DEFAULT_TEMPLATE_HTML);
   assert.match(
     oldDefault,
@@ -295,7 +322,9 @@ test("legacy saved templates and old default content normalize generically", () 
     subject: "{{artist}}",
     htmlBody: oldDefault,
   });
-  assert.equal(normalized.htmlBody, DEFAULT_TEMPLATE_HTML);
+  assert.match(normalized.htmlBody, /multimedia creative specialist/);
+  assert.match(normalized.htmlBody, /My minimum deliverables include/);
+  assert.notEqual(normalized.htmlBody, DEFAULT_TEMPLATE_HTML);
   assert.doesNotMatch(normalized.htmlBody, /\brate\b|\$[0-9]/i);
 
   const fixedRateDefault = oldDefault
@@ -307,13 +336,16 @@ test("legacy saved templates and old default content normalize generically", () 
       "{{rate}} for photo/video, or $200 for just photo.",
       "$400 for photo/video, or $200 for just photo, more details in my rate card.",
     );
-  assert.equal(
-    normalizeTemplateContent({
-      subject: "{{artist}}",
-      htmlBody: fixedRateDefault,
-    }).htmlBody,
-    DEFAULT_TEMPLATE_HTML,
+  const normalizedFixedRateDefault = normalizeTemplateContent({
+    subject: "{{artist}}",
+    htmlBody: fixedRateDefault,
+  }).htmlBody;
+  assert.match(
+    normalizedFixedRateDefault,
+    /multimedia creative specialist/,
   );
+  assert.notEqual(normalizedFixedRateDefault, DEFAULT_TEMPLATE_HTML);
+  assert.doesNotMatch(normalizedFixedRateDefault, /\brate\b|\$[0-9]/i);
   assert.doesNotMatch(DEFAULT_TEMPLATE_HTML, /\{\{\s*rate\s*\}\}|\$[0-9]/i);
 });
 
@@ -355,6 +387,10 @@ test("follow-up template cloning is a one-time independent snapshot", () => {
   assert.match(
     source,
     /const original = await ensureDefaultTemplate\(\)[\s\S]*update: \{\},[\s\S]*persistNormalizedTemplate\(template, normalizeTemplateContent\)/,
+  );
+  assert.match(
+    source,
+    /where: \{ purpose: "original" \},[\s\S]*update: \{\},[\s\S]*htmlBody: DEFAULT_TEMPLATE_HTML/,
   );
   assert.match(
     source,

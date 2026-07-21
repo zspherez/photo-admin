@@ -381,19 +381,7 @@ export const FOLLOW_UP_TEMPLATE_NAME = "follow_up";
 export const DEFAULT_TEMPLATE_SUBJECT =
   "{{artist}} {{sender_city}} Photo/Video";
 
-export const DEFAULT_TEMPLATE_HTML = `<html>
-  <body>
-    <p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a multimedia creative specialist local to {{sender_city}} and would love to work together to capture this show!</p>
-    ${DEFAULT_DELIVERABLES_SUMMARY}
-    <p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p>
-    <p>You can check out some examples of my previous work at <a href="{{portfolio_url}}">{{portfolio_url}}</a></p>
-    <p>I look forward to hearing from you soon!</p>
-    <p>Best,<br>
-       {{sender_name}}<br>
-       <a href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a href="{{portfolio_url}}">{{portfolio_url}}</a>
-    </p>
-  </body>
-</html>`;
+export const DEFAULT_TEMPLATE_HTML = `<p>Hey {{manager_name}} - wanted to shoot a quick message over regarding the {{artist}} show in {{sender_city}} in a few weeks. I am a photographer and videographer local to {{sender_city}} and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My standard deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>I look forward to hearing from you soon!</p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`;
 
 export const FESTIVAL_TEMPLATE_SUBJECT =
   "Photo coverage request: {{artist}} at {{festival_name}}";

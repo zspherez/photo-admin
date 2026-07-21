@@ -116,10 +116,16 @@ test("Settings edits, previews, and resets normal and festival templates indepen
   assert.match(settings, /isFestival: kind === "festival"/);
   assert.match(settings, /supportedTemplateVars\(kind\)/);
   assert.match(settings, /unsupportedTemplateVars\(content, kind\)/);
+  assert.match(settings, /subject: DEFAULT_TEMPLATE_SUBJECT/);
+  assert.match(settings, /htmlBody: DEFAULT_TEMPLATE_HTML/);
   assert.match(settings, /subject: FESTIVAL_TEMPLATE_SUBJECT/);
   assert.match(settings, /htmlBody: FESTIVAL_TEMPLATE_HTML/);
   assert.match(settings, /where: \{ id: existing\.id \}/);
   assert.match(settings, /templateUtmKind\(kind\)/);
+  assert.match(
+    settings,
+    /previewHtml = renderTrackedEmailHtml\([\s\S]*template\.htmlBody/,
+  );
 });
 
 test("festival template migration is transactional, preserving, constrained, and release-probed", () => {
