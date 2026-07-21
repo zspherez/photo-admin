@@ -157,7 +157,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,
@@ -312,8 +312,96 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
     selectedScalarFields(source, "dashboardShowSnapshotMember"),
     ["snapshotId", "position", "showId", "sortDate"],
   );
+  assert.deepEqual(
+    selectedScalarFields(source, "trajectoryModelRun"),
+    [
+      "id",
+      "producer",
+      "producerRunId",
+      "contractVersion",
+      "producerSchemaVersion",
+      "artifactSha256",
+      "fullArtifactSha256",
+      "artifactGzip",
+      "artifactByteLength",
+      "producerRevision",
+      "generatedAt",
+      "asOfDate",
+      "decisionDate",
+      "minimumShowDate",
+      "validUntil",
+      "modelStatus",
+      "validationReference",
+      "status",
+      "summary",
+      "failureCode",
+      "failureMessage",
+      "importedAt",
+      "activatedAt",
+      "createdAt",
+      "updatedAt",
+    ],
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "trajectoryRunArtist"),
+    [
+      "id",
+      "runId",
+      "artistId",
+      "edmtrainArtistId",
+      "sourceName",
+      "spotifyArtistId",
+      "raArtistId",
+      "coverageState",
+      "momentumBand",
+      "isEarlyStage",
+      "isEstablished",
+      "isVeteran",
+      "eventDelta6m",
+      "eventsPrior6m",
+      "eventsRecent6m",
+      "marketsPrior6m",
+      "marketsRecent6m",
+      "careerAgeYears",
+      "analogSummary",
+      "releaseContext",
+      "genres",
+      "createdAt",
+    ],
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "trajectoryRecommendation"),
+    [
+      "id",
+      "runId",
+      "showId",
+      "runArtistId",
+      "arm",
+      "listRank",
+      "isSuggested",
+      "slatePosition",
+      "billingPosition",
+      "lineupSize",
+      "isFirstBilled",
+      "rationale",
+      "sourceFingerprint",
+      "createdAt",
+    ],
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "trajectoryImportIssue"),
+    ["id", "runId", "recommendationKey", "code", "detail", "createdAt"],
+  );
   assert.match(
     source,
-    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ArbitraryEmail\.providerCredentialScope",[\s\S]*"Outreach\.expectedRecipientUpdatedAt",[\s\S]*"Outreach_dispatch_recipient_identity_check",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*\]/,
+    /TrajectoryModelRun_one_ready_artist_trajectory_idx/,
+  );
+  assert.match(
+    source,
+    /trajectoryConstraintProbe\.every\(\(constraint\) => constraint\.validated\)/,
+  );
+  assert.match(
+    source,
+    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ArbitraryEmail\.providerCredentialScope",[\s\S]*"Outreach\.expectedRecipientUpdatedAt",[\s\S]*"Outreach_dispatch_recipient_identity_check",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*"TrajectoryModelRun",[\s\S]*"TrajectoryRunArtist",[\s\S]*"TrajectoryRecommendation",[\s\S]*"TrajectoryImportIssue",[\s\S]*"TrajectoryModelRun_one_ready_artist_trajectory_idx",[\s\S]*\]/,
   );
 });

@@ -38,12 +38,12 @@ model ArtistIdentityNameClaim {
 }
 
 model Artist {
-  id                 String               @id @default(cuid())
+  id                 String                @id @default(cuid())
   name               String
   normalizedName     String
-  spotifyId          String?              @unique
-  statsfmId          String?              @unique
-  edmtrainId         Int?                 @unique
+  spotifyId          String?               @unique
+  statsfmId          String?               @unique
+  edmtrainId         Int?                  @unique
   genres             String?
   popularity         Int?
   imageUrl           String?
@@ -55,10 +55,148 @@ model Artist {
   contactResearchJob ContactResearchJob?
   researchSkips      ArtistResearchSkip[]
   contactAuditJobs   ContactAuditJob[]
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
+  trajectoryRuns     TrajectoryRunArtist[]
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
 
   @@index([normalizedName])
+}
+
+enum TrajectoryRunStatus {
+  importing
+  ready
+  stale
+  superseded
+  failed
+}
+
+enum TrajectoryArm {
+  trajectory
+  momentum
+  exploration
+  portfolio
+}
+
+enum TrajectoryCoverageState {
+  C_covered
+  U0_unresolved
+  U1_no_history
+  U2_thin_history
+  Q_query_incomplete
+  Q_query_failure
+  J_junk
+}
+
+enum TrajectoryImportIssueCode {
+  show_not_found
+  artist_not_found
+  show_artist_membership_missing
+}
+
+model TrajectoryModelRun {
+  id                    String                     @id @default(cuid())
+  producer              String
+  producerRunId         String
+  contractVersion       String
+  producerSchemaVersion String
+  artifactSha256        String
+  fullArtifactSha256    String
+  artifactGzip          Bytes?
+  artifactByteLength    Int
+  producerRevision      String?
+  generatedAt           DateTime
+  asOfDate              DateTime                   @db.Date
+  decisionDate          DateTime                   @db.Date
+  minimumShowDate       DateTime                   @db.Date
+  validUntil            DateTime
+  modelStatus           String
+  validationReference   String?
+  status                TrajectoryRunStatus
+  summary               Json?
+  failureCode           String?
+  failureMessage        String?
+  importedAt            DateTime                   @default(now())
+  activatedAt           DateTime?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+  artists               TrajectoryRunArtist[]
+  recommendations       TrajectoryRecommendation[]
+  importIssues          TrajectoryImportIssue[]
+
+  @@unique([producer, producerRunId])
+  @@unique([producer, artifactSha256])
+  @@index([status, generatedAt])
+  @@index([validUntil])
+}
+
+model TrajectoryRunArtist {
+  id               String                     @id @default(cuid())
+  runId            String
+  run              TrajectoryModelRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  artistId         String?
+  artist           Artist?                    @relation(fields: [artistId], references: [id], onDelete: SetNull)
+  edmtrainArtistId Int
+  sourceName       String
+  spotifyArtistId  String?
+  raArtistId       String?
+  coverageState    TrajectoryCoverageState
+  momentumBand     String?
+  isEarlyStage     Boolean
+  isEstablished    Boolean
+  isVeteran        Boolean
+  eventDelta6m     Int?
+  eventsPrior6m    Int?
+  eventsRecent6m   Int?
+  marketsPrior6m   Int?
+  marketsRecent6m  Int?
+  careerAgeYears   Float?
+  analogSummary    Json?
+  releaseContext   Json?
+  genres           Json?
+  createdAt        DateTime                   @default(now())
+  recommendations  TrajectoryRecommendation[]
+
+  @@unique([runId, edmtrainArtistId])
+  @@index([runId, coverageState])
+  @@index([artistId])
+}
+
+model TrajectoryRecommendation {
+  id                String              @id @default(cuid())
+  runId             String
+  run               TrajectoryModelRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  showId            String
+  show              Show                @relation(fields: [showId], references: [id], onDelete: Cascade)
+  runArtistId       String
+  runArtist         TrajectoryRunArtist @relation(fields: [runArtistId], references: [id], onDelete: Cascade)
+  arm               TrajectoryArm
+  listRank          Int
+  isSuggested       Boolean             @default(false)
+  slatePosition     Int?
+  billingPosition   Int
+  lineupSize        Int
+  isFirstBilled     Boolean
+  rationale         Json?
+  sourceFingerprint String
+  createdAt         DateTime            @default(now())
+
+  @@unique([runId, showId, runArtistId, arm])
+  @@unique([runId, arm, listRank])
+  @@index([runId, arm, listRank])
+  @@index([runId, isSuggested, slatePosition])
+  @@index([showId])
+}
+
+model TrajectoryImportIssue {
+  id                String                    @id @default(cuid())
+  runId             String
+  run               TrajectoryModelRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  recommendationKey String?
+  code              TrajectoryImportIssueCode
+  detail            Json?
+  createdAt         DateTime                  @default(now())
+
+  @@index([runId, code])
 }
 
 model SpotifyPlaylist {
@@ -297,39 +435,40 @@ model ContactResearchCandidate {
 }
 
 model Show {
-  id                  String               @id @default(cuid())
-  edmtrainId          Int?                 @unique
-  edmtrainVenueId     Int?
-  edmtrainVenue       EdmtrainVenue?       @relation(fields: [edmtrainVenueId], references: [id], onDelete: SetNull)
-  date                DateTime
-  venueName           String
-  city                String
-  state               String?
+  id                        String                        @id @default(cuid())
+  edmtrainId                Int?                          @unique
+  edmtrainVenueId           Int?
+  edmtrainVenue             EdmtrainVenue?                @relation(fields: [edmtrainVenueId], references: [id], onDelete: SetNull)
+  date                      DateTime
+  venueName                 String
+  city                      String
+  state                     String?
   /// ISO 3166-1 alpha-2 when known. Null is explicitly unknown, never assumed US.
-  countryCode         String?
+  countryCode               String?
   /// Provider/manual display value retained when an ISO code cannot be resolved.
-  countryName         String?
-  ticketUrl           String?
-  ages                String?
-  electronicGenre     String?
-  isFestival          Boolean              @default(false)
+  countryName               String?
+  ticketUrl                 String?
+  ages                      String?
+  electronicGenre           String?
+  isFestival                Boolean                       @default(false)
   /// inside_nyc, outside_nyc, or unknown for festival eligibility.
-  festivalNycStatus   String?
-  eventName           String?
-  source              String?
+  festivalNycStatus         String?
+  eventName                 String?
+  source                    String?
   /// Provider status; blocked is retained only for legacy compatibility.
-  syncStatus          String               @default("active")
-  sourceLastSeenAt    DateTime?
-  sourceGeneration    String?
-  dismissedAt         DateTime?
-  interestedAt        DateTime?
-  raw                 String?
-  artists             ShowArtist[]
-  outreaches          Outreach[]
-  contactResearchJobs ContactResearchJob[]
-  dashboardSnapshotMembers DashboardShowSnapshotMember[]
-  createdAt           DateTime             @default(now())
-  updatedAt           DateTime             @updatedAt
+  syncStatus                String                        @default("active")
+  sourceLastSeenAt          DateTime?
+  sourceGeneration          String?
+  dismissedAt               DateTime?
+  interestedAt              DateTime?
+  raw                       String?
+  artists                   ShowArtist[]
+  outreaches                Outreach[]
+  contactResearchJobs       ContactResearchJob[]
+  dashboardSnapshotMembers  DashboardShowSnapshotMember[]
+  trajectoryRecommendations TrajectoryRecommendation[]
+  createdAt                 DateTime                      @default(now())
+  updatedAt                 DateTime                      @updatedAt
 
   @@index([date])
   @@index([edmtrainVenueId])

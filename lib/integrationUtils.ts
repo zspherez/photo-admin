@@ -120,6 +120,7 @@ export interface DeadlineTransactionPolicy {
   lockTimeoutMs?: number;
   completionSafetyMarginMs?: number;
   statementSafetyMarginMs?: number;
+  isolationLevel?: Prisma.TransactionIsolationLevel;
 }
 
 export interface DeadlineTransactionTiming {
@@ -139,6 +140,7 @@ interface NormalizedDeadlineTransactionPolicy {
   lockTimeoutMs: number | null;
   completionSafetyMarginMs: number;
   statementSafetyMarginMs: number;
+  isolationLevel?: Prisma.TransactionIsolationLevel;
 }
 
 function normalizedDeadlineTransactionPolicy(
@@ -180,6 +182,7 @@ function normalizedDeadlineTransactionPolicy(
     lockTimeoutMs: policy.lockTimeoutMs ?? null,
     completionSafetyMarginMs,
     statementSafetyMarginMs,
+    isolationLevel: policy.isolationLevel,
   };
 }
 
@@ -361,6 +364,7 @@ export async function runDeadlineBoundTransaction<T>(
       {
         maxWait: timing.maxWait,
         timeout: timing.timeout,
+        isolationLevel: policy.isolationLevel,
       }
     );
   } catch (error) {
