@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildDashboardHref,
+  dashboardHrefWithoutLegacyPage,
   DEFAULT_FILTERS,
   getDashboardDateRange,
   getPagination,
@@ -29,7 +30,6 @@ test("dashboard filters parse shareable URL state and reject invalid values", ()
         status: "clicked",
         search: "Four Tet",
       },
-      page: 3,
     }
   );
   assert.deepEqual(
@@ -41,7 +41,7 @@ test("dashboard filters parse shareable URL state and reject invalid values", ()
       status: "queued",
       page: "-2",
     }),
-    { mode: "matched", filters: DEFAULT_FILTERS, page: 1 }
+    { mode: "matched", filters: DEFAULT_FILTERS }
   );
   assert.deepEqual(
     parseDashboardQuery({
@@ -52,12 +52,11 @@ test("dashboard filters parse shareable URL state and reject invalid values", ()
     {
       mode: "unknown",
       filters: { ...DEFAULT_FILTERS, search: "Bicep" },
-      page: 1,
     }
   );
 });
 
-test("dashboard URL generation omits defaults and preserves pagination state", () => {
+test("dashboard URL generation omits defaults and obsolete page state", () => {
   assert.equal(
     buildDashboardHref({
       mode: "dismissed",
@@ -66,22 +65,30 @@ test("dashboard URL generation omits defaults and preserves pagination state", (
         source: "statsfm",
         search: "Jamie xx",
       },
-      page: 2,
     }),
-    "/dashboard?mode=dismissed&src=statsfm&search=Jamie+xx&page=2"
+    "/dashboard?mode=dismissed&src=statsfm&search=Jamie+xx"
   );
   assert.equal(
-    buildDashboardHref({ mode: "matched", filters: DEFAULT_FILTERS, page: 1 }),
+    buildDashboardHref({ mode: "matched", filters: DEFAULT_FILTERS }),
     "/dashboard"
   );
   assert.equal(
     buildDashboardHref({
       mode: "unknown",
       filters: { ...DEFAULT_FILTERS, source: "spotify" },
-      page: 1,
     }),
     "/dashboard?mode=unknown"
   );
+  assert.equal(
+    dashboardHrefWithoutLegacyPage({
+      mode: "dismissed",
+      search: "Jamie xx",
+      page: "4",
+      marked: "1",
+    }),
+    "/dashboard?mode=dismissed&search=Jamie+xx&marked=1"
+  );
+  assert.equal(dashboardHrefWithoutLegacyPage({ mode: "matched" }), null);
 });
 
 test("dashboard date ranges use Eastern calendar dates", () => {

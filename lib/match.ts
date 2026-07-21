@@ -17,7 +17,9 @@ import {
   isActiveManualOutreachMarker,
 } from "@/lib/manualOutreach";
 import {
+  DASHBOARD_BATCH_SIZE,
   DASHBOARD_PAGE_SIZE,
+  dashboardHrefWithoutLegacyPage,
   getPagination,
   type DashboardMode,
   type DashboardPagination,
@@ -26,11 +28,18 @@ import {
   type RangeFilter,
   type SourceFilter,
 } from "@/lib/dashboardQuery";
+import {
+  decodeDashboardCursor,
+  encodeDashboardCursor,
+  type DashboardCursor,
+} from "@/lib/dashboardCursor";
 
 export {
+  DASHBOARD_BATCH_SIZE,
   DASHBOARD_PAGE_SIZE,
   DEFAULT_FILTERS,
   buildDashboardHref,
+  dashboardHrefWithoutLegacyPage,
   firstSearchParam,
   getPagination,
   parseDashboardQuery,
@@ -97,9 +106,17 @@ export interface MatchedShow {
 export interface DashboardData {
   shows: MatchedShow[];
   modeCounts: Record<DashboardMode, number>;
-  pagination: DashboardPagination;
+  resultCount: number;
+  nextCursor: string | null;
+  snapshotAt: Date;
   totalUpcoming: number;
   totalSignals: number;
+}
+
+export interface DashboardBatch {
+  shows: MatchedShow[];
+  nextCursor: string | null;
+  snapshotAt: Date;
 }
 
 export function getDashboardDateRange(
@@ -169,7 +186,7 @@ function matchingArtistWhere(
   return { OR: [matched, unknown] };
 }
 
-function showWhere(
+export function dashboardShowWhere(
   mode: DashboardMode,
   filters: MatchFilters,
   now: Date
@@ -235,7 +252,7 @@ function showWhere(
   return where;
 }
 
-function dashboardShowSelect(
+export function dashboardShowSelect(
   now: Date
 ) {
   return {
@@ -338,57 +355,51 @@ function parseGenres(value: string | null): string[] {
   }
 }
 
-export async function getDashboardData(
-  query: DashboardQuery,
-  now: Date = new Date()
-): Promise<DashboardData> {
-  if (!Number.isSafeInteger(query.page) || query.page < 1) {
-    throw new Error("Dashboard page must be a positive integer");
-  }
-
-  const selectedWhere = showWhere(query.mode, query.filters, now);
-  const select = dashboardShowSelect(now);
-  const skip = (query.page - 1) * DASHBOARD_PAGE_SIZE;
-  const showRowsPromise: Promise<DashboardShowRow[]> = db.show.findMany({
-    where: selectedWhere,
-    orderBy: [{ date: "asc" }, { id: "asc" }],
-    skip,
-    take: DASHBOARD_PAGE_SIZE,
-    select,
-  });
-
-  const [
-    showRows,
-    matchedCount,
-    unknownCount,
-    interestedCount,
-    dismissedCount,
-    totalUpcoming,
-    totalSignals,
-  ] = await Promise.all([
-    showRowsPromise,
-    countShows(showWhere("matched", query.filters, now)),
-    countShows(showWhere("unknown", query.filters, now)),
-    countShows(showWhere("interested", query.filters, now)),
-    countShows(showWhere("dismissed", query.filters, now)),
-    db.show.count({
-      where: {
-        date: { gte: easternTodayStoredDate(now) },
-        isFestival: false,
-        syncStatus: "active",
-      },
-    }),
-    db.listenSignal.count({ where: activeListenSignalWhere(now) }),
-  ]);
-
-  const modeCounts: Record<DashboardMode, number> = {
-    matched: matchedCount,
-    unknown: unknownCount,
-    interested: interestedCount,
-    dismissed: dismissedCount,
+function snapshotShowWhere(
+  where: Prisma.ShowWhereInput,
+  snapshotAt: Date,
+  cursor: DashboardCursor | null
+): Prisma.ShowWhereInput {
+  return {
+    ...where,
+    AND: [
+      { createdAt: { lte: snapshotAt } },
+      ...(cursor
+        ? [
+            {
+              OR: [
+                { date: { gt: cursor.date } },
+                { date: cursor.date, id: { gt: cursor.id } },
+              ],
+            },
+          ]
+        : []),
+    ],
   };
-  const pagination = getPagination(modeCounts[query.mode], query.page);
+}
 
+export function buildDashboardShowFindManyArgs(
+  query: DashboardQuery,
+  snapshotAt: Date,
+  cursor: DashboardCursor | null
+) {
+  return {
+    where: snapshotShowWhere(
+      dashboardShowWhere(query.mode, query.filters, snapshotAt),
+      snapshotAt,
+      cursor
+    ),
+    orderBy: [{ date: "asc" as const }, { id: "asc" as const }],
+    take: DASHBOARD_BATCH_SIZE + 1,
+    select: dashboardShowSelect(snapshotAt),
+  };
+}
+
+async function hydrateDashboardShowRows(
+  showRows: DashboardShowRow[],
+  query: DashboardQuery,
+  now: Date
+): Promise<MatchedShow[]> {
   const featuredArtistIds = new Set<string>();
   for (const show of showRows) {
     for (const showArtist of show.artists) {
@@ -459,7 +470,7 @@ export async function getDashboardData(
     playlistsByArtist.set(row.artistId, rows);
   }
 
-  const shows = showRows.map((show): MatchedShow => {
+  return showRows.map((show): MatchedShow => {
     const matchedArtists: MatchedShow["matchedArtists"] = [];
     const otherArtists: MatchedShow["otherArtists"] = [];
 
@@ -551,10 +562,92 @@ export async function getDashboardData(
     };
   });
 
+}
+
+async function loadDashboardBatch(
+  query: DashboardQuery,
+  snapshotAt: Date,
+  cursor: DashboardCursor | null
+): Promise<DashboardBatch> {
+  const rows: DashboardShowRow[] = await db.show.findMany(
+    buildDashboardShowFindManyArgs(query, snapshotAt, cursor)
+  );
+  const hasMore = rows.length > DASHBOARD_BATCH_SIZE;
+  const pageRows = rows.slice(0, DASHBOARD_BATCH_SIZE);
+  const shows = await hydrateDashboardShowRows(pageRows, query, snapshotAt);
+  const last = pageRows.at(-1);
+
   return {
     shows,
+    nextCursor:
+      hasMore && last
+        ? encodeDashboardCursor(
+            { date: last.date, id: last.id, snapshotAt },
+            query
+          )
+        : null,
+    snapshotAt,
+  };
+}
+
+export async function getDashboardNextBatch(
+  query: DashboardQuery,
+  cursorValue: unknown,
+  requestNow: Date = new Date()
+): Promise<DashboardBatch | null> {
+  const cursor = decodeDashboardCursor(cursorValue, query, requestNow);
+  if (!cursor) return null;
+  return loadDashboardBatch(query, cursor.snapshotAt, cursor);
+}
+
+export async function getDashboardData(
+  query: DashboardQuery,
+  now: Date = new Date()
+): Promise<DashboardData> {
+  const countWhere = (mode: DashboardMode) =>
+    snapshotShowWhere(
+      dashboardShowWhere(mode, query.filters, now),
+      now,
+      null
+    );
+  const [
+    batch,
+    matchedCount,
+    unknownCount,
+    interestedCount,
+    dismissedCount,
+    totalUpcoming,
+    totalSignals,
+  ] = await Promise.all([
+    loadDashboardBatch(query, now, null),
+    countShows(countWhere("matched")),
+    countShows(countWhere("unknown")),
+    countShows(countWhere("interested")),
+    countShows(countWhere("dismissed")),
+    db.show.count({
+      where: {
+        date: { gte: easternTodayStoredDate(now) },
+        isFestival: false,
+        syncStatus: "active",
+        createdAt: { lte: now },
+      },
+    }),
+    db.listenSignal.count({ where: activeListenSignalWhere(now) }),
+  ]);
+
+  const modeCounts: Record<DashboardMode, number> = {
+    matched: matchedCount,
+    unknown: unknownCount,
+    interested: interestedCount,
+    dismissed: dismissedCount,
+  };
+
+  return {
+    shows: batch.shows,
     modeCounts,
-    pagination,
+    resultCount: modeCounts[query.mode],
+    nextCursor: batch.nextCursor,
+    snapshotAt: batch.snapshotAt,
     totalUpcoming,
     totalSignals,
   };

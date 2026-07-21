@@ -3,18 +3,14 @@ import { redirect } from "next/navigation";
 import { getDashboardData } from "@/lib/match";
 import {
   buildDashboardHref,
+  dashboardHrefWithoutLegacyPage,
   firstSearchParam,
   parseDashboardQuery,
 } from "@/lib/dashboardQuery";
 import { getTestOverride } from "@/lib/resend";
 import { isWeekendET } from "@/lib/schedule";
 import { cn } from "@/lib/cn";
-import { appendWorkflowResult } from "@/lib/dashboardReturnUrl";
-import { pickEmailContact } from "@/lib/contactSelection";
-import {
-  getFollowUpEligibilityBatch,
-  getOutreachSendabilityBatch,
-} from "@/lib/sendOutreach";
+import { getDashboardInteractionState } from "@/lib/dashboardInteractionState";
 import { DashboardClient } from "./dashboard-client";
 
 export const dynamic = "force-dynamic";
@@ -49,6 +45,8 @@ export default async function DashboardPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = await searchParams;
+  const legacyPageRedirect = dashboardHrefWithoutLegacyPage(params);
+  if (legacyPageRedirect) redirect(legacyPageRedirect);
   const query = parseDashboardQuery(params);
   const sent = firstSearchParam(params.sent);
   const error = firstSearchParam(params.error);
@@ -68,53 +66,10 @@ export default async function DashboardPage({
     getDashboardData(query, now),
   ]);
 
-  if (dashboard.pagination.requestedPage !== dashboard.pagination.page) {
-    const results = Object.fromEntries(
-      Object.entries({
-        sent,
-        error,
-        added,
-        updated,
-        deleted,
-        sheet_errors: sheetErrors,
-        marked,
-        unmarked,
-        scheduled,
-        cancelled,
-        followup_sent: followUpSent,
-        followup_scheduled: followUpScheduled,
-      }).filter((entry): entry is [string, string] => entry[1] !== undefined)
-    );
-    redirect(
-      appendWorkflowResult(
-        buildDashboardHref({
-          ...query,
-          page: dashboard.pagination.page,
-        }),
-        results
-      )
-    );
-  }
-
-  const [sendability, followUpEligibility] = await Promise.all([
-    getOutreachSendabilityBatch(
-      dashboard.shows.flatMap((show) =>
-        show.matchedArtists.flatMap((artist) => {
-          const contact = pickEmailContact(artist.contacts);
-          return contact ? [{ showId: show.id, contactId: contact.id }] : [];
-        }),
-      ),
-      now,
-    ),
-    getFollowUpEligibilityBatch(
-      dashboard.shows.flatMap((show) =>
-        show.outreach.flatMap((outreach) =>
-          outreach.kind === "original" ? [outreach.id] : [],
-        ),
-      ),
-      now,
-    ),
-  ]);
+  const interactionState = await getDashboardInteractionState(
+    dashboard.shows,
+    now
+  );
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -166,11 +121,11 @@ export default async function DashboardPage({
       </div>
 
       <DashboardClient
+        key={`${buildDashboardHref(query)}:${dashboard.snapshotAt.toISOString()}`}
         data={dashboard}
         query={query}
         isWeekend={isWeekendET(now)}
-        sendabilityRows={sendability}
-        followUpEligibilityRows={followUpEligibility}
+        {...interactionState}
       />
     </main>
   );

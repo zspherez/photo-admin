@@ -18,14 +18,14 @@ test("dashboard returns preserve only validated shareable state", () => {
     dashboardReturnPath(
       "/dashboard?mode=unknown&range=30-60d&src=spotify&contact=needs&status=clicked&search=Four%20Tet&page=3&sent=old"
     ),
-    "/dashboard?mode=unknown&range=30-60d&contact=needs&status=clicked&search=Four+Tet&page=3"
+    "/dashboard?mode=unknown&range=30-60d&contact=needs&status=clicked&search=Four+Tet"
   );
   assert.equal(
     dashboardResultHref(
       "/dashboard?mode=dismissed&search=Jamie%20xx&page=2",
       "marked"
     ),
-    "/dashboard?mode=dismissed&search=Jamie+xx&page=2&marked=1"
+    "/dashboard?mode=dismissed&search=Jamie+xx&marked=1"
   );
 });
 

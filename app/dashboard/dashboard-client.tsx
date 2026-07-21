@@ -1,5 +1,14 @@
+"use client";
+
 import Form from "next/form";
 import Link from "next/link";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   ContactFilter,
   DashboardData,
@@ -11,6 +20,7 @@ import type {
   StatusFilter,
 } from "@/lib/match";
 import {
+  buildDashboardBatchHref,
   buildDashboardHref,
   DEFAULT_FILTERS,
 } from "@/lib/dashboardQuery";
@@ -40,6 +50,15 @@ import type {
 } from "@/lib/sendOutreach";
 import { isCancellableOutreachStatus } from "@/lib/outreachStatus";
 import { withWorkflowReturnTo } from "@/lib/workflowLinks";
+import {
+  mergeUniqueById,
+  mergeUniqueByKey,
+  shouldAutomaticallyLoadMore,
+} from "@/lib/dashboardInfinite";
+import {
+  deserializeDashboardAppendPayload,
+  type DashboardAppendJson,
+} from "@/lib/dashboardTransport";
 import {
   sendNowAction,
   dismissShowAction,
@@ -118,13 +137,11 @@ function queryWith(
   changes: {
     mode?: DashboardMode;
     filters?: Partial<MatchFilters>;
-    page?: number;
   }
 ): DashboardQuery {
   return {
     mode: changes.mode ?? query.mode,
     filters: { ...query.filters, ...changes.filters },
-    page: changes.page ?? query.page,
   };
 }
 
@@ -132,20 +149,44 @@ export function DashboardClient({
   data,
   query,
   isWeekend,
-  sendabilityRows,
-  followUpEligibilityRows,
+  sendabilityRows: initialSendabilityRows,
+  followUpEligibilityRows: initialFollowUpEligibilityRows,
 }: Props) {
-  const { shows, modeCounts, pagination } = data;
+  const { modeCounts } = data;
+  const [shows, setShows] = useState(data.shows);
+  const [nextCursor, setNextCursor] = useState(data.nextCursor);
+  const [sendabilityRows, setSendabilityRows] = useState(
+    initialSendabilityRows
+  );
+  const [followUpEligibilityRows, setFollowUpEligibilityRows] = useState(
+    initialFollowUpEligibilityRows
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  const [automaticLoading, setAutomaticLoading] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(false);
+  const showsRef = useRef(shows);
+  const abortRef = useRef<AbortController | null>(null);
   const filters = query.filters;
   const returnTo = buildDashboardHref(query);
-  const sendabilityByTarget = new Map(
-    sendabilityRows.map((row) => [
-      `${row.showId}\u0000${row.contactId}`,
-      row,
-    ])
+  const sendabilityByTarget = useMemo(
+    () =>
+      new Map(
+        sendabilityRows.map((row) => [
+          `${row.showId}\u0000${row.contactId}`,
+          row,
+        ])
+      ),
+    [sendabilityRows]
   );
-  const followUpByParent = new Map(
-    followUpEligibilityRows.map((row) => [row.parentOutreachId, row]),
+  const followUpByParent = useMemo(
+    () =>
+      new Map(
+        followUpEligibilityRows.map((row) => [row.parentOutreachId, row])
+      ),
+    [followUpEligibilityRows]
   );
   const tabs: { key: DashboardMode; label: string; tone?: "amber" }[] = [
     { key: "matched", label: "Matched" },
@@ -197,6 +238,135 @@ export function DashboardClient({
     filters.contact !== DEFAULT_FILTERS.contact ||
     filters.status !== DEFAULT_FILTERS.status;
 
+  useEffect(() => {
+    showsRef.current = shows;
+  }, [shows]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const connection = (
+      navigator as Navigator & {
+        connection?: {
+          saveData?: boolean;
+          addEventListener?: (type: "change", listener: () => void) => void;
+          removeEventListener?: (type: "change", listener: () => void) => void;
+        };
+      }
+    ).connection;
+    const update = () =>
+      setAutomaticLoading(
+        shouldAutomaticallyLoadMore({
+          intersectionObserver: "IntersectionObserver" in window,
+          reducedMotion: media.matches,
+          saveData: connection?.saveData === true,
+        })
+      );
+    update();
+    media.addEventListener("change", update);
+    connection?.addEventListener?.("change", update);
+    return () => {
+      media.removeEventListener("change", update);
+      connection?.removeEventListener?.("change", update);
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      abortRef.current?.abort();
+    },
+    []
+  );
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingRef.current) return;
+    loadingRef.current = true;
+    setLoading(true);
+    setError(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const response = await fetch(
+        buildDashboardBatchHref(query, nextCursor),
+        {
+          cache: "no-store",
+          credentials: "same-origin",
+          signal: controller.signal,
+        }
+      );
+      if (!response.ok) {
+        throw new Error(
+          response.status === 401
+            ? "Your session expired. Sign in again, then retry."
+            : "Couldn’t load more shows."
+        );
+      }
+      const payload = deserializeDashboardAppendPayload(
+        (await response.json()) as DashboardAppendJson
+      );
+      const merged = mergeUniqueById(showsRef.current, payload.shows);
+      showsRef.current = merged.items;
+      setShows(merged.items);
+      setNextCursor(payload.nextCursor);
+      setSendabilityRows((current) =>
+        mergeUniqueByKey(
+          current,
+          payload.sendabilityRows,
+          (row) => `${row.showId}\u0000${row.contactId}`
+        ).items
+      );
+      setFollowUpEligibilityRows((current) =>
+        mergeUniqueByKey(
+          current,
+          payload.followUpEligibilityRows,
+          (row) => row.parentOutreachId
+        ).items
+      );
+      setAnnouncement(
+        merged.added > 0
+          ? `${merged.added} more show${merged.added === 1 ? "" : "s"} loaded.`
+          : payload.nextCursor
+            ? "No duplicate shows added. More results are available."
+            : "No more shows."
+      );
+    } catch (loadError) {
+      if ((loadError as Error).name !== "AbortError") {
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Couldn’t load more shows."
+        );
+      }
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        loadingRef.current = false;
+        setLoading(false);
+      }
+    }
+  }, [nextCursor, query]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (
+      !sentinel ||
+      !automaticLoading ||
+      !nextCursor ||
+      loading ||
+      error
+    ) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadMore();
+      },
+      { rootMargin: "600px 0px" }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [automaticLoading, error, loadMore, loading, nextCursor]);
+
   return (
     <>
       <div className="mt-1 text-sm text-zinc-500">
@@ -211,7 +381,7 @@ export function DashboardClient({
             <Link
               key={tab.key}
               href={buildDashboardHref(
-                queryWith(query, { mode: tab.key, page: 1 })
+                queryWith(query, { mode: tab.key })
               )}
               aria-current={active ? "page" : undefined}
               className={cn(
@@ -263,7 +433,6 @@ export function DashboardClient({
               href={buildDashboardHref({
                 mode: query.mode,
                 filters: DEFAULT_FILTERS,
-                page: 1,
               })}
               variant="ghost"
             >
@@ -301,7 +470,6 @@ export function DashboardClient({
                     href={buildDashboardHref(
                       queryWith(query, {
                         filters: { [option.key]: option.value },
-                        page: 1,
                       })
                     )}
                     aria-current={active ? "page" : undefined}
@@ -323,12 +491,9 @@ export function DashboardClient({
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
         <span>
-          {pagination.total === 0
+          {data.resultCount === 0
             ? "0 shows"
-            : `${pagination.start}–${pagination.end} of ${pagination.total} shows`}
-        </span>
-        <span>
-          Page {pagination.page} of {pagination.pageCount}
+            : `${shows.length} of ${data.resultCount} shows`}
         </span>
       </div>
 
@@ -810,40 +975,48 @@ export function DashboardClient({
         </div>
       )}
 
-      {pagination.pageCount > 1 && (
-        <nav
-          aria-label="Dashboard pages"
-          className="mt-6 flex items-center justify-between gap-3"
-        >
-          {pagination.hasPrevious ? (
-            <LinkButton
-              href={buildDashboardHref(
-                queryWith(query, { page: pagination.page - 1 })
-              )}
-              variant="secondary"
-            >
-              ← Previous
-            </LinkButton>
-          ) : (
-            <span />
-          )}
-          <span className="text-xs text-zinc-500">
-            Page {pagination.page} of {pagination.pageCount}
-          </span>
-          {pagination.hasNext ? (
-            <LinkButton
-              href={buildDashboardHref(
-                queryWith(query, { page: pagination.page + 1 })
-              )}
-              variant="secondary"
-            >
-              Next →
-            </LinkButton>
-          ) : (
-            <span />
-          )}
-        </nav>
-      )}
+      <div
+        ref={sentinelRef}
+        className="mt-6 flex min-h-20 flex-col items-center justify-center gap-3 text-center"
+      >
+        {loading && (
+          <div
+            aria-busy="true"
+            aria-label="Loading more shows"
+            className="w-full space-y-2"
+          >
+            <div className="h-16 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-900" />
+            <div className="h-16 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-900" />
+          </div>
+        )}
+        {error && (
+          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        )}
+        {nextCursor ? (
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loading}
+            className="inline-flex h-9 items-center justify-center rounded-md border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-900 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            {loading ? "Loading…" : error ? "Retry" : "Load more"}
+          </button>
+        ) : (
+          shows.length > 0 && (
+            <p className="text-sm text-zinc-500">You’ve reached the end.</p>
+          )
+        )}
+        {nextCursor && !loading && !error && (
+          <p className="text-xs text-zinc-500">
+            {automaticLoading
+              ? "More shows load automatically as you scroll."
+              : "Automatic loading is off; use the Load more button."}
+          </p>
+        )}
+      </div>
+      <p className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </p>
     </>
   );
 }

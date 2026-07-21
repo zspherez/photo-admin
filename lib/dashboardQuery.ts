@@ -1,8 +1,12 @@
-import { firstSearchParam } from "@/lib/searchParams";
+import {
+  firstSearchParam,
+  validatedTrimmedSearchParam,
+} from "@/lib/searchParams";
 
 export { firstSearchParam } from "@/lib/searchParams";
 
 export const DASHBOARD_PAGE_SIZE = 24;
+export const DASHBOARD_BATCH_SIZE = DASHBOARD_PAGE_SIZE;
 
 export type RangeFilter = "7d" | "30d" | "30-60d" | "90d";
 export type SourceFilter = "any" | "statsfm" | "spotify";
@@ -25,7 +29,6 @@ export interface MatchFilters {
 export interface DashboardQuery {
   mode: DashboardMode;
   filters: MatchFilters;
-  page: number;
 }
 
 export interface DashboardPagination {
@@ -49,13 +52,6 @@ export const DEFAULT_FILTERS: MatchFilters = {
 };
 
 type SearchParamsRecord = Record<string, string | string[] | undefined>;
-
-function parsePage(value: string | undefined): number {
-  if (!value || !/^[1-9]\d*$/.test(value)) return 1;
-  const page = Number(value);
-  const maxPage = Math.floor(Number.MAX_SAFE_INTEGER / DASHBOARD_PAGE_SIZE);
-  return Number.isSafeInteger(page) && page <= maxPage ? page : 1;
-}
 
 export function parseDashboardQuery(
   searchParams: SearchParamsRecord
@@ -98,9 +94,10 @@ export function parseDashboardQuery(
         status === "any"
           ? status
           : DEFAULT_FILTERS.status,
-      search: (firstSearchParam(searchParams.search) ?? "").trim(),
+      search:
+        validatedTrimmedSearchParam(searchParams.search, { maxLength: 200 }) ??
+        "",
     },
-    page: parsePage(firstSearchParam(searchParams.page)),
   };
 }
 
@@ -123,9 +120,37 @@ export function buildDashboardHref(query: DashboardQuery): string {
     params.set("status", query.filters.status);
   }
   if (query.filters.search) params.set("search", query.filters.search);
-  if (query.page > 1) params.set("page", String(query.page));
   const queryString = params.toString();
   return queryString ? `/dashboard?${queryString}` : "/dashboard";
+}
+
+export function dashboardHrefWithoutLegacyPage(
+  searchParams: SearchParamsRecord
+): string | null {
+  if (searchParams.page === undefined) return null;
+
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(searchParams)) {
+    if (key === "page" || value === undefined) continue;
+    for (const entry of Array.isArray(value) ? value : [value]) {
+      params.append(key, entry);
+    }
+  }
+  const queryString = params.toString();
+  return queryString ? `/dashboard?${queryString}` : "/dashboard";
+}
+
+export function buildDashboardBatchHref(
+  query: DashboardQuery,
+  cursor: string
+): string {
+  const dashboardUrl = new URL(
+    buildDashboardHref(query),
+    "https://dashboard.local"
+  );
+  dashboardUrl.pathname = "/api/dashboard/shows";
+  dashboardUrl.searchParams.set("cursor", cursor);
+  return `${dashboardUrl.pathname}${dashboardUrl.search}`;
 }
 
 export function getPagination(

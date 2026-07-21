@@ -55,10 +55,14 @@ test("manual mark and unmark refresh server truth before redirecting with banner
   );
 });
 
-test("inline dashboard mutations keep returnTo and render from Server Component props", () => {
-  assert.ok(
-    !dashboardSource.startsWith('"use client"'),
-    "dashboard listing must render from fresh Server Component data",
+test("inline dashboard mutations keep returnTo and refresh client state from server snapshots", () => {
+  const pageSource = readFileSync(
+    path.join(process.cwd(), "app/dashboard/page.tsx"),
+    "utf8",
+  );
+  assert.match(
+    pageSource,
+    /key=\{`\$\{buildDashboardHref\(query\)\}:\$\{dashboard\.snapshotAt\.toISOString\(\)\}`\}/,
   );
   assert.ok(
     dashboardSource.match(/name="returnTo"/g)?.length &&
