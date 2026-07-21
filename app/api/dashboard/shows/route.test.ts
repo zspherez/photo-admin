@@ -70,19 +70,30 @@ test("dashboard batch API rejects unknown, duplicate, and invalid inputs", async
   );
 });
 
-test("dashboard batch API validates cursor and returns read-safe data", async () => {
+test("dashboard batch API separates invalid cursors from gone snapshots", async () => {
   const invalid = await handleDashboardShowsRequest(
     new NextRequest("https://example.test/api/dashboard/shows?cursor=abc"),
     dependencies({ loadBatch: async () => ({ status: "invalid" }) })
   );
   assert.equal(invalid.status, 400);
 
+  let interactionLoaded = false;
   const expired = await handleDashboardShowsRequest(
     new NextRequest("https://example.test/api/dashboard/shows?cursor=abc"),
-    dependencies({ loadBatch: async () => ({ status: "expired" }) })
+    dependencies({
+      loadBatch: async () => ({ status: "expired" }),
+      loadInteractionState: async () => {
+        interactionLoaded = true;
+        return { sendabilityRows: [], followUpEligibilityRows: [] };
+      },
+    })
   );
   assert.equal(expired.status, 410);
+  assert.deepEqual(await expired.json(), { error: "Snapshot expired" });
+  assert.equal(interactionLoaded, false);
+});
 
+test("dashboard batch API returns read-safe data for a valid snapshot", async () => {
   let ownerKey = "";
   const response = await handleDashboardShowsRequest(
     new NextRequest("https://example.test/api/dashboard/shows?cursor=abc"),

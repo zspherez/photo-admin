@@ -14,7 +14,6 @@ test("dashboard snapshot migration is transactional and constrained", () => {
   assert.match(migration, /^BEGIN;/);
   assert.match(migration, /COMMIT;\s*$/);
   assert.match(migration, /DashboardShowSnapshot_expiry_check/);
-  assert.match(migration, /DashboardShowSnapshot_cursorKey_check/);
   assert.match(migration, /DashboardShowSnapshotMember_position_check/);
   assert.match(migration, /DashboardShowSnapshotMember_sortDate_check/);
   assert.match(

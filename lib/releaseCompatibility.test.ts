@@ -278,7 +278,6 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "id",
       "ownerKey",
       "queryKey",
-      "cursorKey",
       "total",
       "expiresAt",
       "createdAt",

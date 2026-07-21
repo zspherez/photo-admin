@@ -18,13 +18,15 @@ test("dashboard snapshot creation freezes ordered membership transactionally", (
   assert.match(create, /buildDashboardSnapshotMembers\(orderedShows\)/);
 });
 
-test("subsequent batches validate owner, query, expiry, and position", () => {
+test("subsequent batches authenticate before lookup and classify missing snapshots", () => {
   const next = source.slice(source.indexOf("export async function getDashboardNextBatch"));
-  assert.match(next, /snapshot\.ownerKey !== ownerKey/);
-  assert.match(next, /snapshot\.queryKey !== dashboardQueryKey\(query\)/);
-  assert.match(next, /verifyDashboardCursor\(cursor, query, snapshot\.cursorKey\)/);
-  assert.match(next, /isDashboardSnapshotExpired/);
-  assert.match(next, /cursor\.position >= snapshot\.total/);
+  assert.match(next, /verifyDashboardCursor\(cursor, query, ownerKey\)/);
+  assert.ok(
+    next.indexOf("verifyDashboardCursor(cursor, query, ownerKey)") <
+      next.indexOf("dashboardShowSnapshot.findUnique")
+  );
+  assert.match(next, /dashboardSnapshotAccessStatus\(/);
+  assert.match(next, /if \(!snapshot\) return \{ status: "expired" \}/);
   assert.match(
     source,
     /dashboardShowSnapshotMember\.findMany\(\{[\s\S]*position: \{ gt: afterPosition \}[\s\S]*orderBy: \{ position: "asc" \}/

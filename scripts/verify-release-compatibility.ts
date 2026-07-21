@@ -278,7 +278,6 @@ async function main(): Promise<void> {
         id: true,
         ownerKey: true,
         queryKey: true,
-        cursorKey: true,
         total: true,
         expiresAt: true,
         createdAt: true,

@@ -10,7 +10,7 @@ import type { DashboardNextBatchResult } from "@/lib/match";
 import { getDashboardInteractionState } from "@/lib/dashboardInteractionState";
 import type { DashboardInteractionState } from "@/lib/dashboardInteractionState";
 import { serializeDashboardAppendPayload } from "@/lib/dashboardTransport";
-import { dashboardOwnerKey } from "@/lib/dashboardSession";
+import { dashboardSessionIdentity } from "@/lib/dashboardSession";
 
 const ALLOWED_PARAMETERS = new Set([
   "cursor",
@@ -109,7 +109,7 @@ async function authenticate(request: NextRequest): Promise<AuthResult> {
   }
   return {
     status: "ok",
-    ownerKey: dashboardOwnerKey(cookieValue, configuration),
+    ownerKey: dashboardSessionIdentity(cookieValue, configuration).ownerKey,
   };
 }
 

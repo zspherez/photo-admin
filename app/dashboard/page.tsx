@@ -16,7 +16,7 @@ import {
   SESSION_COOKIE,
   getAuthConfiguration,
 } from "@/lib/auth";
-import { dashboardOwnerKey } from "@/lib/dashboardSession";
+import { dashboardSessionIdentity } from "@/lib/dashboardSession";
 import { DashboardClient } from "./dashboard-client";
 
 export const dynamic = "force-dynamic";
@@ -69,7 +69,10 @@ export default async function DashboardPage({
   const now = new Date();
   const configuration = getAuthConfiguration();
   const cookieValue = (await cookies()).get(SESSION_COOKIE)?.value;
-  const ownerKey = dashboardOwnerKey(cookieValue, configuration);
+  const { ownerKey, persistenceScope } = dashboardSessionIdentity(
+    cookieValue,
+    configuration
+  );
   const [testOverride, dashboard] = await Promise.all([
     getTestOverride(),
     getDashboardData(query, ownerKey, now),
@@ -130,10 +133,10 @@ export default async function DashboardPage({
       </div>
 
       <DashboardClient
-        key={`${ownerKey}:${buildDashboardHref(query)}`}
+        key={`${persistenceScope}:${buildDashboardHref(query)}`}
         data={dashboard}
         query={query}
-        persistenceScope={ownerKey}
+        persistenceScope={persistenceScope}
         isWeekend={isWeekendET(now)}
         {...interactionState}
       />

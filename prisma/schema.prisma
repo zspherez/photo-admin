@@ -345,7 +345,6 @@ model DashboardShowSnapshot {
   id        String                        @id @default(cuid())
   ownerKey  String
   queryKey  String
-  cursorKey String
   total     Int
   expiresAt DateTime
   members   DashboardShowSnapshotMember[]

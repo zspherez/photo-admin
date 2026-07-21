@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   buildDashboardHref,
   type DashboardQuery,
@@ -18,12 +18,35 @@ export interface DashboardSnapshotMember {
   sortDate: Date;
 }
 
-export function dashboardQueryKey(query: DashboardQuery): string {
-  return createHash("sha256").update(buildDashboardHref(query)).digest("hex");
+export type DashboardSnapshotAccessStatus = "ok" | "invalid" | "expired";
+
+export function dashboardSnapshotAccessStatus(
+  snapshot: {
+    ownerKey: string;
+    queryKey: string;
+    total: number;
+    expiresAt: Date;
+  } | null,
+  query: DashboardQuery,
+  ownerKey: string,
+  position: number,
+  now: Date
+): DashboardSnapshotAccessStatus {
+  if (!snapshot) return "expired";
+  if (
+    snapshot.ownerKey !== ownerKey ||
+    snapshot.queryKey !== dashboardQueryKey(query) ||
+    position >= snapshot.total
+  ) {
+    return "invalid";
+  }
+  return isDashboardSnapshotExpired(snapshot.expiresAt, now)
+    ? "expired"
+    : "ok";
 }
 
-export function createDashboardSnapshotCursorKey(): string {
-  return randomBytes(32).toString("hex");
+export function dashboardQueryKey(query: DashboardQuery): string {
+  return createHash("sha256").update(buildDashboardHref(query)).digest("hex");
 }
 
 export function buildDashboardSnapshotMembers(

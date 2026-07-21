@@ -46,3 +46,14 @@ test("dashboard action returns mark restoration while filter changes reset it", 
   assert.match(source, /parseDashboardRestoreState/);
   assert.match(source, /sessionStorage\.removeItem\(storageKey\)/);
 });
+
+test("HTTP 410 switches to safe refresh without a retry loop", () => {
+  assert.match(source, /response\.status === 410/);
+  assert.match(source, /setSnapshotExpired\(true\)/);
+  assert.match(source, /sessionStorage\.removeItem\(storageKey\)/);
+  assert.match(source, /"Refresh results"/);
+  assert.match(
+    source,
+    /if \(snapshotExpired\) \{\s*window\.location\.reload\(\);\s*\} else if/,
+  );
+});

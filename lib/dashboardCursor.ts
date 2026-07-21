@@ -35,9 +35,9 @@ function cursorSignature(
   snapshotId: string,
   position: number,
   scope: string,
-  cursorKey: string
+  signingKey: string
 ): string {
-  return createHmac("sha256", cursorKey)
+  return createHmac("sha256", signingKey)
     .update(signingInput(snapshotId, position, scope))
     .digest("base64url");
 }
@@ -79,13 +79,13 @@ export function dashboardCursorScope(query: DashboardQuery): string {
 export function encodeDashboardCursor(
   cursor: Pick<DashboardCursor, "snapshotId" | "position">,
   query: DashboardQuery,
-  cursorKey: string
+  signingKey: string
 ): string {
   if (
     !/^[A-Za-z0-9_-]{1,128}$/.test(cursor.snapshotId) ||
     !Number.isSafeInteger(cursor.position) ||
     cursor.position < 0 ||
-    !/^[0-9a-f]{64}$/.test(cursorKey)
+    !/^[0-9a-f]{64}$/.test(signingKey)
   ) {
     throw new Error("Cannot encode an invalid dashboard cursor");
   }
@@ -98,7 +98,7 @@ export function encodeDashboardCursor(
       cursor.snapshotId,
       cursor.position,
       dashboardCursorScope(query),
-      cursorKey
+      signingKey
     ),
   };
   return bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
@@ -147,14 +147,14 @@ export function decodeDashboardCursor(
 export function verifyDashboardCursor(
   cursor: DashboardCursor,
   query: DashboardQuery,
-  cursorKey: string
+  signingKey: string
 ): boolean {
-  if (!/^[0-9a-f]{64}$/.test(cursorKey)) return false;
+  if (!/^[0-9a-f]{64}$/.test(signingKey)) return false;
   const expected = cursorSignature(
     cursor.snapshotId,
     cursor.position,
     dashboardCursorScope(query),
-    cursorKey
+    signingKey
   );
   const actualBytes = Buffer.from(cursor.signature, "base64url");
   const expectedBytes = Buffer.from(expected, "base64url");

@@ -32,10 +32,9 @@ import {
 import {
   DASHBOARD_SNAPSHOT_INSERT_CHUNK_SIZE,
   buildDashboardSnapshotMembers,
-  createDashboardSnapshotCursorKey,
   dashboardQueryKey,
+  dashboardSnapshotAccessStatus,
   dashboardSnapshotExpiresAt,
-  isDashboardSnapshotExpired,
 } from "@/lib/dashboardSnapshot";
 
 export {
@@ -543,7 +542,6 @@ async function createDashboardSnapshot(
   snapshotAt: Date
 ): Promise<{
   id: string;
-  cursorKey: string;
   total: number;
   createdAt: Date;
   expiresAt: Date;
@@ -563,14 +561,12 @@ async function createDashboardSnapshot(
         data: {
           ownerKey,
           queryKey,
-          cursorKey: createDashboardSnapshotCursorKey(),
           total: orderedShows.length,
           expiresAt,
           createdAt: snapshotAt,
         },
         select: {
           id: true,
-          cursorKey: true,
           total: true,
           createdAt: true,
           expiresAt: true,
@@ -601,11 +597,11 @@ async function loadDashboardSnapshotBatch(
   query: DashboardQuery,
   snapshot: {
     id: string;
-    cursorKey: string;
     total: number;
     createdAt: Date;
   },
-  afterPosition: number
+  afterPosition: number,
+  ownerKey: string
 ): Promise<DashboardBatch> {
   const members = await db.dashboardShowSnapshotMember.findMany({
     where: {
@@ -638,7 +634,7 @@ async function loadDashboardSnapshotBatch(
         ? encodeDashboardCursor(
             { snapshotId: snapshot.id, position: last.position },
             query,
-            snapshot.cursorKey
+            ownerKey
           )
         : null,
     snapshotId: snapshot.id,
@@ -654,40 +650,46 @@ export async function getDashboardNextBatch(
 ): Promise<DashboardNextBatchResult> {
   const cursor = decodeDashboardCursor(cursorValue, query);
   if (!cursor) return { status: "invalid" };
+  if (!verifyDashboardCursor(cursor, query, ownerKey)) {
+    return { status: "invalid" };
+  }
   const snapshot = await db.dashboardShowSnapshot.findUnique({
     where: { id: cursor.snapshotId },
     select: {
       id: true,
       ownerKey: true,
       queryKey: true,
-      cursorKey: true,
       total: true,
       expiresAt: true,
       createdAt: true,
     },
   });
-  if (
-    !snapshot ||
-    snapshot.ownerKey !== ownerKey ||
-    snapshot.queryKey !== dashboardQueryKey(query)
-  ) {
+  const accessStatus = dashboardSnapshotAccessStatus(
+    snapshot,
+    query,
+    ownerKey,
+    cursor.position,
+    requestNow
+  );
+  if (accessStatus === "invalid") {
     return { status: "invalid" };
   }
-  if (!verifyDashboardCursor(cursor, query, snapshot.cursorKey)) {
-    return { status: "invalid" };
-  }
-  if (isDashboardSnapshotExpired(snapshot.expiresAt, requestNow)) {
+  if (accessStatus === "expired") {
+    if (!snapshot) return { status: "expired" };
     await db.dashboardShowSnapshot.deleteMany({
       where: { id: snapshot.id, ownerKey },
     });
     return { status: "expired" };
   }
-  if (cursor.position >= snapshot.total) {
-    return { status: "invalid" };
-  }
+  if (!snapshot) return { status: "expired" };
   return {
     status: "ok",
-    batch: await loadDashboardSnapshotBatch(query, snapshot, cursor.position),
+    batch: await loadDashboardSnapshotBatch(
+      query,
+      snapshot,
+      cursor.position,
+      ownerKey
+    ),
   };
 }
 
@@ -727,7 +729,12 @@ export async function getDashboardData(
     dismissed: dismissedCount,
   };
   modeCounts[query.mode] = snapshot.total;
-  const batch = await loadDashboardSnapshotBatch(query, snapshot, -1);
+  const batch = await loadDashboardSnapshotBatch(
+    query,
+    snapshot,
+    -1,
+    ownerKey
+  );
 
   return {
     shows: batch.shows,

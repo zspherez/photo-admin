@@ -62,9 +62,9 @@ test("inline dashboard mutations keep returnTo without timestamp remounts", () =
   );
   assert.match(
     pageSource,
-    /key=\{`\$\{ownerKey\}:\$\{buildDashboardHref\(query\)\}`\}/,
+    /key=\{`\$\{persistenceScope\}:\$\{buildDashboardHref\(query\)\}`\}/,
   );
-  assert.match(pageSource, /persistenceScope=\{ownerKey\}/);
+  assert.match(pageSource, /persistenceScope=\{persistenceScope\}/);
   assert.doesNotMatch(pageSource, /snapshotAt\.toISOString/);
   assert.ok(
     dashboardSource.match(/name="returnTo"/g)?.length &&
