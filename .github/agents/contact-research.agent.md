@@ -93,8 +93,9 @@ statement. A valid submission creates a review proposal; it never applies the
 note automatically.
 
 Never include an actual phone number in any submitted field, evidence quote,
-company, canonical rule reference, URL path, or query. The owner-authored note
-is taken from the structured snapshot rather than agent text. If
+company, instruction excerpt, URL path, or query. The proposed note must
+faithfully reflect the quoted instruction and remains subject to human review.
+If
 `existingContacts` already includes the same direct-outreach instruction, do
 not submit it again; continue normal email research.
 

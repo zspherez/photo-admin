@@ -63,16 +63,21 @@ export function normalizeGlobalAgentRules(value: unknown): string {
 }
 
 function looksLikeStructuredRuleSyntax(value: string): boolean {
-  return value
-    .split(/\r?\n/)
-    .some((line) => {
-      const trimmed = line.trim();
-      return (
-        /^DIRECT_OUTREACH\b/i.test(trimmed) ||
-        trimmed.startsWith("{") ||
-        trimmed.startsWith("[")
-      );
-    });
+  if (
+    value
+      .split(/\r?\n/)
+      .some((line) => /^DIRECT_OUTREACH\s*(?:\{|$)/.test(line.trim()))
+  ) {
+    return true;
+  }
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return typeof parsed === "object" && parsed !== null;
+  } catch {
+    return false;
+  }
 }
 
 export function normalizeDirectOutreachInstructions(value: unknown): string {

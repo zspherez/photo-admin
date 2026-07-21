@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import {
   DIRECT_OUTREACH_INSTRUCTIONS_MAX_LENGTH,
   GLOBAL_AGENT_RULES_MAX_LENGTH,
+  directOutreachInstructionExcerptFromCanonical,
   normalizeDirectOutreachInstructions,
   normalizeGlobalAgentRules,
   readGlobalAgentRulesInTransaction,
@@ -102,6 +103,18 @@ test("plain-language direct outreach rules allow references but reject literals 
   );
   assert.equal(
     normalizeDirectOutreachInstructions(
+      "Direct outreach should only be proposed when a trusted instruction applies.",
+    ),
+    "Direct outreach should only be proposed when a trusted instruction applies.",
+  );
+  assert.equal(
+    normalizeDirectOutreachInstructions(
+      "[Only propose a note when the manager relationship is public.]",
+    ),
+    "[Only propose a note when the manager relationship is public.]",
+  );
+  assert.equal(
+    normalizeDirectOutreachInstructions(
       "x".repeat(DIRECT_OUTREACH_INSTRUCTIONS_MAX_LENGTH),
     ).length,
     DIRECT_OUTREACH_INSTRUCTIONS_MAX_LENGTH,
@@ -191,6 +204,12 @@ test("legacy structured rules convert to readable freeform text", () => {
   ] as unknown as Prisma.JsonValue;
   assert.equal(
     readStoredDirectOutreachInstructions(legacy),
+    "When an artist is managed by Leif Fosse, add this direct outreach note: Use the number already on file.",
+  );
+  assert.equal(
+    directOutreachInstructionExcerptFromCanonical(
+      'DIRECT_OUTREACH {"id":"leif-fosse","manager":"Leif Fosse","note":"Use the number already on file"}',
+    ),
     "When an artist is managed by Leif Fosse, add this direct outreach note: Use the number already on file.",
   );
 });
