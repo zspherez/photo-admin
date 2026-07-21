@@ -363,3 +363,26 @@ test("agent skip submissions are schema and claim-token protected", () => {
     /error\.status === 409[\s\S]*metrics\.sessions\[sessionId\]\.stale = true/
   );
 });
+
+test("broker accepts only structured trusted-rule direct outreach", () => {
+  const source = readFileSync(
+    new URL("./contact-research-broker.mjs", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    source,
+    /const directOutreachSchema = z[\s\S]*ruleId: z\.string\(\)\.regex[\s\S]*ruleVersion: z\.number\(\)\.int\(\)\.min\(1\)[\s\S]*canonicalRule: z\.string\(\)\.min\(1\)\.max\(8_000\)[\s\S]*managerName: z\.string\(\)\.min\(1\)\.max\(200\)[\s\S]*sourceUrl: z\.string\(\)\.url\(\)[\s\S]*quote: z\.string\(\)\.min\(1\)\.max\(2_000\)[\s\S]*\.min\(1\)[\s\S]*\.max\(5\)[\s\S]*\.strict\(\)/,
+  );
+  assert.match(
+    source,
+    /"submit-direct-outreach": z\.object\(\{[\s\S]*directOutreach: directOutreachSchema/,
+  );
+  assert.match(
+    source,
+    /case "submit-direct-outreach": \{[\s\S]*requireSessionClaim\(state, input\)[\s\S]*candidates: \[\][\s\S]*directOutreach: input\.directOutreach/,
+  );
+  assert.match(
+    source,
+    /case "submit-candidates": \{[\s\S]*input\.directOutreach[\s\S]*directOutreach: input\.directOutreach/,
+  );
+});

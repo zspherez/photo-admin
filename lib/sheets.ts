@@ -23,6 +23,7 @@ import {
 } from "@/lib/integrationUtils";
 import { normalizeEmail } from "@/lib/resend";
 import { CONTACT_AUDIT_RESOLUTION_CLAIM_TTL_MS } from "@/lib/contactAuditResolutionPolicy";
+import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
 
 const SHEET_SOURCE_ID_HEADER = "photo_admin_id";
 const SHEET_SYNC_LEASE_WAIT_MS = 2 * 60 * 1_000;
@@ -1228,6 +1229,37 @@ interface ContactSheetRow {
   notes: string | null;
 }
 
+export interface SheetOwnedContactDataInput {
+  artistId: string;
+  email: string | null;
+  directOutreachNote: string | null;
+  sourceKey: string;
+  row: Pick<
+    ContactSheetRow,
+    "name" | "role" | "customPrice" | "notes" | "isFullTeam"
+  >;
+}
+
+export function sheetOwnedContactData(
+  input: SheetOwnedContactDataInput,
+  now: Date,
+) {
+  return {
+    artistId: input.artistId,
+    email: input.email,
+    directOutreachNote: input.directOutreachNote,
+    ...CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE,
+    name: input.row.name,
+    role: input.row.role,
+    customPrice: input.row.customPrice,
+    notes: input.row.notes,
+    source: "sheet",
+    sourceKey: input.sourceKey,
+    sourceSyncedAt: now,
+    isFullTeam: input.row.isFullTeam,
+  };
+}
+
 function contactRows(sheet: IdentifiedSheet): {
   rows: ContactSheetRow[];
   skipped: number;
@@ -1881,18 +1913,8 @@ async function syncContactsAtTarget(
       const createRows = plans
         .filter((plan) => !plan.existingId)
         .map((plan) => ({
-          artistId: plan.artistId,
-          email: plan.email,
-          directOutreachNote: plan.directOutreachNote,
-          name: plan.row.name,
-          role: plan.row.role,
-          customPrice: plan.row.customPrice,
-          notes: plan.row.notes,
-          source: "sheet",
-          sourceKey: plan.sourceKey,
-          sourceSyncedAt: now,
+          ...sheetOwnedContactData(plan, now),
           state: "active" as const,
-          isFullTeam: plan.row.isFullTeam,
         }));
       if (createRows.length > 0) {
         await tx.contact.createMany({ data: createRows });
@@ -1906,23 +1928,13 @@ async function syncContactsAtTarget(
             tx.contact.update({
               where: { id: plan.existingId! },
               data: {
-                artistId: plan.artistId,
-                email: plan.email,
-                directOutreachNote: plan.directOutreachNote,
-                name: plan.row.name,
-                role: plan.row.role,
-                customPrice: plan.row.customPrice,
-                notes: plan.row.notes,
-                source: "sheet",
-                sourceKey: plan.sourceKey,
-                sourceSyncedAt: now,
+                ...sheetOwnedContactData(plan, now),
                 state: shouldKeepApprovedStaleSheetContactQuarantined(
                   contactsById.get(plan.existingId!)!,
                   plan
                 )
                   ? "quarantined"
                   : "active",
-                isFullTeam: plan.row.isFullTeam,
               },
             })
           )

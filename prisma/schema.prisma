@@ -231,6 +231,15 @@ model Contact {
   email              String?
   phone              String?
   directOutreachNote String?
+  /// Stable hash for an agent-created artist/manager direct-outreach identity.
+  directOutreachIdentity String? @unique
+  directOutreachSourceJobId String?
+  directOutreachRuleVersion Int?
+  directOutreachRuleText String?
+  directOutreachManagerName String?
+  directOutreachManagerCompany String?
+  directOutreachEvidenceUrls String[] @default([])
+  directOutreachEvidence String?
   name               String?
   role               String?
   customPrice        String?
@@ -244,6 +253,7 @@ model Contact {
   isFullTeam         Boolean           @default(false)
   outreaches         Outreach[]
   auditJobs          ContactAuditJob[]
+  researchDirectOutreachProposals ContactResearchDirectOutreachProposal[]
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
@@ -376,10 +386,12 @@ model ContactResearchJob {
   claimToken               String?                    @unique
   claimedAgentRules        String?
   claimedAgentRulesVersion Int?
+  claimedDirectOutreachRules Json?
   userNotes                String?
   agentNotes               String?
   completedAt              DateTime?
   candidates               ContactResearchCandidate[]
+  directOutreachProposals  ContactResearchDirectOutreachProposal[]
   researchSkips            ArtistResearchSkip[]
   createdAt                DateTime                   @default(now())
   updatedAt                DateTime                   @updatedAt
@@ -432,6 +444,31 @@ model ContactResearchCandidate {
 
   @@unique([jobId, normalizedEmail])
   @@index([status, createdAt])
+}
+
+model ContactResearchDirectOutreachProposal {
+  id                    String             @id @default(cuid())
+  jobId                 String
+  job                   ContactResearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  ruleId                String
+  ruleVersion           Int
+  canonicalRule         String
+  normalizedManagerName String
+  managerName           String
+  managerCompany        String?
+  note                  String
+  sourceUrls            String[]           @default([])
+  evidenceQuotes        String[]           @default([])
+  status                String             @default("pending")
+  contactId             String?
+  contact               Contact?           @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  reviewedAt            DateTime?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  @@unique([jobId, ruleId, normalizedManagerName])
+  @@index([status, createdAt])
+  @@index([contactId])
 }
 
 model Show {
@@ -778,6 +815,7 @@ model Setting {
 model AgentRuleSet {
   scope        String   @id
   instructions String
+  directOutreachRules Json @default("[]")
   version      Int      @default(1)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

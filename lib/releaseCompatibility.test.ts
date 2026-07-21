@@ -100,7 +100,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /contactProbe,\s*directOutreachNoteProbe,\s*festivalGeographyProbe,\s*outreachAttemptProbe/,
+    /contactProbe,\s*directOutreachNoteProbe,\s*directOutreachProvenanceProbe,\s*festivalGeographyProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*outreachAttemptProbe/,
   );
   assert.deepEqual(
     selectedScalarFields(source, "outreach"),
@@ -123,9 +123,22 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
     /outreachDispatchIdentityConstraintProbe\.some\([\s\S]*constraint\.validated/,
   );
   assert.match(source, /directOutreachNote: \{ not: null \}/);
+  assert.deepEqual(
+    selectedScalarFields(source, "contact"),
+    [
+      "directOutreachIdentity",
+      "directOutreachSourceJobId",
+      "directOutreachRuleVersion",
+      "directOutreachRuleText",
+      "directOutreachManagerName",
+      "directOutreachManagerCompany",
+      "directOutreachEvidenceUrls",
+      "directOutreachEvidence",
+    ],
+  );
   assert.match(
     source,
-    /db\.contactResearchJob\.findMany\(\{[\s\S]*claimedAgentRules: true,[\s\S]*claimedAgentRulesVersion: true/,
+    /db\.contactResearchJob\.findMany\(\{[\s\S]*claimedAgentRules: true,[\s\S]*claimedAgentRulesVersion: true,[\s\S]*claimedDirectOutreachRules: true/,
   );
   assert.doesNotMatch(source, /db\.contactResearchJob\.count/);
   assert.match(
@@ -133,6 +146,10 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
     /db\.contactResearchCandidate\.findMany\(\{[\s\S]*needsApproval: true,[\s\S]*officialSourceType: true,[\s\S]*officialSourceUrl: true,[\s\S]*officialManagementLabel: true,[\s\S]*officialSourceEvidence: true/,
   );
   assert.doesNotMatch(source, /db\.contactResearchCandidate\.count/);
+  assert.match(
+    source,
+    /db\.contactResearchDirectOutreachProposal\.findMany\(\{[\s\S]*ruleId: true,[\s\S]*canonicalRule: true,[\s\S]*evidenceQuotes: true,[\s\S]*reviewedAt: true/,
+  );
   assert.deepEqual(
     selectedScalarFields(source, "artistResearchSkip"),
     [
@@ -153,11 +170,11 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   assert.doesNotMatch(source, /db\.artistResearchSkip\.count/);
   assert.match(
     source,
-    /db\.agentRuleSet\.findMany\(\{[\s\S]*scope: true,[\s\S]*instructions: true,[\s\S]*version: true,[\s\S]*createdAt: true,[\s\S]*updatedAt: true/,
+    /db\.agentRuleSet\.findMany\(\{[\s\S]*scope: true,[\s\S]*instructions: true,[\s\S]*directOutreachRules: true,[\s\S]*version: true,[\s\S]*createdAt: true,[\s\S]*updatedAt: true/,
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*contactResearchDirectOutreachProbe,\s*directOutreachProvenanceProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,

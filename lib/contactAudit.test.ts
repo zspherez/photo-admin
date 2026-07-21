@@ -276,3 +276,23 @@ test("reject resolution does not mutate the contact", () => {
   );
   assert.doesNotMatch(finalizer, /decision\.resolution === "rejected"[\s\S]*tx\.contact\.update/);
 });
+
+test("changed and ambiguous replacement atomically clears agent direct-outreach provenance", () => {
+  const source = readFileSync(
+    new URL("./contactAudit.ts", import.meta.url),
+    "utf8",
+  );
+  const replacement = source.slice(
+    source.indexOf(
+      'else if (decision.resolution === "approved" && alternative)',
+    ),
+    source.indexOf("const saved =", source.indexOf(
+      'else if (decision.resolution === "approved" && alternative)',
+    )),
+  );
+  assert.match(replacement, /directOutreachNote: null/);
+  assert.match(
+    replacement,
+    /\.\.\.CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/,
+  );
+});

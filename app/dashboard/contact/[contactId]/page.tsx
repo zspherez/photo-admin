@@ -25,10 +25,12 @@ import {
   directOutreachNoteValue,
   hasDirectOutreachNote,
 } from "@/lib/contactDisplay";
+import { DirectOutreachProvenance } from "@/components/direct-outreach-provenance";
 import {
   cancelScheduledAction,
   sendFollowUpAction,
 } from "@/app/dashboard/actions";
+import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +45,14 @@ const getEditableContact = cache(async (contactId: string) =>
       email: true,
       phone: true,
       directOutreachNote: true,
+      directOutreachIdentity: true,
+      directOutreachSourceJobId: true,
+      directOutreachRuleVersion: true,
+      directOutreachRuleText: true,
+      directOutreachManagerName: true,
+      directOutreachManagerCompany: true,
+      directOutreachEvidenceUrls: true,
+      directOutreachEvidence: true,
       name: true,
       role: true,
       customPrice: true,
@@ -114,15 +124,11 @@ async function saveContact(formData: FormData) {
 
   if (
     !contactId ||
-    (!email && !phone && !directOutreachNote) ||
-    (email && directOutreachNote)
+    (!email && !phone && !directOutreachNote)
   ) {
     redirect(
       contactPageHref(contactId, returnTo, {
-        error:
-          email && directOutreachNote
-            ? "conflicting_targets"
-            : "missing_fields",
+        error: "missing_fields",
         historyPage,
       })
     );
@@ -136,6 +142,14 @@ async function saveContact(formData: FormData) {
     redirect(
       contactPageHref(contactId, returnTo, {
         error: "not_found",
+        historyPage,
+      })
+    );
+  }
+  if (prior.source === "sheet" && email && directOutreachNote) {
+    redirect(
+      contactPageHref(contactId, returnTo, {
+        error: "sheet_conflicting_targets",
         historyPage,
       })
     );
@@ -206,6 +220,10 @@ async function saveContact(formData: FormData) {
   let databaseError: string | null = null;
   let rollbackError: string | null = null;
   try {
+    const clearsAgentProvenance =
+      prior.directOutreachIdentity !== null &&
+      (prior.directOutreachNote !== directOutreachNote ||
+        prior.name !== name);
     await db.contact.update({
       where: { id: contactId },
       data: {
@@ -216,6 +234,9 @@ async function saveContact(formData: FormData) {
         role,
         customPrice,
         notes,
+        ...(clearsAgentProvenance
+          ? CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE
+          : {}),
         ...(prior.source === "sheet"
           ? {
               sourceKey: sheetUpdate?.sourceKey ?? prior.sourceKey,
@@ -390,8 +411,8 @@ export default async function ContactEditPage({
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
           {error === "missing_fields"
             ? "Provide an email, phone number, or direct outreach details."
-            : error === "conflicting_targets"
-              ? "Use either an email or direct outreach details, not both."
+            : error === "sheet_conflicting_targets"
+              ? "A Sheet-owned contact cannot combine email and direct outreach details."
             : error === "sheet_target_required"
               ? "Sheet-owned contacts must keep an email or direct outreach details."
               : error === "duplicate_email"
@@ -427,6 +448,7 @@ export default async function ContactEditPage({
           </p>
         </div>
       )}
+      <DirectOutreachProvenance contact={contact} className="mt-3" />
 
       <Card className="mt-6">
         <CardBody>
@@ -443,12 +465,12 @@ export default async function ContactEditPage({
             <TextArea
               name="directOutreachNote"
               label="Direct outreach details"
-              description="Use instead of email for a personal relationship, DM path, or other direct contact instructions."
+              description="Use for a personal relationship, DM path, or other direct contact instructions. Editing an agent-created note makes it user-managed."
               rows={3}
               defaultValue={contact.directOutreachNote ?? ""}
             />
             <p className="text-xs text-zinc-500">
-              Provide an email, phone, or direct outreach details. Email and direct outreach details cannot be combined on one contact.
+              Provide an email, phone, or direct outreach details. Non-Sheet contacts may combine an email with direct outreach context.
             </p>
             <Field name="name" label="Manager name" defaultValue={contact.name ?? ""} />
             <Field name="customPrice" label="Custom rate" defaultValue={contact.customPrice ?? ""} placeholder="$400" />

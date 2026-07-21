@@ -72,3 +72,27 @@ test("direct-only contacts expose manual marking without email actions", () => {
   assert.match(markSent, /select: \{ artistId: true \}/);
   assert.doesNotMatch(markSent, /select: \{ email: true \}/);
 });
+
+test("agent-created direct outreach provenance appears on research and contact surfaces", () => {
+  const component = source("components/direct-outreach-provenance.tsx");
+  assert.match(component, /Agent-created direct outreach/);
+  assert.match(component, /Trusted rule v/);
+  assert.match(component, /directOutreachEvidenceUrls\.map/);
+
+  for (const file of [
+    "app/research/page.tsx",
+    "app/artists/[id]/page.tsx",
+    "app/contacts/page.tsx",
+    "app/dashboard/contact/[contactId]/page.tsx",
+  ]) {
+    assert.match(
+      source(file),
+      /DirectOutreachProvenance/,
+      `${file} must display trusted-rule provenance`,
+    );
+  }
+
+  const editor = source("app/dashboard/contact/[contactId]/page.tsx");
+  assert.match(editor, /clearsAgentProvenance/);
+  assert.match(editor, /CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/);
+});

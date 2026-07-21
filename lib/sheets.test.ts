@@ -24,6 +24,7 @@ import {
   sheetApiRequestOptions,
   sheetDatabaseTransactionTiming,
   sheetSourceKeyBelongsToTarget,
+  sheetOwnedContactData,
   shouldKeepApprovedStaleSheetContactQuarantined,
   sheetSyncDeadlineResult,
   staleOwnedSheetContactIds,
@@ -56,6 +57,55 @@ test("Sheet rows distinguish empty, email, direct outreach, and invalid identiti
   const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
   assert.match(source, /event: "sheet_contact_row_skipped"/);
   assert.match(source, /"missing_artist"/);
+});
+
+test("Sheet ownership reconciliation clears agent direct-outreach provenance", () => {
+  const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
+  assert.match(source, /CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/);
+  assert.match(
+    source,
+    /createRows[\s\S]*sheetOwnedContactData\(plan, now\)/,
+  );
+  assert.match(
+    source,
+    /tx\.contact\.update\([\s\S]*sheetOwnedContactData\(plan, now\)/,
+  );
+});
+
+test("matched agent contacts lose provenance for Sheet email and note ownership", () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const row = {
+    name: "Sheet Manager",
+    role: "management",
+    customPrice: null,
+    notes: "Sheet-owned notes",
+    isFullTeam: false,
+  };
+  for (const channel of [
+    { email: "sheet@example.com", directOutreachNote: null },
+    { email: null, directOutreachNote: "Use the Sheet-owned introduction" },
+  ]) {
+    const data = sheetOwnedContactData(
+      {
+        artistId: "artist-1",
+        sourceKey: "sheet-key",
+        row,
+        ...channel,
+      },
+      now,
+    );
+    assert.equal(data.email, channel.email);
+    assert.equal(data.directOutreachNote, channel.directOutreachNote);
+    assert.equal(data.source, "sheet");
+    assert.equal(data.directOutreachIdentity, null);
+    assert.equal(data.directOutreachSourceJobId, null);
+    assert.equal(data.directOutreachRuleVersion, null);
+    assert.equal(data.directOutreachRuleText, null);
+    assert.equal(data.directOutreachManagerName, null);
+    assert.equal(data.directOutreachManagerCompany, null);
+    assert.deepEqual(data.directOutreachEvidenceUrls, []);
+    assert.equal(data.directOutreachEvidence, null);
+  }
 });
 
 test("same canonical artist and email aliases are deduplicated during Sheet planning", () => {

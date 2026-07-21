@@ -46,7 +46,7 @@ export async function POST(
         return NextResponse.json(
           {
             error:
-              "skip rule provenance does not match the trusted claim snapshot",
+              "agent rule provenance does not match the trusted claim snapshot",
           },
           { status: 400 }
         );

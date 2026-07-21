@@ -80,6 +80,26 @@ const reviewedEmailSchema = z
       Boolean(value.personName),
     "named manager email requires personName"
   );
+const directOutreachSchema = z
+  .object({
+    ruleId: z.string().regex(/^[a-z0-9][a-z0-9_-]{1,63}$/),
+    ruleVersion: z.number().int().min(1),
+    canonicalRule: z.string().min(1).max(8_000),
+    managerName: z.string().min(1).max(200),
+    managerCompany: z.string().min(1).max(200).nullable().optional(),
+    evidence: z
+      .array(
+        z
+          .object({
+            sourceUrl: z.string().url(),
+            quote: z.string().min(1).max(2_000),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(5),
+  })
+  .strict();
 
 const schemas = {
   claim: z.object({
@@ -109,6 +129,13 @@ const schemas = {
     notes: z.string().max(4_000).nullable().optional(),
     candidates: z.array(candidateSchema).min(1).max(10),
     reviewedEmails: z.array(reviewedEmailSchema).min(1).max(30),
+    directOutreach: directOutreachSchema.nullable().optional(),
+  }).strict(),
+  "submit-direct-outreach": z.object({
+    jobId: z.string().min(1),
+    claimToken: z.string().min(1),
+    notes: z.string().max(4_000).nullable().optional(),
+    directOutreach: directOutreachSchema,
   }).strict(),
   "submit-exhausted": z.object({
     jobId: z.string().min(1),
@@ -229,6 +256,7 @@ function recordSuccessfulTool(name, value) {
   }
   if (
     name === "submit-candidates" ||
+    name === "submit-direct-outreach" ||
     name === "submit-exhausted" ||
     name === "submit-skipped"
   ) {
@@ -385,6 +413,39 @@ async function runTool(name, input, sessionId) {
               ...candidate,
               role: "management",
             })),
+            ...(input.directOutreach
+              ? { directOutreach: input.directOutreach }
+              : {}),
+          }
+        );
+      } catch (error) {
+        if (
+          error instanceof PhotoAdminRequestError &&
+          error.status === 409
+        ) {
+          state.completed = true;
+          metrics.sessions[sessionId].completed = true;
+          metrics.sessions[sessionId].stale = true;
+          persistMetrics();
+        }
+        throw error;
+      }
+      state.completed = true;
+      metrics.sessions[sessionId].completed = true;
+      return result;
+    }
+    case "submit-direct-outreach": {
+      requireSessionClaim(state, input);
+      let result;
+      try {
+        result = await photoAdminRequest(
+          `/api/contact-research/${encodeURIComponent(input.jobId)}/result`,
+          {
+            outcome: "candidates",
+            claimToken: input.claimToken,
+            notes: input.notes ?? null,
+            candidates: [],
+            directOutreach: input.directOutreach,
           }
         );
       } catch (error) {

@@ -8,8 +8,10 @@ import { TextArea } from "@/components/ui/field";
 import { requireServerActionAuth } from "@/lib/auth";
 import {
   GLOBAL_AGENT_RULES_MAX_LENGTH,
+  DIRECT_OUTREACH_RULES_MAX_LENGTH,
   readGlobalAgentRules,
-  saveGlobalAgentRules,
+  saveGlobalAgentRuleSet,
+  serializeDirectOutreachAgentRules,
 } from "@/lib/agentRules";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 
@@ -21,7 +23,10 @@ async function saveAgentRulesAction(formData: FormData) {
   await requireServerActionAuth("/settings/agents");
   let destination = "/settings/agents?saved=1";
   try {
-    await saveGlobalAgentRules(formData.get("instructions"));
+    await saveGlobalAgentRuleSet({
+      instructions: formData.get("instructions"),
+      directOutreachRules: formData.get("directOutreachRules"),
+    });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     destination = `/settings/agents?error=${encodeURIComponent(detail.slice(0, 180))}`;
@@ -82,6 +87,23 @@ export default async function AgentRulesPage({
               rows={12}
               maxLength={GLOBAL_AGENT_RULES_MAX_LENGTH}
             />
+            <TextArea
+              name="directOutreachRules"
+              label="Structured direct-outreach rules"
+              description={`One DIRECT_OUTREACH JSON rule per line. Each rule explicitly names its stable id, manager condition, and safe note. Maximum ${DIRECT_OUTREACH_RULES_MAX_LENGTH.toLocaleString()} characters.`}
+              placeholder={'DIRECT_OUTREACH {"id":"leif-fosse","manager":"Leif Fosse","note":"Use the number already on file"}'}
+              defaultValue={serializeDirectOutreachAgentRules(
+                rules.directOutreachRules,
+              )}
+              rows={5}
+              maxLength={DIRECT_OUTREACH_RULES_MAX_LENGTH}
+            />
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              Ordinary global instruction lines never authorize direct
+              outreach. Only validated rules in this dedicated field are
+              included in the structured claim snapshot. Phone numbers are
+              rejected; refer to a number or channel already on file.
+            </div>
             <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/50 dark:text-zinc-400">
               Saving creates a new version for future claims. Jobs already
               claimed keep their snapshotted rules and claim token; pending,

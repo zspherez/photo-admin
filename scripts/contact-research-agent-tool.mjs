@@ -29,6 +29,7 @@ switch (action) {
     }
     break;
   case "submit-candidates":
+  case "submit-direct-outreach":
   case "submit-exhausted":
   case "submit-skipped":
     try {
@@ -39,7 +40,7 @@ switch (action) {
     break;
   default:
     throw new Error(
-      "usage: claim [limit] | search <query> [limit] | fetch <url> | known-contacts <json> | submit-candidates <json> | submit-exhausted <json> | submit-skipped <json>"
+      "usage: claim [limit] | search <query> [limit] | fetch <url> | known-contacts <json> | submit-candidates <json> | submit-direct-outreach <json> | submit-exhausted <json> | submit-skipped <json>"
     );
 }
 
