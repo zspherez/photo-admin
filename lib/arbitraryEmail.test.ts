@@ -407,6 +407,7 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
   for (const laterMigration of [
     "20260721030000_contact_audit_request_queue",
     "20260721030000_festival_email_template",
+    "20260721040000_dashboard_show_snapshots",
   ]) {
     assert.ok(
       migrationNames.indexOf(textMigrationName) <

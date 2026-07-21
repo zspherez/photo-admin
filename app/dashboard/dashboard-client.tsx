@@ -1,5 +1,15 @@
+"use client";
+
 import Form from "next/form";
 import Link from "next/link";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   ContactFilter,
   DashboardData,
@@ -11,6 +21,7 @@ import type {
   StatusFilter,
 } from "@/lib/match";
 import {
+  buildDashboardBatchHref,
   buildDashboardHref,
   DEFAULT_FILTERS,
 } from "@/lib/dashboardQuery";
@@ -41,6 +52,23 @@ import type {
 import { isCancellableOutreachStatus } from "@/lib/outreachStatus";
 import { withWorkflowReturnTo } from "@/lib/workflowLinks";
 import {
+  mergeUniqueById,
+  mergeUniqueByKey,
+  shouldAutomaticallyLoadMore,
+} from "@/lib/dashboardInfinite";
+import {
+  deserializeDashboardAppendPayload,
+  type DashboardAppendJson,
+} from "@/lib/dashboardTransport";
+import {
+  createDashboardRestoreState,
+  dashboardRestoreIntentStorageKey,
+  dashboardRestoreStorageKey,
+  hasDashboardRestoreIntent,
+  parseDashboardRestoreState,
+  type DashboardRestoreState,
+} from "@/lib/dashboardRestore";
+import {
   sendNowAction,
   dismissShowAction,
   restoreShowAction,
@@ -51,9 +79,12 @@ import {
   sendFollowUpAction,
 } from "./actions";
 
+const DASHBOARD_RESTORE_HISTORY_KEY = "__photoAdminDashboardRestoreV1";
+
 interface Props {
   data: DashboardData;
   query: DashboardQuery;
+  persistenceScope: string;
   isWeekend: boolean;
   sendabilityRows: OutreachSendability[];
   followUpEligibilityRows: FollowUpEligibility[];
@@ -118,34 +149,77 @@ function queryWith(
   changes: {
     mode?: DashboardMode;
     filters?: Partial<MatchFilters>;
-    page?: number;
   }
 ): DashboardQuery {
   return {
     mode: changes.mode ?? query.mode,
     filters: { ...query.filters, ...changes.filters },
-    page: changes.page ?? query.page,
   };
 }
 
 export function DashboardClient({
   data,
   query,
+  persistenceScope,
   isWeekend,
-  sendabilityRows,
-  followUpEligibilityRows,
+  sendabilityRows: initialSendabilityRows,
+  followUpEligibilityRows: initialFollowUpEligibilityRows,
 }: Props) {
-  const { shows, modeCounts, pagination } = data;
+  const { modeCounts } = data;
+  const [shows, setShows] = useState(data.shows);
+  const [nextCursor, setNextCursor] = useState(data.nextCursor);
+  const [sendabilityRows, setSendabilityRows] = useState(
+    initialSendabilityRows
+  );
+  const [followUpEligibilityRows, setFollowUpEligibilityRows] = useState(
+    initialFollowUpEligibilityRows
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  const [automaticLoading, setAutomaticLoading] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restorationChecked, setRestorationChecked] = useState(false);
+  const [restoreRequest, setRestoreRequest] =
+    useState<DashboardRestoreState | null>(null);
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
+  const [snapshotExpired, setSnapshotExpired] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(false);
+  const showsRef = useRef(shows);
+  const nextCursorRef = useRef(data.nextCursor);
+  const batchCountRef = useRef(1);
+  const restoringRef = useRef(false);
+  const restorationCheckedRef = useRef(false);
+  const resettingSnapshotRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filters = query.filters;
   const returnTo = buildDashboardHref(query);
-  const sendabilityByTarget = new Map(
-    sendabilityRows.map((row) => [
-      `${row.showId}\u0000${row.contactId}`,
-      row,
-    ])
+  const storageKey = useMemo(
+    () => dashboardRestoreStorageKey(persistenceScope, returnTo),
+    [persistenceScope, returnTo]
   );
-  const followUpByParent = new Map(
-    followUpEligibilityRows.map((row) => [row.parentOutreachId, row]),
+  const restoreIntentKey = useMemo(
+    () => dashboardRestoreIntentStorageKey(persistenceScope),
+    [persistenceScope]
+  );
+  const sendabilityByTarget = useMemo(
+    () =>
+      new Map(
+        sendabilityRows.map((row) => [
+          `${row.showId}\u0000${row.contactId}`,
+          row,
+        ])
+      ),
+    [sendabilityRows]
+  );
+  const followUpByParent = useMemo(
+    () =>
+      new Map(
+        followUpEligibilityRows.map((row) => [row.parentOutreachId, row])
+      ),
+    [followUpEligibilityRows]
   );
   const tabs: { key: DashboardMode; label: string; tone?: "amber" }[] = [
     { key: "matched", label: "Matched" },
@@ -197,8 +271,477 @@ export function DashboardClient({
     filters.contact !== DEFAULT_FILTERS.contact ||
     filters.status !== DEFAULT_FILTERS.status;
 
+  useEffect(() => {
+    restoringRef.current = restoring;
+  }, [restoring]);
+
+  useEffect(() => {
+    restorationCheckedRef.current = restorationChecked;
+  }, [restorationChecked]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const connection = (
+      navigator as Navigator & {
+        connection?: {
+          saveData?: boolean;
+          addEventListener?: (type: "change", listener: () => void) => void;
+          removeEventListener?: (type: "change", listener: () => void) => void;
+        };
+      }
+    ).connection;
+    const update = () =>
+      setAutomaticLoading(
+        shouldAutomaticallyLoadMore({
+          intersectionObserver: "IntersectionObserver" in window,
+          reducedMotion: media.matches,
+          saveData: connection?.saveData === true,
+        })
+      );
+    update();
+    media.addEventListener("change", update);
+    connection?.addEventListener?.("change", update);
+    return () => {
+      media.removeEventListener("change", update);
+      connection?.removeEventListener?.("change", update);
+    };
+  }, []);
+
+  const readRestoreState = useCallback((): DashboardRestoreState | null => {
+    try {
+      const historyState =
+        window.history.state && typeof window.history.state === "object"
+          ? (window.history.state as Record<string, unknown>)
+          : {};
+      const sessionIntent = sessionStorage.getItem(restoreIntentKey);
+      if (
+        !hasDashboardRestoreIntent(
+          storageKey,
+          historyState[DASHBOARD_RESTORE_HISTORY_KEY],
+          sessionIntent
+        )
+      ) {
+        return null;
+      }
+      if (sessionIntent === storageKey) {
+        sessionStorage.removeItem(restoreIntentKey);
+      }
+      const raw = sessionStorage.getItem(storageKey);
+      const saved = parseDashboardRestoreState(raw);
+      if (raw && !saved) sessionStorage.removeItem(storageKey);
+      return saved;
+    } catch {
+      return null;
+    }
+  }, [restoreIntentKey, storageKey]);
+
+  const persistRestoreState = useCallback(() => {
+    if (
+      !restorationCheckedRef.current ||
+      restoringRef.current ||
+      resettingSnapshotRef.current
+    ) {
+      return;
+    }
+    const showElements = document.querySelectorAll<HTMLElement>(
+      "[data-dashboard-show-id]"
+    );
+    let anchor: HTMLElement | null = null;
+    for (const element of showElements) {
+      if (element.getBoundingClientRect().bottom > 0) {
+        anchor = element;
+        break;
+      }
+    }
+    const anchorId = anchor?.dataset.dashboardShowId ?? null;
+    const anchorOffset = anchor?.getBoundingClientRect().top ?? 0;
+    try {
+      sessionStorage.setItem(
+        storageKey,
+        JSON.stringify(
+          createDashboardRestoreState({
+            batches: batchCountRef.current,
+            snapshotId: data.snapshotId,
+            nextCursor: nextCursorRef.current,
+            anchorId,
+            anchorOffset,
+            scrollY: window.scrollY,
+          })
+        )
+      );
+    } catch {
+      // Storage can be unavailable in private or constrained browser contexts.
+    }
+  }, [data.snapshotId, storageKey]);
+
+  const markRestoreIntent = useCallback(() => {
+    persistRestoreState();
+    try {
+      sessionStorage.setItem(restoreIntentKey, storageKey);
+      const currentState =
+        window.history.state && typeof window.history.state === "object"
+          ? (window.history.state as Record<string, unknown>)
+          : {};
+      window.history.replaceState(
+        {
+          ...currentState,
+          [DASHBOARD_RESTORE_HISTORY_KEY]: storageKey,
+        },
+        ""
+      );
+    } catch {
+      // History/session storage can be unavailable in constrained browsers.
+    }
+  }, [persistRestoreState, restoreIntentKey, storageKey]);
+
+  const clearRestoreIntent = useCallback(() => {
+    try {
+      sessionStorage.removeItem(restoreIntentKey);
+    } catch {}
+  }, [restoreIntentKey]);
+
+  const handleClickCapture = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const link = (event.target as Element).closest<HTMLAnchorElement>(
+        "a[href]"
+      );
+      if (!link) return;
+      const destination = new URL(link.href, window.location.href);
+      if (destination.origin !== window.location.origin) return;
+      if (destination.pathname === "/dashboard") {
+        clearRestoreIntent();
+      } else {
+        markRestoreIntent();
+      }
+    },
+    [clearRestoreIntent, markRestoreIntent]
+  );
+
+  const handleSubmitCapture = useCallback(
+    (event: React.FormEvent<HTMLDivElement>) => {
+      const form = event.target as HTMLFormElement;
+      if (form.dataset.dashboardFilterForm === "true") {
+        clearRestoreIntent();
+      } else {
+        markRestoreIntent();
+      }
+    },
+    [clearRestoreIntent, markRestoreIntent]
+  );
+
+  const restoreScrollPosition = useCallback(
+    (saved: DashboardRestoreState) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const anchor = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              "[data-dashboard-show-id]"
+            )
+          ).find(
+            (element) => element.dataset.dashboardShowId === saved.anchorId
+          );
+          if (anchor) {
+            const top =
+              window.scrollY +
+              anchor.getBoundingClientRect().top -
+              saved.anchorOffset;
+            window.scrollTo(0, Math.max(0, top));
+          } else {
+            window.scrollTo(0, saved.scrollY);
+          }
+        });
+      });
+    },
+    []
+  );
+
+  useLayoutEffect(() => {
+    let cancelled = false;
+    resettingSnapshotRef.current = true;
+    abortRef.current?.abort();
+    loadingRef.current = false;
+    showsRef.current = data.shows;
+    nextCursorRef.current = data.nextCursor;
+    batchCountRef.current = 1;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setShows(data.shows);
+      setNextCursor(data.nextCursor);
+      setSendabilityRows(initialSendabilityRows);
+      setFollowUpEligibilityRows(initialFollowUpEligibilityRows);
+      setLoading(false);
+      setError(null);
+      setAnnouncement("");
+      setSnapshotExpired(false);
+      const saved = readRestoreState();
+      setRestoreRequest(saved && saved.batches > 1 ? saved : null);
+      setRestorationChecked(true);
+      resettingSnapshotRef.current = false;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    data.nextCursor,
+    data.shows,
+    data.snapshotId,
+    initialFollowUpEligibilityRows,
+    initialSendabilityRows,
+    readRestoreState,
+  ]);
+
+  useEffect(() => {
+    const previous = window.history.scrollRestoration;
+    window.history.scrollRestoration = "manual";
+    return () => {
+      window.history.scrollRestoration = previous;
+    };
+  }, []);
+
+  useEffect(() => {
+    const saveSoon = () => {
+      if (scrollSaveTimerRef.current) {
+        clearTimeout(scrollSaveTimerRef.current);
+      }
+      scrollSaveTimerRef.current = setTimeout(persistRestoreState, 150);
+    };
+    const saveNow = () => persistRestoreState();
+    window.addEventListener("scroll", saveSoon, { passive: true });
+    window.addEventListener("pagehide", saveNow);
+    document.addEventListener("visibilitychange", saveNow);
+    return () => {
+      window.removeEventListener("scroll", saveSoon);
+      window.removeEventListener("pagehide", saveNow);
+      document.removeEventListener("visibilitychange", saveNow);
+      if (scrollSaveTimerRef.current) {
+        clearTimeout(scrollSaveTimerRef.current);
+        scrollSaveTimerRef.current = null;
+      }
+      saveNow();
+      abortRef.current?.abort();
+    };
+  }, [persistRestoreState]);
+
+  const requestBatch = useCallback(
+    async (cursor: string, signal: AbortSignal) => {
+      const response = await fetch(buildDashboardBatchHref(query, cursor), {
+        cache: "no-store",
+        credentials: "same-origin",
+        signal,
+      });
+      if (!response.ok) {
+        if (response.status === 410) {
+          const expired = new Error("This result snapshot expired.");
+          expired.name = "DashboardSnapshotExpired";
+          throw expired;
+        }
+        throw new Error(
+          response.status === 401
+            ? "Your session expired. Sign in again, then retry."
+            : "Couldn’t load more shows."
+        );
+      }
+      return deserializeDashboardAppendPayload(
+        (await response.json()) as DashboardAppendJson
+      );
+    },
+    [query]
+  );
+
+  const appendBatch = useCallback(
+    (
+      payload: ReturnType<typeof deserializeDashboardAppendPayload>,
+      announce: boolean
+    ) => {
+      const merged = mergeUniqueById(showsRef.current, payload.shows);
+      showsRef.current = merged.items;
+      nextCursorRef.current = payload.nextCursor;
+      batchCountRef.current += 1;
+      setShows(merged.items);
+      setNextCursor(payload.nextCursor);
+      setSendabilityRows((current) =>
+        mergeUniqueByKey(
+          current,
+          payload.sendabilityRows,
+          (row) => `${row.showId}\u0000${row.contactId}`
+        ).items
+      );
+      setFollowUpEligibilityRows((current) =>
+        mergeUniqueByKey(
+          current,
+          payload.followUpEligibilityRows,
+          (row) => row.parentOutreachId
+        ).items
+      );
+      if (announce) {
+        setAnnouncement(
+          merged.added > 0
+            ? `${merged.added} more show${merged.added === 1 ? "" : "s"} loaded.`
+            : payload.nextCursor
+              ? "No duplicate shows added. More results are available."
+              : "No more shows."
+        );
+      }
+      return payload.nextCursor;
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (
+      !restoreRequest ||
+      !restorationChecked ||
+      resettingSnapshotRef.current ||
+      loadingRef.current
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    loadingRef.current = true;
+    setLoading(true);
+    setRestoring(true);
+    setError(null);
+
+    void (async () => {
+      try {
+        let cursor = nextCursorRef.current;
+        while (
+          batchCountRef.current < restoreRequest.batches &&
+          cursor &&
+          !controller.signal.aborted
+        ) {
+          cursor = appendBatch(
+            await requestBatch(cursor, controller.signal),
+            false
+          );
+        }
+        if (!controller.signal.aborted) {
+          setRestoreRequest(null);
+          setAnnouncement("Previous show list position restored.");
+          restoreScrollPosition(restoreRequest);
+        }
+      } catch (loadError) {
+        if ((loadError as Error).name !== "AbortError") {
+          const expired =
+            (loadError as Error).name === "DashboardSnapshotExpired";
+          if (expired) {
+            setSnapshotExpired(true);
+            try {
+              sessionStorage.removeItem(storageKey);
+            } catch {}
+          }
+          setError(
+            expired
+              ? "This result snapshot expired. Refresh to continue."
+              : loadError instanceof Error
+                ? loadError.message
+                : "Couldn’t restore the previous show position."
+          );
+        }
+      } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+          loadingRef.current = false;
+          setLoading(false);
+          setRestoring(false);
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [
+    appendBatch,
+    requestBatch,
+    restorationChecked,
+    restoreAttempt,
+    restoreRequest,
+    restoreScrollPosition,
+    storageKey,
+  ]);
+
+  const loadMore = useCallback(async () => {
+    const cursor = nextCursorRef.current;
+    if (
+      !cursor ||
+      loadingRef.current ||
+      restoreRequest ||
+      resettingSnapshotRef.current
+    ) {
+      return;
+    }
+    loadingRef.current = true;
+    setLoading(true);
+    setError(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      appendBatch(await requestBatch(cursor, controller.signal), true);
+    } catch (loadError) {
+      if ((loadError as Error).name !== "AbortError") {
+        const expired =
+          (loadError as Error).name === "DashboardSnapshotExpired";
+        if (expired) {
+          setSnapshotExpired(true);
+          try {
+            sessionStorage.removeItem(storageKey);
+          } catch {}
+        }
+        setError(
+          expired
+            ? "This result snapshot expired. Refresh to continue."
+            : loadError instanceof Error
+              ? loadError.message
+              : "Couldn’t load more shows."
+        );
+      }
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        loadingRef.current = false;
+        setLoading(false);
+      }
+    }
+  }, [appendBatch, requestBatch, restoreRequest, storageKey]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (
+      !sentinel ||
+      !automaticLoading ||
+      !restorationChecked ||
+      resettingSnapshotRef.current ||
+      restoreRequest ||
+      restoring ||
+      !nextCursor ||
+      loading ||
+      error
+    ) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadMore();
+      },
+      { rootMargin: "600px 0px" }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [
+    automaticLoading,
+    error,
+    loadMore,
+    loading,
+    nextCursor,
+    restorationChecked,
+    restoreRequest,
+    restoring,
+  ]);
+
   return (
-    <>
+    <div
+      onClickCapture={handleClickCapture}
+      onSubmitCapture={handleSubmitCapture}
+    >
       <div className="mt-1 text-sm text-zinc-500">
         {data.totalUpcoming} total upcoming ·{" "}
         {data.totalSignals.toLocaleString()} listen signals
@@ -210,8 +753,9 @@ export function DashboardClient({
           return (
             <Link
               key={tab.key}
+              prefetch={false}
               href={buildDashboardHref(
-                queryWith(query, { mode: tab.key, page: 1 })
+                queryWith(query, { mode: tab.key })
               )}
               aria-current={active ? "page" : undefined}
               className={cn(
@@ -233,7 +777,12 @@ export function DashboardClient({
       </div>
 
       <Card className="mt-6 p-4">
-        <Form action="/dashboard" scroll={false} className="flex gap-2">
+        <Form
+          action="/dashboard"
+          scroll={false}
+          data-dashboard-filter-form="true"
+          className="flex gap-2"
+        >
           {query.mode !== "matched" && (
             <input type="hidden" name="mode" value={query.mode} />
           )}
@@ -263,7 +812,6 @@ export function DashboardClient({
               href={buildDashboardHref({
                 mode: query.mode,
                 filters: DEFAULT_FILTERS,
-                page: 1,
               })}
               variant="ghost"
             >
@@ -298,10 +846,10 @@ export function DashboardClient({
                 return (
                   <Link
                     key={option.value}
+                    prefetch={false}
                     href={buildDashboardHref(
                       queryWith(query, {
                         filters: { [option.key]: option.value },
-                        page: 1,
                       })
                     )}
                     aria-current={active ? "page" : undefined}
@@ -323,12 +871,9 @@ export function DashboardClient({
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
         <span>
-          {pagination.total === 0
+          {data.resultCount === 0
             ? "0 shows"
-            : `${pagination.start}–${pagination.end} of ${pagination.total} shows`}
-        </span>
-        <span>
-          Page {pagination.page} of {pagination.pageCount}
+            : `${shows.length} of ${data.resultCount} shows`}
         </span>
       </div>
 
@@ -339,7 +884,11 @@ export function DashboardClient({
       ) : (
         <div className="mt-3 space-y-3">
           {shows.map((show) => (
-            <Card key={show.id} className="p-5">
+            <Card
+              key={show.id}
+              data-dashboard-show-id={show.id}
+              className="p-5"
+            >
               <div className="flex items-start justify-between gap-2">
                 <p className="text-sm text-zinc-500">
                   <span className="font-medium text-zinc-900 dark:text-zinc-100">
@@ -810,40 +1359,70 @@ export function DashboardClient({
         </div>
       )}
 
-      {pagination.pageCount > 1 && (
-        <nav
-          aria-label="Dashboard pages"
-          className="mt-6 flex items-center justify-between gap-3"
-        >
-          {pagination.hasPrevious ? (
-            <LinkButton
-              href={buildDashboardHref(
-                queryWith(query, { page: pagination.page - 1 })
-              )}
-              variant="secondary"
-            >
-              ← Previous
-            </LinkButton>
-          ) : (
-            <span />
-          )}
-          <span className="text-xs text-zinc-500">
-            Page {pagination.page} of {pagination.pageCount}
-          </span>
-          {pagination.hasNext ? (
-            <LinkButton
-              href={buildDashboardHref(
-                queryWith(query, { page: pagination.page + 1 })
-              )}
-              variant="secondary"
-            >
-              Next →
-            </LinkButton>
-          ) : (
-            <span />
-          )}
-        </nav>
-      )}
-    </>
+      <div
+        ref={sentinelRef}
+        className="mt-6 flex min-h-20 flex-col items-center justify-center gap-3 text-center"
+      >
+        {loading && (
+          <div
+            aria-busy="true"
+            aria-label={
+              restoring
+                ? "Restoring previous show position"
+                : "Loading more shows"
+            }
+            className="w-full space-y-2"
+          >
+            <div className="h-16 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-900" />
+            <div className="h-16 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-900" />
+          </div>
+        )}
+        {error && (
+          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        )}
+        {nextCursor || restoreRequest || snapshotExpired ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (snapshotExpired) {
+                window.location.reload();
+              } else if (restoreRequest) {
+                setRestoreAttempt((attempt) => attempt + 1);
+              } else {
+                void loadMore();
+              }
+            }}
+            disabled={loading}
+            className="inline-flex h-9 items-center justify-center rounded-md border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-900 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            {loading
+              ? restoring
+                ? "Restoring…"
+                : "Loading…"
+              : snapshotExpired
+                ? "Refresh results"
+                : restoreRequest && error
+                  ? "Retry restoration"
+                  : error
+                    ? "Retry"
+                    : "Load more"}
+          </button>
+        ) : (
+          shows.length > 0 && (
+            <p className="text-sm text-zinc-500">You’ve reached the end.</p>
+          )
+        )}
+        {nextCursor && !restoreRequest && !loading && !error && (
+          <p className="text-xs text-zinc-500">
+            {automaticLoading
+              ? "More shows load automatically as you scroll."
+              : "Automatic loading is off; use the Load more button."}
+          </p>
+        )}
+      </div>
+      <p className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </p>
+    </div>
   );
 }

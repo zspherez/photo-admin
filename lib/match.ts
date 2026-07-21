@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   addDateOnlyDays,
@@ -17,15 +17,25 @@ import {
   isActiveManualOutreachMarker,
 } from "@/lib/manualOutreach";
 import {
-  DASHBOARD_PAGE_SIZE,
-  getPagination,
+  DASHBOARD_BATCH_SIZE,
   type DashboardMode,
-  type DashboardPagination,
   type DashboardQuery,
   type MatchFilters,
   type RangeFilter,
   type SourceFilter,
 } from "@/lib/dashboardQuery";
+import {
+  decodeDashboardCursor,
+  encodeDashboardCursor,
+  verifyDashboardCursor,
+} from "@/lib/dashboardCursor";
+import {
+  DASHBOARD_SNAPSHOT_INSERT_CHUNK_SIZE,
+  buildDashboardSnapshotMembers,
+  dashboardQueryKey,
+  dashboardSnapshotAccessStatus,
+  dashboardSnapshotExpiresAt,
+} from "@/lib/dashboardSnapshot";
 
 export {
   DASHBOARD_PAGE_SIZE,
@@ -97,10 +107,24 @@ export interface MatchedShow {
 export interface DashboardData {
   shows: MatchedShow[];
   modeCounts: Record<DashboardMode, number>;
-  pagination: DashboardPagination;
+  resultCount: number;
+  nextCursor: string | null;
+  snapshotId: string;
+  snapshotAt: Date;
   totalUpcoming: number;
   totalSignals: number;
 }
+
+export interface DashboardBatch {
+  shows: MatchedShow[];
+  nextCursor: string | null;
+  snapshotId: string;
+  snapshotAt: Date;
+}
+
+export type DashboardNextBatchResult =
+  | { status: "ok"; batch: DashboardBatch }
+  | { status: "invalid" | "expired" };
 
 export function getDashboardDateRange(
   range: RangeFilter,
@@ -169,7 +193,7 @@ function matchingArtistWhere(
   return { OR: [matched, unknown] };
 }
 
-function showWhere(
+function dashboardShowWhere(
   mode: DashboardMode,
   filters: MatchFilters,
   now: Date
@@ -338,57 +362,11 @@ function parseGenres(value: string | null): string[] {
   }
 }
 
-export async function getDashboardData(
+async function hydrateDashboardShowRows(
+  showRows: DashboardShowRow[],
   query: DashboardQuery,
-  now: Date = new Date()
-): Promise<DashboardData> {
-  if (!Number.isSafeInteger(query.page) || query.page < 1) {
-    throw new Error("Dashboard page must be a positive integer");
-  }
-
-  const selectedWhere = showWhere(query.mode, query.filters, now);
-  const select = dashboardShowSelect(now);
-  const skip = (query.page - 1) * DASHBOARD_PAGE_SIZE;
-  const showRowsPromise: Promise<DashboardShowRow[]> = db.show.findMany({
-    where: selectedWhere,
-    orderBy: [{ date: "asc" }, { id: "asc" }],
-    skip,
-    take: DASHBOARD_PAGE_SIZE,
-    select,
-  });
-
-  const [
-    showRows,
-    matchedCount,
-    unknownCount,
-    interestedCount,
-    dismissedCount,
-    totalUpcoming,
-    totalSignals,
-  ] = await Promise.all([
-    showRowsPromise,
-    countShows(showWhere("matched", query.filters, now)),
-    countShows(showWhere("unknown", query.filters, now)),
-    countShows(showWhere("interested", query.filters, now)),
-    countShows(showWhere("dismissed", query.filters, now)),
-    db.show.count({
-      where: {
-        date: { gte: easternTodayStoredDate(now) },
-        isFestival: false,
-        syncStatus: "active",
-      },
-    }),
-    db.listenSignal.count({ where: activeListenSignalWhere(now) }),
-  ]);
-
-  const modeCounts: Record<DashboardMode, number> = {
-    matched: matchedCount,
-    unknown: unknownCount,
-    interested: interestedCount,
-    dismissed: dismissedCount,
-  };
-  const pagination = getPagination(modeCounts[query.mode], query.page);
-
+  now: Date
+): Promise<MatchedShow[]> {
   const featuredArtistIds = new Set<string>();
   for (const show of showRows) {
     for (const showArtist of show.artists) {
@@ -459,7 +437,7 @@ export async function getDashboardData(
     playlistsByArtist.set(row.artistId, rows);
   }
 
-  const shows = showRows.map((show): MatchedShow => {
+  return showRows.map((show): MatchedShow => {
     const matchedArtists: MatchedShow["matchedArtists"] = [];
     const otherArtists: MatchedShow["otherArtists"] = [];
 
@@ -550,11 +528,221 @@ export async function getDashboardData(
       })),
     };
   });
+}
 
+async function cleanupExpiredDashboardSnapshots(now: Date): Promise<void> {
+  await db.dashboardShowSnapshot.deleteMany({
+    where: { expiresAt: { lte: now } },
+  });
+}
+
+async function createDashboardSnapshot(
+  query: DashboardQuery,
+  ownerKey: string,
+  snapshotAt: Date
+): Promise<{
+  id: string;
+  total: number;
+  createdAt: Date;
+  expiresAt: Date;
+}> {
+  await cleanupExpiredDashboardSnapshots(snapshotAt);
+  const queryKey = dashboardQueryKey(query);
+  const expiresAt = dashboardSnapshotExpiresAt(snapshotAt);
+
+  return db.$transaction(
+    async (transaction) => {
+      const orderedShows = await transaction.show.findMany({
+        where: dashboardShowWhere(query.mode, query.filters, snapshotAt),
+        orderBy: [{ date: "asc" }, { id: "asc" }],
+        select: { id: true, date: true },
+      });
+      const snapshot = await transaction.dashboardShowSnapshot.create({
+        data: {
+          ownerKey,
+          queryKey,
+          total: orderedShows.length,
+          expiresAt,
+          createdAt: snapshotAt,
+        },
+        select: {
+          id: true,
+          total: true,
+          createdAt: true,
+          expiresAt: true,
+        },
+      });
+      const members = buildDashboardSnapshotMembers(orderedShows);
+      for (
+        let start = 0;
+        start < members.length;
+        start += DASHBOARD_SNAPSHOT_INSERT_CHUNK_SIZE
+      ) {
+        await transaction.dashboardShowSnapshotMember.createMany({
+          data: members
+            .slice(start, start + DASHBOARD_SNAPSHOT_INSERT_CHUNK_SIZE)
+            .map((member) => ({
+              snapshotId: snapshot.id,
+              ...member,
+            })),
+        });
+      }
+      return snapshot;
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }
+  );
+}
+
+async function loadDashboardSnapshotBatch(
+  query: DashboardQuery,
+  snapshot: {
+    id: string;
+    total: number;
+    createdAt: Date;
+  },
+  afterPosition: number,
+  ownerKey: string
+): Promise<DashboardBatch> {
+  const members = await db.dashboardShowSnapshotMember.findMany({
+    where: {
+      snapshotId: snapshot.id,
+      position: { gt: afterPosition },
+    },
+    orderBy: { position: "asc" },
+    take: DASHBOARD_BATCH_SIZE + 1,
+    select: {
+      position: true,
+      sortDate: true,
+      show: { select: dashboardShowSelect(snapshot.createdAt) },
+    },
+  });
+  const hasMore = members.length > DASHBOARD_BATCH_SIZE;
+  const pageMembers = members.slice(0, DASHBOARD_BATCH_SIZE);
+  const shows = await hydrateDashboardShowRows(
+    pageMembers.map((member) => ({
+      ...member.show,
+      date: member.sortDate,
+    })),
+    query,
+    snapshot.createdAt
+  );
+  const last = pageMembers.at(-1);
   return {
     shows,
+    nextCursor:
+      hasMore && last
+        ? encodeDashboardCursor(
+            { snapshotId: snapshot.id, position: last.position },
+            query,
+            ownerKey
+          )
+        : null,
+    snapshotId: snapshot.id,
+    snapshotAt: snapshot.createdAt,
+  };
+}
+
+export async function getDashboardNextBatch(
+  query: DashboardQuery,
+  cursorValue: unknown,
+  ownerKey: string,
+  requestNow: Date = new Date()
+): Promise<DashboardNextBatchResult> {
+  const cursor = decodeDashboardCursor(cursorValue, query);
+  if (!cursor) return { status: "invalid" };
+  if (!verifyDashboardCursor(cursor, query, ownerKey)) {
+    return { status: "invalid" };
+  }
+  const snapshot = await db.dashboardShowSnapshot.findUnique({
+    where: { id: cursor.snapshotId },
+    select: {
+      id: true,
+      ownerKey: true,
+      queryKey: true,
+      total: true,
+      expiresAt: true,
+      createdAt: true,
+    },
+  });
+  const accessStatus = dashboardSnapshotAccessStatus(
+    snapshot,
+    query,
+    ownerKey,
+    cursor.position,
+    requestNow
+  );
+  if (accessStatus === "invalid") {
+    return { status: "invalid" };
+  }
+  if (accessStatus === "expired") {
+    if (!snapshot) return { status: "expired" };
+    await db.dashboardShowSnapshot.deleteMany({
+      where: { id: snapshot.id, ownerKey },
+    });
+    return { status: "expired" };
+  }
+  if (!snapshot) return { status: "expired" };
+  return {
+    status: "ok",
+    batch: await loadDashboardSnapshotBatch(
+      query,
+      snapshot,
+      cursor.position,
+      ownerKey
+    ),
+  };
+}
+
+export async function getDashboardData(
+  query: DashboardQuery,
+  ownerKey: string,
+  now: Date = new Date()
+): Promise<DashboardData> {
+  const [
+    snapshot,
+    matchedCount,
+    unknownCount,
+    interestedCount,
+    dismissedCount,
+    totalUpcoming,
+    totalSignals,
+  ] = await Promise.all([
+    createDashboardSnapshot(query, ownerKey, now),
+    countShows(dashboardShowWhere("matched", query.filters, now)),
+    countShows(dashboardShowWhere("unknown", query.filters, now)),
+    countShows(dashboardShowWhere("interested", query.filters, now)),
+    countShows(dashboardShowWhere("dismissed", query.filters, now)),
+    db.show.count({
+      where: {
+        date: { gte: easternTodayStoredDate(now) },
+        isFestival: false,
+        syncStatus: "active",
+      },
+    }),
+    db.listenSignal.count({ where: activeListenSignalWhere(now) }),
+  ]);
+
+  const modeCounts: Record<DashboardMode, number> = {
+    matched: matchedCount,
+    unknown: unknownCount,
+    interested: interestedCount,
+    dismissed: dismissedCount,
+  };
+  modeCounts[query.mode] = snapshot.total;
+  const batch = await loadDashboardSnapshotBatch(
+    query,
+    snapshot,
+    -1,
+    ownerKey
+  );
+
+  return {
+    shows: batch.shows,
     modeCounts,
-    pagination,
+    resultCount: snapshot.total,
+    nextCursor: batch.nextCursor,
+    snapshotId: batch.snapshotId,
+    snapshotAt: batch.snapshotAt,
     totalUpcoming,
     totalSignals,
   };

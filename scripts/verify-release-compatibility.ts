@@ -44,6 +44,8 @@ async function main(): Promise<void> {
     arbitraryEmailProbe,
     resendWebhookArbitraryEmailProbe,
     emailTemplateProbe,
+    dashboardShowSnapshotProbe,
+    dashboardShowSnapshotMemberProbe,
   ] = await Promise.all([
     db.setting.findMany({
       where: {
@@ -270,6 +272,26 @@ async function main(): Promise<void> {
         purpose: true,
       },
     }),
+    db.dashboardShowSnapshot.findMany({
+      take: 1,
+      select: {
+        id: true,
+        ownerKey: true,
+        queryKey: true,
+        total: true,
+        expiresAt: true,
+        createdAt: true,
+      },
+    }),
+    db.dashboardShowSnapshotMember.findMany({
+      take: 1,
+      select: {
+        snapshotId: true,
+        position: true,
+        showId: true,
+        sortDate: true,
+      },
+    }),
   ]);
   const values = new Map(settings.map((setting) => [setting.key, setting.value]));
 
@@ -297,6 +319,8 @@ async function main(): Promise<void> {
           arbitraryEmailProbe,
           resendWebhookArbitraryEmailProbe,
           emailTemplateProbe,
+          dashboardShowSnapshotProbe,
+          dashboardShowSnapshotMemberProbe,
         ].every(Array.isArray),
       configuredSpreadsheetId:
         values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,
@@ -319,6 +343,8 @@ async function main(): Promise<void> {
         "ArbitraryEmail.text",
         "ResendWebhookEvent.arbitraryEmailId",
         "EmailTemplate.purpose",
+        "DashboardShowSnapshot",
+        "DashboardShowSnapshotMember",
       ],
     })
   );
