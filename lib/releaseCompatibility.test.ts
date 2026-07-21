@@ -112,6 +112,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "expectedRecipientArtistId",
       "expectedRecipientEmail",
       "expectedRecipientUpdatedAt",
+      "trajectoryRecommendationId",
     ],
   );
   assert.match(
@@ -174,7 +175,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*contactResearchDirectOutreachProbe,\s*directOutreachProvenanceProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditRosterSnapshotProbe,\s*contactAuditRosterEntryProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*contactAuditRosterConstraintProbe,\s*contactAuditRosterIndexProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*contactResearchDirectOutreachProbe,\s*directOutreachProvenanceProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditRosterSnapshotProbe,\s*contactAuditRosterEntryProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*contactAuditRosterConstraintProbe,\s*contactAuditRosterIndexProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryFeedbackEventProbe,\s*trajectoryShowOutcomeProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*trajectoryFeedbackTriggerProbe,\s*trajectoryFeedbackIndexProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,
@@ -448,6 +449,38 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
     selectedScalarFields(source, "trajectoryImportIssue"),
     ["id", "runId", "recommendationKey", "code", "detail", "createdAt"],
   );
+  assert.deepEqual(
+    selectedScalarFields(source, "trajectoryFeedbackEvent"),
+    [
+      "id",
+      "recommendationId",
+      "action",
+      "propensity",
+      "manualOverride",
+      "notes",
+      "idempotencyKey",
+      "supersedesId",
+      "recordedAt",
+    ],
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "trajectoryShowOutcome"),
+    [
+      "id",
+      "recommendationId",
+      "attended",
+      "access",
+      "keeperCount",
+      "relationshipValue",
+      "publicationValue",
+      "shootability",
+      "venueAccessibility",
+      "notes",
+      "idempotencyKey",
+      "supersedesId",
+      "recordedAt",
+    ],
+  );
   assert.match(
     source,
     /TrajectoryModelRun_one_ready_artist_trajectory_idx/,
@@ -458,6 +491,11 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ArbitraryEmail\.providerCredentialScope",[\s\S]*"Outreach\.expectedRecipientUpdatedAt",[\s\S]*"Outreach_dispatch_recipient_identity_check",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*"TrajectoryModelRun",[\s\S]*"TrajectoryRunArtist",[\s\S]*"TrajectoryRecommendation",[\s\S]*"TrajectoryImportIssue",[\s\S]*"TrajectoryModelRun_one_ready_artist_trajectory_idx",[\s\S]*\]/,
+    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ArbitraryEmail\.providerCredentialScope",[\s\S]*"Outreach\.expectedRecipientUpdatedAt",[\s\S]*"Outreach_dispatch_recipient_identity_check",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*"TrajectoryModelRun",[\s\S]*"TrajectoryRunArtist",[\s\S]*"TrajectoryRecommendation",[\s\S]*"TrajectoryImportIssue",[\s\S]*"TrajectoryFeedbackEvent",[\s\S]*"TrajectoryShowOutcome",[\s\S]*"Outreach\.trajectoryRecommendationId",[\s\S]*"Trajectory feedback append-only triggers",[\s\S]*"Trajectory feedback indexes",[\s\S]*"TrajectoryModelRun_one_ready_artist_trajectory_idx",[\s\S]*\]/,
   );
+  assert.match(
+    source,
+    /trajectoryFeedbackTriggerProbe\.length === 5[\s\S]*trigger\.enabled === "O"/,
+  );
+  assert.match(source, /trajectoryFeedbackIndexProbe\.length === 9/);
 });

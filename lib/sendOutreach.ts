@@ -178,6 +178,7 @@ export interface FollowUpEligibility {
 interface PreparedOutreach {
   kind: OutreachKindValue;
   parentOutreachId: string | null;
+  trajectoryRecommendationId: string | null;
   showId: string;
   artistId: string;
   contactId: string;
@@ -188,6 +189,14 @@ interface PreparedOutreach {
   subject: string;
   html: string;
   expectedRecipientIdentity: CustomizeRecipientIdentity | null;
+}
+
+function trajectoryAttributionData(
+  outreach: Pick<PreparedOutreach, "trajectoryRecommendationId">,
+): { trajectoryRecommendationId?: string } {
+  return outreach.trajectoryRecommendationId
+    ? { trajectoryRecommendationId: outreach.trajectoryRecommendationId }
+    : {};
 }
 
 interface StoredExpectedRecipientIdentity {
@@ -2525,6 +2534,7 @@ async function prepareOriginalOutreach(
   return {
     kind: "original",
     parentOutreachId: null,
+    trajectoryRecommendationId: null,
     showId,
     artistId: contact.artistId,
     contactId,
@@ -2572,6 +2582,7 @@ async function prepareFollowUpOutreach(
         id: true,
         kind: true,
         parentOutreachId: true,
+        trajectoryRecommendationId: true,
         showId: true,
         artistId: true,
         contactId: true,
@@ -2660,6 +2671,7 @@ async function prepareFollowUpOutreach(
   return {
     kind: "follow_up",
     parentOutreachId: parent.id,
+    trajectoryRecommendationId: parent.trajectoryRecommendationId,
     showId: parent.showId,
     artistId: parent.artistId,
     contactId: parent.contactId,
@@ -3618,6 +3630,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
+          ...trajectoryAttributionData(prep),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -3653,6 +3666,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
+          ...trajectoryAttributionData(prep),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -3748,6 +3762,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
+          ...trajectoryAttributionData(prep),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -3816,6 +3831,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
+          ...trajectoryAttributionData(prep),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -3854,6 +3870,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         recipientSnapshotState: "verified",
         fullTeamSend: prep.fullTeamSend,
         ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
+        ...trajectoryAttributionData(prep),
         status: "queued",
         idempotencyKey: identity.idempotencyKey,
         claimToken,
@@ -5460,6 +5477,7 @@ async function schedulePreparedOutreach(
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
+          ...trajectoryAttributionData(prep),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5491,6 +5509,7 @@ async function schedulePreparedOutreach(
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
+          ...trajectoryAttributionData(prep),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5574,6 +5593,7 @@ async function schedulePreparedOutreach(
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
+          ...trajectoryAttributionData(prep),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5639,6 +5659,7 @@ async function schedulePreparedOutreach(
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
+          ...trajectoryAttributionData(prep),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5674,6 +5695,7 @@ async function schedulePreparedOutreach(
         recipientSnapshotState: "verified",
         fullTeamSend: prep.fullTeamSend,
         ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
+        ...trajectoryAttributionData(prep),
         status: "scheduled",
         scheduledFor,
         nextAttemptAt: scheduledFor,
