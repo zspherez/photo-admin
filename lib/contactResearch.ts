@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import {
   createRemoteJWKSet,
@@ -69,12 +69,24 @@ export interface ContactResearchCandidateInput {
   officialSourceEvidence: string | null;
 }
 
+export interface TrustedDirectOutreachInput {
+  note: string;
+  ruleVersion: number;
+  ruleText: string;
+  managerName: string;
+  managerCompany: string | null;
+  sourceUrls: string[];
+  relationshipEvidence: string;
+  relationshipStatus: "confirmed";
+}
+
 export type ContactResearchSubmission =
   | {
       outcome: "candidates";
       claimToken: string;
       notes: string | null;
       candidates: ContactResearchCandidateInput[];
+      directOutreach: TrustedDirectOutreachInput | null;
     }
   | {
       outcome: "exhausted";
@@ -220,6 +232,16 @@ async function supersedeObsoleteContactResearchApprovals(
     data: { status: "superseded" },
   });
 }
+const DIRECT_OUTREACH_KEYS = new Set([
+  "note",
+  "ruleVersion",
+  "ruleText",
+  "managerName",
+  "managerCompany",
+  "sourceUrls",
+  "relationshipEvidence",
+  "relationshipStatus",
+]);
 
 function optionalString(
   value: unknown,
@@ -317,6 +339,137 @@ export function normalizeResearchSourceUrl(value: unknown): string {
   }
   url.hash = "";
   return url.toString();
+}
+
+function normalizedIdentityText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+export function normalizeDirectOutreachIdentity(
+  artistId: string,
+  managerName: string
+): string {
+  return createHash("sha256")
+    .update(`${artistId}\u0000${normalizedIdentityText(managerName)}`)
+    .digest("hex");
+}
+
+function containsSubmittedPhoneNumber(value: string): boolean {
+  return (
+    /\btel\s*:/i.test(value) ||
+    /\+\s*\d(?:[\s().-]*\d){6,}/.test(value) ||
+    /\(\d{3}\)\s*\d{3}[-.\s]\d{4}/.test(value) ||
+    /\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b/.test(value) ||
+    /\b\d{3}[-.\s]\d{4}\b/.test(value) ||
+    /\b\d{10,15}\b/.test(value)
+  );
+}
+
+export function normalizeTrustedDirectOutreach(
+  value: unknown
+): TrustedDirectOutreachInput {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("directOutreach must be an object");
+  }
+  const input = value as Record<string, unknown>;
+  const unexpected = Object.keys(input).filter(
+    (key) => !DIRECT_OUTREACH_KEYS.has(key)
+  );
+  if (unexpected.length > 0) {
+    throw new Error(
+      `directOutreach contains unsupported field: ${unexpected[0]}`
+    );
+  }
+  if (
+    typeof input.ruleVersion !== "number" ||
+    !Number.isSafeInteger(input.ruleVersion) ||
+    input.ruleVersion < 1
+  ) {
+    throw new Error("direct outreach ruleVersion must be a positive integer");
+  }
+  if (input.relationshipStatus !== "confirmed") {
+    throw new Error(
+      "direct outreach requires a confirmed manager relationship"
+    );
+  }
+  const note = requiredString(input.note, 1_000, "direct outreach note");
+  if (!note.startsWith("Direct outreach:")) {
+    throw new Error(
+      "direct outreach note must start with Direct outreach:"
+    );
+  }
+  const managerName = requiredString(
+    input.managerName,
+    200,
+    "direct outreach managerName"
+  );
+  const normalizedManagerName = normalizedIdentityText(managerName);
+  if (normalizedManagerName.length < 2) {
+    throw new Error(
+      "direct outreach managerName must identify a named manager"
+    );
+  }
+  const managerCompany = optionalString(
+    input.managerCompany,
+    200,
+    "direct outreach managerCompany"
+  );
+  const relationshipEvidence = requiredString(
+    input.relationshipEvidence,
+    4_000,
+    "direct outreach relationshipEvidence"
+  );
+  const normalizedRelationshipEvidence = normalizedIdentityText(
+    relationshipEvidence
+  );
+  if (
+    !` ${normalizedRelationshipEvidence} `.includes(
+      ` ${normalizedManagerName} `
+    )
+  ) {
+    throw new Error(
+      "direct outreach relationshipEvidence must identify the manager"
+    );
+  }
+  if (
+    containsSubmittedPhoneNumber(note) ||
+    containsSubmittedPhoneNumber(relationshipEvidence) ||
+    containsSubmittedPhoneNumber(managerName) ||
+    (managerCompany !== null &&
+      containsSubmittedPhoneNumber(managerCompany))
+  ) {
+    throw new Error(
+      "direct outreach cannot submit a phone number; refer to the channel already on file"
+    );
+  }
+  if (!Array.isArray(input.sourceUrls) || input.sourceUrls.length === 0) {
+    throw new Error("direct outreach needs at least one source URL");
+  }
+  if (input.sourceUrls.length > 5) {
+    throw new Error("direct outreach may have at most 5 source URLs");
+  }
+  return {
+    note,
+    ruleVersion: input.ruleVersion,
+    ruleText: requiredString(
+      input.ruleText,
+      8_000,
+      "direct outreach ruleText"
+    ),
+    managerName,
+    managerCompany,
+    sourceUrls: Array.from(
+      new Set(input.sourceUrls.map(normalizeResearchSourceUrl))
+    ),
+    relationshipEvidence,
+    relationshipStatus: "confirmed",
+  };
 }
 
 interface OfficialManagementSource {
@@ -883,9 +1036,15 @@ export function parseContactResearchSubmission(
   const claimToken = requiredString(input.claimToken, 200, "claimToken");
   const notes = optionalString(input.notes, 4_000, "notes");
   if (outcome === "exhausted") {
+    if (input.directOutreach != null) {
+      throw new Error("exhausted outcomes cannot include direct outreach");
+    }
     return { outcome, claimToken, notes, candidates: [] };
   }
   if (outcome === "skipped") {
+    if (input.directOutreach != null) {
+      throw new Error("skipped outcomes cannot include direct outreach");
+    }
     if (Array.isArray(input.candidates) && input.candidates.length > 0) {
       throw new Error("skipped outcomes cannot include candidates");
     }
@@ -905,15 +1064,23 @@ export function parseContactResearchSubmission(
       candidates: [],
     };
   }
-  if (!Array.isArray(input.candidates) || input.candidates.length === 0) {
-    throw new Error("at least one candidate is required");
+  const directOutreach =
+    input.directOutreach == null
+      ? null
+      : normalizeTrustedDirectOutreach(input.directOutreach);
+  const candidateValues = input.candidates ?? [];
+  if (!Array.isArray(candidateValues)) {
+    throw new Error("candidates must be an array");
   }
-  if (input.candidates.length > 10) {
+  if (candidateValues.length === 0 && directOutreach === null) {
+    throw new Error("at least one candidate or direct outreach is required");
+  }
+  if (candidateValues.length > 10) {
     throw new Error("at most 10 candidates may be submitted");
   }
 
   const candidatesByEmail = new Map<string, ContactResearchCandidateInput>();
-  for (const candidateValue of input.candidates) {
+  for (const candidateValue of candidateValues) {
     if (
       typeof candidateValue !== "object" ||
       candidateValue === null ||
@@ -979,6 +1146,7 @@ export function parseContactResearchSubmission(
     claimToken,
     notes,
     candidates: [...candidatesByEmail.values()],
+    directOutreach,
   };
 }
 
@@ -1002,6 +1170,83 @@ export function isTrustedAgentSkipRuleProvenance(
     matchingRule.length > 0 &&
     (snapshot === matchingRule || snapshotLines.includes(matchingRule))
   );
+}
+
+async function persistTrustedDirectOutreach(
+  tx: Prisma.TransactionClient,
+  job: { id: string; artistId: string },
+  directOutreach: TrustedDirectOutreachInput
+): Promise<void> {
+  const directOutreachIdentity = normalizeDirectOutreachIdentity(
+    job.artistId,
+    directOutreach.managerName
+  );
+  const provenance = {
+    directOutreachNote: directOutreach.note,
+    directOutreachIdentity,
+    directOutreachSourceJobId: job.id,
+    directOutreachRuleVersion: directOutreach.ruleVersion,
+    directOutreachRuleText: directOutreach.ruleText,
+    directOutreachManagerName: directOutreach.managerName,
+    directOutreachManagerCompany: directOutreach.managerCompany,
+    directOutreachEvidenceUrls: directOutreach.sourceUrls,
+    directOutreachEvidence: directOutreach.relationshipEvidence,
+  };
+  const existingIdentity = await tx.contact.findUnique({
+    where: { directOutreachIdentity },
+    select: { id: true },
+  });
+  if (existingIdentity) {
+    await tx.contact.update({
+      where: { id: existingIdentity.id },
+      data: { ...provenance, state: "active" },
+    });
+    return;
+  }
+
+  const attachableContacts = await tx.contact.findMany({
+    where: {
+      artistId: job.artistId,
+      state: "active",
+      directOutreachIdentity: null,
+      directOutreachNote: null,
+      sourceKey: null,
+      OR: [{ source: null }, { source: { not: "sheet" } }],
+    },
+    select: {
+      id: true,
+      name: true,
+    },
+    orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+  });
+  const normalizedManagerName = normalizedIdentityText(
+    directOutreach.managerName
+  );
+  const matchingContact = attachableContacts.find(
+    (contact) =>
+      contact.name !== null &&
+      normalizedIdentityText(contact.name) === normalizedManagerName
+  );
+  if (matchingContact) {
+    await tx.contact.update({
+      where: { id: matchingContact.id },
+      data: provenance,
+    });
+    return;
+  }
+
+  await tx.contact.create({
+    data: {
+      artistId: job.artistId,
+      email: null,
+      phone: null,
+      name: directOutreach.managerName,
+      role: "management",
+      source: "research",
+      state: "active",
+      ...provenance,
+    },
+  });
 }
 
 export async function isValidContactResearchAuthorization(
@@ -1630,8 +1875,16 @@ export async function claimContactResearchJobs(
                 select: {
                   email: true,
                   phone: true,
+                  directOutreachNote: true,
+                  directOutreachRuleVersion: true,
+                  directOutreachRuleText: true,
+                  directOutreachManagerName: true,
+                  directOutreachManagerCompany: true,
+                  directOutreachEvidenceUrls: true,
+                  directOutreachEvidence: true,
                   name: true,
                   role: true,
+                  source: true,
                 },
               },
               shows: {
@@ -1746,6 +1999,23 @@ export async function submitContactResearchResult(
       };
     }
 
+    if (
+      submission.outcome === "candidates" &&
+      submission.directOutreach !== null &&
+      !isTrustedAgentSkipRuleProvenance(
+        job.claimedAgentRulesVersion,
+        job.claimedAgentRules,
+        submission.directOutreach.ruleVersion,
+        submission.directOutreach.ruleText
+      )
+    ) {
+      return {
+        accepted: false,
+        status: "invalid_rule_provenance" as const,
+        autoApprovals: [] as ApprovedResearchContact[],
+      };
+    }
+
     if (submission.outcome === "skipped") {
       if (
         !isTrustedAgentSkipRuleProvenance(
@@ -1811,6 +2081,10 @@ export async function submitContactResearchResult(
     await supersedeObsoleteContactResearchApprovals(tx, {
       jobIds: [jobId],
     });
+    if (submission.directOutreach !== null) {
+      await persistTrustedDirectOutreach(tx, job, submission.directOutreach);
+    }
+
     const autoApproveCandidates: Array<{
       id: string;
       input: ContactResearchCandidateInput;

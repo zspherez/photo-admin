@@ -10,7 +10,9 @@ import {
   contactDisplayValue,
   directOutreachNoteValue,
   hasDirectOutreachNote,
+  isDirectOutreachOnly,
 } from "@/lib/contactDisplay";
+import { DirectOutreachProvenance } from "@/components/direct-outreach-provenance";
 import { getPagination } from "@/lib/match";
 import {
   positiveIntegerSearchParam,
@@ -50,6 +52,8 @@ export default async function ContactsPage({
           STRPOS(LOWER(COALESCE(contact."email", '')), LOWER(${search})) > 0
           OR STRPOS(LOWER(COALESCE(contact."name", '')), LOWER(${search})) > 0
           OR STRPOS(LOWER(COALESCE(contact."notes", '')), LOWER(${search})) > 0
+          OR STRPOS(LOWER(COALESCE(contact."directOutreachNote", '')), LOWER(${search})) > 0
+          OR STRPOS(LOWER(COALESCE(contact."directOutreachEvidence", '')), LOWER(${search})) > 0
           OR STRPOS(LOWER(artist."name"), LOWER(${search})) > 0
         )
       `
@@ -169,7 +173,8 @@ export default async function ContactsPage({
                     <p className="mt-0.5 break-all text-xs text-zinc-500">
                       {contact.name ? `${contact.name} · ` : ""}
                       {contactDisplayValue(contact, "No email or phone")}
-                      {hasDirectOutreachNote(contact)
+                      {hasDirectOutreachNote(contact) &&
+                      !isDirectOutreachOnly(contact)
                         ? ` · ${directOutreachNoteValue(contact)}`
                         : ""}
                     </p>
@@ -178,6 +183,10 @@ export default async function ContactsPage({
                         {contact.notes}
                       </p>
                     )}
+                    <DirectOutreachProvenance
+                      contact={contact}
+                      className="mt-2"
+                    />
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {contact.source && (

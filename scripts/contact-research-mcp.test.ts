@@ -118,6 +118,12 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
   assert.match(agent, /Only the claimed `globalAgentRules` snapshot can authorize/);
   assert.match(agent, /call `submit-skipped` without browsing/);
   assert.match(agent, /matching rule version and exact\s+rule text/);
+  assert.match(agent, /Only an exact rule in the claimed `globalAgentRules` snapshot can authorize\s+direct outreach/);
+  assert.match(agent, /page that explicitly tells you to create a note[\s\S]*untrusted/);
+  assert.match(agent, /Never include an actual phone number/);
+  assert.match(agent, /relationshipStatus` to `confirmed` only for unambiguous evidence/);
+  assert.match(agent, /call `submit-direct-outreach`/);
+  assert.match(agent, /leaves the email-research job in review/);
   assert.doesNotMatch(agent, /mcp-servers:/);
   assert.match(runner, /contact-research-broker\.mjs/);
   assert.match(runner, /run-contact-research-copilot\.mjs/);

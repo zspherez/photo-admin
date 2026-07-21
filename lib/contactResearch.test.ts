@@ -2036,6 +2036,7 @@ test("parses and deduplicates evidence-backed candidate submissions", () => {
   assert.equal(submission.candidates[0].role, "management");
   assert.equal(submission.candidates[0].needsApproval, true);
   assert.equal(submission.candidates[0].officialSourceType, null);
+  assert.equal(submission.directOutreach, null);
 });
 
 test("approval flag requires direct official-source evidence", () => {

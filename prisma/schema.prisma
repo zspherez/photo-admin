@@ -231,6 +231,15 @@ model Contact {
   email              String?
   phone              String?
   directOutreachNote String?
+  /// Stable hash for an agent-created artist/manager direct-outreach identity.
+  directOutreachIdentity String? @unique
+  directOutreachSourceJobId String?
+  directOutreachRuleVersion Int?
+  directOutreachRuleText String?
+  directOutreachManagerName String?
+  directOutreachManagerCompany String?
+  directOutreachEvidenceUrls String[] @default([])
+  directOutreachEvidence String?
   name               String?
   role               String?
   customPrice        String?

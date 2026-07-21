@@ -28,6 +28,7 @@ async function main(): Promise<void> {
     activeUnownedSheetContacts,
     contactProbe,
     directOutreachNoteProbe,
+    directOutreachProvenanceProbe,
     festivalGeographyProbe,
     outreachKindProbe,
     outreachDispatchIdentityConstraintProbe,
@@ -72,6 +73,19 @@ async function main(): Promise<void> {
     db.contact.count({
       where: { directOutreachNote: { not: null } },
       take: 1,
+    }),
+    db.contact.findMany({
+      take: 1,
+      select: {
+        directOutreachIdentity: true,
+        directOutreachSourceJobId: true,
+        directOutreachRuleVersion: true,
+        directOutreachRuleText: true,
+        directOutreachManagerName: true,
+        directOutreachManagerCompany: true,
+        directOutreachEvidenceUrls: true,
+        directOutreachEvidence: true,
+      },
     }),
     db.show.count({
       where: {
@@ -465,6 +479,7 @@ async function main(): Promise<void> {
         [
           contactResearchJobProbe,
           contactResearchCandidateProbe,
+          directOutreachProvenanceProbe,
           outreachKindProbe,
           outreachDispatchIdentityConstraintProbe,
           artistResearchSkipProbe,
@@ -512,6 +527,7 @@ async function main(): Promise<void> {
       sheetAdoptionRequired: requireSheetAdoption,
       addedRuntimeRoleProbes: [
         "ArtistResearchSkip",
+        "Contact.agentDirectOutreachProvenance",
         "ContactAuditRequest",
         "ContactAuditRun",
         "ContactAuditJob",

@@ -53,6 +53,7 @@ import {
 import { requireServerActionAuth } from "@/lib/auth";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
 import { ContactResearchControls } from "@/components/contact-research-controls";
+import { DirectOutreachProvenance } from "@/components/direct-outreach-provenance";
 import {
   researchStatusHref,
   type ResearchStatusFilter,
@@ -749,6 +750,10 @@ export default async function ArtistPage({
                       {c.isFullTeam && <Badge tone="accent" size="xs">Full team</Badge>}
                     </div>
                   </div>
+                  <DirectOutreachProvenance
+                    contact={c}
+                    className="mt-2"
+                  />
                 </li>
               ))}
             </ul>

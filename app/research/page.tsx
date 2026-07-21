@@ -24,6 +24,7 @@ import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/button";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { ContactResearchControls } from "@/components/contact-research-controls";
+import { DirectOutreachProvenance } from "@/components/direct-outreach-provenance";
 import { AutoDismissStatus } from "./auto-dismiss-status";
 import { easternTodayStoredDate } from "@/lib/calendarDate";
 import {
@@ -426,6 +427,13 @@ export default async function ContactResearchPage({
           id: true,
           name: true,
           popularity: true,
+          contacts: {
+            where: {
+              state: "active",
+              directOutreachIdentity: { not: null },
+            },
+            orderBy: { updatedAt: "desc" },
+          },
           researchSkips: {
             where: { clearedAt: null },
             orderBy: { setAt: "desc" },
@@ -472,8 +480,9 @@ export default async function ContactResearchPage({
             Contact research
           </h1>
           <p className="mt-1 text-sm text-zinc-500">
-            Agents propose manager contacts only. Nothing is added or sent until
-            you approve it.
+            Email candidates require normal review unless directly published.
+            Trusted-rule direct outreach may be added automatically, but
+            nothing is ever sent.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -668,6 +677,14 @@ export default async function ContactResearchPage({
                       {job.agentNotes}
                     </p>
                   )}
+
+                  {job.artist.contacts.map((contact) => (
+                    <DirectOutreachProvenance
+                      key={contact.id}
+                      contact={contact}
+                      className="mt-3"
+                    />
+                  ))}
 
                   <div className="mt-3">
                     <ContactResearchControls
