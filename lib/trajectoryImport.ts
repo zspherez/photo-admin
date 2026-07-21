@@ -165,8 +165,13 @@ export interface TrajectoryImportSummary {
   validUntil: string;
   recommendationCount: number;
   mappedRecommendationCount: number;
+  suggestedRecommendationCount: number;
+  mappedSuggestedRecommendationCount: number;
+  nonSuggestedRecommendationCount: number;
+  mappedNonSuggestedRecommendationCount: number;
   issueCount: number;
   unresolvedNonSuggestedRate: number;
+  maximumUnmappedRate: number;
   previousReadyRunsSuperseded: number;
   runId: string | null;
   mappingValidation:
@@ -813,9 +818,14 @@ function summaryForPlan(
   plan: TrajectoryImportPlan,
   mode: "dry-run" | "write",
   status: TrajectoryImportSummary["status"],
+  maximumUnmappedRate: number,
   previousReadyRunsSuperseded = 0,
 ): TrajectoryImportSummary {
   const parsed = plan.parsed;
+  const suggestedRecommendationCount =
+    parsed.manifest.recommendations.filter((row) => row.is_suggested).length;
+  const nonSuggestedRecommendationCount =
+    parsed.manifest.recommendation_count - suggestedRecommendationCount;
   if (plan.kind === "noop") {
     return {
       mode,
@@ -826,8 +836,13 @@ function summaryForPlan(
       validUntil: parsed.validUntil.toISOString(),
       recommendationCount: parsed.manifest.recommendation_count,
       mappedRecommendationCount: parsed.manifest.recommendation_count,
+      suggestedRecommendationCount,
+      mappedSuggestedRecommendationCount: suggestedRecommendationCount,
+      nonSuggestedRecommendationCount,
+      mappedNonSuggestedRecommendationCount: nonSuggestedRecommendationCount,
       issueCount: 0,
       unresolvedNonSuggestedRate: 0,
+      maximumUnmappedRate,
       previousReadyRunsSuperseded: 0,
       runId: plan.existingRunId,
       mappingValidation: "not-performed",
@@ -842,8 +857,14 @@ function summaryForPlan(
     validUntil: parsed.validUntil.toISOString(),
     recommendationCount: parsed.manifest.recommendation_count,
     mappedRecommendationCount: plan.recommendations.length,
+    suggestedRecommendationCount,
+    mappedSuggestedRecommendationCount: suggestedRecommendationCount,
+    nonSuggestedRecommendationCount,
+    mappedNonSuggestedRecommendationCount:
+      nonSuggestedRecommendationCount - plan.unresolvedNonSuggestedCount,
     issueCount: plan.issues.length,
     unresolvedNonSuggestedRate: plan.unresolvedNonSuggestedRate,
+    maximumUnmappedRate,
     previousReadyRunsSuperseded,
     runId: mode === "write" && status === "imported" ? plan.runId : null,
     mappingValidation:
@@ -860,6 +881,7 @@ async function promoteTrajectoryImportPlan(
   lease: IntegrationSyncLeaseGuard,
   persistence: TrajectoryImportPersistence,
   deadline: OperationDeadline,
+  maximumUnmappedRate: number,
 ): Promise<TrajectoryImportSummary> {
   return persistence.withTransaction(deadline, async (transaction) => {
     await transaction.fence(lease);
@@ -883,6 +905,7 @@ async function promoteTrajectoryImportPlan(
         },
         "write",
         "noop",
+        maximumUnmappedRate,
       );
     }
 
@@ -939,7 +962,13 @@ async function promoteTrajectoryImportPlan(
     const superseded =
       await transaction.supersedeReadyRuns(TRAJECTORY_PRODUCER);
     await transaction.promoteRun(plan.runId, promotionNow);
-    return summaryForPlan(plan, "write", "imported", superseded);
+    return summaryForPlan(
+      plan,
+      "write",
+      "imported",
+      maximumUnmappedRate,
+      superseded,
+    );
   });
 }
 
@@ -961,7 +990,7 @@ export async function importTrajectoryManifest(
       persistence,
       threshold,
     );
-    return summaryForPlan(plan, "dry-run", "planned");
+    return summaryForPlan(plan, "dry-run", "planned", threshold);
   }
 
   const deadline =
@@ -973,13 +1002,14 @@ export async function importTrajectoryManifest(
       threshold,
     );
     if (plan.kind === "noop") {
-      return summaryForPlan(plan, "write", "noop");
+      return summaryForPlan(plan, "write", "noop", threshold);
     }
     return promoteTrajectoryImportPlan(
       plan,
       lease,
       persistence,
       deadline,
+      threshold,
     );
   }, deadline);
 
@@ -993,8 +1023,17 @@ export async function importTrajectoryManifest(
       validUntil: parsed.validUntil.toISOString(),
       recommendationCount: parsed.manifest.recommendation_count,
       mappedRecommendationCount: 0,
+      suggestedRecommendationCount:
+        parsed.manifest.recommendations.filter((row) => row.is_suggested)
+          .length,
+      mappedSuggestedRecommendationCount: 0,
+      nonSuggestedRecommendationCount:
+        parsed.manifest.recommendations.filter((row) => !row.is_suggested)
+          .length,
+      mappedNonSuggestedRecommendationCount: 0,
       issueCount: 0,
       unresolvedNonSuggestedRate: 0,
+      maximumUnmappedRate: threshold,
       previousReadyRunsSuperseded: 0,
       runId: null,
       mappingValidation: "not-performed",

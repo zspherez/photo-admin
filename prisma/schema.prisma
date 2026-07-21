@@ -269,6 +269,23 @@ model TrajectoryShowOutcome {
   @@index([recordedAt])
 }
 
+model TrajectoryIngestRequest {
+  idempotencyKey String   @id
+  ownerToken     String
+  producerRunId  String
+  artifactSha256 String
+  mode           String
+  producedAt     DateTime
+  status         String
+  response       Json?
+  httpStatus     Int?
+  completedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([producerRunId, artifactSha256, mode, status])
+}
+
 model SpotifyPlaylist {
   id        String           @id @default(cuid())
   spotifyId String           @unique

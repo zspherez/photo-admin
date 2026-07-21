@@ -13,6 +13,13 @@ const schema = readFileSync(
   new URL("../prisma/schema.prisma", import.meta.url),
   "utf8",
 );
+const ingestMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260721210000_trajectory_ingest_requests/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 function modelBlock(name: string): string {
   const match = schema.match(
@@ -65,4 +72,22 @@ test("trajectory schema remains an additive model-opinion layer", () => {
   }
   assert.match(schema, /model TrajectoryFeedbackEvent/);
   assert.match(schema, /model TrajectoryShowOutcome/);
+});
+
+test("trajectory ingest replay records are additive and constrained", () => {
+  assert.match(ingestMigration, /^BEGIN;/);
+  assert.match(ingestMigration, /COMMIT;\s*$/);
+  assert.match(
+    ingestMigration,
+    /CREATE TABLE "TrajectoryIngestRequest"/,
+  );
+  assert.match(
+    ingestMigration,
+    /TrajectoryIngestRequest_idempotencyKey_check/,
+  );
+  assert.match(
+    ingestMigration,
+    /TrajectoryIngestRequest_completion_check/,
+  );
+  assert.match(schema, /model TrajectoryIngestRequest/);
 });
