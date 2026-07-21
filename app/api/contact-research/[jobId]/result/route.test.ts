@@ -27,7 +27,11 @@ test("result route returns atomic official-source auto-approval results", () => 
   assert.match(research, /officialSourceEvidence !== null/);
   assert.match(
     research,
-    /autoApproveCandidates\.length > 0[\s\S]*tx\.contact\.create[\s\S]*status: "complete"/
+    /autoApproveCandidates[\s\S]*tx\.contact\.create[\s\S]*resolveContactResearchJob/
+  );
+  assert.doesNotMatch(
+    research,
+    /id: \{ notIn: approvedIds \}[\s\S]*status: "rejected"/
   );
   assert.match(research, /approveContactResearchCandidates/);
 });

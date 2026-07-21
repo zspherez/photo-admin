@@ -1118,7 +1118,7 @@ export async function refreshContactResearchQueue(
     const artistIds = [...eligible.keys()];
     const completed = await tx.contactResearchJob.updateMany({
       where: {
-        status: { in: ["pending", "claimed", "review", "exhausted"] },
+        status: { in: ["pending", "claimed", "exhausted"] },
         artist: {
           contacts: {
             some: ACTIVE_EMAIL_CONTACT_WHERE,
@@ -1134,7 +1134,7 @@ export async function refreshContactResearchQueue(
       },
     });
     const ineligibleWhere: Prisma.ContactResearchJobWhereInput = {
-      status: { in: ["pending", "claimed", "review"] },
+      status: { in: ["pending", "claimed"] },
       artist: {
         contacts: {
           none: ACTIVE_EMAIL_CONTACT_WHERE,
@@ -1437,6 +1437,12 @@ export async function claimContactResearchJobs(
           WHERE research_skip."artistId" = job."artistId"
             AND research_skip."clearedAt" IS NULL
         )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "ContactResearchCandidate" candidate
+          WHERE candidate."jobId" = job."id"
+            AND candidate."status" = 'approved'
+        )
         AND EXISTS (
           SELECT 1
           FROM "ShowArtist" show_artist
@@ -1573,7 +1579,11 @@ export async function submitContactResearchResult(
   value: unknown,
   now: Date = new Date(),
   runTransaction: ContactResearchTransactionRunner = (work) =>
-    withSerializableRetry(work)
+    withSerializableRetry(work),
+  appendApprovals: (
+    approvals: readonly ApprovedResearchContact[],
+    approvedAt: Date
+  ) => Promise<string[]> = appendApprovedResearchContactsToSheet
 ): Promise<{
   accepted: boolean;
   status:
@@ -1681,6 +1691,17 @@ export async function submitContactResearchResult(
       };
     }> = [];
     for (const candidate of submission.candidates) {
+      const existingCandidate =
+        await tx.contactResearchCandidate.findUnique({
+          where: {
+            jobId_normalizedEmail: {
+              jobId,
+              normalizedEmail: candidate.normalizedEmail,
+            },
+          },
+          select: { status: true },
+        });
+      const preserveApproval = existingCandidate?.status === "approved";
       const storedCandidate = await tx.contactResearchCandidate.upsert({
         where: {
           jobId_normalizedEmail: {
@@ -1704,11 +1725,15 @@ export async function submitContactResearchResult(
           officialSourceUrl: candidate.officialSourceUrl,
           officialManagementLabel: candidate.officialManagementLabel,
           officialSourceEvidence: candidate.officialSourceEvidence,
-          status: "pending",
-          reviewedAt: null,
+          ...(!preserveApproval
+            ? { status: "pending", reviewedAt: null }
+            : {}),
         },
       });
-      if (isOfficialManagementAutoApprovalEligible(candidate)) {
+      if (
+        !preserveApproval &&
+        isOfficialManagementAutoApprovalEligible(candidate)
+      ) {
         autoApproveCandidates.push({
           id: storedCandidate.id,
           input: candidate,
@@ -1716,91 +1741,67 @@ export async function submitContactResearchResult(
         });
       }
     }
-    if (autoApproveCandidates.length > 0) {
-      const approvals: ApprovedResearchContact[] = [];
-      for (const candidate of autoApproveCandidates) {
-        const existing = await tx.contact.findUnique({
-          where: {
-            artistId_email: {
+    const approvals: ApprovedResearchContact[] = [];
+    for (const candidate of autoApproveCandidates) {
+      const existing = await tx.contact.findUnique({
+        where: {
+          artistId_email: {
+            artistId: job.artistId,
+            email: candidate.input.normalizedEmail,
+          },
+        },
+      });
+      const contact = existing
+        ? await tx.contact.update({
+            where: { id: existing.id },
+            data: {
+              state: "active",
+              name: existing.name ?? candidate.input.name,
+              role: "management",
+            },
+          })
+        : await tx.contact.create({
+            data: {
               artistId: job.artistId,
               email: candidate.input.normalizedEmail,
+              name: candidate.input.name,
+              role: "management",
+              source: "research",
+              state: "active",
             },
-          },
-        });
-        const contact = existing
-          ? await tx.contact.update({
-              where: { id: existing.id },
-              data: {
-                state: "active",
-                name: existing.name ?? candidate.input.name,
-                role: "management",
-              },
-            })
-          : await tx.contact.create({
-              data: {
-                artistId: job.artistId,
-                email: candidate.input.normalizedEmail,
-                name: candidate.input.name,
-                role: "management",
-                source: "research",
-                state: "active",
-              },
-            });
-        approvals.push({
-          contact,
-          artistName: job.artist.name,
-          candidate: candidate.stored,
-          shouldAppendToSheet: !existing,
-        });
-      }
+          });
+      approvals.push({
+        contact,
+        artistName: job.artist.name,
+        candidate: candidate.stored,
+        shouldAppendToSheet: !existing,
+      });
+    }
+    if (autoApproveCandidates.length > 0) {
       const approvedIds = autoApproveCandidates.map(
         (candidate) => candidate.id
       );
-      await Promise.all([
-        tx.contactResearchCandidate.updateMany({
-          where: { id: { in: approvedIds } },
-          data: { status: "approved", reviewedAt: now },
-        }),
-        tx.contactResearchCandidate.updateMany({
-          where: {
-            jobId,
-            id: { notIn: approvedIds },
-            status: "pending",
-          },
-          data: { status: "rejected", reviewedAt: now },
-        }),
-        tx.contactResearchJob.update({
-          where: { id: jobId },
-          data: {
-            status: "complete",
-            agentNotes: submission.notes,
-            completedAt: now,
-            claimToken: null,
-            claimedAt: null,
-            claimExpiresAt: null,
-          },
-        }),
-      ]);
-      return {
-        accepted: true,
-        status: "complete" as const,
-        autoApprovals: approvals,
-      };
+      const updated = await tx.contactResearchCandidate.updateMany({
+        where: {
+          id: { in: approvedIds },
+          status: "pending",
+        },
+        data: { status: "approved", reviewedAt: now },
+      });
+      if (updated.count !== approvedIds.length) {
+        throw new ContactResearchCandidateConflictError();
+      }
     }
-    await tx.contactResearchJob.update({
-      where: { id: jobId },
-      data: {
-        status: "review",
-        agentNotes: submission.notes,
-        claimToken: null,
-        claimedAt: null,
-        claimExpiresAt: null,
-      },
-    });
+    const status = await resolveContactResearchJob(
+      tx,
+      jobId,
+      now,
+      submission.notes
+    );
     return {
       accepted: true,
-      status: "review" as const,
-      autoApprovals: [] as ApprovedResearchContact[],
+      status,
+      autoApprovals: approvals,
     };
   });
   if (!stored.accepted) {
@@ -1811,14 +1812,13 @@ export async function submitContactResearchResult(
       sheetErrors: [],
     };
   }
-  const sheetErrors = await appendApprovedResearchContactsToSheet(
+  const sheetErrors = await appendApprovals(
     stored.autoApprovals,
     now
   );
   return {
     accepted: true,
-    status:
-      stored.autoApprovals.length > 0 ? "complete" : stored.status,
+    status: stored.status,
     autoApproved: stored.autoApprovals.length,
     sheetErrors,
   };
@@ -1859,6 +1859,36 @@ interface ApprovedResearchContact {
   };
   artistName: string;
   shouldAppendToSheet: boolean;
+}
+
+class ContactResearchCandidateConflictError extends Error {}
+
+async function resolveContactResearchJob(
+  tx: Prisma.TransactionClient,
+  jobId: string,
+  now: Date,
+  agentNotes?: string | null
+): Promise<"review" | "complete" | "exhausted"> {
+  const pending = await tx.contactResearchCandidate.count({
+    where: { jobId, status: "pending" },
+  });
+  const approved = await tx.contactResearchCandidate.count({
+    where: { jobId, status: "approved" },
+  });
+  const status =
+    pending > 0 ? "review" : approved > 0 ? "complete" : "exhausted";
+  await tx.contactResearchJob.update({
+    where: { id: jobId },
+    data: {
+      status,
+      ...(agentNotes !== undefined ? { agentNotes } : {}),
+      completedAt: status === "complete" ? now : null,
+      claimToken: null,
+      claimedAt: null,
+      claimExpiresAt: null,
+    },
+  });
+  return status;
 }
 
 async function appendApprovedResearchContactsToSheet(
@@ -1920,7 +1950,13 @@ async function appendApprovedResearchContactsToSheet(
 
 export async function approveContactResearchCandidates(
   candidateIds: readonly string[],
-  now: Date = new Date()
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work),
+  appendApprovals: (
+    approvals: readonly ApprovedResearchContact[],
+    approvedAt: Date
+  ) => Promise<string[]> = appendApprovedResearchContactsToSheet
 ): Promise<{
   ok: boolean;
   approvedCount?: number;
@@ -1931,108 +1967,111 @@ export async function approveContactResearchCandidates(
   if (uniqueCandidateIds.length === 0) {
     return { ok: false, error: "No candidates were selected" };
   }
-  const approved = await withSerializableRetry(async (tx) => {
-    const candidates = await tx.contactResearchCandidate.findMany({
-      where: { id: { in: uniqueCandidateIds } },
-      include: {
-        job: {
-          include: {
-            artist: { select: { id: true, name: true } },
-          },
-        },
-      },
-    });
-    if (
-      candidates.length !== uniqueCandidateIds.length ||
-      candidates.some(
-        (candidate) =>
-          candidate.status !== "pending" ||
-          candidate.job.status !== "review"
-      )
-    ) {
-      return { ok: false as const, error: "Candidate is no longer reviewable" };
-    }
-    const jobIds = new Set(candidates.map((candidate) => candidate.jobId));
-    if (jobIds.size !== 1) {
-      return {
-        ok: false as const,
-        error: "Candidates must belong to the same research job",
-      };
-    }
-    const candidateById = new Map(
-      candidates.map((candidate) => [candidate.id, candidate])
-    );
-    const approvals: ApprovedResearchContact[] = [];
-    for (const candidateId of uniqueCandidateIds) {
-      const candidate = candidateById.get(candidateId)!;
-      const existing = await tx.contact.findUnique({
-        where: {
-          artistId_email: {
-            artistId: candidate.job.artistId,
-            email: candidate.normalizedEmail,
-          },
-        },
-      });
-      const contact = existing
-        ? await tx.contact.update({
-            where: { id: existing.id },
-            data: {
-              state: "active",
-              name: existing.name ?? candidate.name,
-              role: "management",
-            },
-          })
-        : await tx.contact.create({
-          data: {
-            artistId: candidate.job.artistId,
-            email: candidate.normalizedEmail,
-            name: candidate.name,
-            role: "management",
-            source: "research",
-            state: "active",
-          },
-        });
-      approvals.push({
-        contact,
-        artistName: candidate.job.artist.name,
-        candidate,
-        shouldAppendToSheet: !existing,
-      });
-    }
-
-    await Promise.all([
-      tx.contactResearchCandidate.updateMany({
+  let approved:
+    | {
+        ok: true;
+        approvals: ApprovedResearchContact[];
+      }
+    | { ok: false; error: string };
+  try {
+    approved = await runTransaction(async (tx) => {
+      const candidates = await tx.contactResearchCandidate.findMany({
         where: { id: { in: uniqueCandidateIds } },
-        data: { status: "approved", reviewedAt: now },
-      }),
-      tx.contactResearchCandidate.updateMany({
+        include: {
+          job: {
+            include: {
+              artist: { select: { id: true, name: true } },
+            },
+          },
+        },
+      });
+      if (
+        candidates.length !== uniqueCandidateIds.length ||
+        candidates.some(
+          (candidate) =>
+            candidate.status !== "pending" ||
+            candidate.job.status !== "review"
+        )
+      ) {
+        return {
+          ok: false as const,
+          error: "Candidate is no longer reviewable",
+        };
+      }
+      const jobIds = new Set(candidates.map((candidate) => candidate.jobId));
+      if (jobIds.size !== 1) {
+        return {
+          ok: false as const,
+          error: "Candidates must belong to the same research job",
+        };
+      }
+      const updated = await tx.contactResearchCandidate.updateMany({
         where: {
-          jobId: candidates[0].jobId,
-          id: { notIn: uniqueCandidateIds },
+          id: { in: uniqueCandidateIds },
           status: "pending",
         },
-        data: { status: "rejected", reviewedAt: now },
-      }),
-      tx.contactResearchJob.update({
-        where: { id: candidates[0].jobId },
-        data: {
-          status: "complete",
-          completedAt: now,
-          claimToken: null,
-          claimedAt: null,
-          claimExpiresAt: null,
-        },
-      }),
-    ]);
+        data: { status: "approved", reviewedAt: now },
+      });
+      if (updated.count !== uniqueCandidateIds.length) {
+        throw new ContactResearchCandidateConflictError();
+      }
+      const candidateById = new Map(
+        candidates.map((candidate) => [candidate.id, candidate])
+      );
+      const approvals: ApprovedResearchContact[] = [];
+      for (const candidateId of uniqueCandidateIds) {
+        const candidate = candidateById.get(candidateId)!;
+        const existing = await tx.contact.findUnique({
+          where: {
+            artistId_email: {
+              artistId: candidate.job.artistId,
+              email: candidate.normalizedEmail,
+            },
+          },
+        });
+        const contact = existing
+          ? await tx.contact.update({
+              where: { id: existing.id },
+              data: {
+                state: "active",
+                name: existing.name ?? candidate.name,
+                role: "management",
+              },
+            })
+          : await tx.contact.create({
+            data: {
+              artistId: candidate.job.artistId,
+              email: candidate.normalizedEmail,
+              name: candidate.name,
+              role: "management",
+              source: "research",
+              state: "active",
+            },
+          });
+        approvals.push({
+          contact,
+          artistName: candidate.job.artist.name,
+          candidate,
+          shouldAppendToSheet: !existing,
+        });
+      }
 
-    return {
-      ok: true as const,
-      approvals,
-    };
-  });
+      await resolveContactResearchJob(tx, candidates[0].jobId, now);
+
+      return {
+        ok: true as const,
+        approvals,
+      };
+    });
+  } catch (error) {
+    if (error instanceof ContactResearchCandidateConflictError) {
+      return { ok: false, error: "Candidate is no longer reviewable" };
+    }
+    throw error;
+  }
   if (!approved.ok) return approved;
 
-  const sheetErrors = await appendApprovedResearchContactsToSheet(
+  const sheetErrors = await appendApprovals(
     approved.approvals,
     now
   );
@@ -2045,11 +2084,19 @@ export async function approveContactResearchCandidates(
 
 export async function approveContactResearchCandidate(
   candidateId: string,
-  now: Date = new Date()
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work),
+  appendApprovals: (
+    approvals: readonly ApprovedResearchContact[],
+    approvedAt: Date
+  ) => Promise<string[]> = appendApprovedResearchContactsToSheet
 ): Promise<{ ok: boolean; error?: string; sheetError?: string }> {
   const result = await approveContactResearchCandidates(
     [candidateId],
-    now
+    now,
+    runTransaction,
+    appendApprovals
   );
   return {
     ok: result.ok,
@@ -2062,33 +2109,51 @@ export async function approveContactResearchCandidate(
 
 export async function rejectContactResearchCandidate(
   candidateId: string,
-  now: Date = new Date()
-): Promise<{ ok: boolean; exhausted: boolean }> {
-  return withSerializableRetry(async (tx) => {
-    const candidate = await tx.contactResearchCandidate.findFirst({
-      where: {
-        id: candidateId,
-        status: "pending",
-        job: { status: "review" },
-      },
-      select: { id: true, jobId: true },
-    });
-    if (!candidate) return { ok: false, exhausted: false };
-    await tx.contactResearchCandidate.update({
-      where: { id: candidate.id },
-      data: { status: "rejected", reviewedAt: now },
-    });
-    const remaining = await tx.contactResearchCandidate.count({
-      where: { jobId: candidate.jobId, status: "pending" },
-    });
-    if (remaining === 0) {
-      await tx.contactResearchJob.update({
-        where: { id: candidate.jobId },
-        data: { status: "exhausted" },
+  now: Date = new Date(),
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work)
+): Promise<{ ok: boolean; exhausted: boolean; error?: string }> {
+  try {
+    return await runTransaction(async (tx) => {
+      const candidate = await tx.contactResearchCandidate.findFirst({
+        where: {
+          id: candidateId,
+          status: "pending",
+          job: { status: "review" },
+        },
+        select: { id: true, jobId: true },
       });
+      if (!candidate) {
+        return {
+          ok: false,
+          exhausted: false,
+          error: "Candidate is no longer reviewable",
+        };
+      }
+      const updated = await tx.contactResearchCandidate.updateMany({
+        where: { id: candidate.id, status: "pending" },
+        data: { status: "rejected", reviewedAt: now },
+      });
+      if (updated.count !== 1) {
+        throw new ContactResearchCandidateConflictError();
+      }
+      const status = await resolveContactResearchJob(
+        tx,
+        candidate.jobId,
+        now
+      );
+      return { ok: true, exhausted: status === "exhausted" };
+    });
+  } catch (error) {
+    if (error instanceof ContactResearchCandidateConflictError) {
+      return {
+        ok: false,
+        exhausted: false,
+        error: "Candidate is no longer reviewable",
+      };
     }
-    return { ok: true, exhausted: remaining === 0 };
-  });
+    throw error;
+  }
 }
 
 export async function updateContactResearchJobUserNotes(
@@ -2580,6 +2645,12 @@ async function retryEligibleContactResearchJobs(
         FROM "ArtistResearchSkip" research_skip
         WHERE research_skip."artistId" = job."artistId"
           AND research_skip."clearedAt" IS NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "ContactResearchCandidate" candidate
+        WHERE candidate."jobId" = job."id"
+          AND candidate."status" = 'approved'
       )
       AND EXISTS (
         SELECT 1

@@ -25,7 +25,10 @@ import {
   parseContactResearchClaimLimit,
   parseKnownContactLookup,
   parseContactResearchSubmission,
+  approveContactResearchCandidates,
+  approveContactResearchCandidate,
   rankKnownContactEmails,
+  rejectContactResearchCandidate,
   isOfficialManagementAutoApprovalEligible,
   refreshContactResearchQueue,
   skipContactResearchArtist,
@@ -41,6 +44,610 @@ function runWithTransaction(
 ): ContactResearchTransactionRunner {
   return async (work) => work(tx as Prisma.TransactionClient);
 }
+
+interface CandidateResolutionState {
+  id: string;
+  jobId: string;
+  normalizedEmail: string;
+  email: string;
+  name: string | null;
+  role: string;
+  sourceUrls: string[];
+  evidence: string;
+  confidence: string;
+  needsApproval: boolean;
+  officialSourceType: string | null;
+  officialSourceUrl: string | null;
+  officialManagementLabel: string | null;
+  officialSourceEvidence: string | null;
+  status: string;
+  reviewedAt: Date | null;
+}
+
+function createCandidateResolutionHarness(
+  initialCandidates: Array<{
+    id: string;
+    email: string;
+    status?: string;
+  }>,
+  initialJobStatus: "review" | "claimed" = "review"
+) {
+  const job = {
+    id: "job-1",
+    artistId: "artist-1",
+    status: initialJobStatus as string,
+    completedAt: null as Date | null,
+    claimToken: initialJobStatus === "claimed" ? "claim-1" : null,
+    claimExpiresAt:
+      initialJobStatus === "claimed"
+        ? new Date("2026-07-22T00:00:00.000Z")
+        : null,
+    agentNotes: null as string | null,
+  };
+  const candidates = new Map<string, CandidateResolutionState>(
+    initialCandidates.map((candidate) => [
+      candidate.id,
+      {
+        id: candidate.id,
+        jobId: job.id,
+        normalizedEmail: candidate.email,
+        email: candidate.email,
+        name: `Manager ${candidate.id}`,
+        role: "management",
+        sourceUrls: ["https://soundcloud.com/exampleartist"],
+        evidence: "Published management contact.",
+        confidence: "high",
+        needsApproval: true,
+        officialSourceType: null,
+        officialSourceUrl: null,
+        officialManagementLabel: null,
+        officialSourceEvidence: null,
+        status: candidate.status ?? "pending",
+        reviewedAt: null,
+      },
+    ])
+  );
+  const contacts = new Map<
+    string,
+    {
+      id: string;
+      email: string;
+      name: string | null;
+      role: string | null;
+      customPrice: string | null;
+      state: string;
+    }
+  >();
+  let nextCandidateId = candidates.size + 1;
+  let nextContactId = 1;
+
+  function candidateMatches(
+    candidate: CandidateResolutionState,
+    where: {
+      id?: string | { in?: string[] };
+      jobId?: string;
+      status?: string;
+    }
+  ) {
+    const ids =
+      typeof where.id === "string" ? [where.id] : where.id?.in;
+    return (
+      (!ids || ids.includes(candidate.id)) &&
+      (!where.jobId || where.jobId === candidate.jobId) &&
+      (!where.status || where.status === candidate.status)
+    );
+  }
+
+  const tx = {
+    contactResearchCandidate: {
+      findMany: async (value: unknown) => {
+        const input = value as {
+          where: { id: { in: string[] } };
+        };
+        return [...candidates.values()]
+          .filter((candidate) =>
+            input.where.id.in.includes(candidate.id)
+          )
+          .map((candidate) => ({
+            ...candidate,
+            job: {
+              id: job.id,
+              artistId: job.artistId,
+              status: job.status,
+              artist: { id: job.artistId, name: "Example Artist" },
+            },
+          }));
+      },
+      findFirst: async (value: unknown) => {
+        const input = value as {
+          where: { id: string; status: string };
+        };
+        if (job.status !== "review") return null;
+        const candidate = candidates.get(input.where.id);
+        return candidate?.status === input.where.status
+          ? { id: candidate.id, jobId: candidate.jobId }
+          : null;
+      },
+      findUnique: async (value: unknown) => {
+        const input = value as {
+          where: {
+            jobId_normalizedEmail: {
+              jobId: string;
+              normalizedEmail: string;
+            };
+          };
+        };
+        const key = input.where.jobId_normalizedEmail;
+        return (
+          [...candidates.values()].find(
+            (candidate) =>
+              candidate.jobId === key.jobId &&
+              candidate.normalizedEmail === key.normalizedEmail
+          ) ?? null
+        );
+      },
+      upsert: async (value: unknown) => {
+        const input = value as {
+          where: {
+            jobId_normalizedEmail: {
+              jobId: string;
+              normalizedEmail: string;
+            };
+          };
+          create: Omit<CandidateResolutionState, "id" | "status" | "reviewedAt">;
+          update: Partial<CandidateResolutionState>;
+        };
+        const key = input.where.jobId_normalizedEmail;
+        const existing = [...candidates.values()].find(
+          (candidate) =>
+            candidate.jobId === key.jobId &&
+            candidate.normalizedEmail === key.normalizedEmail
+        );
+        if (existing) {
+          Object.assign(existing, input.update);
+          return { ...existing };
+        }
+        const created: CandidateResolutionState = {
+          ...input.create,
+          id: `candidate-${nextCandidateId++}`,
+          status: "pending",
+          reviewedAt: null,
+        };
+        candidates.set(created.id, created);
+        return { ...created };
+      },
+      updateMany: async (value: unknown) => {
+        const input = value as {
+          where: {
+            id?: string | { in?: string[] };
+            jobId?: string;
+            status?: string;
+          };
+          data: Partial<CandidateResolutionState>;
+        };
+        let count = 0;
+        for (const candidate of candidates.values()) {
+          if (!candidateMatches(candidate, input.where)) continue;
+          Object.assign(candidate, input.data);
+          count += 1;
+        }
+        return { count };
+      },
+      count: async (value: unknown) => {
+        const input = value as {
+          where: { jobId: string; status: string };
+        };
+        return [...candidates.values()].filter(
+          (candidate) =>
+            candidate.jobId === input.where.jobId &&
+            candidate.status === input.where.status
+        ).length;
+      },
+    },
+    contactResearchJob: {
+      findFirst: async () =>
+        job.status === "claimed"
+          ? {
+              id: job.id,
+              artistId: job.artistId,
+              artist: { name: "Example Artist" },
+              claimedAgentRules: null,
+              claimedAgentRulesVersion: null,
+            }
+          : null,
+      update: async (value: unknown) => {
+        const input = value as {
+          data: {
+            status: string;
+            completedAt?: Date | null;
+            agentNotes?: string | null;
+            claimToken?: null;
+            claimExpiresAt?: null;
+          };
+        };
+        Object.assign(job, input.data);
+        return { ...job };
+      },
+    },
+    contact: {
+      findUnique: async (value: unknown) => {
+        const input = value as {
+          where: {
+            artistId_email: { artistId: string; email: string };
+          };
+        };
+        return contacts.get(input.where.artistId_email.email) ?? null;
+      },
+      update: async (value: unknown) => {
+        const input = value as {
+          where: { id: string };
+          data: Partial<{
+            name: string | null;
+            role: string | null;
+            state: string;
+          }>;
+        };
+        const contact = [...contacts.values()].find(
+          (row) => row.id === input.where.id
+        )!;
+        Object.assign(contact, input.data);
+        return { ...contact };
+      },
+      create: async (value: unknown) => {
+        const input = value as {
+          data: {
+            email: string;
+            name: string | null;
+            role: string;
+            state: string;
+          };
+        };
+        const contact = {
+          id: `contact-${nextContactId++}`,
+          email: input.data.email,
+          name: input.data.name,
+          role: input.data.role,
+          customPrice: null,
+          state: input.data.state,
+        };
+        contacts.set(contact.email, contact);
+        return { ...contact };
+      },
+    },
+  };
+  let transactionTail = Promise.resolve();
+  const serialRunner: ContactResearchTransactionRunner = async (work) => {
+    const previous = transactionTail;
+    let release!: () => void;
+    transactionTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await work(tx as unknown as Prisma.TransactionClient);
+    } finally {
+      release();
+    }
+  };
+  return { job, candidates, contacts, tx, serialRunner };
+}
+
+function officialCandidate(email: string) {
+  return {
+    email,
+    name: "Official Manager",
+    role: "management",
+    sourceUrls: ["https://soundcloud.com/exampleartist"],
+    evidence: "Official profile publishes the address.",
+    confidence: "high",
+    needsApproval: false,
+    officialSource: {
+      type: "soundcloud",
+      url: "https://soundcloud.com/exampleartist",
+      managementLabel: "management",
+      evidence: `Official SoundCloud: management ${email}`,
+    },
+  };
+}
+
+test("approving one candidate leaves every other proposal pending", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness([
+    { id: "candidate-1", email: "one@example.com" },
+    { id: "candidate-2", email: "two@example.com" },
+  ]);
+
+  const result = await approveContactResearchCandidate(
+    "candidate-1",
+    now,
+    harness.serialRunner,
+    async () => ["one@example.com: Sheet unavailable"]
+  );
+
+  assert.equal(result.ok, true);
+  assert.match(result.sheetError ?? "", /Sheet unavailable/);
+  assert.equal(harness.candidates.get("candidate-1")?.status, "approved");
+  assert.equal(harness.candidates.get("candidate-2")?.status, "pending");
+  assert.equal(harness.job.status, "review");
+  assert.equal(harness.job.completedAt, null);
+});
+
+test("approving both candidates sequentially completes the job", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness([
+    { id: "candidate-1", email: "one@example.com" },
+    { id: "candidate-2", email: "two@example.com" },
+  ]);
+  const writeSheet = async () => [] as string[];
+
+  assert.equal(
+    (
+      await approveContactResearchCandidate(
+        "candidate-1",
+        now,
+        harness.serialRunner,
+        writeSheet
+      )
+    ).ok,
+    true
+  );
+  assert.equal(harness.job.status, "review");
+  assert.equal(
+    (
+      await approveContactResearchCandidate(
+        "candidate-2",
+        now,
+        harness.serialRunner,
+        writeSheet
+      )
+    ).ok,
+    true
+  );
+  assert.equal(harness.job.status, "complete");
+  assert.equal(harness.job.completedAt, now);
+});
+
+test("rejecting the final candidate after an approval completes", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness([
+    { id: "candidate-1", email: "one@example.com" },
+    { id: "candidate-2", email: "two@example.com" },
+  ]);
+
+  await approveContactResearchCandidate(
+    "candidate-1",
+    now,
+    harness.serialRunner,
+    async () => []
+  );
+  const rejected = await rejectContactResearchCandidate(
+    "candidate-2",
+    now,
+    harness.serialRunner
+  );
+
+  assert.deepEqual(rejected, { ok: true, exhausted: false });
+  assert.equal(harness.job.status, "complete");
+  assert.equal(harness.job.completedAt, now);
+});
+
+test("rejecting every candidate exhausts the job", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness([
+    { id: "candidate-1", email: "one@example.com" },
+    { id: "candidate-2", email: "two@example.com" },
+  ]);
+
+  assert.deepEqual(
+    await rejectContactResearchCandidate(
+      "candidate-1",
+      now,
+      harness.serialRunner
+    ),
+    { ok: true, exhausted: false }
+  );
+  assert.deepEqual(
+    await rejectContactResearchCandidate(
+      "candidate-2",
+      now,
+      harness.serialRunner
+    ),
+    { ok: true, exhausted: true }
+  );
+  assert.equal(harness.job.status, "exhausted");
+  assert.equal(harness.job.completedAt, null);
+});
+
+test("concurrent approval and rejection resolve from final candidate state", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness([
+    { id: "candidate-1", email: "one@example.com" },
+    { id: "candidate-2", email: "two@example.com" },
+  ]);
+
+  const [approved, rejected] = await Promise.all([
+    approveContactResearchCandidate(
+      "candidate-1",
+      now,
+      harness.serialRunner,
+      async () => []
+    ),
+    rejectContactResearchCandidate(
+      "candidate-2",
+      now,
+      harness.serialRunner
+    ),
+  ]);
+
+  assert.equal(approved.ok, true);
+  assert.deepEqual(rejected, { ok: true, exhausted: false });
+  assert.equal(harness.job.status, "complete");
+  assert.equal(harness.candidates.get("candidate-1")?.status, "approved");
+  assert.equal(harness.candidates.get("candidate-2")?.status, "rejected");
+});
+
+test("batch approval resolves only the selected subset", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness([
+    { id: "candidate-1", email: "one@example.com" },
+    { id: "candidate-2", email: "two@example.com" },
+    { id: "candidate-3", email: "three@example.com" },
+  ]);
+
+  const result = await approveContactResearchCandidates(
+    ["candidate-1", "candidate-2"],
+    now,
+    harness.serialRunner,
+    async () => []
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.approvedCount, 2);
+  assert.equal(harness.candidates.get("candidate-1")?.status, "approved");
+  assert.equal(harness.candidates.get("candidate-2")?.status, "approved");
+  assert.equal(harness.candidates.get("candidate-3")?.status, "pending");
+  assert.equal(harness.job.status, "review");
+});
+
+test("stale candidate actions fail without changing resolved state", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness([
+    { id: "candidate-1", email: "one@example.com" },
+  ]);
+  let sheetWrites = 0;
+
+  await approveContactResearchCandidate(
+    "candidate-1",
+    now,
+    harness.serialRunner,
+    async () => {
+      sheetWrites += 1;
+      return [];
+    }
+  );
+  const stale = await approveContactResearchCandidate(
+    "candidate-1",
+    now,
+    harness.serialRunner,
+    async () => {
+      sheetWrites += 1;
+      return [];
+    }
+  );
+
+  assert.deepEqual(stale, {
+    ok: false,
+    error: "Candidate is no longer reviewable",
+  });
+  assert.equal(sheetWrites, 1);
+  assert.equal(harness.job.status, "complete");
+});
+
+test("auto-approval leaves manual candidates awaiting review", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness([], "claimed");
+  let appended = 0;
+
+  const result = await submitContactResearchResult(
+    "job-1",
+    {
+      outcome: "candidates",
+      claimToken: "claim-1",
+      notes: "Two possible contacts.",
+      candidates: [
+        officialCandidate("official@example.com"),
+        {
+          email: "manual@example.com",
+          name: "Possible Manager",
+          role: "management",
+          sourceUrls: ["https://agency.example/team"],
+          evidence: "Agency roster associates this manager with the artist.",
+          confidence: "medium",
+          needsApproval: true,
+        },
+      ],
+    },
+    now,
+    harness.serialRunner,
+    async (approvals) => {
+      appended = approvals.length;
+      return [];
+    }
+  );
+
+  assert.equal(result.status, "review");
+  assert.equal(result.autoApproved, 1);
+  assert.equal(appended, 1);
+  assert.equal(harness.job.status, "review");
+  assert.deepEqual(
+    [...harness.candidates.values()].map((candidate) => candidate.status).sort(),
+    ["approved", "pending"]
+  );
+});
+
+test("all directly published candidates auto-approve together", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const harness = createCandidateResolutionHarness([], "claimed");
+
+  const result = await submitContactResearchResult(
+    "job-1",
+    {
+      outcome: "candidates",
+      claimToken: "claim-1",
+      notes: "Official contacts.",
+      candidates: [
+        officialCandidate("one@example.com"),
+        officialCandidate("two@example.com"),
+      ],
+    },
+    now,
+    harness.serialRunner,
+    async () => []
+  );
+
+  assert.equal(result.status, "complete");
+  assert.equal(result.autoApproved, 2);
+  assert.equal(harness.job.status, "complete");
+  assert.equal(harness.job.completedAt, now);
+  assert.ok(
+    [...harness.candidates.values()].every(
+      (candidate) => candidate.status === "approved"
+    )
+  );
+});
+
+test("queue refresh preserves partial review jobs with active contacts", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const updateWheres: unknown[] = [];
+  const result = await refreshContactResearchQueue(
+    now,
+    runWithTransaction({
+      showArtist: { findMany: async () => [] },
+      contactResearchJob: {
+        findMany: async () => [],
+        updateMany: async (value: unknown) => {
+          updateWheres.push((value as { where: unknown }).where);
+          return { count: 0 };
+        },
+      },
+    })
+  );
+
+  assert.deepEqual(result, {
+    eligible: 0,
+    enqueued: 0,
+    reprioritized: 0,
+    completed: 0,
+    inactivated: 0,
+  });
+  assert.equal(updateWheres.length, 2);
+  assert.ok(
+    updateWheres.every(
+      (where) =>
+        !JSON.stringify(where).includes('"review"')
+    )
+  );
+});
 
 test("normalizes research emails and rejects malformed values", () => {
   assert.equal(normalizeResearchEmail(" Manager@Example.COM "), "manager@example.com");
