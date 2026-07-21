@@ -122,7 +122,12 @@ async function rejectCandidateAction(formData: FormData) {
   revalidatePath("/research");
   revalidatePath("/settings");
   if (!result.ok) {
-    redirect(researchStatusHref(filter, { error: "reject_failed" }));
+    redirect(
+      researchStatusHref(filter, {
+        error: "reject_failed",
+        detail: result.error ?? "Candidate could not be rejected",
+      })
+    );
   }
 }
 
@@ -330,7 +335,12 @@ export default async function ContactResearchPage({
               AND research_skip."clearedAt" IS NULL
           )
         `;
-  const [groupedCounts, skippedCount, rankedSummaries] = await Promise.all([
+  const [
+    groupedCounts,
+    skippedCount,
+    retryReviewCount,
+    rankedSummaries,
+  ] = await Promise.all([
     db.contactResearchJob.groupBy({
       by: ["status"],
       where: { status: { in: [...RESEARCH_JOB_STATUSES] } },
@@ -338,6 +348,14 @@ export default async function ContactResearchPage({
     }),
     db.artistResearchSkip.count({
       where: { clearedAt: null },
+    }),
+    db.contactResearchJob.count({
+      where: {
+        status: "review",
+        candidates: {
+          none: { status: { in: ["approved", "superseded"] } },
+        },
+      },
     }),
     db.$queryRaw<
       Array<{
@@ -444,7 +462,6 @@ export default async function ContactResearchPage({
     (counts.get("pending") ?? 0) +
     (counts.get("claimed") ?? 0) +
     (counts.get("review") ?? 0);
-  const retryReviewCount = counts.get("review") ?? 0;
   const retryExhaustedCount = counts.get("exhausted") ?? 0;
 
   return (
@@ -609,8 +626,14 @@ export default async function ContactResearchPage({
       ) : (
         <div className="mt-3 space-y-3">
           {jobs.map((job) => {
-            const candidates = job.candidates.filter(
+            const pendingCandidates = job.candidates.filter(
               (candidate) => candidate.status === "pending"
+            );
+            const approvedCandidateCount = job.candidates.filter(
+              (candidate) => candidate.status === "approved"
+            ).length;
+            const hasApprovalHistory = job.candidates.some((candidate) =>
+              ["approved", "superseded"].includes(candidate.status)
             );
             const activeSkip = job.artist.researchSkips[0] ?? null;
             return (
@@ -661,9 +684,17 @@ export default async function ContactResearchPage({
                     />
                   </div>
 
-                  {candidates.length > 0 && (
+                  {(approvedCandidateCount > 0 ||
+                    pendingCandidates.length > 0) && (
+                    <p className="mt-3 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                      {approvedCandidateCount} approved ·{" "}
+                      {pendingCandidates.length} awaiting review
+                    </p>
+                  )}
+
+                  {pendingCandidates.length > 0 && (
                     <div className="mt-4 space-y-3">
-                      {candidates.map((candidate) => (
+                      {pendingCandidates.map((candidate) => (
                         <div
                           key={candidate.id}
                           className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
@@ -742,7 +773,8 @@ export default async function ContactResearchPage({
                   )}
 
                   {(job.status === "exhausted" ||
-                    job.status === "review") && (
+                    (job.status === "review" &&
+                      !hasApprovalHistory)) && (
                     <form action={retryJobAction} className="mt-3">
                       <input type="hidden" name="jobId" value={job.id} />
                       <input

@@ -49,6 +49,7 @@ test("successful research actions revalidate without redirecting to the top", ()
   assert.match(approve, /if \(result\.sheetError\)[\s\S]*redirect/);
   assert.doesNotMatch(approve, /approved: "1"/);
   assert.match(reject, /if \(!result\.ok\) \{[\s\S]*redirect/);
+  assert.match(reject, /detail: result\.error/);
   assert.doesNotMatch(reject, /rejected: "1"/);
   assert.match(retry, /if \(!retried\) \{[\s\S]*redirect/);
   assert.doesNotMatch(retry, /retried: "1"/);
@@ -68,6 +69,10 @@ test("review and exhausted jobs have separate bulk requeue actions", () => {
   );
   assert.match(source, /disabled=\{retryReviewCount === 0\}/);
   assert.match(source, /disabled=\{retryExhaustedCount === 0\}/);
+  assert.match(
+    source,
+    /none: \{ status: \{ in: \["approved", "superseded"\] \} \}/
+  );
 });
 
 test("research page links to the trusted queue-draining workflow", () => {
@@ -126,9 +131,29 @@ test("status count cards are accessible links with a visible active state", () =
 test("review and exhausted jobs can be requeued", () => {
   assert.match(
     source,
-    /job\.status === "exhausted" \|\|\s*job\.status === "review"/
+    /job\.status === "exhausted" \|\|[\s\S]*job\.status === "review"[\s\S]*!hasApprovalHistory/
   );
   assert.match(source, />\s*Requeue research\s*</);
+});
+
+test("candidate cards retain pending actions with independent review counts", () => {
+  assert.match(
+    source,
+    /const pendingCandidates = job\.candidates\.filter\([\s\S]*candidate\.status === "pending"/
+  );
+  assert.match(
+    source,
+    /const approvedCandidateCount = job\.candidates\.filter\([\s\S]*candidate\.status === "approved"/
+  );
+  assert.match(
+    source,
+    /\{approvedCandidateCount\} approved ·\{" "\}[\s\S]*\{pendingCandidates\.length\} awaiting review/
+  );
+  assert.match(source, /pendingCandidates\.map\(\(candidate\) =>/);
+  assert.match(
+    source,
+    /\["approved", "superseded"\]\.includes\(candidate\.status\)/
+  );
 });
 
 test("intentional skips have a URL-backed count and dedicated view", () => {
