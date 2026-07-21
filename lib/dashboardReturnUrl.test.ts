@@ -27,6 +27,12 @@ test("dashboard returns preserve only validated shareable state", () => {
     ),
     "/dashboard?mode=dismissed&search=Jamie+xx&marked=1"
   );
+  assert.equal(
+    dashboardReturnPath(
+      "/dashboard?mode=all-nyc&range=30d&src=spotify&search=Four%20Tet"
+    ),
+    "/dashboard?mode=all-nyc&range=30d&search=Four+Tet"
+  );
 });
 
 test("dashboard returns reject external and non-dashboard paths", () => {

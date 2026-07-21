@@ -69,6 +69,14 @@ test("dashboard batch API rejects unknown, duplicate, and invalid inputs", async
     )?.query.mode,
     "dismissed"
   );
+  assert.equal(
+    parseDashboardBatchRequest(
+      new URL(
+        "https://example.test/api/dashboard/shows?cursor=abc&mode=all-nyc&src=any"
+      )
+    )?.query.mode,
+    "all-nyc"
+  );
 });
 
 test("dashboard batch API separates invalid cursors from gone snapshots", async () => {

@@ -22,7 +22,13 @@ const ALLOWED_PARAMETERS = new Set([
   "search",
 ]);
 const ENUM_PARAMETERS: Record<string, ReadonlySet<string>> = {
-  mode: new Set(["matched", "unknown", "interested", "dismissed"]),
+  mode: new Set([
+    "matched",
+    "all-nyc",
+    "unknown",
+    "interested",
+    "dismissed",
+  ]),
   range: new Set(["7d", "30d", "30-60d", "90d"]),
   src: new Set(["any", "statsfm", "spotify"]),
   contact: new Set(["any", "has", "needs"]),

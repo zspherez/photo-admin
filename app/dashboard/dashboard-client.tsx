@@ -243,6 +243,7 @@ export function DashboardClient({
   );
   const tabs: { key: DashboardMode; label: string; tone?: "amber" }[] = [
     { key: "matched", label: "Matched" },
+    { key: "all-nyc", label: "All NYC shows" },
     { key: "unknown", label: "Unknown but big" },
     { key: "interested", label: "★ Interested", tone: "amber" },
     { key: "dismissed", label: "Dismissed" },
@@ -857,7 +858,7 @@ export function DashboardClient({
               {group.options.map((option) => {
                 const active = filters[option.key] === option.value;
                 const disabled =
-                  query.mode === "unknown" &&
+                  (query.mode === "unknown" || query.mode === "all-nyc") &&
                   option.key === "source" &&
                   option.value !== "any";
                 if (disabled) {
@@ -865,7 +866,11 @@ export function DashboardClient({
                     <span
                       key={option.value}
                       aria-disabled="true"
-                      title="Unknown artists have no active source signal"
+                      title={
+                        query.mode === "all-nyc"
+                          ? "All NYC shows do not require a listening source"
+                          : "Unknown artists have no active source signal"
+                      }
                       className="cursor-not-allowed rounded-full border border-zinc-200 px-2.5 py-0.5 text-xs font-medium text-zinc-300 dark:border-zinc-800 dark:text-zinc-700"
                     >
                       {option.label}
@@ -1256,7 +1261,7 @@ export function DashboardClient({
                             )}
                           </>
                         )}
-                        {!contact && (
+                        {!contact && artist.workflowEligible && (
                           <Link
                             href={withWorkflowReturnTo(
                               `/dashboard/add-contact/${artist.id}`,
@@ -1275,7 +1280,8 @@ export function DashboardClient({
                       </div>
 
                       <div className="flex shrink-0 flex-col items-end gap-1">
-                        {(emailContact || phoneContact) && (
+                        {artist.workflowEligible &&
+                          (emailContact || phoneContact) && (
                           <div className="flex gap-1.5">
                             <SendButton
                               showId={show.id}
@@ -1327,7 +1333,7 @@ export function DashboardClient({
                             cancelAction={cancelScheduledAction}
                           />
                         )}
-                        {artist.canMarkManually && (
+                        {artist.workflowEligible && artist.canMarkManually && (
                           <form action={markSentAction}>
                             <input
                               type="hidden"

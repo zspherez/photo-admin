@@ -18,6 +18,17 @@ test("dashboard replaces page navigation with infinite loading states", () => {
   assert.match(source, /aria-live="polite"/);
 });
 
+test("all NYC cards keep badges optional and new outreach actions eligibility-gated", () => {
+  assert.match(source, /key: "all-nyc", label: "All NYC shows"/);
+  assert.match(source, /\{artist\.topSignal && \(/);
+  assert.match(
+    source,
+    /artist\.workflowEligible &&\s*\(emailContact \|\| phoneContact\)/
+  );
+  assert.match(source, /!contact && artist\.workflowEligible/);
+  assert.match(source, /returnTo=\{returnTo\}/);
+});
+
 test("dashboard retains a manual fallback and prevents concurrent loads", () => {
   assert.match(source, /loadingRef\.current/);
   assert.match(source, /disabled=\{loading\}/);

@@ -69,6 +69,7 @@ export interface MatchedShow {
   matchedArtists: {
     id: string;
     name: string;
+    workflowEligible: boolean;
     genres: string[];
     popularity: number | null;
     topSignal: { source: string; rank: number | null } | null;
@@ -169,6 +170,22 @@ export function isDashboardArtistMatch(
   return hasSourceSignal || isUnknown;
 }
 
+export function isDashboardArtistVisible(
+  artist: {
+    popularity: number | null;
+    listenSignals: readonly ListenSignalRank[];
+  },
+  mode: DashboardMode,
+  now: Date = new Date(),
+  minPopularity: number = UNKNOWN_BIG_MIN_POPULARITY,
+  source: SourceFilter = "any"
+): boolean {
+  return (
+    mode === "all-nyc" ||
+    isDashboardArtistMatch(artist, mode, now, minPopularity, source)
+  );
+}
+
 function sourcePrefix(source: SourceFilter): string | null {
   return source === "statsfm" ? "statsfm_" : source === "spotify" ? "spotify_" : null;
 }
@@ -193,14 +210,16 @@ function matchingArtistWhere(
   return { OR: [matched, unknown] };
 }
 
-function dashboardShowWhere(
+export function dashboardShowWhere(
   mode: DashboardMode,
   filters: MatchFilters,
   now: Date
 ): Prisma.ShowWhereInput {
-  const artist = matchingArtistWhere(filters.source, mode, now);
   const dates = getDashboardDateRange(filters.range, now);
-  const artistFilters: Prisma.ArtistWhereInput[] = [artist];
+  const artistFilters: Prisma.ArtistWhereInput[] =
+    mode === "all-nyc"
+      ? []
+      : [matchingArtistWhere(filters.source, mode, now)];
   if (filters.search) {
     artistFilters.push({
       name: {
@@ -224,13 +243,24 @@ function dashboardShowWhere(
     syncStatus: "active",
     dismissedAt: mode === "dismissed" ? { not: null } : null,
     ...(mode === "interested" ? { interestedAt: { not: null } } : {}),
-    artists: {
-      some: {
-        artist: {
-          AND: artistFilters,
-        },
-      },
-    },
+    ...(mode === "all-nyc"
+      ? {
+          edmtrainVenue: {
+            is: { nycStatus: "inside_nyc" },
+          },
+        }
+      : {}),
+    ...(artistFilters.length > 0
+      ? {
+          artists: {
+            some: {
+              artist: {
+                AND: artistFilters,
+              },
+            },
+          },
+        }
+      : {}),
   };
 
   if (filters.status === "sent") {
@@ -350,6 +380,16 @@ function countShows(where: Prisma.ShowWhereInput): Promise<number> {
   return db.show.count({ where });
 }
 
+function countDashboardMode(
+  mode: DashboardMode,
+  query: DashboardQuery,
+  now: Date
+): Promise<number> {
+  return mode === query.mode
+    ? Promise.resolve(0)
+    : countShows(dashboardShowWhere(mode, query.filters, now));
+}
+
 function parseGenres(value: string | null): string[] {
   if (!value) return [];
   try {
@@ -371,7 +411,7 @@ async function hydrateDashboardShowRows(
   for (const show of showRows) {
     for (const showArtist of show.artists) {
       if (
-        isDashboardArtistMatch(
+        isDashboardArtistVisible(
           showArtist.artist,
           query.mode,
           now,
@@ -444,7 +484,7 @@ async function hydrateDashboardShowRows(
     for (const showArtist of show.artists) {
       const artist = showArtist.artist;
       if (
-        !isDashboardArtistMatch(
+        !isDashboardArtistVisible(
           artist,
           query.mode,
           now,
@@ -471,6 +511,13 @@ async function hydrateDashboardShowRows(
       matchedArtists.push({
         id: artist.id,
         name: artist.name,
+        workflowEligible: isDashboardArtistMatch(
+          artist,
+          query.mode,
+          now,
+          UNKNOWN_BIG_MIN_POPULARITY,
+          query.filters.source
+        ),
         genres: parseGenres(artist.genres),
         popularity: artist.popularity,
         topSignal: topSignal
@@ -554,6 +601,8 @@ async function createDashboardSnapshot(
     async (transaction) => {
       const orderedShows = await transaction.show.findMany({
         where: dashboardShowWhere(query.mode, query.filters, snapshotAt),
+        // Snapshot positions freeze the deterministic cursor order: date ASC,
+        // then show ID ASC for ties.
         orderBy: [{ date: "asc" }, { id: "asc" }],
         select: { id: true, date: true },
       });
@@ -701,6 +750,7 @@ export async function getDashboardData(
   const [
     snapshot,
     matchedCount,
+    allNycCount,
     unknownCount,
     interestedCount,
     dismissedCount,
@@ -708,10 +758,11 @@ export async function getDashboardData(
     totalSignals,
   ] = await Promise.all([
     createDashboardSnapshot(query, ownerKey, now),
-    countShows(dashboardShowWhere("matched", query.filters, now)),
-    countShows(dashboardShowWhere("unknown", query.filters, now)),
-    countShows(dashboardShowWhere("interested", query.filters, now)),
-    countShows(dashboardShowWhere("dismissed", query.filters, now)),
+    countDashboardMode("matched", query, now),
+    countDashboardMode("all-nyc", query, now),
+    countDashboardMode("unknown", query, now),
+    countDashboardMode("interested", query, now),
+    countDashboardMode("dismissed", query, now),
     db.show.count({
       where: {
         date: { gte: easternTodayStoredDate(now) },
@@ -724,6 +775,7 @@ export async function getDashboardData(
 
   const modeCounts: Record<DashboardMode, number> = {
     matched: matchedCount,
+    "all-nyc": allNycCount,
     unknown: unknownCount,
     interested: interestedCount,
     dismissed: dismissedCount,
