@@ -463,13 +463,9 @@ workflow from**, enter the full 40-character target commit SHA, and type
    leaves the prior target and contacts unchanged;
 12. verifies the stored Sheet target, absence of active unowned Sheet contacts,
     exact migration history, fresh database nonce, and new-code schema queries,
-    then idempotently unpauses;
-13. after schema releases only, calls the authenticated show, listen,
-    contact-research, and top-playlist catch-up routes independently with
-    bounded transient retries. Code-only releases leave normal schedules to run;
-    catch-up failures remain visible warnings but do not mark a completed
-    production release as failed or skip later catch-ups;
-14. on any earlier failure, an `if: always()` step uses the already-approved
+    then idempotently unpauses. Normal independent schedules handle show sync,
+    listen sync, contact-research queue refresh, and top-playlist refresh;
+13. on any earlier failure, an `if: always()` step uses the already-approved
     production credentials, while the independent watchdog uses only
     `production-recovery` credentials and inline recovery logic—never a
     checked-out helper. Each unconditional recovery path independently
@@ -535,12 +531,6 @@ paused. Recovery after schema cutover also leaves production paused unless
 `ownership_ready=true`; only then does it verify/promote the staged SHA before
 unpausing. Promotion is never rolled back to the old deployment.
 
-The post-resume catch-up is different: production stays unpaused if a show,
-listen, or playlist call fails, while the protected release fails visibly so
-normal Actions notifications can alert maintainers. The route leases and
-provider idempotency make overlap with delayed daily jobs safe. A failed
-prerequisite stops the later dependent calls.
-
 For recovery, inspect the failed step and watchdog log before changing project
 state. If the watchdog intentionally left production paused, correct the
 database migration/backfill or target compatibility failure and rerun the same
@@ -550,22 +540,6 @@ Keep both Sheet overrides when bootstrapping, and use the workflow's one-run
 backfill, exact deployment promotion, Sheet reconciliation, and pause/unpause
 are idempotent. A whole-workflow cancellation or recovery API failure can still
 require manual action, but the safe default is paused and visible.
-
-If only the post-resume catch-up fails, leave production serving. After fixing
-the reported authentication, configuration, provider, or network issue, make
-authenticated `GET` requests from a trusted shell to these production URLs in
-order, stopping if any request fails:
-
-1. `${APP_BASE_URL}/api/cron/sync-shows` (`--max-time 330`);
-2. `${APP_BASE_URL}/api/cron/sync-listens` (`--max-time 330`);
-3. `${APP_BASE_URL}/api/cron/contact-research` (`--max-time 120`);
-4. `${APP_BASE_URL}/api/cron/refresh-top-playlist` (`--max-time 210`).
-
-Use `curl --fail-with-body --silent --show-error --connect-timeout 15` and
-`Authorization: Bearer ${CRON_SECRET}`. Do not print the secret. The first two
-show/listen client limits allow response-delivery grace beyond their
-300-second route maximum; the queue and playlist limits likewise exceed their
-route maximums.
 
 ### Scheduled jobs
 
