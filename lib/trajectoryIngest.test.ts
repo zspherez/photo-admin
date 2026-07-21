@@ -146,8 +146,7 @@ class MemoryPersistence implements TrajectoryIngestRequestPersistence {
       if (
         existing.producerRunId !== input.producerRunId ||
         existing.artifactSha256 !== input.artifactSha256 ||
-        existing.mode !== input.mode ||
-        existing.producedAt.getTime() !== input.producedAt.getTime()
+        existing.mode !== input.mode
       ) {
         return { kind: "conflict" };
       }
@@ -379,6 +378,7 @@ test("apply rejects without a successful exact-digest dry-run receipt or exact c
     (await noDryRun.json()).error.code,
     "trajectory_dry_run_receipt_invalid",
   );
+  assert.equal(persistence.requests.size, 0);
 });
 
 test("identical idempotency replay returns the stored response and conflicting reuse rejects", async () => {
@@ -429,6 +429,25 @@ test("identical idempotency replay returns the stored response and conflicting r
   );
   assert.equal(replay.status, 201);
   assert.equal((await replay.json()).replayed, true);
+  assert.equal(calls, 1);
+
+  const later = new Date(NOW.getTime() + 31 * 60 * 1_000);
+  const durableReplay = await handleTrajectoryIngestRequest(
+    signedRequest({
+      value,
+      mode: "apply",
+      idempotencyKey: "run-replay-001",
+      producedAt: later.toISOString(),
+      confirmation: `apply:${value.producer_run_id}:${digest}`,
+      dryRunReceipt,
+    }),
+    {
+      ...dependencies,
+      now: () => later,
+    },
+  );
+  assert.equal(durableReplay.status, 201);
+  assert.equal((await durableReplay.json()).replayed, true);
   assert.equal(calls, 1);
 
   const changedValue = manifest({ validation_reference: "changed.md" });

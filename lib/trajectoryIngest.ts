@@ -607,14 +607,12 @@ function requestMatches(
     producerRunId: string;
     artifactSha256: string;
     mode: TrajectoryIngestMode;
-    producedAt: Date;
   },
 ): boolean {
   return (
     existing.producerRunId === input.producerRunId &&
     existing.artifactSha256 === input.artifactSha256 &&
-    existing.mode === input.mode &&
-    existing.producedAt.getTime() === input.producedAt.getTime()
+    existing.mode === input.mode
   );
 }
 
@@ -1060,12 +1058,6 @@ export async function handleTrajectoryIngestRequest(
       );
     }
 
-    verifyDryRunReceipt(
-      dryRunReceipt,
-      { producerRunId, artifactSha256: expectedDigest, now },
-      dependencies.environment ?? process.env,
-    );
-
     const claimed = await persistence.claim({
       idempotencyKey,
       producerRunId,
@@ -1106,6 +1098,12 @@ export async function handleTrajectoryIngestRequest(
       );
     }
     claim = { idempotencyKey, ownerToken: claimed.ownerToken };
+
+    verifyDryRunReceipt(
+      dryRunReceipt,
+      { producerRunId, artifactSha256: expectedDigest, now },
+      dependencies.environment ?? process.env,
+    );
 
     const summary = await (
       dependencies.importManifest ?? importTrajectoryManifest

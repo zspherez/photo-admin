@@ -181,10 +181,11 @@ return a short-lived signed `dryRunReceipt`. Apply is rejected unless
 `X-Trajectory-Dry-Run-Receipt` proves a successful dry-run for that exact
 run/digest and threshold. It also requires
 `X-Trajectory-Apply-Confirmation: apply:<producer-run-id>:<manifest-sha256>`.
-The same apply idempotency key and request safely replays its stored successful
-response; different content conflicts. Repeated dry-runs safely recalculate
-without writes. A concurrent identical apply or busy import lease returns a
-retryable conflict. Same run/digest imports are no-ops, while same
+The same apply idempotency key, run, digest, and mode safely replay the stored
+successful response with fresh authentication headers, even after the dry-run
+receipt expires; different content conflicts. Repeated dry-runs safely
+recalculate without writes. A concurrent identical apply or busy import lease
+returns a retryable conflict. Same run/digest imports are no-ops, while same
 run/different digest conflicts. Failures leave the current ready run active.
 
 If the producer has no GitHub repository identity, set
