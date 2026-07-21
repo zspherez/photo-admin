@@ -1,26 +1,45 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   buildDashboardHref,
   type DashboardQuery,
 } from "@/lib/dashboardQuery";
 
-const CURSOR_VERSION = 1;
-const MAX_CURSOR_LENGTH = 2048;
-const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
+const CURSOR_VERSION = 2;
+const MAX_CURSOR_LENGTH = 1024;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
 export interface DashboardCursor {
-  date: Date;
-  id: string;
-  snapshotAt: Date;
+  snapshotId: string;
+  position: number;
+  signature: string;
 }
 
 interface DashboardCursorPayload {
   v: number;
-  date: string;
-  id: string;
-  snapshotAt: string;
+  snapshotId: string;
+  position: number;
   scope: string;
+  signature: string;
+}
+
+function signingInput(
+  snapshotId: string,
+  position: number,
+  scope: string
+): string {
+  return `${CURSOR_VERSION}\u0000${snapshotId}\u0000${position}\u0000${scope}`;
+}
+
+function cursorSignature(
+  snapshotId: string,
+  position: number,
+  scope: string,
+  cursorKey: string
+): string {
+  return createHmac("sha256", cursorKey)
+    .update(signingInput(snapshotId, position, scope))
+    .digest("base64url");
 }
 
 function bytesToBase64Url(bytes: Uint8Array): string {
@@ -53,84 +72,94 @@ function base64UrlToBytes(value: string): Uint8Array | null {
   }
 }
 
-function exactIsoDate(value: unknown): Date | null {
-  if (typeof value !== "string") return null;
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) && date.toISOString() === value
-    ? date
-    : null;
-}
-
-function isStoredCalendarDate(value: Date): boolean {
-  return (
-    value.getUTCHours() === 0 &&
-    value.getUTCMinutes() === 0 &&
-    value.getUTCSeconds() === 0 &&
-    value.getUTCMilliseconds() === 0
-  );
-}
-
 export function dashboardCursorScope(query: DashboardQuery): string {
   return buildDashboardHref(query);
 }
 
 export function encodeDashboardCursor(
-  cursor: DashboardCursor,
-  query: DashboardQuery
+  cursor: Pick<DashboardCursor, "snapshotId" | "position">,
+  query: DashboardQuery,
+  cursorKey: string
 ): string {
   if (
-    !isStoredCalendarDate(cursor.date) ||
-    !Number.isFinite(cursor.snapshotAt.getTime()) ||
-    !/^[A-Za-z0-9_-]{1,128}$/.test(cursor.id)
+    !/^[A-Za-z0-9_-]{1,128}$/.test(cursor.snapshotId) ||
+    !Number.isSafeInteger(cursor.position) ||
+    cursor.position < 0 ||
+    !/^[0-9a-f]{64}$/.test(cursorKey)
   ) {
     throw new Error("Cannot encode an invalid dashboard cursor");
   }
   const payload: DashboardCursorPayload = {
     v: CURSOR_VERSION,
-    date: cursor.date.toISOString(),
-    id: cursor.id,
-    snapshotAt: cursor.snapshotAt.toISOString(),
+    snapshotId: cursor.snapshotId,
+    position: cursor.position,
     scope: dashboardCursorScope(query),
+    signature: cursorSignature(
+      cursor.snapshotId,
+      cursor.position,
+      dashboardCursorScope(query),
+      cursorKey
+    ),
   };
   return bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
 }
 
 export function decodeDashboardCursor(
   value: unknown,
-  query: DashboardQuery,
-  now = new Date()
+  query: DashboardQuery
 ): DashboardCursor | null {
   if (typeof value !== "string") return null;
   const bytes = base64UrlToBytes(value);
   if (!bytes) return null;
 
   try {
-    const payload = JSON.parse(decoder.decode(bytes)) as Partial<DashboardCursorPayload>;
+    const payload = JSON.parse(
+      decoder.decode(bytes)
+    ) as Partial<DashboardCursorPayload>;
     if (
       !payload ||
       typeof payload !== "object" ||
       Array.isArray(payload) ||
       Object.keys(payload).sort().join(",") !==
-        "date,id,scope,snapshotAt,v" ||
+        "position,scope,signature,snapshotId,v" ||
       payload.v !== CURSOR_VERSION ||
       payload.scope !== dashboardCursorScope(query) ||
-      typeof payload.id !== "string" ||
-      !/^[A-Za-z0-9_-]{1,128}$/.test(payload.id)
+      typeof payload.snapshotId !== "string" ||
+      !/^[A-Za-z0-9_-]{1,128}$/.test(payload.snapshotId) ||
+      typeof payload.position !== "number" ||
+      !Number.isSafeInteger(payload.position) ||
+      payload.position < 0 ||
+      typeof payload.signature !== "string" ||
+      !/^[A-Za-z0-9_-]{43}$/.test(payload.signature)
     ) {
       return null;
     }
-    const date = exactIsoDate(payload.date);
-    const snapshotAt = exactIsoDate(payload.snapshotAt);
-    if (
-      !date ||
-      !snapshotAt ||
-      !isStoredCalendarDate(date) ||
-      snapshotAt.getTime() > now.getTime() + MAX_FUTURE_SKEW_MS
-    ) {
-      return null;
-    }
-    return { date, id: payload.id, snapshotAt };
+    return {
+      snapshotId: payload.snapshotId,
+      position: payload.position,
+      signature: payload.signature,
+    };
   } catch {
     return null;
   }
+}
+
+export function verifyDashboardCursor(
+  cursor: DashboardCursor,
+  query: DashboardQuery,
+  cursorKey: string
+): boolean {
+  if (!/^[0-9a-f]{64}$/.test(cursorKey)) return false;
+  const expected = cursorSignature(
+    cursor.snapshotId,
+    cursor.position,
+    dashboardCursorScope(query),
+    cursorKey
+  );
+  const actualBytes = Buffer.from(cursor.signature, "base64url");
+  const expectedBytes = Buffer.from(expected, "base64url");
+  return (
+    actualBytes.length === expectedBytes.length &&
+    timingSafeEqual(actualBytes, expectedBytes)
+  );
 }

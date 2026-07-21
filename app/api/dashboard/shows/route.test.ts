@@ -10,6 +10,7 @@ const now = new Date("2026-07-20T22:00:00.000Z");
 const emptyBatch = {
   shows: [],
   nextCursor: null,
+  snapshotId: "snapshot_1",
   snapshotAt: now,
 };
 
@@ -19,8 +20,8 @@ function dependencies(
   > = {}
 ): NonNullable<Parameters<typeof handleDashboardShowsRequest>[1]> {
   return {
-    authenticate: async () => "ok",
-    loadBatch: async () => emptyBatch,
+    authenticate: async () => ({ status: "ok", ownerKey: "a".repeat(64) }),
+    loadBatch: async () => ({ status: "ok", batch: emptyBatch }),
     loadInteractionState: async () => ({
       sendabilityRows: [],
       followUpEligibilityRows: [],
@@ -35,10 +36,10 @@ test("dashboard batch API requires authentication before loading", async () => {
   const response = await handleDashboardShowsRequest(
     new NextRequest("https://example.test/api/dashboard/shows?cursor=abc"),
     dependencies({
-      authenticate: async () => "unauthorized",
+      authenticate: async () => ({ status: "unauthorized" }),
       loadBatch: async () => {
         loaded = true;
-        return emptyBatch;
+        return { status: "ok", batch: emptyBatch };
       },
     })
   );
@@ -72,15 +73,28 @@ test("dashboard batch API rejects unknown, duplicate, and invalid inputs", async
 test("dashboard batch API validates cursor and returns read-safe data", async () => {
   const invalid = await handleDashboardShowsRequest(
     new NextRequest("https://example.test/api/dashboard/shows?cursor=abc"),
-    dependencies({ loadBatch: async () => null })
+    dependencies({ loadBatch: async () => ({ status: "invalid" }) })
   );
   assert.equal(invalid.status, 400);
 
+  const expired = await handleDashboardShowsRequest(
+    new NextRequest("https://example.test/api/dashboard/shows?cursor=abc"),
+    dependencies({ loadBatch: async () => ({ status: "expired" }) })
+  );
+  assert.equal(expired.status, 410);
+
+  let ownerKey = "";
   const response = await handleDashboardShowsRequest(
     new NextRequest("https://example.test/api/dashboard/shows?cursor=abc"),
-    dependencies()
+    dependencies({
+      loadBatch: async (_query, _cursor, owner) => {
+        ownerKey = owner;
+        return { status: "ok", batch: emptyBatch };
+      },
+    })
   );
   assert.equal(response.status, 200);
+  assert.equal(ownerKey, "a".repeat(64));
   assert.deepEqual(await response.json(), {
     shows: [],
     nextCursor: null,

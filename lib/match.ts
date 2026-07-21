@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   addDateOnlyDays,
@@ -18,11 +18,7 @@ import {
 } from "@/lib/manualOutreach";
 import {
   DASHBOARD_BATCH_SIZE,
-  DASHBOARD_PAGE_SIZE,
-  dashboardHrefWithoutLegacyPage,
-  getPagination,
   type DashboardMode,
-  type DashboardPagination,
   type DashboardQuery,
   type MatchFilters,
   type RangeFilter,
@@ -31,15 +27,21 @@ import {
 import {
   decodeDashboardCursor,
   encodeDashboardCursor,
-  type DashboardCursor,
+  verifyDashboardCursor,
 } from "@/lib/dashboardCursor";
+import {
+  DASHBOARD_SNAPSHOT_INSERT_CHUNK_SIZE,
+  buildDashboardSnapshotMembers,
+  createDashboardSnapshotCursorKey,
+  dashboardQueryKey,
+  dashboardSnapshotExpiresAt,
+  isDashboardSnapshotExpired,
+} from "@/lib/dashboardSnapshot";
 
 export {
-  DASHBOARD_BATCH_SIZE,
   DASHBOARD_PAGE_SIZE,
   DEFAULT_FILTERS,
   buildDashboardHref,
-  dashboardHrefWithoutLegacyPage,
   firstSearchParam,
   getPagination,
   parseDashboardQuery,
@@ -108,6 +110,7 @@ export interface DashboardData {
   modeCounts: Record<DashboardMode, number>;
   resultCount: number;
   nextCursor: string | null;
+  snapshotId: string;
   snapshotAt: Date;
   totalUpcoming: number;
   totalSignals: number;
@@ -116,8 +119,13 @@ export interface DashboardData {
 export interface DashboardBatch {
   shows: MatchedShow[];
   nextCursor: string | null;
+  snapshotId: string;
   snapshotAt: Date;
 }
+
+export type DashboardNextBatchResult =
+  | { status: "ok"; batch: DashboardBatch }
+  | { status: "invalid" | "expired" };
 
 export function getDashboardDateRange(
   range: RangeFilter,
@@ -186,7 +194,7 @@ function matchingArtistWhere(
   return { OR: [matched, unknown] };
 }
 
-export function dashboardShowWhere(
+function dashboardShowWhere(
   mode: DashboardMode,
   filters: MatchFilters,
   now: Date
@@ -252,7 +260,7 @@ export function dashboardShowWhere(
   return where;
 }
 
-export function dashboardShowSelect(
+function dashboardShowSelect(
   now: Date
 ) {
   return {
@@ -353,46 +361,6 @@ function parseGenres(value: string | null): string[] {
   } catch {
     return [];
   }
-}
-
-function snapshotShowWhere(
-  where: Prisma.ShowWhereInput,
-  snapshotAt: Date,
-  cursor: DashboardCursor | null
-): Prisma.ShowWhereInput {
-  return {
-    ...where,
-    AND: [
-      { createdAt: { lte: snapshotAt } },
-      ...(cursor
-        ? [
-            {
-              OR: [
-                { date: { gt: cursor.date } },
-                { date: cursor.date, id: { gt: cursor.id } },
-              ],
-            },
-          ]
-        : []),
-    ],
-  };
-}
-
-export function buildDashboardShowFindManyArgs(
-  query: DashboardQuery,
-  snapshotAt: Date,
-  cursor: DashboardCursor | null
-) {
-  return {
-    where: snapshotShowWhere(
-      dashboardShowWhere(query.mode, query.filters, snapshotAt),
-      snapshotAt,
-      cursor
-    ),
-    orderBy: [{ date: "asc" as const }, { id: "asc" as const }],
-    take: DASHBOARD_BATCH_SIZE + 1,
-    select: dashboardShowSelect(snapshotAt),
-  };
 }
 
 async function hydrateDashboardShowRows(
@@ -561,57 +529,175 @@ async function hydrateDashboardShowRows(
       })),
     };
   });
-
 }
 
-async function loadDashboardBatch(
-  query: DashboardQuery,
-  snapshotAt: Date,
-  cursor: DashboardCursor | null
-): Promise<DashboardBatch> {
-  const rows: DashboardShowRow[] = await db.show.findMany(
-    buildDashboardShowFindManyArgs(query, snapshotAt, cursor)
-  );
-  const hasMore = rows.length > DASHBOARD_BATCH_SIZE;
-  const pageRows = rows.slice(0, DASHBOARD_BATCH_SIZE);
-  const shows = await hydrateDashboardShowRows(pageRows, query, snapshotAt);
-  const last = pageRows.at(-1);
+async function cleanupExpiredDashboardSnapshots(now: Date): Promise<void> {
+  await db.dashboardShowSnapshot.deleteMany({
+    where: { expiresAt: { lte: now } },
+  });
+}
 
+async function createDashboardSnapshot(
+  query: DashboardQuery,
+  ownerKey: string,
+  snapshotAt: Date
+): Promise<{
+  id: string;
+  cursorKey: string;
+  total: number;
+  createdAt: Date;
+  expiresAt: Date;
+}> {
+  await cleanupExpiredDashboardSnapshots(snapshotAt);
+  const queryKey = dashboardQueryKey(query);
+  const expiresAt = dashboardSnapshotExpiresAt(snapshotAt);
+
+  return db.$transaction(
+    async (transaction) => {
+      const orderedShows = await transaction.show.findMany({
+        where: dashboardShowWhere(query.mode, query.filters, snapshotAt),
+        orderBy: [{ date: "asc" }, { id: "asc" }],
+        select: { id: true, date: true },
+      });
+      const snapshot = await transaction.dashboardShowSnapshot.create({
+        data: {
+          ownerKey,
+          queryKey,
+          cursorKey: createDashboardSnapshotCursorKey(),
+          total: orderedShows.length,
+          expiresAt,
+          createdAt: snapshotAt,
+        },
+        select: {
+          id: true,
+          cursorKey: true,
+          total: true,
+          createdAt: true,
+          expiresAt: true,
+        },
+      });
+      const members = buildDashboardSnapshotMembers(orderedShows);
+      for (
+        let start = 0;
+        start < members.length;
+        start += DASHBOARD_SNAPSHOT_INSERT_CHUNK_SIZE
+      ) {
+        await transaction.dashboardShowSnapshotMember.createMany({
+          data: members
+            .slice(start, start + DASHBOARD_SNAPSHOT_INSERT_CHUNK_SIZE)
+            .map((member) => ({
+              snapshotId: snapshot.id,
+              ...member,
+            })),
+        });
+      }
+      return snapshot;
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }
+  );
+}
+
+async function loadDashboardSnapshotBatch(
+  query: DashboardQuery,
+  snapshot: {
+    id: string;
+    cursorKey: string;
+    total: number;
+    createdAt: Date;
+  },
+  afterPosition: number
+): Promise<DashboardBatch> {
+  const members = await db.dashboardShowSnapshotMember.findMany({
+    where: {
+      snapshotId: snapshot.id,
+      position: { gt: afterPosition },
+    },
+    orderBy: { position: "asc" },
+    take: DASHBOARD_BATCH_SIZE + 1,
+    select: {
+      position: true,
+      sortDate: true,
+      show: { select: dashboardShowSelect(snapshot.createdAt) },
+    },
+  });
+  const hasMore = members.length > DASHBOARD_BATCH_SIZE;
+  const pageMembers = members.slice(0, DASHBOARD_BATCH_SIZE);
+  const shows = await hydrateDashboardShowRows(
+    pageMembers.map((member) => ({
+      ...member.show,
+      date: member.sortDate,
+    })),
+    query,
+    snapshot.createdAt
+  );
+  const last = pageMembers.at(-1);
   return {
     shows,
     nextCursor:
       hasMore && last
         ? encodeDashboardCursor(
-            { date: last.date, id: last.id, snapshotAt },
-            query
+            { snapshotId: snapshot.id, position: last.position },
+            query,
+            snapshot.cursorKey
           )
         : null,
-    snapshotAt,
+    snapshotId: snapshot.id,
+    snapshotAt: snapshot.createdAt,
   };
 }
 
 export async function getDashboardNextBatch(
   query: DashboardQuery,
   cursorValue: unknown,
+  ownerKey: string,
   requestNow: Date = new Date()
-): Promise<DashboardBatch | null> {
-  const cursor = decodeDashboardCursor(cursorValue, query, requestNow);
-  if (!cursor) return null;
-  return loadDashboardBatch(query, cursor.snapshotAt, cursor);
+): Promise<DashboardNextBatchResult> {
+  const cursor = decodeDashboardCursor(cursorValue, query);
+  if (!cursor) return { status: "invalid" };
+  const snapshot = await db.dashboardShowSnapshot.findUnique({
+    where: { id: cursor.snapshotId },
+    select: {
+      id: true,
+      ownerKey: true,
+      queryKey: true,
+      cursorKey: true,
+      total: true,
+      expiresAt: true,
+      createdAt: true,
+    },
+  });
+  if (
+    !snapshot ||
+    snapshot.ownerKey !== ownerKey ||
+    snapshot.queryKey !== dashboardQueryKey(query)
+  ) {
+    return { status: "invalid" };
+  }
+  if (!verifyDashboardCursor(cursor, query, snapshot.cursorKey)) {
+    return { status: "invalid" };
+  }
+  if (isDashboardSnapshotExpired(snapshot.expiresAt, requestNow)) {
+    await db.dashboardShowSnapshot.deleteMany({
+      where: { id: snapshot.id, ownerKey },
+    });
+    return { status: "expired" };
+  }
+  if (cursor.position >= snapshot.total) {
+    return { status: "invalid" };
+  }
+  return {
+    status: "ok",
+    batch: await loadDashboardSnapshotBatch(query, snapshot, cursor.position),
+  };
 }
 
 export async function getDashboardData(
   query: DashboardQuery,
+  ownerKey: string,
   now: Date = new Date()
 ): Promise<DashboardData> {
-  const countWhere = (mode: DashboardMode) =>
-    snapshotShowWhere(
-      dashboardShowWhere(mode, query.filters, now),
-      now,
-      null
-    );
   const [
-    batch,
+    snapshot,
     matchedCount,
     unknownCount,
     interestedCount,
@@ -619,17 +705,16 @@ export async function getDashboardData(
     totalUpcoming,
     totalSignals,
   ] = await Promise.all([
-    loadDashboardBatch(query, now, null),
-    countShows(countWhere("matched")),
-    countShows(countWhere("unknown")),
-    countShows(countWhere("interested")),
-    countShows(countWhere("dismissed")),
+    createDashboardSnapshot(query, ownerKey, now),
+    countShows(dashboardShowWhere("matched", query.filters, now)),
+    countShows(dashboardShowWhere("unknown", query.filters, now)),
+    countShows(dashboardShowWhere("interested", query.filters, now)),
+    countShows(dashboardShowWhere("dismissed", query.filters, now)),
     db.show.count({
       where: {
         date: { gte: easternTodayStoredDate(now) },
         isFestival: false,
         syncStatus: "active",
-        createdAt: { lte: now },
       },
     }),
     db.listenSignal.count({ where: activeListenSignalWhere(now) }),
@@ -641,12 +726,15 @@ export async function getDashboardData(
     interested: interestedCount,
     dismissed: dismissedCount,
   };
+  modeCounts[query.mode] = snapshot.total;
+  const batch = await loadDashboardSnapshotBatch(query, snapshot, -1);
 
   return {
     shows: batch.shows,
     modeCounts,
-    resultCount: modeCounts[query.mode],
+    resultCount: snapshot.total,
     nextCursor: batch.nextCursor,
+    snapshotId: batch.snapshotId,
     snapshotAt: batch.snapshotAt,
     totalUpcoming,
     totalSignals,

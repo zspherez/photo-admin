@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getDashboardData } from "@/lib/match";
 import {
@@ -11,6 +12,11 @@ import { getTestOverride } from "@/lib/resend";
 import { isWeekendET } from "@/lib/schedule";
 import { cn } from "@/lib/cn";
 import { getDashboardInteractionState } from "@/lib/dashboardInteractionState";
+import {
+  SESSION_COOKIE,
+  getAuthConfiguration,
+} from "@/lib/auth";
+import { dashboardOwnerKey } from "@/lib/dashboardSession";
 import { DashboardClient } from "./dashboard-client";
 
 export const dynamic = "force-dynamic";
@@ -61,9 +67,12 @@ export default async function DashboardPage({
   const followUpSent = firstSearchParam(params.followup_sent);
   const followUpScheduled = firstSearchParam(params.followup_scheduled);
   const now = new Date();
+  const configuration = getAuthConfiguration();
+  const cookieValue = (await cookies()).get(SESSION_COOKIE)?.value;
+  const ownerKey = dashboardOwnerKey(cookieValue, configuration);
   const [testOverride, dashboard] = await Promise.all([
     getTestOverride(),
-    getDashboardData(query, now),
+    getDashboardData(query, ownerKey, now),
   ]);
 
   const interactionState = await getDashboardInteractionState(
@@ -121,9 +130,10 @@ export default async function DashboardPage({
       </div>
 
       <DashboardClient
-        key={`${buildDashboardHref(query)}:${dashboard.snapshotAt.toISOString()}`}
+        key={`${ownerKey}:${buildDashboardHref(query)}`}
         data={dashboard}
         query={query}
+        persistenceScope={ownerKey}
         isWeekend={isWeekendET(now)}
         {...interactionState}
       />

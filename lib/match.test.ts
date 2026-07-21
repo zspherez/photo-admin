@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildDashboardHref,
-  dashboardHrefWithoutLegacyPage,
   DEFAULT_FILTERS,
   getDashboardDateRange,
   getPagination,
   isDashboardArtistMatch,
   parseDashboardQuery,
 } from "./match";
+import { dashboardHrefWithoutLegacyPage } from "./dashboardQuery";
 
 test("dashboard filters parse shareable URL state and reject invalid values", () => {
   assert.deepEqual(

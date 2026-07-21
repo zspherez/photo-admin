@@ -141,7 +141,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,
@@ -272,8 +272,28 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
     selectedScalarFields(source, "emailTemplate"),
     ["purpose"],
   );
+  assert.deepEqual(
+    selectedScalarFields(source, "dashboardShowSnapshot"),
+    [
+      "id",
+      "ownerKey",
+      "queryKey",
+      "cursorKey",
+      "total",
+      "expiresAt",
+      "createdAt",
+    ],
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "dashboardShowSnapshotMember"),
+    ["snapshotId", "position", "showId", "sortDate"],
+  );
   assert.match(
     source,
     /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*\]/,
+  );
+  assert.match(
+    source,
+    /"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember"/,
   );
 });

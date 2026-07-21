@@ -327,6 +327,7 @@ model Show {
   artists             ShowArtist[]
   outreaches          Outreach[]
   contactResearchJobs ContactResearchJob[]
+  dashboardSnapshotMembers DashboardShowSnapshotMember[]
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
 
@@ -338,6 +339,33 @@ model Show {
   @@index([source, syncStatus, date])
   @@index([dismissedAt])
   @@index([interestedAt])
+}
+
+model DashboardShowSnapshot {
+  id        String                        @id @default(cuid())
+  ownerKey  String
+  queryKey  String
+  cursorKey String
+  total     Int
+  expiresAt DateTime
+  members   DashboardShowSnapshotMember[]
+  createdAt DateTime                      @default(now())
+
+  @@index([expiresAt])
+  @@index([ownerKey, queryKey, expiresAt])
+}
+
+model DashboardShowSnapshotMember {
+  snapshotId String
+  position   Int
+  showId     String
+  sortDate   DateTime
+  snapshot   DashboardShowSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  show       Show                  @relation(fields: [showId], references: [id], onDelete: Restrict)
+
+  @@id([snapshotId, position])
+  @@unique([snapshotId, showId])
+  @@index([showId])
 }
 
 model EdmtrainVenue {

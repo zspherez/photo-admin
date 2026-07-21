@@ -6,9 +6,11 @@ import {
 } from "@/lib/auth";
 import { parseDashboardQuery, type DashboardQuery } from "@/lib/dashboardQuery";
 import { getDashboardNextBatch, type DashboardBatch } from "@/lib/match";
+import type { DashboardNextBatchResult } from "@/lib/match";
 import { getDashboardInteractionState } from "@/lib/dashboardInteractionState";
 import type { DashboardInteractionState } from "@/lib/dashboardInteractionState";
 import { serializeDashboardAppendPayload } from "@/lib/dashboardTransport";
+import { dashboardOwnerKey } from "@/lib/dashboardSession";
 
 const ALLOWED_PARAMETERS = new Set([
   "cursor",
@@ -74,15 +76,18 @@ export function parseDashboardBatchRequest(
   return { cursor, query };
 }
 
-type AuthResult = "ok" | "unauthorized" | "misconfigured";
+type AuthResult =
+  | { status: "ok"; ownerKey: string }
+  | { status: "unauthorized" | "misconfigured" };
 
 interface DashboardShowsRouteDependencies {
   authenticate: (request: NextRequest) => Promise<AuthResult>;
   loadBatch: (
     query: DashboardQuery,
     cursor: string,
+    ownerKey: string,
     now: Date
-  ) => Promise<DashboardBatch | null>;
+  ) => Promise<DashboardNextBatchResult>;
   loadInteractionState: (
     shows: DashboardBatch["shows"],
     now: Date
@@ -92,13 +97,20 @@ interface DashboardShowsRouteDependencies {
 
 async function authenticate(request: NextRequest): Promise<AuthResult> {
   const configuration = getAuthConfiguration();
-  if (configuration.mode === "misconfigured") return "misconfigured";
-  if (configuration.mode === "open") return "ok";
-  return (await isAuthenticated(
-    request.cookies.get(SESSION_COOKIE)?.value
-  ))
-    ? "ok"
-    : "unauthorized";
+  if (configuration.mode === "misconfigured") {
+    return { status: "misconfigured" };
+  }
+  const cookieValue = request.cookies.get(SESSION_COOKIE)?.value;
+  if (
+    configuration.mode === "protected" &&
+    !(await isAuthenticated(cookieValue))
+  ) {
+    return { status: "unauthorized" };
+  }
+  return {
+    status: "ok",
+    ownerKey: dashboardOwnerKey(cookieValue, configuration),
+  };
 }
 
 const DEFAULT_DEPENDENCIES: DashboardShowsRouteDependencies = {
@@ -113,13 +125,13 @@ export async function handleDashboardShowsRequest(
   dependencies: DashboardShowsRouteDependencies = DEFAULT_DEPENDENCIES
 ): Promise<Response> {
   const auth = await dependencies.authenticate(request);
-  if (auth === "misconfigured") {
+  if (auth.status === "misconfigured") {
     return Response.json(
       { error: "Authentication is not configured on the server" },
       { status: 500 }
     );
   }
-  if (auth !== "ok") {
+  if (auth.status !== "ok") {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -132,20 +144,23 @@ export async function handleDashboardShowsRequest(
   const batch = await dependencies.loadBatch(
     parsed.query,
     parsed.cursor,
+    auth.ownerKey,
     requestNow
   );
-  if (!batch) {
-    return Response.json({ error: "Invalid cursor" }, { status: 400 });
+  if (batch.status !== "ok") {
+    return batch.status === "expired"
+      ? Response.json({ error: "Snapshot expired" }, { status: 410 })
+      : Response.json({ error: "Invalid cursor" }, { status: 400 });
   }
   const interactionState = await dependencies.loadInteractionState(
-    batch.shows,
+    batch.batch.shows,
     requestNow
   );
 
   return Response.json(
     serializeDashboardAppendPayload({
-      shows: batch.shows,
-      nextCursor: batch.nextCursor,
+      shows: batch.batch.shows,
+      nextCursor: batch.batch.nextCursor,
       ...interactionState,
     })
   );
