@@ -12,6 +12,7 @@ import {
   ContactResearchProbeCleanupError,
   runContactResearchProbeCleanup,
 } from "@/lib/contactResearchProbeCleanup";
+import { createContactResearchProbeCleanupAuditSummary } from "@/lib/contactResearchProbeCleanupSummary";
 import { reconcileContactResearchJobAfterProbeCleanup } from "@/lib/contactResearch";
 
 const REQUIRED_CONFIRMATION = "CLEANUP_RESEARCH_PROBES";
@@ -157,25 +158,9 @@ function cleanupStore(db: CleanupDb): ContactResearchProbeCleanupStore {
 function outputSummary(
   summary: Awaited<ReturnType<typeof runContactResearchProbeCleanup>>
 ) {
-  const reconciledCount = Object.values(summary.reconciled).reduce(
-    (total, ids) => total + ids.length,
-    0
-  );
   process.stdout.write(
     `${JSON.stringify(
-      {
-        ...summary,
-        counts: {
-          syntheticCandidates: summary.candidates.syntheticIds.length,
-          deletedCandidates: summary.candidates.deletedIds.length,
-          preservedCandidates:
-            summary.candidates.preservedSubstantiveIds.length,
-          clearedAgentNotes: summary.agentNotes.clearIds.length,
-          trimmedDrinkurwaterNotes:
-            summary.agentNotes.drinkurwaterTrimIds.length,
-          reconciledJobs: reconciledCount,
-        },
-      },
+      createContactResearchProbeCleanupAuditSummary(summary),
       null,
       2
     )}\n`

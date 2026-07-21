@@ -173,6 +173,26 @@ export CONTACT_RESEARCH_LIMIT=3
 npm run contact-research:agent
 ```
 
+### One-time research probe cleanup
+
+The exact research-probe cleanup is intentionally split across two independent
+manual dispatches of **Actions → Cleanup contact research probes**:
+
+1. From `main`, dispatch `mode: dry_run` with confirmation
+   `DRY_RUN_RESEARCH_PROBES`.
+2. Wait for the protected `production` job, then inspect its job summary and
+   downloaded JSON summary artifact. Confirm the committed manifest version,
+   IDs, counts, and preflight status; the artifact contains no evidence, notes,
+   or database URLs.
+3. Only after that inspection, start a new dispatch from `main` with
+   `mode: apply` and confirmation `CLEANUP_RESEARCH_PROBES`.
+4. Inspect the apply dispatch's preflight, apply, and post-verification
+   summaries. Apply reruns the target and manifest preconditions from the
+   trusted workflow before changing data.
+
+A dry-run dispatch has no apply step. Selecting one mode never advances into
+the other mode within the same workflow run.
+
 The worker accepts manager/management contacts only. It checks artist websites,
 Instagram, Facebook, SoundCloud, linked Linktrees, and manager-focused Google
 searches before using Booking Agent Info solely to identify a manager. It then

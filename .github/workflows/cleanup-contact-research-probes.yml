@@ -3,8 +3,15 @@ name: Cleanup contact research probes
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Select dry_run first; use apply only after inspecting its summary
+        required: true
+        type: choice
+        options:
+          - dry_run
+          - apply
       confirmation:
-        description: Type CLEANUP_RESEARCH_PROBES to authorize the manifest cleanup
+        description: Type the exact confirmation required for the selected mode
         required: true
         type: string
 
@@ -16,11 +23,78 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  cleanup:
+  dry_run:
     if: >-
       github.repository == 'zspherez/photo-admin' &&
       github.ref == 'refs/heads/main' &&
       github.workflow_ref == 'zspherez/photo-admin/.github/workflows/cleanup-contact-research-probes.yml@refs/heads/main' &&
+      inputs.mode == 'dry_run' &&
+      inputs.confirmation == 'DRY_RUN_RESEARCH_PROBES'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@v4
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+
+      - name: Verify trusted checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Verify database target binding
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: npm run db:verify-targets -- --require-all-migrations
+
+      - name: Run dry-run cleanup preflight
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          npx tsx scripts/cleanup-contact-research-probes.ts --dry-run \
+            > artifacts/dry-run-summary.json
+
+      - name: Validate and present dry-run summary
+        run: >-
+          npx tsx scripts/validate-contact-research-probe-summary.ts
+          --input artifacts/dry-run-summary.json
+          --expected-mode dry-run
+
+      - name: Upload dry-run summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: contact-research-probe-cleanup-dry-run-${{ github.run_id }}
+          path: artifacts/dry-run-summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+  apply:
+    if: >-
+      github.repository == 'zspherez/photo-admin' &&
+      github.ref == 'refs/heads/main' &&
+      github.workflow_ref == 'zspherez/photo-admin/.github/workflows/cleanup-contact-research-probes.yml@refs/heads/main' &&
+      inputs.mode == 'apply' &&
       inputs.confirmation == 'CLEANUP_RESEARCH_PROBES'
     runs-on: ubuntu-latest
     environment: production
@@ -57,11 +131,21 @@ jobs:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
         run: npm run db:verify-targets -- --require-all-migrations
 
-      - name: Dry-run cleanup manifest
+      - name: Rerun dry-run cleanup preflight
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
-        run: npx tsx scripts/cleanup-contact-research-probes.ts --dry-run
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          npx tsx scripts/cleanup-contact-research-probes.ts --dry-run \
+            > artifacts/apply-preflight-summary.json
+
+      - name: Validate committed preflight invariants
+        run: >-
+          npx tsx scripts/validate-contact-research-probe-summary.ts
+          --input artifacts/apply-preflight-summary.json
+          --expected-mode dry-run
 
       - name: Apply cleanup manifest
         env:
@@ -72,9 +156,33 @@ jobs:
           npx tsx scripts/cleanup-contact-research-probes.ts
           --apply
           --confirmation "$CLEANUP_CONFIRMATION"
+          > artifacts/apply-summary.json
+
+      - name: Validate apply summary
+        run: >-
+          npx tsx scripts/validate-contact-research-probe-summary.ts
+          --input artifacts/apply-summary.json
+          --expected-mode apply
 
       - name: Verify cleanup manifest
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
-        run: npx tsx scripts/cleanup-contact-research-probes.ts --verify
+        run: >-
+          npx tsx scripts/cleanup-contact-research-probes.ts
+          --verify
+          > artifacts/post-verify-summary.json
+
+      - name: Validate and present post-verification
+        run: >-
+          npx tsx scripts/validate-contact-research-probe-summary.ts
+          --input artifacts/post-verify-summary.json
+          --expected-mode verify
+
+      - name: Upload apply audit summaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: contact-research-probe-cleanup-apply-${{ github.run_id }}
+          path: artifacts/*.json
+          if-no-files-found: error
+          retention-days: 14
