@@ -72,9 +72,11 @@ test("outreach and decisions retain exact recommendation attribution", () => {
     send,
     /trajectoryRecommendationId:\s*trajectoryContext\?\.recommendationId \?\? null/,
   );
+  assert.doesNotMatch(actions, /attributeTrajectoryOutreach/);
+  assert.match(actions, /sendFollowUp\(parentOutreachId, recommendation/);
   assert.match(
     actions,
-    /attributeTrajectoryOutreach\(\{[\s\S]*outreachId: parentOutreachId/,
+    /scheduleFollowUp\([\s\S]*recommendation \?\? undefined/,
   );
   assert.match(
     actions,

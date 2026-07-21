@@ -1,4 +1,4 @@
-import type { TrajectoryRunStatus } from "@prisma/client";
+import type { Prisma, TrajectoryRunStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
   TRAJECTORY_PRODUCER,
@@ -40,6 +40,12 @@ export interface TrajectoryActionContext {
   artistId: string;
 }
 
+interface TrajectoryActionStore extends TrajectoryRunStore {
+  findRecommendation(
+    context: TrajectoryActionContext,
+  ): Promise<{ id: string } | null>;
+}
+
 const DEFAULT_RUN_STORE: TrajectoryRunStore = {
   findReadyRuns: (producer, limit) =>
     db.trajectoryModelRun.findMany({
@@ -65,6 +71,47 @@ const DEFAULT_RUN_STORE: TrajectoryRunStore = {
       },
     }),
 };
+
+function transactionActionStore(
+  tx: Prisma.TransactionClient,
+): TrajectoryActionStore {
+  return {
+    findReadyRuns: (producer, limit) =>
+      tx.trajectoryModelRun.findMany({
+        where: { producer, status: "ready" },
+        orderBy: [{ generatedAt: "desc" }, { id: "desc" }],
+        take: limit,
+        select: {
+          id: true,
+          generatedAt: true,
+          validUntil: true,
+          status: true,
+        },
+      }),
+    findLatestRun: (producer) =>
+      tx.trajectoryModelRun.findFirst({
+        where: { producer },
+        orderBy: [{ generatedAt: "desc" }, { id: "desc" }],
+        select: {
+          id: true,
+          generatedAt: true,
+          validUntil: true,
+          status: true,
+        },
+      }),
+    findRecommendation: (context) =>
+      tx.trajectoryRecommendation.findFirst({
+        where: {
+          id: context.recommendationId,
+          runId: context.runId,
+          showId: context.showId,
+          runArtist: { is: { artistId: context.artistId } },
+          show: { is: { syncStatus: "active" } },
+        },
+        select: { id: true },
+      }),
+  };
+}
 
 export function trajectoryFreshnessCutoff(now: Date): Date {
   return new Date(
@@ -130,7 +177,29 @@ export async function requireActionableTrajectoryRecommendation(
   context: TrajectoryActionContext,
   now: Date = new Date(),
 ): Promise<void> {
-  const resolved = await resolveDefaultTrajectoryRun(now);
+  const store: TrajectoryActionStore = {
+    ...DEFAULT_RUN_STORE,
+    findRecommendation: (candidate) =>
+      db.trajectoryRecommendation.findFirst({
+        where: {
+          id: candidate.recommendationId,
+          runId: candidate.runId,
+          showId: candidate.showId,
+          runArtist: { is: { artistId: candidate.artistId } },
+          show: { is: { syncStatus: "active" } },
+        },
+        select: { id: true },
+      }),
+  };
+  await requireActionableTrajectoryRecommendationFromStore(context, now, store);
+}
+
+async function requireActionableTrajectoryRecommendationFromStore(
+  context: TrajectoryActionContext,
+  now: Date,
+  store: TrajectoryActionStore,
+): Promise<void> {
+  const resolved = await resolveTrajectoryRun(now, store);
   if (
     resolved.availability !== "ready" ||
     !resolved.run ||
@@ -138,19 +207,22 @@ export async function requireActionableTrajectoryRecommendation(
   ) {
     throw new Error("The trajectory recommendation run is no longer actionable");
   }
-  const recommendation = await db.trajectoryRecommendation.findFirst({
-    where: {
-      id: context.recommendationId,
-      runId: context.runId,
-      showId: context.showId,
-      runArtist: { is: { artistId: context.artistId } },
-      show: { is: { syncStatus: "active" } },
-    },
-    select: { id: true },
-  });
+  const recommendation = await store.findRecommendation(context);
   if (!recommendation) {
     throw new Error(
       "The trajectory recommendation does not match this show and artist",
     );
   }
+}
+
+export async function requireActionableTrajectoryRecommendationInTransaction(
+  tx: Prisma.TransactionClient,
+  context: TrajectoryActionContext,
+  now: Date = new Date(),
+): Promise<void> {
+  await requireActionableTrajectoryRecommendationFromStore(
+    context,
+    now,
+    transactionActionStore(tx),
+  );
 }

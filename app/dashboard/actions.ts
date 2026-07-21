@@ -30,12 +30,10 @@ import {
   festivalLeadTimeError,
   festivalLeadTimeExclusion,
 } from "@/lib/festivalEligibility";
-import {
-  attributeTrajectoryOutreach,
-  recordTrajectoryFeedback,
-} from "@/lib/trajectoryFeedback";
+import { recordTrajectoryFeedback } from "@/lib/trajectoryFeedback";
 import {
   requireActionableTrajectoryRecommendation,
+  requireActionableTrajectoryRecommendationInTransaction,
   trajectoryActionContextFromFormData,
   type TrajectoryActionContext,
 } from "@/lib/trajectoryActiveRun";
@@ -166,25 +164,23 @@ export async function sendFollowUpAction(formData: FormData) {
     );
   }
   const recommendation = await trajectoryContext(formData, parent.showId);
-  if (recommendation) {
-    if (recommendation.artistId !== parent.artistId) {
-      redirect(
-        dashboardResultHref(
-          returnTo,
-          "error",
-          "Recommendation does not match original outreach",
-        ),
-      );
-    }
-    await attributeTrajectoryOutreach({
-      ...recommendation,
-      outreachId: parentOutreachId,
-    });
+  if (recommendation && recommendation.artistId !== parent.artistId) {
+    redirect(
+      dashboardResultHref(
+        returnTo,
+        "error",
+        "Recommendation does not match original outreach",
+      ),
+    );
   }
 
   const result = isWeekendET()
-    ? await scheduleFollowUp(parentOutreachId, getNextMondaySlot())
-    : await sendFollowUp(parentOutreachId);
+    ? await scheduleFollowUp(
+        parentOutreachId,
+        getNextMondaySlot(),
+        recommendation ?? undefined,
+      )
+    : await sendFollowUp(parentOutreachId, recommendation ?? undefined);
   refreshWorkflowViews(returnTo, [
     "/outreach",
     festivalReturnPath(parent.showId),
@@ -353,52 +349,116 @@ export async function markSentAction(formData: FormData) {
     if (!contact) {
       redirect(dashboardResultHref(returnTo, "error", "Contact not found"));
     }
+    if (recommendation && contact.artistId !== recommendation.artistId) {
+      redirect(
+        dashboardResultHref(
+          returnTo,
+          "error",
+          "Contact does not match the recommendation artist",
+        ),
+      );
+    }
     artistId = contact.artistId;
   }
   if (!artistId) {
     redirect(dashboardResultHref(returnTo, "error", "Missing outreach target"));
   }
+  if (recommendation && artistId !== recommendation.artistId) {
+    redirect(
+      dashboardResultHref(
+        returnTo,
+        "error",
+        "Outreach target does not match the recommendation artist",
+      ),
+    );
+  }
+  const targetArtistId = artistId;
 
   const result = await withSerializableRetry(async (tx) => {
-    const [show, artist, association, rows, manualMarker] = await Promise.all([
-      tx.show.findUnique({
-        where: { id: showId },
-        select: {
-          id: true,
-          isFestival: true,
-          date: true,
-          festivalNycStatus: true,
-          syncStatus: true,
-          dismissedAt: true,
-        },
-      }),
-      tx.artist.findUnique({ where: { id: artistId }, select: { id: true } }),
-      tx.showArtist.findUnique({
-        where: { showId_artistId: { showId, artistId } },
-        select: { showId: true },
-      }),
-      tx.outreach.findMany({
-        where: { showId, artistId, kind: "original" },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        select: {
-          id: true,
-          status: true,
-          contactId: true,
-          providerMessageId: true,
-          attemptCount: true,
-          _count: { select: { sendAttempts: true } },
-        },
-      }),
-      tx.outreach.findFirst({
-        where: {
-          showId,
-          artistId,
-          ...REUSABLE_MANUAL_OUTREACH_MARKER_WHERE,
-        },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        select: { id: true },
-      }),
-    ]);
+    const [show, artist, association, rows, manualMarker, currentContact] =
+      await Promise.all([
+        tx.show.findUnique({
+          where: { id: showId },
+          select: {
+            id: true,
+            isFestival: true,
+            date: true,
+            festivalNycStatus: true,
+            syncStatus: true,
+            dismissedAt: true,
+          },
+        }),
+        tx.artist.findUnique({
+          where: { id: targetArtistId },
+          select: { id: true },
+        }),
+        tx.showArtist.findUnique({
+          where: {
+            showId_artistId: { showId, artistId: targetArtistId },
+          },
+          select: { showId: true },
+        }),
+        tx.outreach.findMany({
+          where: {
+            showId,
+            artistId: targetArtistId,
+            kind: "original",
+          },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          select: {
+            id: true,
+            status: true,
+            contactId: true,
+            providerMessageId: true,
+            attemptCount: true,
+            _count: { select: { sendAttempts: true } },
+          },
+        }),
+        tx.outreach.findFirst({
+          where: {
+            showId,
+            artistId: targetArtistId,
+            ...REUSABLE_MANUAL_OUTREACH_MARKER_WHERE,
+          },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          select: { id: true },
+        }),
+        contactId
+          ? tx.contact.findUnique({
+              where: { id: contactId },
+              select: { artistId: true, state: true },
+            })
+          : Promise.resolve(null),
+      ]);
+    if (
+      contactId &&
+      (!currentContact ||
+        currentContact.state !== "active" ||
+        currentContact.artistId !== targetArtistId ||
+        (recommendation &&
+          currentContact.artistId !== recommendation.artistId))
+    ) {
+      return {
+        ok: false,
+        error: "Contact no longer matches the outreach artist",
+      };
+    }
+    if (recommendation) {
+      try {
+        await requireActionableTrajectoryRecommendationInTransaction(
+          tx,
+          recommendation,
+        );
+      } catch (error) {
+        return {
+          ok: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Trajectory recommendation is no longer actionable",
+        };
+      }
+    }
     if (!show) return { ok: false, error: "Show not found" };
     if (show.syncStatus !== "active") {
       return { ok: false, error: "Show is inactive" };
@@ -458,7 +518,7 @@ export async function markSentAction(formData: FormData) {
       data: {
         kind: "original",
         showId,
-        artistId,
+        artistId: targetArtistId,
         contactId: contactSlotAvailable ? contactId : null,
         finalSubject: MANUAL_OUTREACH_SUBJECT,
         finalHtml: MANUAL_OUTREACH_HTML,

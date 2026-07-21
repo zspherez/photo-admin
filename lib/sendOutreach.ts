@@ -59,6 +59,7 @@ import {
 } from "@/lib/schedule";
 import {
   requireActionableTrajectoryRecommendation,
+  requireActionableTrajectoryRecommendationInTransaction,
   type TrajectoryActionContext,
 } from "@/lib/trajectoryActiveRun";
 
@@ -184,6 +185,7 @@ interface PreparedOutreach {
   kind: OutreachKindValue;
   parentOutreachId: string | null;
   trajectoryRecommendationId: string | null;
+  trajectoryContext: TrajectoryActionContext | null;
   showId: string;
   artistId: string;
   contactId: string;
@@ -196,11 +198,32 @@ interface PreparedOutreach {
   expectedRecipientIdentity: CustomizeRecipientIdentity | null;
 }
 
+export function resolveTrajectoryRecommendationAttribution(
+  explicitRecommendationId: string | null,
+  inheritedRecommendationId: string | null,
+  existingRecommendationId: string | null = null,
+): string | null {
+  return (
+    explicitRecommendationId ??
+    existingRecommendationId ??
+    inheritedRecommendationId
+  );
+}
+
 function trajectoryAttributionData(
-  outreach: Pick<PreparedOutreach, "trajectoryRecommendationId">,
+  outreach: Pick<
+    PreparedOutreach,
+    "trajectoryRecommendationId" | "trajectoryContext"
+  >,
+  existingRecommendationId: string | null = null,
 ): { trajectoryRecommendationId?: string } {
-  return outreach.trajectoryRecommendationId
-    ? { trajectoryRecommendationId: outreach.trajectoryRecommendationId }
+  const recommendationId = resolveTrajectoryRecommendationAttribution(
+    outreach.trajectoryContext?.recommendationId ?? null,
+    outreach.trajectoryRecommendationId,
+    existingRecommendationId,
+  );
+  return recommendationId
+    ? { trajectoryRecommendationId: recommendationId }
     : {};
 }
 
@@ -2560,6 +2583,7 @@ async function prepareOriginalOutreach(
     parentOutreachId: null,
     trajectoryRecommendationId:
       trajectoryContext?.recommendationId ?? null,
+    trajectoryContext: trajectoryContext ?? null,
     showId,
     artistId: contact.artistId,
     contactId,
@@ -2589,6 +2613,7 @@ async function prepareOriginalOutreach(
 
 async function prepareFollowUpOutreach(
   parentOutreachId: string,
+  trajectoryContext?: TrajectoryActionContext,
 ): Promise<PreparedOutreach | { error: string }> {
   const [eligibility] = await getFollowUpEligibilityBatch([
     parentOutreachId,
@@ -2681,6 +2706,24 @@ async function prepareFollowUpOutreach(
     select: { showId: true },
   });
   if (!association) return { error: artistNotOnShowError() };
+  if (trajectoryContext) {
+    if (
+      trajectoryContext.showId !== parent.showId ||
+      trajectoryContext.artistId !== parent.artistId
+    ) {
+      return { error: "Trajectory recommendation follow-up target changed" };
+    }
+    try {
+      await requireActionableTrajectoryRecommendation(trajectoryContext);
+    } catch (error) {
+      return {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Trajectory recommendation is no longer actionable",
+      };
+    }
+  }
 
   const vars = await buildVarsForShow({
     artistName: parent.contact.artist.name,
@@ -2697,6 +2740,7 @@ async function prepareFollowUpOutreach(
     kind: "follow_up",
     parentOutreachId: parent.id,
     trajectoryRecommendationId: parent.trajectoryRecommendationId,
+    trajectoryContext: trajectoryContext ?? null,
     showId: parent.showId,
     artistId: parent.artistId,
     contactId: parent.contactId,
@@ -3204,6 +3248,32 @@ async function preparedFollowUpBlockingReason(
   return null;
 }
 
+async function preparedTrajectoryBlockingReason(
+  tx: Prisma.TransactionClient,
+  prep: PreparedOutreach,
+  now: Date,
+): Promise<string | null> {
+  if (!prep.trajectoryContext) return null;
+  if (
+    prep.trajectoryContext.showId !== prep.showId ||
+    prep.trajectoryContext.artistId !== prep.artistId
+  ) {
+    return "Trajectory recommendation outreach target changed";
+  }
+  try {
+    await requireActionableTrajectoryRecommendationInTransaction(
+      tx,
+      prep.trajectoryContext,
+      now,
+    );
+    return null;
+  } catch (error) {
+    return error instanceof Error
+      ? error.message
+      : "Trajectory recommendation is no longer actionable";
+  }
+}
+
 async function preparedDeliveryPolicyBlockingReason(
   tx: Prisma.TransactionClient,
   prep: PreparedOutreach,
@@ -3251,6 +3321,9 @@ async function preparedDeliveryPolicyBlockingReason(
   if (festivalBlocked) return festivalBlocked;
   const contact =
     artistContacts.find((candidate) => candidate.id === prep.contactId) ?? null;
+  if (!contact || contact.artistId !== prep.artistId) {
+    return "Selected contact no longer belongs to the outreach artist";
+  }
   const policyEmails = normalizeEmails([
     ...artistContacts.flatMap((candidate) =>
       candidate.state === "active" && candidate.email
@@ -3386,6 +3459,17 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
       return {
         kind: "complete",
         result: { ok: false, error: followUpBlocked },
+      };
+    }
+    const trajectoryBlocked = await preparedTrajectoryBlockingReason(
+      tx,
+      prep,
+      now,
+    );
+    if (trajectoryBlocked) {
+      return {
+        kind: "complete",
+        result: { ok: false, error: trajectoryBlocked },
       };
     }
     const policyBlocked = await preparedDeliveryPolicyBlockingReason(tx, prep);
@@ -3554,6 +3638,10 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           lastAttemptAt: now,
           error: null,
           idempotencyKey,
+          ...trajectoryAttributionData(
+            prep,
+            queued.trajectoryRecommendationId,
+          ),
           ...(!attempt
             ? {
                 finalSubject: prep.subject,
@@ -3655,7 +3743,10 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
-          ...trajectoryAttributionData(prep),
+          ...trajectoryAttributionData(
+            prep,
+            existing.trajectoryRecommendationId,
+          ),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -3691,7 +3782,10 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
-          ...trajectoryAttributionData(prep),
+          ...trajectoryAttributionData(
+            prep,
+            existing.trajectoryRecommendationId,
+          ),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -3756,6 +3850,10 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
             claimToken,
             claimedAt: now,
             lastAttemptAt: now,
+            ...trajectoryAttributionData(
+              prep,
+              existing.trajectoryRecommendationId,
+            ),
           },
         });
         return {
@@ -3787,7 +3885,10 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
-          ...trajectoryAttributionData(prep),
+          ...trajectoryAttributionData(
+            prep,
+            existing.trajectoryRecommendationId,
+          ),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -3856,7 +3957,10 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
-          ...trajectoryAttributionData(prep),
+          ...trajectoryAttributionData(
+            prep,
+            existing.trajectoryRecommendationId,
+          ),
           scheduledFor: null,
           nextAttemptAt: null,
           claimToken,
@@ -5190,6 +5294,7 @@ export async function sendOutreach(
 
 export async function sendFollowUp(
   parentOutreachId: string,
+  trajectoryContext?: TrajectoryActionContext,
 ): Promise<SendOutreachOutput> {
   const configurationError = getResendConfigurationError(
     process.env.RESEND_API_KEY,
@@ -5197,7 +5302,10 @@ export async function sendFollowUp(
   );
   if (configurationError) return { ok: false, error: configurationError };
 
-  const prep = await prepareFollowUpOutreach(parentOutreachId);
+  const prep = await prepareFollowUpOutreach(
+    parentOutreachId,
+    trajectoryContext,
+  );
   if ("error" in prep) return { ok: false, error: prep.error };
   const claim = await claimImmediateOutreach(prep);
   if (claim.kind === "complete") return claim.result;
@@ -5248,6 +5356,12 @@ async function schedulePreparedOutreach(
     if (!association) return { ok: false, error: artistNotOnShowError() };
     const followUpBlocked = await preparedFollowUpBlockingReason(tx, prep);
     if (followUpBlocked) return { ok: false, error: followUpBlocked };
+    const trajectoryBlocked = await preparedTrajectoryBlockingReason(
+      tx,
+      prep,
+      now,
+    );
+    if (trajectoryBlocked) return { ok: false, error: trajectoryBlocked };
     const policyBlocked = await preparedDeliveryPolicyBlockingReason(tx, prep);
     if (policyBlocked) return { ok: false, error: policyBlocked };
 
@@ -5302,6 +5416,20 @@ async function schedulePreparedOutreach(
         ) &&
         scheduled.scheduledFor?.getTime() === scheduledFor.getTime()
       ) {
+        const recommendationId = resolveTrajectoryRecommendationAttribution(
+          prep.trajectoryContext?.recommendationId ?? null,
+          prep.trajectoryRecommendationId,
+          scheduled.trajectoryRecommendationId,
+        );
+        if (
+          recommendationId &&
+          recommendationId !== scheduled.trajectoryRecommendationId
+        ) {
+          await tx.outreach.update({
+            where: { id: scheduled.id },
+            data: { trajectoryRecommendationId: recommendationId },
+          });
+        }
         return {
           ok: true,
           outreachId: scheduled.id,
@@ -5407,6 +5535,10 @@ async function schedulePreparedOutreach(
           claimedAt: null,
           claimToken: null,
           idempotencyKey,
+          ...trajectoryAttributionData(
+            prep,
+            queued.trajectoryRecommendationId,
+          ),
           ...(!attempt
             ? {
                 finalSubject: prep.subject,
@@ -5502,7 +5634,10 @@ async function schedulePreparedOutreach(
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
-          ...trajectoryAttributionData(prep),
+          ...trajectoryAttributionData(
+            prep,
+            existing.trajectoryRecommendationId,
+          ),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5534,7 +5669,10 @@ async function schedulePreparedOutreach(
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
-          ...trajectoryAttributionData(prep),
+          ...trajectoryAttributionData(
+            prep,
+            existing.trajectoryRecommendationId,
+          ),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5585,6 +5723,10 @@ async function schedulePreparedOutreach(
             nextAttemptAt: scheduledFor,
             claimedAt: null,
             claimToken: null,
+            ...trajectoryAttributionData(
+              prep,
+              existing.trajectoryRecommendationId,
+            ),
           },
         });
         return {
@@ -5618,7 +5760,10 @@ async function schedulePreparedOutreach(
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
-          ...trajectoryAttributionData(prep),
+          ...trajectoryAttributionData(
+            prep,
+            existing.trajectoryRecommendationId,
+          ),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5684,7 +5829,10 @@ async function schedulePreparedOutreach(
           fullTeamSend: prep.fullTeamSend,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
-          ...trajectoryAttributionData(prep),
+          ...trajectoryAttributionData(
+            prep,
+            existing.trajectoryRecommendationId,
+          ),
           scheduledFor,
           nextAttemptAt: scheduledFor,
           claimedAt: null,
@@ -5748,8 +5896,12 @@ export async function scheduleOutreach(
 export async function scheduleFollowUp(
   parentOutreachId: string,
   scheduledFor: Date,
+  trajectoryContext?: TrajectoryActionContext,
 ): Promise<SendOutreachOutput> {
-  const prep = await prepareFollowUpOutreach(parentOutreachId);
+  const prep = await prepareFollowUpOutreach(
+    parentOutreachId,
+    trajectoryContext,
+  );
   if ("error" in prep) return { ok: false, error: prep.error };
   return schedulePreparedOutreach(prep, scheduledFor);
 }
