@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { Prisma } from "@prisma/client";
 import { festivalLeadTimeWhere } from "./festivalEligibility";
+import { directOutreachInstructionsStorage } from "./agentRules";
 import {
   type ContactResearchTransactionRunner,
   claimContactResearchJobs,
@@ -725,12 +726,24 @@ test("pending direct outreach blocks per-job and bulk review requeue until revie
 
 test("pending direct outreach cannot be reclaimed, while reviewed proposals can", async () => {
   const now = new Date("2026-07-21T12:00:00.000Z");
+  const directOutreachInstructions =
+    "When an artist is managed by Leif Fosse, add a direct outreach note that I have his number.";
+  const storedDirectOutreachInstructions =
+    directOutreachInstructionsStorage(directOutreachInstructions);
   for (const proposalStatus of ["pending", "approved", "rejected"] as const) {
     const claims = await claimContactResearchJobs(
       1,
       now,
       runWithTransaction({
-        agentRuleSet: { findUnique: async () => null },
+        agentRuleSet: {
+          findUnique: async () => ({
+            instructions: "Prefer official sources.",
+            directOutreachRules:
+              storedDirectOutreachInstructions as Prisma.JsonValue,
+            version: 7,
+            updatedAt: now,
+          }),
+        },
         $queryRaw: async (query: unknown) => {
           const source = sqlText(query);
           assert.match(
@@ -747,9 +760,10 @@ test("pending direct outreach cannot be reclaimed, while reviewed proposals can"
               id: "job-1",
               attemptCount: 1,
               priority: 100,
-              claimedAgentRules: "",
-              claimedAgentRulesVersion: 0,
-              claimedDirectOutreachRules: [],
+              claimedAgentRules: "Prefer official sources.",
+              claimedAgentRulesVersion: 7,
+              claimedDirectOutreachRules:
+                storedDirectOutreachInstructions,
               userNotes: null,
               artist: {
                 id: "artist-1",
@@ -767,6 +781,14 @@ test("pending direct outreach cannot be reclaimed, while reviewed proposals can"
       }),
     );
     assert.equal(claims.length, proposalStatus === "pending" ? 0 : 1);
+    if (claims[0]) {
+      assert.deepEqual(claims[0].globalAgentRules, {
+        scope: "global",
+        version: 7,
+        instructions: "Prefer official sources.",
+        directOutreachInstructions,
+      });
+    }
   }
 });
 
@@ -3715,6 +3737,10 @@ test("claims require current eligibility and unexpired ownership", () => {
   );
   assert.match(source, /globalAgentRules: \{/);
   assert.match(source, /instructions: job\.claimedAgentRules \?\? ""/);
+  assert.match(
+    source,
+    /directOutreachInstructions:[\s\S]*readStoredDirectOutreachInstructions/,
+  );
   assert.match(source, /researchInstructions: job\.userNotes/);
   assert.match(
     source,

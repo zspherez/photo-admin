@@ -43,6 +43,7 @@ import {
   venueTierLabel,
 } from "@/lib/venueTier";
 import { festivalLeadTimeSql } from "@/lib/festivalEligibility";
+import { directOutreachInstructionExcerptFromCanonical } from "@/lib/directOutreachInstruction";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact research" };
@@ -782,7 +783,7 @@ export default async function ContactResearchPage({
                         <span className="font-semibold">
                           Direct outreach proposal
                         </span>
-                        <Badge tone="warning">trusted rule review</Badge>
+                        <Badge tone="warning">human review required</Badge>
                       </div>
                       <p className="mt-2">{proposal.note}</p>
                       <p className="mt-1 text-xs">
@@ -792,8 +793,10 @@ export default async function ContactResearchPage({
                           : ""}
                       </p>
                       <p className="mt-1 text-xs">
-                        Rule {proposal.ruleId} · version{" "}
-                        {proposal.ruleVersion}: {proposal.canonicalRule}
+                        Trusted instruction v{proposal.ruleVersion}:{" "}
+                        {directOutreachInstructionExcerptFromCanonical(
+                          proposal.canonicalRule,
+                        )}
                       </p>
                       <div className="mt-2 space-y-2">
                         {proposal.evidenceQuotes.map((quote, index) => (

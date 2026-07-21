@@ -15,10 +15,14 @@ import {
 import { activeListenSignalWhere } from "@/lib/listenSignal";
 import { appendContactToSheet, parseSheetEmails } from "@/lib/sheets";
 import {
+  directOutreachInstructionsStorage,
   readGlobalAgentRulesInTransaction,
-  readStoredDirectOutreachAgentRules,
-  type DirectOutreachAgentRule,
+  readStoredDirectOutreachInstructions,
 } from "@/lib/agentRules";
+import {
+  canonicalDirectOutreachInstructionExcerpt,
+  DIRECT_OUTREACH_INSTRUCTION_EXCERPT_MAX_LENGTH,
+} from "@/lib/directOutreachInstruction";
 import {
   assertAgentSafeSourceUrl,
   assertNoPhoneLikeNumber,
@@ -90,11 +94,11 @@ export interface DirectOutreachEvidenceInput {
 }
 
 export interface TrustedDirectOutreachInput {
-  ruleId: string;
-  ruleVersion: number;
-  canonicalRule: string;
+  instructionVersion: number;
+  instructionExcerpt: string;
   managerName: string;
   managerCompany: string | null;
+  note: string;
   evidence: DirectOutreachEvidenceInput[];
 }
 
@@ -171,11 +175,11 @@ const ACTIVE_EMAIL_CONTACT_WHERE = {
 } satisfies Prisma.ContactWhereInput;
 
 const DIRECT_OUTREACH_KEYS = new Set([
-  "ruleId",
-  "ruleVersion",
-  "canonicalRule",
+  "instructionVersion",
+  "instructionExcerpt",
   "managerName",
   "managerCompany",
+  "note",
   "evidence",
 ]);
 
@@ -458,28 +462,22 @@ export function normalizeTrustedDirectOutreach(
     );
   }
   if (
-    typeof input.ruleVersion !== "number" ||
-    !Number.isSafeInteger(input.ruleVersion) ||
-    input.ruleVersion < 1
+    typeof input.instructionVersion !== "number" ||
+    !Number.isSafeInteger(input.instructionVersion) ||
+    input.instructionVersion < 1
   ) {
-    throw new Error("direct outreach ruleVersion must be a positive integer");
+    throw new Error(
+      "direct outreach instructionVersion must be a positive integer",
+    );
   }
-  const ruleId = requiredString(
-    input.ruleId,
-    64,
-    "direct outreach ruleId",
-  );
-  if (!/^[a-z0-9][a-z0-9_-]{1,63}$/.test(ruleId)) {
-    throw new Error("direct outreach ruleId is invalid");
-  }
-  const canonicalRule = requiredString(
-    input.canonicalRule,
-    8_000,
-    "direct outreach canonicalRule",
+  const instructionExcerpt = requiredString(
+    input.instructionExcerpt,
+    DIRECT_OUTREACH_INSTRUCTION_EXCERPT_MAX_LENGTH,
+    "direct outreach instructionExcerpt",
   );
   assertNoPhoneLikeNumber(
-    canonicalRule,
-    "direct outreach canonicalRule",
+    instructionExcerpt,
+    "direct outreach instructionExcerpt",
   );
   const managerName = requiredString(
     input.managerName,
@@ -497,7 +495,11 @@ export function normalizeTrustedDirectOutreach(
     200,
     "direct outreach managerCompany"
   );
-  assertNoPhoneLikeNumber(ruleId, "direct outreach ruleId");
+  const note = requiredString(
+    input.note,
+    900,
+    "direct outreach note",
+  );
   assertNoPhoneLikeNumber(managerName, "direct outreach managerName");
   if (managerCompany !== null) {
     assertNoPhoneLikeNumber(
@@ -505,12 +507,13 @@ export function normalizeTrustedDirectOutreach(
       "direct outreach managerCompany",
     );
   }
+  assertNoPhoneLikeNumber(note, "direct outreach note");
   return {
-    ruleId,
-    ruleVersion: input.ruleVersion,
-    canonicalRule,
+    instructionVersion: input.instructionVersion,
+    instructionExcerpt,
     managerName,
     managerCompany,
+    note,
     evidence: normalizeDirectOutreachEvidence(input.evidence, managerName),
   };
 }
@@ -1223,47 +1226,72 @@ export function isTrustedAgentSkipRuleProvenance(
   );
 }
 
-function trustedDirectOutreachRule(
+function hasVerbatimInstructionExcerpt(
+  snapshot: string,
+  excerpt: string,
+): boolean {
+  let index = snapshot.indexOf(excerpt);
+  while (index !== -1) {
+    const before = snapshot[index - 1];
+    const after = snapshot[index + excerpt.length];
+    const startsAtBoundary =
+      before === undefined || !/[\p{L}\p{N}]/u.test(before);
+    const endsAtBoundary =
+      after === undefined || !/[\p{L}\p{N}]/u.test(after);
+    if (startsAtBoundary && endsAtBoundary) return true;
+    index = snapshot.indexOf(excerpt, index + 1);
+  }
+  return false;
+}
+
+export function isTrustedDirectOutreachInstructionProvenance(
   claimedRuleVersion: number | null,
   claimedRules: Prisma.JsonValue | null,
   directOutreach: TrustedDirectOutreachInput,
-): DirectOutreachAgentRule | null {
+): boolean {
   if (
     claimedRuleVersion === null ||
     claimedRuleVersion < 1 ||
-    claimedRuleVersion !== directOutreach.ruleVersion
+    claimedRuleVersion !== directOutreach.instructionVersion
   ) {
-    return null;
+    return false;
   }
-  const rule = readStoredDirectOutreachAgentRules(
-    claimedRules ?? [],
-  ).find((candidate) => candidate.id === directOutreach.ruleId);
-  if (
-    !rule ||
-    rule.action !== "direct_outreach" ||
-    rule.canonicalRule !== directOutreach.canonicalRule ||
-    rule.managerName !== directOutreach.managerName
-  ) {
-    return null;
+  try {
+    const snapshot = readStoredDirectOutreachInstructions(
+      claimedRules ?? [],
+    );
+    const excerpt = directOutreach.instructionExcerpt.trim();
+    return (
+      snapshot.length > 0 &&
+      excerpt.length > 0 &&
+      hasVerbatimInstructionExcerpt(snapshot, excerpt)
+    );
+  } catch {
+    return false;
   }
-  return rule;
 }
 
 async function persistTrustedDirectOutreachProposal(
   tx: Prisma.TransactionClient,
   job: { id: string },
   directOutreach: TrustedDirectOutreachInput,
-  rule: DirectOutreachAgentRule,
 ): Promise<void> {
   const normalizedManagerName = normalizedIdentityText(
     directOutreach.managerName,
+  );
+  const ruleId = `instruction-${createHash("sha256")
+    .update(directOutreach.instructionExcerpt)
+    .digest("hex")
+    .slice(0, 32)}`;
+  const canonicalRule = canonicalDirectOutreachInstructionExcerpt(
+    directOutreach.instructionExcerpt,
   );
   const existing =
     await tx.contactResearchDirectOutreachProposal.findUnique({
       where: {
         jobId_ruleId_normalizedManagerName: {
           jobId: job.id,
-          ruleId: rule.id,
+          ruleId,
           normalizedManagerName,
         },
       },
@@ -1271,11 +1299,11 @@ async function persistTrustedDirectOutreachProposal(
     });
   if (existing && existing.status !== "pending") return;
   const data = {
-    ruleVersion: directOutreach.ruleVersion,
-    canonicalRule: rule.canonicalRule,
-    managerName: rule.managerName,
+    ruleVersion: directOutreach.instructionVersion,
+    canonicalRule,
+    managerName: directOutreach.managerName,
     managerCompany: directOutreach.managerCompany,
-    note: `Direct outreach: ${rule.note}`,
+    note: `Direct outreach: ${directOutreach.note}`,
     sourceUrls: directOutreach.evidence.map(
       (evidence) => evidence.sourceUrl,
     ),
@@ -1293,7 +1321,7 @@ async function persistTrustedDirectOutreachProposal(
   await tx.contactResearchDirectOutreachProposal.create({
     data: {
       jobId: job.id,
-      ruleId: rule.id,
+      ruleId,
       normalizedManagerName,
       status: "pending",
       ...data,
@@ -2018,7 +2046,9 @@ export async function claimContactResearchJobs(
             claimedAgentRules: globalAgentRules.instructions,
             claimedAgentRulesVersion: globalAgentRules.version,
             claimedDirectOutreachRules:
-              globalAgentRules.directOutreachRules as unknown as Prisma.InputJsonValue,
+              directOutreachInstructionsStorage(
+                globalAgentRules.directOutreachInstructions,
+              ),
           },
         });
       }
@@ -2096,8 +2126,8 @@ export async function claimContactResearchJobs(
               scope: globalAgentRules.scope,
               version: job.claimedAgentRulesVersion ?? 0,
               instructions: job.claimedAgentRules ?? "",
-              directOutreachRules:
-                readStoredDirectOutreachAgentRules(
+              directOutreachInstructions:
+                readStoredDirectOutreachInstructions(
                   job.claimedDirectOutreachRules ?? [],
                 ),
             },
@@ -2167,10 +2197,10 @@ export async function submitContactResearchResult(
       };
     }
 
-    const matchedDirectOutreachRule =
+    const trustedDirectOutreachInstruction =
       submission.outcome === "candidates" &&
       submission.directOutreach !== null
-        ? trustedDirectOutreachRule(
+        ? isTrustedDirectOutreachInstructionProvenance(
             job.claimedAgentRulesVersion,
             job.claimedDirectOutreachRules,
             submission.directOutreach,
@@ -2179,7 +2209,7 @@ export async function submitContactResearchResult(
     if (
       submission.outcome === "candidates" &&
       submission.directOutreach !== null &&
-      matchedDirectOutreachRule === null
+      !trustedDirectOutreachInstruction
     ) {
       return {
         accepted: false,
@@ -2255,13 +2285,12 @@ export async function submitContactResearchResult(
     });
     if (
       submission.directOutreach !== null &&
-      matchedDirectOutreachRule !== null
+      trustedDirectOutreachInstruction
     ) {
       await persistTrustedDirectOutreachProposal(
         tx,
         job,
         submission.directOutreach,
-        matchedDirectOutreachRule,
       );
     }
 

@@ -76,7 +76,7 @@ test("direct-only contacts expose manual marking without email actions", () => {
 test("agent-created direct outreach provenance appears on research and contact surfaces", () => {
   const component = source("components/direct-outreach-provenance.tsx");
   assert.match(component, /Agent-created direct outreach/);
-  assert.match(component, /Trusted rule v/);
+  assert.match(component, /Trusted instruction v/);
   assert.match(component, /directOutreachEvidenceUrls\.map/);
 
   for (const file of [

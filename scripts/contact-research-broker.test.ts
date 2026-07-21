@@ -84,6 +84,8 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
                       version: 4,
                       instructions:
                         "Skip artists managed by a Metatone manager.",
+                      directOutreachInstructions:
+                        "When an artist is managed by Leif Fosse, add a direct outreach note that I have his number.",
                     },
                     artist: {
                       id: "artist-1",
@@ -167,6 +169,8 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
           scope: "global",
           version: 4,
           instructions: "Skip artists managed by a Metatone manager.",
+          directOutreachInstructions:
+            "When an artist is managed by Leif Fosse, add a direct outreach note that I have his number.",
         },
         artist: { name: "Example Artist" },
       },
@@ -430,14 +434,14 @@ test("agent skip submissions are schema and claim-token protected", () => {
   );
 });
 
-test("broker accepts only structured trusted-rule direct outreach", () => {
+test("broker accepts versioned freeform instruction provenance for direct outreach", () => {
   const source = readFileSync(
     new URL("./contact-research-broker.mjs", import.meta.url),
     "utf8"
   );
   assert.match(
     source,
-    /const directOutreachSchema = z[\s\S]*ruleId: z\.string\(\)\.regex[\s\S]*ruleVersion: z\.number\(\)\.int\(\)\.min\(1\)[\s\S]*canonicalRule: z\.string\(\)\.min\(1\)\.max\(8_000\)[\s\S]*managerName: z\.string\(\)\.min\(1\)\.max\(200\)[\s\S]*sourceUrl: z\.string\(\)\.url\(\)[\s\S]*quote: z\.string\(\)\.min\(1\)\.max\(2_000\)[\s\S]*\.min\(1\)[\s\S]*\.max\(5\)[\s\S]*\.strict\(\)/,
+    /const directOutreachSchema = z[\s\S]*instructionVersion: z\.number\(\)\.int\(\)\.min\(1\)[\s\S]*instructionExcerpt: z\.string\(\)\.min\(1\)\.max\(7_984\)[\s\S]*managerName: z\.string\(\)\.min\(1\)\.max\(200\)[\s\S]*note: z\.string\(\)\.min\(1\)\.max\(900\)[\s\S]*sourceUrl: z\.string\(\)\.url\(\)[\s\S]*quote: z\.string\(\)\.min\(1\)\.max\(2_000\)[\s\S]*\.min\(1\)[\s\S]*\.max\(5\)[\s\S]*\.strict\(\)/,
   );
   assert.match(
     source,
