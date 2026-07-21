@@ -113,11 +113,62 @@ test("contact audit roster migration is normalized, immutable, and legacy-safe",
   );
   assert.match(rosterMigration, /ContactAuditJob_roster_link_check/);
   assert.match(rosterMigration, /target must belong to the job artist roster/);
+  assert.match(
+    migration,
+    /ContactAuditJob_artistId_fkey[\s\S]*ON DELETE SET NULL/
+  );
+  assert.match(
+    rosterMigration,
+    /NEW\."artistId" IS NULL AND TG_OP = 'INSERT'/
+  );
+  assert.match(
+    rosterMigration,
+    /NEW\."artistId" IS NOT NULL AND NEW\."artistId" <> roster_artist_id/
+  );
+  assert.match(
+    rosterMigration,
+    /OLD\."artistId" IS NOT NULL[\s\S]*OLD\."artistId" <> roster_artist_id/
+  );
+  assert.match(
+    rosterMigration,
+    /Contact audit roster and target links are immutable/
+  );
+  assert.match(
+    rosterMigration,
+    /NEW\."snapshotIsFullTeam" IS DISTINCT FROM OLD\."snapshotIsFullTeam"/
+  );
   assert.match(rosterMigration, /roster snapshots are immutable/);
   assert.match(rosterMigration, /"rosterReview" IS DISTINCT FROM/);
   assert.doesNotMatch(rosterMigration, /UPDATE "ContactAuditJob"/);
   assert.doesNotMatch(rosterMigration, /DELETE FROM "ContactAudit/);
   assert.match(rosterMigration, /COMMIT;\s*$/);
+});
+
+test("roster target integrity preserves artist deletion set-null semantics", () => {
+  assert.match(
+    migration,
+    /ContactAuditJob_artistId_fkey[\s\S]*ON DELETE SET NULL/
+  );
+  assert.match(
+    rosterMigration,
+    /IF NEW\."artistId" IS NULL AND TG_OP = 'INSERT' THEN[\s\S]*live artist link/
+  );
+  assert.match(
+    rosterMigration,
+    /NEW\."artistId" IS NULL[\s\S]*OLD\."artistId" IS NOT NULL[\s\S]*OLD\."artistId" <> roster_artist_id/
+  );
+  assert.match(
+    rosterMigration,
+    /NEW\."artistId" IS NOT NULL AND NEW\."artistId" <> roster_artist_id[\s\S]*target must belong/
+  );
+  assert.match(
+    rosterMigration,
+    /NEW\."rosterSnapshotId" IS DISTINCT FROM OLD\."rosterSnapshotId"[\s\S]*NEW\."targetRosterEntryId" IS DISTINCT FROM OLD\."targetRosterEntryId"[\s\S]*links are immutable/
+  );
+  assert.match(
+    rosterMigration,
+    /entry\."rosterSnapshotId" = NEW\."rosterSnapshotId"[\s\S]*snapshot\."runId" = NEW\."runId"/
+  );
 });
 
 test("contact audit migration is explicit and transactional", () => {

@@ -253,6 +253,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "snapshotRole",
       "snapshotSource",
       "snapshotNotes",
+      "snapshotIsFullTeam",
       "status",
       "attemptCount",
       "claimedAt",

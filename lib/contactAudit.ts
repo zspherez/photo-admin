@@ -372,6 +372,7 @@ export function buildContactAuditRosterPayload(job: {
   snapshotRole: string | null;
   snapshotSource: string | null;
   snapshotNotes: string | null;
+  snapshotIsFullTeam: boolean | null;
   rosterSnapshot: {
     id: string;
     createdAt: Date;
@@ -431,7 +432,7 @@ export function buildContactAuditRosterPayload(job: {
         role: job.snapshotRole,
         source: job.snapshotSource,
         notes: job.snapshotNotes,
-        isFullTeam: null,
+        isFullTeam: job.snapshotIsFullTeam,
       },
     ],
   };
@@ -824,6 +825,7 @@ export async function prepareContactAudit(
             snapshotRole: contact.role,
             snapshotSource: contact.source,
             snapshotNotes: contact.notes,
+            snapshotIsFullTeam: contact.isFullTeam,
           };
         }),
       });
@@ -991,6 +993,7 @@ export async function claimContactAuditJobs(
           snapshotRole: true,
           snapshotSource: true,
           snapshotNotes: true,
+          snapshotIsFullTeam: true,
           rosterSnapshot: {
             select: {
               id: true,
@@ -1200,6 +1203,8 @@ type ResolutionContact = {
   name: string | null;
   role: string | null;
   source: string | null;
+  notes: string | null;
+  isFullTeam: boolean;
   sourceKey: string | null;
   state: "active" | "quarantined";
   updatedAt: Date;
@@ -1233,7 +1238,7 @@ const CONTACT_AUDIT_SHEET_MUTATIONS: ContactAuditSheetMutations = {
   rollback: rollbackAuditedContactInSheet,
 };
 
-function contactStillMatchesAuditSnapshot(
+export function contactStillMatchesAuditSnapshot(
   job: {
     snapshotEmail: string | null;
     snapshotPhone: string | null;
@@ -1241,8 +1246,21 @@ function contactStillMatchesAuditSnapshot(
     snapshotName: string | null;
     snapshotRole: string | null;
     snapshotSource: string | null;
+    snapshotNotes: string | null;
+    snapshotIsFullTeam: boolean | null;
   },
-  contact: ResolutionContact
+  contact: Pick<
+    ResolutionContact,
+    | "state"
+    | "email"
+    | "phone"
+    | "directOutreachNote"
+    | "name"
+    | "role"
+    | "source"
+    | "notes"
+    | "isFullTeam"
+  >
 ): boolean {
   return (
     contact.state === "active" &&
@@ -1251,7 +1269,10 @@ function contactStillMatchesAuditSnapshot(
     contact.directOutreachNote === job.snapshotDirectOutreachNote &&
     contact.name === job.snapshotName &&
     contact.role === job.snapshotRole &&
-    contact.source === job.snapshotSource
+    contact.source === job.snapshotSource &&
+    contact.notes === job.snapshotNotes &&
+    (job.snapshotIsFullTeam === null ||
+      contact.isFullTeam === job.snapshotIsFullTeam)
   );
 }
 

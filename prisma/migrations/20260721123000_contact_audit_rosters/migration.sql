@@ -35,6 +35,7 @@ ALTER TABLE "ContactAuditJob"
   ADD COLUMN "rosterSnapshotId" TEXT,
   ADD COLUMN "targetRosterEntryId" TEXT,
   ADD COLUMN "rosterReview" JSONB,
+  ADD COLUMN "snapshotIsFullTeam" BOOLEAN,
   ADD CONSTRAINT "ContactAuditJob_roster_link_check"
     CHECK (
       ("rosterSnapshotId" IS NULL AND "targetRosterEntryId" IS NULL) OR
@@ -86,16 +87,45 @@ CREATE FUNCTION "validate_contact_audit_roster_target"()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  roster_artist_id TEXT;
 BEGIN
-  IF NEW."rosterSnapshotId" IS NOT NULL AND NOT EXISTS (
-    SELECT 1
+  IF TG_OP = 'UPDATE' AND (
+    NEW."rosterSnapshotId" IS DISTINCT FROM OLD."rosterSnapshotId"
+    OR NEW."targetRosterEntryId" IS DISTINCT FROM OLD."targetRosterEntryId"
+  ) THEN
+    RAISE EXCEPTION 'Contact audit roster and target links are immutable';
+  END IF;
+
+  IF NEW."rosterSnapshotId" IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT snapshot."snapshotArtistId"
+  INTO roster_artist_id
     FROM "ContactAuditRosterEntry" entry
     JOIN "ContactAuditRosterSnapshot" snapshot
       ON snapshot."id" = entry."rosterSnapshotId"
     WHERE entry."id" = NEW."targetRosterEntryId"
       AND entry."rosterSnapshotId" = NEW."rosterSnapshotId"
-      AND snapshot."runId" = NEW."runId"
-      AND snapshot."snapshotArtistId" = NEW."artistId"
+      AND snapshot."runId" = NEW."runId";
+
+  IF roster_artist_id IS NULL THEN
+    RAISE EXCEPTION 'Contact audit target must belong to the job artist roster snapshot';
+  END IF;
+
+  IF NEW."artistId" IS NOT NULL AND NEW."artistId" <> roster_artist_id THEN
+    RAISE EXCEPTION 'Contact audit target must belong to the job artist roster snapshot';
+  END IF;
+
+  IF NEW."artistId" IS NULL AND TG_OP = 'INSERT' THEN
+    RAISE EXCEPTION 'New contact audit roster jobs require their live artist link';
+  END IF;
+
+  IF (
+    NEW."artistId" IS NULL
+    AND OLD."artistId" IS NOT NULL
+    AND OLD."artistId" <> roster_artist_id
   ) THEN
     RAISE EXCEPTION 'Contact audit target must belong to the job artist roster snapshot';
   END IF;
@@ -180,6 +210,7 @@ BEGIN
     OR NEW."snapshotRole" IS DISTINCT FROM OLD."snapshotRole"
     OR NEW."snapshotSource" IS DISTINCT FROM OLD."snapshotSource"
     OR NEW."snapshotNotes" IS DISTINCT FROM OLD."snapshotNotes"
+    OR NEW."snapshotIsFullTeam" IS DISTINCT FROM OLD."snapshotIsFullTeam"
   ) THEN
     RAISE EXCEPTION 'Resolved contact audit decisions and provenance are immutable';
   END IF;

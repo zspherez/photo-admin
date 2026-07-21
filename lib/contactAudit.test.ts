@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { db } from "./db";
 import {
   CONTACT_AUDIT_OIDC_AUDIENCE,
   CONTACT_AUDIT_WORKFLOW_REF,
   buildContactAuditRosterPayload,
+  contactStillMatchesAuditSnapshot,
   isTrustedContactAuditOidcClaims,
   isValidContactAuditAuthorization,
   parseContactAuditClaimLimit,
   parseContactAuditSubmission,
+  resolveContactAuditJob,
   validateContactAuditAlternativeEmails,
 } from "./contactAudit";
 
@@ -168,6 +171,7 @@ test("Somma-like jobs expose the complete immutable roster with one target and a
     snapshotRole: "legacy-role",
     snapshotSource: "sheet",
     snapshotNotes: null,
+    snapshotIsFullTeam: false,
     rosterSnapshot: {
       id: "roster-somma",
       createdAt: snapshotAt,
@@ -210,6 +214,7 @@ test("Somma-like jobs expose the complete immutable roster with one target and a
     snapshotPhone: "+1 212 555 0100",
     snapshotDirectOutreachNote: "@secondmanager",
     snapshotName: "Second Manager",
+    snapshotIsFullTeam: true,
   });
 
   assert.equal(firstClaim.completeness, "complete");
@@ -368,8 +373,10 @@ test("legacy jobs retain safe explicit single-contact context", () => {
     snapshotRole: null,
     snapshotSource: "manual",
     snapshotNotes: null,
+    snapshotIsFullTeam: null,
     rosterSnapshot: null,
   });
+
   assert.equal(roster.completeness, "legacy_single_contact");
   assert.equal(roster.snapshotId, null);
   assert.deepEqual(roster.contacts.map((contact) => contact.isTarget), [true]);
@@ -383,6 +390,372 @@ test("legacy jobs retain safe explicit single-contact context", () => {
       alternatives: [],
     })
   );
+});
+
+test("resolution snapshot matching rejects every mutable target-field change and accepts an unchanged target", () => {
+  const snapshot = {
+    snapshotEmail: "manager@example.com",
+    snapshotPhone: "+1 212 555 0100",
+    snapshotDirectOutreachNote: "@manager",
+    snapshotName: "Manager Name",
+    snapshotRole: "management",
+    snapshotSource: "sheet",
+    snapshotNotes: "Primary manager",
+    snapshotIsFullTeam: true,
+  };
+  const unchanged = {
+    state: "active" as const,
+    email: "manager@example.com",
+    phone: "+1 212 555 0100",
+    directOutreachNote: "@manager",
+    name: "Manager Name",
+    role: "management",
+    source: "sheet",
+    notes: "Primary manager",
+    isFullTeam: true,
+  };
+  assert.equal(contactStillMatchesAuditSnapshot(snapshot, unchanged), true);
+
+  for (const changed of [
+    { state: "quarantined" as const },
+    { email: "sheet-sync@example.com" },
+    { phone: "+1 646 555 0100" },
+    { directOutreachNote: "@sheet-sync-manager" },
+    { name: "Sheet Sync Manager" },
+    { role: "legacy-role" },
+    { source: "manual" },
+    { notes: "Changed by Sheet sync" },
+    { isFullTeam: false },
+  ]) {
+    assert.equal(
+      contactStillMatchesAuditSnapshot(snapshot, {
+        ...unchanged,
+        ...changed,
+      }),
+      false
+    );
+  }
+
+  assert.equal(
+    contactStillMatchesAuditSnapshot(
+      { ...snapshot, snapshotIsFullTeam: null },
+      { ...unchanged, isFullTeam: false }
+    ),
+    true,
+    "legacy snapshots without a full-team value remain resolvable"
+  );
+});
+
+test("resolution refuses notes, full-team, and Sheet-sync changes without mutating the target", async () => {
+  const mutableDb = db as unknown as {
+    $transaction: (
+      work: (tx: Record<string, unknown>) => Promise<unknown>,
+      options?: unknown
+    ) => Promise<unknown>;
+  };
+  const originalTransaction = mutableDb.$transaction;
+  const now = new Date("2026-07-21T16:45:00.000Z");
+
+  try {
+    for (const change of [
+      { notes: "Changed after audit" },
+      { isFullTeam: false },
+      { name: "Changed by Sheet sync", source: "sheet" },
+    ]) {
+    let contactUpdates = 0;
+    let sheetUpdates = 0;
+    const contact = {
+      id: "contact-1",
+      artistId: "artist-1",
+      email: "manager@example.com",
+      phone: "+1 212 555 0100",
+      directOutreachNote: "@manager",
+      name: "Manager Name",
+      role: "management",
+      source: "sheet",
+      notes: "Primary manager",
+      isFullTeam: true,
+      sourceKey: "sheet/tab/row/slot",
+      state: "active" as const,
+      updatedAt: new Date("2026-07-21T16:30:00.000Z"),
+      artist: { name: "Artist" },
+      ...change,
+    };
+    const job = {
+      id: "job-1",
+      runId: "run-1",
+      contactId: contact.id,
+      artistId: contact.artistId,
+      rosterSnapshotId: "roster-1",
+      targetRosterEntryId: "entry-1",
+      snapshotArtistName: "Artist",
+      snapshotEmail: "manager@example.com",
+      snapshotPhone: "+1 212 555 0100",
+      snapshotDirectOutreachNote: "@manager",
+      snapshotName: "Manager Name",
+      snapshotRole: "management",
+      snapshotSource: "sheet",
+      snapshotNotes: "Primary manager",
+      snapshotIsFullTeam: true,
+      status: "complete",
+      finding: "stale",
+      verifiedAt: new Date("2026-07-21T16:35:00.000Z"),
+      resolution: null,
+      selectedAlternativeId: null,
+      resolutionClaimToken: null,
+      resolutionClaimedAt: null,
+      contact,
+    };
+    const tx = {
+      contactAuditJob: {
+        findUnique: async () => job,
+        updateMany: async () => ({ count: 0 }),
+      },
+      contact: {
+        update: async () => {
+          contactUpdates += 1;
+          return contact;
+        },
+      },
+    };
+    mutableDb.$transaction = async (work) => work(tx);
+
+    const result = await resolveContactAuditJob(
+      job.id,
+      "approved",
+      null,
+      now,
+      {
+        update: async () => {
+          sheetUpdates += 1;
+          throw new Error("Sheet update must not run");
+        },
+        rollback: async () => {},
+      }
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.error ?? "", /contact changed after this audit/);
+    assert.equal(contactUpdates, 0);
+      assert.equal(sheetUpdates, 0);
+    }
+  } finally {
+    mutableDb.$transaction = originalTransaction;
+  }
+});
+
+test("resolution succeeds when every snapshotted target field is unchanged", async () => {
+  const mutableDb = db as unknown as {
+    $transaction: (
+      work: (tx: Record<string, unknown>) => Promise<unknown>,
+      options?: unknown
+    ) => Promise<unknown>;
+  };
+  const originalTransaction = mutableDb.$transaction;
+  const now = new Date("2026-07-21T16:50:00.000Z");
+  const contact = {
+    id: "contact-1",
+    artistId: "artist-1",
+    email: "manager@example.com",
+    phone: "+1 212 555 0100",
+    directOutreachNote: "@manager",
+    name: "Manager Name",
+    role: "management",
+    source: "manual",
+    notes: "Primary manager",
+    isFullTeam: true,
+    sourceKey: null,
+    state: "active" as const,
+    updatedAt: new Date("2026-07-21T16:30:00.000Z"),
+    artist: { name: "Artist" },
+  };
+  let resolutionClaimToken: string | null = null;
+  let contactUpdates = 0;
+  let resolutionSaves = 0;
+  const job = {
+    id: "job-1",
+    runId: "run-1",
+    contactId: contact.id,
+    artistId: contact.artistId,
+    rosterSnapshotId: "roster-1",
+    targetRosterEntryId: "entry-1",
+    snapshotArtistName: "Artist",
+    snapshotEmail: contact.email,
+    snapshotPhone: contact.phone,
+    snapshotDirectOutreachNote: contact.directOutreachNote,
+    snapshotName: contact.name,
+    snapshotRole: contact.role,
+    snapshotSource: contact.source,
+    snapshotNotes: contact.notes,
+    snapshotIsFullTeam: contact.isFullTeam,
+    status: "complete",
+    finding: "stale",
+    verifiedAt: new Date("2026-07-21T16:35:00.000Z"),
+    resolution: null,
+    selectedAlternativeId: null,
+    resolutionClaimToken: null as string | null,
+    resolutionClaimedAt: null,
+    contact,
+  };
+  const tx = {
+    contactAuditJob: {
+      findUnique: async () => ({
+        ...job,
+        resolutionClaimToken,
+      }),
+      updateMany: async ({
+        data,
+      }: {
+        data: Record<string, unknown>;
+      }) => {
+        if (typeof data.resolutionClaimToken === "string") {
+          resolutionClaimToken = data.resolutionClaimToken;
+        }
+        if (data.resolution === "approved") resolutionSaves += 1;
+        return { count: 1 };
+      },
+      findUniqueOrThrow: async () => ({ resolutionClaimToken }),
+    },
+    contact: {
+      update: async () => {
+        contactUpdates += 1;
+        return { ...contact, state: "quarantined" as const };
+      },
+    },
+  };
+  mutableDb.$transaction = async (work) => work(tx);
+
+  try {
+    const result = await resolveContactAuditJob(
+      job.id,
+      "approved",
+      null,
+      now
+    );
+    assert.deepEqual(result, {
+      ok: true,
+      status: "resolved",
+      resolution: "approved",
+    });
+    assert.equal(contactUpdates, 1);
+    assert.equal(resolutionSaves, 1);
+  } finally {
+    mutableDb.$transaction = originalTransaction;
+  }
+});
+
+test("finalization rejects a target change that occurs after reservation", async () => {
+  const mutableDb = db as unknown as {
+    $transaction: (
+      work: (tx: Record<string, unknown>) => Promise<unknown>,
+      options?: unknown
+    ) => Promise<unknown>;
+    contactAuditJob: {
+      updateMany: (args: unknown) => Promise<{ count: number }>;
+    };
+  };
+  const originalTransaction = mutableDb.$transaction;
+  const originalUpdateMany = mutableDb.contactAuditJob.updateMany;
+  const now = new Date("2026-07-21T16:55:00.000Z");
+  let contact = {
+    id: "contact-1",
+    artistId: "artist-1",
+    email: "manager@example.com",
+    phone: null,
+    directOutreachNote: null,
+    name: "Manager Name",
+    role: "management",
+    source: "manual",
+    notes: "Primary manager",
+    isFullTeam: true,
+    sourceKey: null,
+    state: "active" as const,
+    updatedAt: new Date("2026-07-21T16:30:00.000Z"),
+    artist: { name: "Artist" },
+  };
+  let resolutionClaimToken: string | null = null;
+  let transactionCount = 0;
+  let contactUpdates = 0;
+  let releasedClaims = 0;
+  const job = {
+    id: "job-1",
+    runId: "run-1",
+    contactId: contact.id,
+    artistId: contact.artistId,
+    rosterSnapshotId: "roster-1",
+    targetRosterEntryId: "entry-1",
+    snapshotArtistName: "Artist",
+    snapshotEmail: contact.email,
+    snapshotPhone: contact.phone,
+    snapshotDirectOutreachNote: contact.directOutreachNote,
+    snapshotName: contact.name,
+    snapshotRole: contact.role,
+    snapshotSource: contact.source,
+    snapshotNotes: contact.notes,
+    snapshotIsFullTeam: contact.isFullTeam,
+    status: "complete",
+    finding: "stale",
+    verifiedAt: new Date("2026-07-21T16:35:00.000Z"),
+    resolution: null,
+    selectedAlternativeId: null,
+    resolutionClaimedAt: null,
+  };
+  const tx = {
+    contactAuditJob: {
+      findUnique: async () => ({
+        ...job,
+        resolutionClaimToken,
+        contact,
+      }),
+      updateMany: async ({
+        data,
+      }: {
+        data: Record<string, unknown>;
+      }) => {
+        if (typeof data.resolutionClaimToken === "string") {
+          resolutionClaimToken = data.resolutionClaimToken;
+        }
+        return { count: 1 };
+      },
+      findUniqueOrThrow: async () => ({ resolutionClaimToken }),
+    },
+    contact: {
+      update: async () => {
+        contactUpdates += 1;
+        return contact;
+      },
+    },
+  };
+  mutableDb.$transaction = async (work) => {
+    transactionCount += 1;
+    if (transactionCount === 2) {
+      contact = {
+        ...contact,
+        notes: "Changed after reservation",
+        updatedAt: new Date("2026-07-21T16:54:00.000Z"),
+      };
+    }
+    return work(tx);
+  };
+  mutableDb.contactAuditJob.updateMany = async () => {
+    releasedClaims += 1;
+    return { count: 1 };
+  };
+
+  try {
+    const result = await resolveContactAuditJob(
+      job.id,
+      "approved",
+      null,
+      now
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.error ?? "", /changed while the decision was being applied/);
+    assert.equal(contactUpdates, 0);
+    assert.equal(releasedClaims, 1);
+  } finally {
+    mutableDb.$transaction = originalTransaction;
+    mutableDb.contactAuditJob.updateMany = originalUpdateMany;
+  }
 });
 
 test("contact audit authorization fails closed", async () => {
@@ -464,6 +837,12 @@ test("contact audit resolution reserves before Sheet work and rolls back failed 
   assert.ok(finalize > sheetUpdate);
   assert.ok(rollback > finalize);
   assert.match(source, /resolutionClaimToken: reservation\.claimToken/);
+  assert.equal(
+    source.match(/contactStillMatchesAuditSnapshot\(job, job\.contact\)/g)
+      ?.length,
+    2,
+    "reservation and finalization both enforce the complete snapshot match"
+  );
   assert.match(source, /isolationLevel: Prisma\.TransactionIsolationLevel\.Serializable/);
   assert.match(source, /outreach history will not be merged automatically/);
   assert.match(source, /Google Sheet update failed; the database and decision were not changed/);

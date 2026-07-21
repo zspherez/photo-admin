@@ -432,6 +432,7 @@ test("each claimed target receives the same complete artist roster with exactly 
       snapshotRole: "legacy",
       snapshotSource: "sheet",
       snapshotNotes: null,
+      snapshotIsFullTeam: false,
       rosterSnapshot: roster,
     },
     {
@@ -448,6 +449,7 @@ test("each claimed target receives the same complete artist roster with exactly 
       snapshotRole: null,
       snapshotSource: "manual",
       snapshotNotes: "Full team context",
+      snapshotIsFullTeam: true,
       rosterSnapshot: roster,
     },
   ];

@@ -350,6 +350,7 @@ model ContactAuditJob {
   snapshotRole               String?
   snapshotSource             String?
   snapshotNotes              String?
+  snapshotIsFullTeam         Boolean?
   status                     String                      @default("pending")
   attemptCount               Int                         @default(0)
   claimedAt                  DateTime?

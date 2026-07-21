@@ -283,6 +283,7 @@ async function main(): Promise<void> {
         snapshotRole: true,
         snapshotSource: true,
         snapshotNotes: true,
+        snapshotIsFullTeam: true,
         status: true,
         attemptCount: true,
         claimedAt: true,
