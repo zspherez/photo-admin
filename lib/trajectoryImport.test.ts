@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { Prisma } from "@prisma/client";
 import {
+  createOperationDeadline,
   IntegrationSyncLeaseLostError,
   type IntegrationSyncLeaseGuard,
   type OperationDeadline,
 } from "./integrationUtils";
 import test from "node:test";
 import {
+  createPrismaTrajectoryImportPersistence,
   DEFAULT_TRAJECTORY_UNMAPPED_THRESHOLD,
   importTrajectoryManifest,
   TrajectoryImportError,
@@ -15,11 +18,13 @@ import {
   type TrajectoryImportPersistence,
   type TrajectoryImportTransaction,
 } from "./trajectoryImport";
+import { db } from "./db";
 
 interface TestRun extends ExistingTrajectoryRun {
   producer: string;
   producerRunId: string;
   activatedAt: Date | null;
+  generatedAt: Date;
 }
 
 function evidence() {
@@ -137,6 +142,9 @@ class MemoryPersistence implements TrajectoryImportPersistence {
   busy = false;
   loseLease = false;
   failPromotion = false;
+  transactionNow = new Date("2026-07-21T12:00:00.000Z");
+  transactionTimes: Date[] = [];
+  beforeTransaction: (() => void) | null = null;
 
   constructor(readonly snapshot: TrajectoryIdentitySnapshot) {}
 
@@ -158,7 +166,7 @@ class MemoryPersistence implements TrajectoryImportPersistence {
 
   async withLease<T>(
     work: (lease: IntegrationSyncLeaseGuard) => Promise<T>,
-    _deadline: OperationDeadline,
+    deadline: OperationDeadline,
   ): Promise<
     | { ok: true; status: "completed"; data: T }
     | {
@@ -170,6 +178,7 @@ class MemoryPersistence implements TrajectoryImportPersistence {
         retryAfterMs: number | null;
       }
   > {
+    void deadline;
     this.leaseCalls++;
     if (this.busy) {
       return {
@@ -195,9 +204,10 @@ class MemoryPersistence implements TrajectoryImportPersistence {
   }
 
   async withTransaction<T>(
-    _deadline: OperationDeadline,
+    deadline: OperationDeadline,
     work: (transaction: TrajectoryImportTransaction) => Promise<T>,
   ): Promise<T> {
+    void deadline;
     this.transactionCalls++;
     const before = structuredClone({
       runs: this.runs,
@@ -205,9 +215,21 @@ class MemoryPersistence implements TrajectoryImportPersistence {
       recommendations: this.recommendations,
       issues: this.issues,
     });
+    this.beforeTransaction?.();
     const transaction: TrajectoryImportTransaction = {
       findExistingRun: (producer, producerRunId) =>
         this.findExistingRun(producer, producerRunId),
+      findReadyRun: async (producer) => {
+        const ready = this.runs.find(
+          (run) => run.producer === producer && run.status === "ready",
+        );
+        return ready
+          ? { id: ready.id, generatedAt: ready.generatedAt }
+          : null;
+      },
+      loadIdentitySnapshot: async () => this.snapshot,
+      currentTime: async () =>
+        this.transactionTimes.shift() ?? this.transactionNow,
       fence: async (lease) => {
         if (this.loseLease) {
           throw new IntegrationSyncLeaseLostError(lease.key);
@@ -221,6 +243,7 @@ class MemoryPersistence implements TrajectoryImportPersistence {
           artifactSha256: parsed.artifactSha256,
           status: "importing",
           activatedAt: null,
+          generatedAt: parsed.generatedAt,
         });
       },
       createRunArtists: async (runId, artists) => {
@@ -278,6 +301,7 @@ test("exact EDMTrain mappings and ShowArtist membership import atomically", asyn
     artifactSha256: "b".repeat(64),
     status: "ready",
     activatedAt: new Date("2026-07-19T00:00:00Z"),
+    generatedAt: new Date("2026-07-19T00:00:00Z"),
   });
 
   const summary = await importTrajectoryManifest(raw(value), {
@@ -286,6 +310,7 @@ test("exact EDMTrain mappings and ShowArtist membership import atomically", asyn
   });
 
   assert.equal(summary.status, "imported");
+  assert.equal(summary.mappingValidation, "transaction-revalidated");
   assert.equal(summary.previousReadyRunsSuperseded, 1);
   assert.equal(persistence.runs.find((run) => run.id === "old-ready")?.status, "superseded");
   assert.equal(persistence.runs.filter((run) => run.status === "ready").length, 1);
@@ -387,6 +412,7 @@ test("lease busy and lease loss never write or displace a ready run", async () =
     artifactSha256: "b".repeat(64),
     status: "ready",
     activatedAt: new Date(),
+    generatedAt: new Date("2026-07-19T00:00:00Z"),
   });
   await assert.rejects(
     importTrajectoryManifest(raw(value), { persistence: lost }),
@@ -428,6 +454,7 @@ test("promotion failure rolls back supersession and retains the old ready run", 
     artifactSha256: "b".repeat(64),
     status: "ready",
     activatedAt: new Date("2026-07-19T00:00:00Z"),
+    generatedAt: new Date("2026-07-19T00:00:00Z"),
   });
 
   await assert.rejects(
@@ -436,6 +463,176 @@ test("promotion failure rolls back supersession and retains the old ready run", 
   );
   assert.deepEqual(persistence.runs.map((run) => [run.id, run.status]), [
     ["old-ready", "ready"],
+  ]);
+  assert.equal(persistence.recommendations.length, 0);
+});
+
+test("membership changes between planning and promotion reject atomically", async () => {
+  const value = manifest();
+  const snapshot = exactSnapshot(value);
+  const persistence = new MemoryPersistence(snapshot);
+  persistence.runs.push({
+    id: "old-ready",
+    producer: "artist_trajectory",
+    producerRunId: "old-run",
+    artifactSha256: "b".repeat(64),
+    status: "ready",
+    activatedAt: new Date("2026-07-19T00:00:00Z"),
+    generatedAt: new Date("2026-07-19T00:00:00Z"),
+  });
+  persistence.beforeTransaction = () => {
+    snapshot.memberships = snapshot.memberships.slice(1);
+  };
+
+  await assert.rejects(
+    importTrajectoryManifest(raw(value), {
+      persistence,
+      now: () => new Date("2026-07-21T12:00:00Z"),
+    }),
+    (error: unknown) =>
+      error instanceof TrajectoryImportError &&
+      error.code === "trajectory_mapping_changed",
+  );
+  assert.deepEqual(persistence.runs.map((run) => [run.id, run.status]), [
+    ["old-ready", "ready"],
+  ]);
+  assert.equal(persistence.recommendations.length, 0);
+});
+
+test("expired and exact-boundary manifests reject before lease or writes", async () => {
+  for (const importTime of [
+    "2026-07-23T05:14:16.108Z",
+    "2026-07-23T05:14:16.109Z",
+  ]) {
+    const value = manifest();
+    const persistence = new MemoryPersistence(exactSnapshot(value));
+    persistence.runs.push({
+      id: "old-ready",
+      producer: "artist_trajectory",
+      producerRunId: "old-run",
+      artifactSha256: "b".repeat(64),
+      status: "ready",
+      activatedAt: new Date("2026-07-19T00:00:00Z"),
+      generatedAt: new Date("2026-07-19T00:00:00Z"),
+    });
+
+    await assert.rejects(
+      importTrajectoryManifest(raw(value), {
+        persistence,
+        now: () => new Date(importTime),
+      }),
+      (error: unknown) =>
+        error instanceof TrajectoryImportError &&
+        error.code === "trajectory_manifest_stale",
+    );
+    assert.equal(persistence.leaseCalls, 0);
+    assert.deepEqual(persistence.runs.map((run) => [run.id, run.status]), [
+      ["old-ready", "ready"],
+    ]);
+  }
+});
+
+test("a manifest generated after import time is rejected before writes", async () => {
+  const value = manifest();
+  const persistence = new MemoryPersistence(exactSnapshot(value));
+  await assert.rejects(
+    importTrajectoryManifest(raw(value), {
+      persistence,
+      now: () => new Date("2026-07-20T05:14:16.107Z"),
+    }),
+    (error: unknown) =>
+      error instanceof TrajectoryImportError &&
+      error.code === "trajectory_contract_order_invalid",
+  );
+  assert.equal(persistence.leaseCalls, 0);
+});
+
+test("freshness is rechecked at transaction time before any insert", async () => {
+  const value = manifest();
+  const persistence = new MemoryPersistence(exactSnapshot(value));
+  persistence.transactionNow = new Date("2026-07-23T05:14:16.108Z");
+  persistence.runs.push({
+    id: "old-ready",
+    producer: "artist_trajectory",
+    producerRunId: "old-run",
+    artifactSha256: "b".repeat(64),
+    status: "ready",
+    activatedAt: new Date("2026-07-19T00:00:00Z"),
+    generatedAt: new Date("2026-07-19T00:00:00Z"),
+  });
+
+  await assert.rejects(
+    importTrajectoryManifest(raw(value), {
+      persistence,
+      now: () => new Date("2026-07-21T12:00:00Z"),
+    }),
+    (error: unknown) =>
+      error instanceof TrajectoryImportError &&
+      error.code === "trajectory_manifest_stale",
+  );
+  assert.deepEqual(persistence.runs.map((run) => [run.id, run.status]), [
+    ["old-ready", "ready"],
+  ]);
+  assert.equal(persistence.runArtists.length, 0);
+});
+
+test("expiry during inserts rolls back before ready-run supersession", async () => {
+  const value = manifest();
+  const persistence = new MemoryPersistence(exactSnapshot(value));
+  persistence.transactionTimes = [
+    new Date("2026-07-23T05:14:16.107Z"),
+    new Date("2026-07-23T05:14:16.108Z"),
+  ];
+  persistence.runs.push({
+    id: "old-ready",
+    producer: "artist_trajectory",
+    producerRunId: "old-run",
+    artifactSha256: "b".repeat(64),
+    status: "ready",
+    activatedAt: new Date("2026-07-19T00:00:00Z"),
+    generatedAt: new Date("2026-07-19T00:00:00Z"),
+  });
+
+  await assert.rejects(
+    importTrajectoryManifest(raw(value), {
+      persistence,
+      now: () => new Date("2026-07-21T12:00:00Z"),
+    }),
+    (error: unknown) =>
+      error instanceof TrajectoryImportError &&
+      error.code === "trajectory_manifest_stale",
+  );
+  assert.deepEqual(persistence.runs.map((run) => [run.id, run.status]), [
+    ["old-ready", "ready"],
+  ]);
+  assert.equal(persistence.runArtists.length, 0);
+  assert.equal(persistence.recommendations.length, 0);
+});
+
+test("an older generated run cannot supersede a newer ready run", async () => {
+  const value = manifest();
+  const persistence = new MemoryPersistence(exactSnapshot(value));
+  persistence.runs.push({
+    id: "newer-ready",
+    producer: "artist_trajectory",
+    producerRunId: "newer-run",
+    artifactSha256: "b".repeat(64),
+    status: "ready",
+    activatedAt: new Date("2026-07-21T06:00:00Z"),
+    generatedAt: new Date("2026-07-21T06:00:00Z"),
+  });
+
+  await assert.rejects(
+    importTrajectoryManifest(raw(value), {
+      persistence,
+      now: () => new Date("2026-07-21T12:00:00Z"),
+    }),
+    (error: unknown) =>
+      error instanceof TrajectoryImportError &&
+      error.code === "trajectory_run_not_newer",
+  );
+  assert.deepEqual(persistence.runs.map((run) => [run.id, run.status]), [
+    ["newer-ready", "ready"],
   ]);
   assert.equal(persistence.recommendations.length, 0);
 });
@@ -450,6 +647,7 @@ test("dry-run plans exact mappings without lease acquisition or database writes"
 
   assert.equal(summary.status, "planned");
   assert.equal(summary.mode, "dry-run");
+  assert.equal(summary.mappingValidation, "point-in-time");
   assert.equal(summary.mappedRecommendationCount, 2);
   assert.equal(persistence.leaseCalls, 0);
   assert.equal(persistence.transactionCalls, 0);
@@ -470,4 +668,65 @@ test("runtime importer has no canonical identity mutation or fallback surface", 
     source,
     /where: \{ edmtrainId: \{ in: \[\.\.\.edmtrainArtistIds\] \} \}/,
   );
+  assert.match(
+    source,
+    /isolationLevel: Prisma\.TransactionIsolationLevel\.Serializable/,
+  );
+  assert.match(source, /error\.code === "P2034"/);
+  const promotion = source.slice(
+    source.indexOf("async function promoteTrajectoryImportPlan"),
+  );
+  assert.ok(
+    promotion.indexOf("transaction.loadIdentitySnapshot(") <
+      promotion.indexOf("transaction.createRun("),
+  );
+});
+
+test("default promotion retries serialization failures within the deadline", async () => {
+  type TransactionRunner = {
+    $transaction<T>(
+      callback: (tx: Prisma.TransactionClient) => Promise<T>,
+      options?: {
+        maxWait?: number;
+        timeout?: number;
+        isolationLevel?: Prisma.TransactionIsolationLevel;
+      },
+    ): Promise<T>;
+  };
+  const target = db as unknown as TransactionRunner;
+  const descriptor = Object.getOwnPropertyDescriptor(db, "$transaction");
+  const isolationLevels: Array<
+    Prisma.TransactionIsolationLevel | undefined
+  > = [];
+  let attempts = 0;
+  target.$transaction = async (callback, options) => {
+    attempts++;
+    isolationLevels.push(options?.isolationLevel);
+    if (attempts === 1) {
+      throw new Prisma.PrismaClientKnownRequestError(
+        "serialization conflict",
+        { code: "P2034", clientVersion: "test" },
+      );
+    }
+    return callback({
+      $queryRaw: async () => [],
+    } as unknown as Prisma.TransactionClient);
+  };
+
+  try {
+    const persistence = createPrismaTrajectoryImportPersistence();
+    const result = await persistence.withTransaction(
+      createOperationDeadline(120_000),
+      async () => "completed",
+    );
+    assert.equal(result, "completed");
+    assert.equal(attempts, 2);
+    assert.deepEqual(isolationLevels, [
+      Prisma.TransactionIsolationLevel.Serializable,
+      Prisma.TransactionIsolationLevel.Serializable,
+    ]);
+  } finally {
+    if (descriptor) Object.defineProperty(db, "$transaction", descriptor);
+    else Reflect.deleteProperty(db, "$transaction");
+  }
 });

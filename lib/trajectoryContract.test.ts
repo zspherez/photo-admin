@@ -201,6 +201,27 @@ test("suggested slate, dates, billing, and source keys are internally consistent
   }
 });
 
+test("generation cannot precede the feature and decision dates", () => {
+  assert.throws(
+    () =>
+      parseTrajectoryManifest(
+        raw(
+          manifest({
+            generated_at_utc: "2026-07-19T23:59:59.999Z",
+          }),
+        ),
+      ),
+    /generated_at_utc cannot be before decision_date/,
+  );
+  assert.throws(
+    () =>
+      parseTrajectoryManifest(
+        raw(manifest({ as_of_date: "2026-07-21" })),
+      ),
+    /as_of_date cannot be after decision_date/,
+  );
+});
+
 test("ready model opinion is actionable only through its contract freshness bound", () => {
   const validUntil = new Date("2026-07-23T05:14:16.108Z");
   assert.equal(

@@ -79,6 +79,7 @@ CREATE TABLE "TrajectoryModelRun" (
     CHECK (
       "asOfDate" <= "decisionDate"
       AND "decisionDate" <= "minimumShowDate"
+      AND "generatedAt" >= "decisionDate"::timestamp
       AND "generatedAt" < "validUntil"
     ),
   CONSTRAINT "TrajectoryModelRun_freshness_check"

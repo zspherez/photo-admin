@@ -39,6 +39,7 @@ test("trajectory migration is additive, transactional, and fully constrained", (
   );
   assert.match(migration, /TrajectoryModelRun_artifactByteLength_check/);
   assert.match(migration, /TrajectoryModelRun_activation_check/);
+  assert.match(migration, /"generatedAt" >= "decisionDate"::timestamp/);
   assert.match(
     migration,
     /TrajectoryModelRun_freshness_check[\s\S]*INTERVAL '72 hours'/,

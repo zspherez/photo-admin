@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
+  assertOperationTimeRemaining,
   createOperationDeadline,
   makeIntegrationSyncLeaseKey,
   minimumDeadlineTransactionRemainingMs,
@@ -33,6 +34,7 @@ const TRAJECTORY_IMPORT_TRANSACTION = {
   timeoutMs: 120_000,
   minimumTimeoutMs: 30_000,
   lockTimeoutMs: 10_000,
+  isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
 } satisfies DeadlineTransactionPolicy;
 
 export type TrajectoryImportIssueCode =
@@ -46,7 +48,11 @@ export class TrajectoryImportError extends Error {
       | "trajectory_run_digest_conflict"
       | "trajectory_suggested_mapping_failed"
       | "trajectory_unmapped_threshold_exceeded"
-      | "trajectory_artist_assessment_conflict",
+      | "trajectory_artist_assessment_conflict"
+      | "trajectory_mapping_changed"
+      | "trajectory_manifest_stale"
+      | "trajectory_run_not_newer"
+      | "trajectory_contract_order_invalid",
     message: string,
   ) {
     super(message);
@@ -58,6 +64,11 @@ export interface ExistingTrajectoryRun {
   id: string;
   artifactSha256: string;
   status: string;
+}
+
+export interface ReadyTrajectoryRun {
+  id: string;
+  generatedAt: Date;
 }
 
 export interface TrajectoryIdentitySnapshot {
@@ -104,6 +115,7 @@ export interface TrajectoryRunArtistPlan {
 export interface TrajectoryRecommendationPlan {
   id: string;
   showId: string;
+  edmtrainEventId: number;
   runArtistId: string;
   arm: string;
   listRank: number;
@@ -155,6 +167,10 @@ export interface TrajectoryImportSummary {
   unresolvedNonSuggestedRate: number;
   previousReadyRunsSuperseded: number;
   runId: string | null;
+  mappingValidation:
+    | "point-in-time"
+    | "transaction-revalidated"
+    | "not-performed";
   lease?: IntegrationSyncLeaseBusyResult;
 }
 
@@ -169,6 +185,12 @@ export interface TrajectoryImportTransaction {
     producer: string,
     producerRunId: string,
   ): Promise<ExistingTrajectoryRun | null>;
+  findReadyRun(producer: string): Promise<ReadyTrajectoryRun | null>;
+  loadIdentitySnapshot(
+    edmtrainEventIds: readonly number[],
+    edmtrainArtistIds: readonly number[],
+  ): Promise<TrajectoryIdentitySnapshot>;
+  currentTime(): Promise<Date>;
   fence(lease: IntegrationSyncLeaseGuard): Promise<void>;
   createRun(input: TrajectoryRunCreateInput): Promise<void>;
   createRunArtists(
@@ -220,6 +242,44 @@ export interface TrajectoryImportOptions {
 
 function asJson(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
+}
+
+function isRetryableTrajectoryTransactionError(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2034"
+  );
+}
+
+async function runTrajectorySerializableTransaction<T>(
+  deadline: OperationDeadline,
+  work: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      return await runDeadlineBoundTransaction(
+        deadline,
+        TRAJECTORY_IMPORT_TRANSACTION,
+        work,
+      );
+    } catch (error) {
+      if (
+        attempt < 3 &&
+        isRetryableTrajectoryTransactionError(error)
+      ) {
+        assertOperationTimeRemaining(
+          deadline,
+          minimumDeadlineTransactionRemainingMs(
+            TRAJECTORY_IMPORT_TRANSACTION,
+          ),
+          "Retry artist trajectory serializable promotion",
+        );
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("Unable to complete artist trajectory promotion");
 }
 
 export function createPrismaTrajectoryImportPersistence(): TrajectoryImportPersistence {
@@ -276,9 +336,8 @@ export function createPrismaTrajectoryImportPersistence(): TrajectoryImportPersi
       });
     },
     withTransaction(deadline, work) {
-      return runDeadlineBoundTransaction(
+      return runTrajectorySerializableTransaction(
         deadline,
-        TRAJECTORY_IMPORT_TRANSACTION,
         async (tx) =>
           work({
             async findExistingRun(producer, producerRunId) {
@@ -288,6 +347,61 @@ export function createPrismaTrajectoryImportPersistence(): TrajectoryImportPersi
                 },
                 select: { id: true, artifactSha256: true, status: true },
               });
+            },
+            findReadyRun(producer) {
+              return tx.trajectoryModelRun.findFirst({
+                where: { producer, status: "ready" },
+                select: { id: true, generatedAt: true },
+              });
+            },
+            async loadIdentitySnapshot(
+              edmtrainEventIds,
+              edmtrainArtistIds,
+            ) {
+              const [shows, artists] = await Promise.all([
+                tx.show.findMany({
+                  where: { edmtrainId: { in: [...edmtrainEventIds] } },
+                  select: { id: true, edmtrainId: true },
+                }),
+                tx.artist.findMany({
+                  where: { edmtrainId: { in: [...edmtrainArtistIds] } },
+                  select: { id: true, edmtrainId: true },
+                }),
+              ]);
+              const usableShows = shows.flatMap((show) =>
+                show.edmtrainId === null
+                  ? []
+                  : [{ id: show.id, edmtrainId: show.edmtrainId }],
+              );
+              const usableArtists = artists.flatMap((artist) =>
+                artist.edmtrainId === null
+                  ? []
+                  : [{ id: artist.id, edmtrainId: artist.edmtrainId }],
+              );
+              const memberships = await tx.showArtist.findMany({
+                where: {
+                  showId: { in: usableShows.map((show) => show.id) },
+                  artistId: {
+                    in: usableArtists.map((artist) => artist.id),
+                  },
+                },
+                select: { showId: true, artistId: true },
+              });
+              return {
+                shows: usableShows,
+                artists: usableArtists,
+                memberships,
+              };
+            },
+            async currentTime() {
+              const rows = await tx.$queryRaw<Array<{ now: Date }>>(
+                Prisma.sql`SELECT clock_timestamp() AS "now"`,
+              );
+              const current = rows[0]?.now;
+              if (!current) {
+                throw new Error("Unable to read transaction time");
+              }
+              return current;
             },
             fence(lease) {
               return lease.fenceTransaction(tx);
@@ -359,14 +473,24 @@ export function createPrismaTrajectoryImportPersistence(): TrajectoryImportPersi
               if (recommendations.length === 0) return;
               await tx.trajectoryRecommendation.createMany({
                 data: recommendations.map((recommendation) => ({
-                  ...recommendation,
+                  id: recommendation.id,
                   runId,
+                  showId: recommendation.showId,
+                  runArtistId: recommendation.runArtistId,
                   arm: recommendation.arm as
                     | "trajectory"
                     | "momentum"
                     | "exploration"
                     | "portfolio",
+                  listRank: recommendation.listRank,
+                  isSuggested: recommendation.isSuggested,
+                  slatePosition: recommendation.slatePosition,
+                  billingPosition: recommendation.billingPosition,
+                  lineupSize: recommendation.lineupSize,
+                  isFirstBilled: recommendation.isFirstBilled,
                   rationale: asJson(recommendation.rationale),
+                  sourceFingerprint:
+                    recommendation.sourceFingerprint,
                 })),
               });
             },
@@ -460,6 +584,78 @@ function mappingIssue(
 function assertThreshold(value: number): void {
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     throw new Error("maximumUnmappedRate must be between 0 and 1");
+  }
+}
+
+function assertTrajectoryImportableAt(
+  parsed: ParsedTrajectoryManifest,
+  importTime: Date,
+): void {
+  if (
+    parsed.asOfDate.getTime() > parsed.decisionDate.getTime() ||
+    parsed.decisionDate.getTime() > parsed.generatedAt.getTime() ||
+    parsed.generatedAt.getTime() > importTime.getTime()
+  ) {
+    throw new TrajectoryImportError(
+      "trajectory_contract_order_invalid",
+      "Trajectory manifest timestamps violate as-of, decision, and generation ordering",
+    );
+  }
+  if (parsed.validUntil.getTime() <= importTime.getTime()) {
+    throw new TrajectoryImportError(
+      "trajectory_manifest_stale",
+      "Trajectory manifest freshness expired before import",
+    );
+  }
+}
+
+function assertTrajectoryMappingsUnchanged(
+  plan: TrajectoryImportWritePlan,
+  snapshot: TrajectoryIdentitySnapshot,
+): void {
+  const shows = new Map(snapshot.shows.map((show) => [show.edmtrainId, show.id]));
+  const artists = new Map(
+    snapshot.artists.map((artist) => [artist.edmtrainId, artist.id]),
+  );
+  const memberships = new Set(
+    snapshot.memberships.map(
+      (membership) => `${membership.showId}:${membership.artistId}`,
+    ),
+  );
+  const runArtists = new Map(
+    plan.runArtists.map((artist) => [artist.id, artist]),
+  );
+
+  for (const recommendation of plan.recommendations) {
+    if (
+      shows.get(recommendation.edmtrainEventId) !==
+      recommendation.showId
+    ) {
+      throw new TrajectoryImportError(
+        "trajectory_mapping_changed",
+        "Trajectory show identity changed before promotion",
+      );
+    }
+    const runArtist = runArtists.get(recommendation.runArtistId);
+    if (
+      !runArtist ||
+      artists.get(runArtist.edmtrainArtistId) !== runArtist.artistId
+    ) {
+      throw new TrajectoryImportError(
+        "trajectory_mapping_changed",
+        "Trajectory artist identity changed before promotion",
+      );
+    }
+    if (
+      !memberships.has(
+        `${recommendation.showId}:${runArtist.artistId}`,
+      )
+    ) {
+      throw new TrajectoryImportError(
+        "trajectory_mapping_changed",
+        "Trajectory show membership changed before promotion",
+      );
+    }
   }
 }
 
@@ -561,6 +757,7 @@ export async function buildTrajectoryImportPlan(
     recommendations.push({
       id: randomUUID(),
       showId: show.id,
+      edmtrainEventId: row.edmtrain_event_id,
       runArtistId: runArtist.id,
       arm: row.arm,
       listRank: row.list_rank,
@@ -627,6 +824,7 @@ function summaryForPlan(
       unresolvedNonSuggestedRate: 0,
       previousReadyRunsSuperseded: 0,
       runId: plan.existingRunId,
+      mappingValidation: "not-performed",
     };
   }
   return {
@@ -642,6 +840,12 @@ function summaryForPlan(
     unresolvedNonSuggestedRate: plan.unresolvedNonSuggestedRate,
     previousReadyRunsSuperseded,
     runId: mode === "write" && status === "imported" ? plan.runId : null,
+    mappingValidation:
+      status === "imported"
+        ? "transaction-revalidated"
+        : mode === "dry-run"
+          ? "point-in-time"
+          : "not-performed",
   };
 }
 
@@ -650,7 +854,6 @@ async function promoteTrajectoryImportPlan(
   lease: IntegrationSyncLeaseGuard,
   persistence: TrajectoryImportPersistence,
   deadline: OperationDeadline,
-  now: () => Date,
 ): Promise<TrajectoryImportSummary> {
   return persistence.withTransaction(deadline, async (transaction) => {
     await transaction.fence(lease);
@@ -676,6 +879,31 @@ async function promoteTrajectoryImportPlan(
       );
     }
 
+    const readyRun = await transaction.findReadyRun(
+      plan.parsed.manifest.producer,
+    );
+    if (
+      readyRun &&
+      readyRun.generatedAt.getTime() >=
+        plan.parsed.generatedAt.getTime()
+    ) {
+      throw new TrajectoryImportError(
+        "trajectory_run_not_newer",
+        "Trajectory run is not newer than the current ready run",
+      );
+    }
+
+    const transactionSnapshot =
+      await transaction.loadIdentitySnapshot(
+        plan.recommendations.map(
+          (recommendation) => recommendation.edmtrainEventId,
+        ),
+        plan.runArtists.map((artist) => artist.edmtrainArtistId),
+      );
+    assertTrajectoryMappingsUnchanged(plan, transactionSnapshot);
+    const transactionNow = await transaction.currentTime();
+    assertTrajectoryImportableAt(plan.parsed, transactionNow);
+
     await transaction.createRun({
       id: plan.runId,
       parsed: plan.parsed,
@@ -699,10 +927,11 @@ async function promoteTrajectoryImportPlan(
       plan.recommendations,
     );
     await transaction.createIssues(plan.runId, plan.issues);
-    const activatedAt = now();
+    const promotionNow = await transaction.currentTime();
+    assertTrajectoryImportableAt(plan.parsed, promotionNow);
     const superseded =
       await transaction.supersedeReadyRuns(TRAJECTORY_PRODUCER);
-    await transaction.promoteRun(plan.runId, activatedAt);
+    await transaction.promoteRun(plan.runId, promotionNow);
     return summaryForPlan(plan, "write", "imported", superseded);
   });
 }
@@ -712,6 +941,8 @@ export async function importTrajectoryManifest(
   options: TrajectoryImportOptions = {},
 ): Promise<TrajectoryImportSummary> {
   const parsed = parseTrajectoryManifest(raw, options.expectedDigest);
+  const importNow = (options.now ?? (() => new Date()))();
+  assertTrajectoryImportableAt(parsed, importNow);
   const persistence =
     options.persistence ?? createPrismaTrajectoryImportPersistence();
   const threshold =
@@ -742,7 +973,6 @@ export async function importTrajectoryManifest(
       lease,
       persistence,
       deadline,
-      options.now ?? (() => new Date()),
     );
   }, deadline);
 
@@ -760,6 +990,7 @@ export async function importTrajectoryManifest(
       unresolvedNonSuggestedRate: 0,
       previousReadyRunsSuperseded: 0,
       runId: null,
+      mappingValidation: "not-performed",
       lease: leased,
     };
   }

@@ -69,6 +69,7 @@ test("CLI dry-run supports producer sha256 files and performs no write mode", as
           unresolvedNonSuggestedRate: 0,
           previousReadyRunsSuperseded: 0,
           runId: null,
+          mappingValidation: "point-in-time",
         };
       },
       stdout: (value) => outputs.push(value),
@@ -82,6 +83,7 @@ test("CLI dry-run supports producer sha256 files and performs no write mode", as
   assert.equal(importOptions[0].expectedDigest, digest.toString("utf8"));
   assert.equal(errors.length, 0);
   assert.equal(JSON.parse(outputs[0]).status, "planned");
+  assert.equal(JSON.parse(outputs[0]).mappingValidation, "point-in-time");
 });
 
 test("CLI checks file size before reading and redacts unexpected errors", async () => {

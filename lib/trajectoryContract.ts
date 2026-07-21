@@ -244,6 +244,15 @@ const manifestSchema = z
         message: "as_of_date cannot be after decision_date",
       });
     }
+    if (
+      Date.parse(manifest.generated_at_utc) <
+      Date.parse(`${manifest.decision_date}T00:00:00.000Z`)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "generated_at_utc cannot be before decision_date",
+      });
+    }
     if (manifest.minimum_show_date < manifest.decision_date) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
