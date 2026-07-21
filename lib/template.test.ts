@@ -285,12 +285,43 @@ test("festival selection and variable validation are purpose-aware", () => {
     `${FESTIVAL_TEMPLATE_SUBJECT} ${FESTIVAL_TEMPLATE_HTML}`,
     /\{\{\s*rate\s*\}\}|\brate card\b|custom price|\$[0-9]/i,
   );
+});
+
+test("template validation allows single-brace prose and rejects damaged placeholders", () => {
   assert.deepEqual(
     malformedTemplateVariableTokens({
-      subject: "Follow up about {artist}}",
-      htmlBody: "<p>Hi {{manager_name}}</p><p>{{{sender_name}}}</p>",
+      subject:
+        "Follow up about {artist}} {{artist} {{artist artist}} {{{sender_name}}} then {{! and !}}",
+      htmlBody: "<p>Hi {{manager_name}}</p>",
     }),
-    ["{artist}}", "{{{sender_name}}}"],
+    [
+      "{artist}}",
+      "{{artist}",
+      "{{artist",
+      "artist}}",
+      "{{{sender_name}}}",
+      "{{",
+      "}}",
+    ],
+  );
+  assert.deepEqual(
+    malformedTemplateVariableTokens({
+      subject:
+        "Use {braces} and the literal {artist} label when describing notation.",
+      htmlBody:
+        "<p>Code: const point = {x}; const object = { value: 1 }.</p><p>Math: {x + y} and set {a, b}.</p>",
+    }),
+    [],
+  );
+  assert.deepEqual(
+    unsupportedTemplateVars(
+      {
+        subject: "{{unknown_supported_typo}}",
+        htmlBody: "<p>{{artist}}</p>",
+      },
+      "follow_up",
+    ),
+    ["unknown_supported_typo"],
   );
   assert.deepEqual(
     malformedTemplateVariableTokens({

@@ -14,10 +14,13 @@ const LEGACY_RENDERED_RATE_PARAGRAPH =
 const LEGACY_RATE_SUMMARY_PARAGRAPH =
   /<p\b[^>]*>Gave a brief summary of my rates\/deliverables below, and (?:attached my full rate card to this email but )?I'm happy to work with you to meet your needs!<\/p\s*>/gi;
 const TEMPLATE_VARIABLE = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
-const TEMPLATE_VARIABLE_CANDIDATE =
-  /\{+\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}+/g;
-const WELL_FORMED_TEMPLATE_VARIABLE =
-  /^\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}$/;
+const BRACED_TEMPLATE_IDENTIFIER =
+  /(\{+)\s*[a-zA-Z_][a-zA-Z0-9_]*\s*(\}+)/g;
+const UNTERMINATED_DOUBLE_BRACE_IDENTIFIER =
+  /\{\{+\s*[a-zA-Z_][a-zA-Z0-9_]*\b(?!\s*\})/g;
+const UNOPENED_DOUBLE_BRACE_IDENTIFIER =
+  /\b[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}+/g;
+const DOUBLE_BRACE_DELIMITER = /\{\{|\}\}/g;
 const LEGACY_RATE_TEMPLATE_VARIABLE_TEST = /\{\{\s*rate\s*\}\}/i;
 const HTML_PARAGRAPH =
   /<p\b[^>]*>(?:(?!<\/?p\b)[\s\S])*?<\/p\s*>/gi;
@@ -78,15 +81,50 @@ export function unsupportedTemplateVars(
 export function malformedTemplateVariableTokens(
   template: TemplateContent,
 ): string[] {
-  return Array.from(
-    new Set(
-      (`${template.subject} ${template.htmlBody}`.match(
-        TEMPLATE_VARIABLE_CANDIDATE,
-      ) ?? []).filter(
-        (token) => !WELL_FORMED_TEMPLATE_VARIABLE.test(token),
-      ),
-    ),
-  );
+  const source = `${template.subject} ${template.htmlBody}`;
+  const coveredRanges: Array<{ start: number; end: number }> = [];
+  const malformed: Array<{ start: number; token: string }> = [];
+
+  for (const match of source.matchAll(BRACED_TEMPLATE_IDENTIFIER)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    coveredRanges.push({ start, end });
+    const openingBraces = match[1].length;
+    const closingBraces = match[2].length;
+    if (
+      (openingBraces === 1 && closingBraces === 1) ||
+      (openingBraces === 2 && closingBraces === 2)
+    ) {
+      continue;
+    }
+    malformed.push({ start, token: match[0].trim() });
+  }
+
+  const overlapsCoveredRange = (start: number, end: number) =>
+    coveredRanges.some((range) => start < range.end && end > range.start);
+  for (const pattern of [
+    UNTERMINATED_DOUBLE_BRACE_IDENTIFIER,
+    UNOPENED_DOUBLE_BRACE_IDENTIFIER,
+  ]) {
+    for (const match of source.matchAll(pattern)) {
+      const start = match.index;
+      const end = start + match[0].length;
+      if (!overlapsCoveredRange(start, end)) {
+        malformed.push({ start, token: match[0].trim() });
+        coveredRanges.push({ start, end });
+      }
+    }
+  }
+  for (const match of source.matchAll(DOUBLE_BRACE_DELIMITER)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (!overlapsCoveredRange(start, end)) {
+      malformed.push({ start, token: match[0] });
+    }
+  }
+
+  malformed.sort((left, right) => left.start - right.start);
+  return Array.from(new Set(malformed.map(({ token }) => token)));
 }
 
 export function normalizeLegacyRateTemplateVariable(template: string): string {
