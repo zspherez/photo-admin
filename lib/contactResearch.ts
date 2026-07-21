@@ -3364,6 +3364,129 @@ export async function retryContactResearchJob(
   );
 }
 
+export type ContactResearchCleanupStatus =
+  | "pending"
+  | "review"
+  | "complete"
+  | "skipped"
+  | "inactive";
+
+export function contactResearchCleanupStatus(input: {
+  hasActiveSkip: boolean;
+  hasPendingCandidate: boolean;
+  hasPendingDirectOutreach: boolean;
+  hasDirectOutreachHistory: boolean;
+  hasActiveEmailContact: boolean;
+  hasEffectiveApproval: boolean;
+  eligible: boolean;
+}): ContactResearchCleanupStatus {
+  if (input.hasActiveSkip) return "skipped";
+  if (
+    input.hasPendingCandidate ||
+    input.hasPendingDirectOutreach
+  ) {
+    return "review";
+  }
+  if (input.hasActiveEmailContact || input.hasEffectiveApproval) {
+    return "complete";
+  }
+  if (input.hasDirectOutreachHistory) return "review";
+  return input.eligible ? "pending" : "inactive";
+}
+
+export async function reconcileContactResearchJobAfterProbeCleanup(
+  tx: Prisma.TransactionClient,
+  jobId: string,
+  now: Date
+): Promise<ContactResearchCleanupStatus> {
+  const job = await tx.contactResearchJob.findUnique({
+    where: { id: jobId },
+    select: {
+      artistId: true,
+      requestedShowId: true,
+      artist: {
+        select: {
+          contacts: {
+            where: ACTIVE_EMAIL_CONTACT_WHERE,
+            select: { email: true, state: true },
+          },
+          researchSkips: {
+            where: { clearedAt: null },
+            take: 1,
+            select: { id: true },
+          },
+        },
+      },
+      candidates: {
+        where: { status: { in: ["pending", "approved"] } },
+        select: { status: true, normalizedEmail: true },
+      },
+      directOutreachProposals: {
+        select: { status: true },
+      },
+    },
+  });
+  if (!job) {
+    throw new Error(`Contact research job ${jobId} no longer exists`);
+  }
+  const today = easternTodayStoredDate(now);
+  const end = parseDateOnly(
+    addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
+  );
+  const eligibleShow = await tx.showArtist.findFirst({
+    where: {
+      artistId: job.artistId,
+      show: {
+        date: { gte: today },
+        syncStatus: "active",
+        AND: [festivalLeadTimeWhere(now)],
+        OR: [
+          {
+            isFestival: false,
+            date: { lte: end },
+          },
+          ...(job.requestedShowId
+            ? [{ id: job.requestedShowId }]
+            : []),
+        ],
+      },
+    },
+    select: { showId: true },
+  });
+  const hasEffectiveApproval = job.candidates.some(
+    (candidate) =>
+      candidate.status === "approved" &&
+      isContactResearchApprovalEffective(
+        candidate.normalizedEmail,
+        job.artist.contacts
+      )
+  );
+  const status = contactResearchCleanupStatus({
+    hasActiveSkip: job.artist.researchSkips.length > 0,
+    hasPendingCandidate: job.candidates.some(
+      (candidate) => candidate.status === "pending"
+    ),
+    hasPendingDirectOutreach: job.directOutreachProposals.some(
+      (proposal) => proposal.status === "pending"
+    ),
+    hasDirectOutreachHistory: job.directOutreachProposals.length > 0,
+    hasActiveEmailContact: job.artist.contacts.length > 0,
+    hasEffectiveApproval,
+    eligible: eligibleShow !== null,
+  });
+  await tx.contactResearchJob.update({
+    where: { id: jobId },
+    data: {
+      status,
+      completedAt: status === "complete" ? now : null,
+      claimToken: null,
+      claimedAt: null,
+      claimExpiresAt: null,
+    },
+  });
+  return status;
+}
+
 async function retryContactResearchJobsByStatus(
   status: "exhausted" | "review",
   now: Date = new Date(),
