@@ -54,6 +54,7 @@ export type DashboardResultKey =
   | "followup_scheduled"
   | "followup_sent"
   | "marked"
+  | "queued"
   | "scheduled"
   | "sent"
   | "sheet_errors"

@@ -9,7 +9,11 @@ import {
   parseDashboardQuery,
 } from "@/lib/dashboardQuery";
 import { getTestOverride } from "@/lib/resend";
-import { isWeekendET } from "@/lib/schedule";
+import {
+  formatNextDispatchActionLabel,
+  getNextNormalOutreachDispatch,
+  isWeekendET,
+} from "@/lib/schedule";
 import { cn } from "@/lib/cn";
 import { getDashboardInteractionState } from "@/lib/dashboardInteractionState";
 import {
@@ -62,6 +66,7 @@ export default async function DashboardPage({
   const sheetErrors = firstSearchParam(params.sheet_errors);
   const marked = firstSearchParam(params.marked);
   const unmarked = firstSearchParam(params.unmarked);
+  const queued = firstSearchParam(params.queued);
   const scheduled = firstSearchParam(params.scheduled);
   const cancelled = firstSearchParam(params.cancelled);
   const followUpSent = firstSearchParam(params.followup_sent);
@@ -97,6 +102,11 @@ export default async function DashboardPage({
           </Banner>
         )}
         {sent && <Banner tone="success">Email sent.</Banner>}
+        {queued && (
+          <Banner tone="success">
+            Email queued for {queued} ET. You can cancel it from the listing.
+          </Banner>
+        )}
         {scheduled && (
           <Banner tone="success">
             Email scheduled for Monday morning (9–10 AM ET). You can cancel it
@@ -140,6 +150,9 @@ export default async function DashboardPage({
         query={query}
         persistenceScope={persistenceScope}
         isWeekend={isWeekendET(now)}
+        nextDispatchLabel={formatNextDispatchActionLabel(
+          getNextNormalOutreachDispatch(now),
+        )}
         {...interactionState}
       />
     </main>

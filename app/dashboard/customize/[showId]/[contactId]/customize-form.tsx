@@ -34,6 +34,7 @@ export function CustomizeForm({
   recipientOptions,
   weekend,
   queueLabel,
+  initialIntent,
   action,
 }: {
   contextContactId: string;
@@ -41,6 +42,7 @@ export function CustomizeForm({
   recipientOptions: CustomizeRecipientOption[];
   weekend: boolean;
   queueLabel: string;
+  initialIntent: "send" | "queue";
   action: (
     previousState: CustomizeActionState,
     formData: FormData,
@@ -131,6 +133,15 @@ export function CustomizeForm({
           {visibleError}
         </div>
       )}
+      {initialIntent === "queue" && !state.queuedFor && (
+        <div
+          role="status"
+          className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200"
+        >
+          Choose the intended recipient, review the composed email, then queue
+          it for the next normal dispatch.
+        </div>
+      )}
       {state.queuedFor && state.selectedContactId === selectedContactId && (
         <div
           role="status"
@@ -201,7 +212,7 @@ export function CustomizeForm({
 
       <div className="flex flex-wrap gap-2">
         <PendingSubmitButton
-          variant="primary"
+          variant={initialIntent === "send" ? "primary" : "secondary"}
           name="intent"
           value="send"
           disabled={!selected?.sendable || !selectedDraft}
@@ -224,7 +235,7 @@ export function CustomizeForm({
               : "Send now"}
         </PendingSubmitButton>
         <PendingSubmitButton
-          variant="secondary"
+          variant={initialIntent === "queue" ? "primary" : "secondary"}
           name="intent"
           value="queue"
           disabled={!selected?.sendable || !selectedDraft}
