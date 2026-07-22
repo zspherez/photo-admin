@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 const ITEMS: { href: string; label: string; match: (p: string) => boolean }[] = [
   { href: "/dashboard", label: "Shows", match: (p) => p === "/dashboard" || p.startsWith("/dashboard/") },
   { href: "/recommendations", label: "Recommendations", match: (p) => p === "/recommendations" || p.startsWith("/recommendations/") },
+  { href: "/metrics", label: "Metrics", match: (p) => p === "/metrics" },
   { href: "/festivals", label: "Festivals", match: (p) => p === "/festivals" || p.startsWith("/festivals/") },
   { href: "/research", label: "Research", match: (p) => p === "/research" },
   { href: "/contacts", label: "Contacts", match: (p) => p === "/contacts" },

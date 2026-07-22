@@ -257,6 +257,14 @@ after the endpoint's exact-digest dry-run gate succeeds. The producer needs
 only the endpoint URL (and the dedicated HMAC secret only in fallback mode);
 it must never receive `DATABASE_URL` or `DIRECT_URL`.
 
+Authenticated operators can review aggregate trajectory operations at
+`/metrics`. The page reports selected-run freshness, import and mapping counts,
+issue categories, contact readiness, same-night alternatives, and
+trajectory-attributed decision, engagement, access, and outcome counts. It
+does not display contact identities or recipient values, and it does not
+present probabilities or causal claims. Export lag is explicitly unavailable
+until a durable successful-export receipt is stored.
+
 ## Contact research agent
 
 The hosted app automatically queues every non-festival artist with a show in
