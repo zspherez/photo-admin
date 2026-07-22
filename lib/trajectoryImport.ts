@@ -940,6 +940,22 @@ async function promoteTrajectoryImportPlan(
       summary: {
         recommendationCount: plan.parsed.manifest.recommendation_count,
         mappedRecommendationCount: plan.recommendations.length,
+        suggestedRecommendationCount:
+          plan.parsed.manifest.recommendations.filter(
+            (recommendation) => recommendation.is_suggested,
+          ).length,
+        mappedSuggestedRecommendationCount: plan.recommendations.filter(
+          (recommendation) => recommendation.isSuggested,
+        ).length,
+        nonSuggestedRecommendationCount: plan.nonSuggestedCount,
+        mappedNonSuggestedRecommendationCount:
+          plan.nonSuggestedCount - plan.unresolvedNonSuggestedCount,
+        artistCount: new Set(
+          plan.parsed.manifest.recommendations.map(
+            (recommendation) => recommendation.edmtrain_artist_id,
+          ),
+        ).size,
+        mappedArtistCount: plan.runArtists.length,
         importIssueCount: plan.issues.length,
         unresolvedNonSuggestedRate: plan.unresolvedNonSuggestedRate,
         recommendationHorizonEnd:
