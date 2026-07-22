@@ -23,7 +23,7 @@
     "contact-audit:agent": "bash scripts/run-contact-audit-agent.sh",
     "contact-research:agent": "bash scripts/run-contact-research-agent.sh",
     "start": "next start",
-    "test": "tsx --test --import ./scripts/test-environment.mjs \"**/*.{test,spec}.{ts,tsx,mts}\"",
+    "test": "tsx --test --test-concurrency=1 --import ./scripts/test-environment.mjs \"**/*.{test,spec}.{ts,tsx,mts}\"",
     "test:mobile": "tsx scripts/mobile-pwa-playwright.ts",
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint",

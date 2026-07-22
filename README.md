@@ -841,7 +841,7 @@ npm run db:migrate:deploy
 npm run db:backfill:normalized-artists
 npm run db:adopt-sheet-contacts
 npm run db:setup   # generate + migrate + normalized-name backfill
-npm test           # Node test runner with TypeScript support
+npm test           # Serial Node test runner with TypeScript support
 npm run typecheck
 npm run lint
 npm run rotate:statsfm-token
@@ -850,10 +850,11 @@ npx tsx scripts/smoke.ts   # write-capable local/disposable-target integration c
 
 ### Safe tests and live smoke checks
 
-`npm test` replaces inherited database URLs with unreachable localhost test
-URLs, disables dotenv file loading for the test process, and clears agent/cron
-credentials. This prevents an ignored `.env` or Vercel production environment
-from silently connecting unit tests to production. The release workflow's
+`npm test` runs test files serially to bound local CPU, memory, and filesystem
+pressure. It also replaces inherited database URLs with unreachable localhost
+test URLs, disables dotenv file loading for the test process, and clears
+agent/cron credentials. This prevents an ignored `.env` or Vercel production
+environment from silently connecting unit tests to production. The release workflow's
 localhost dummy URLs remain compatible with this guard.
 
 `scripts/smoke.ts` performs real integration writes. It always refuses Vercel
