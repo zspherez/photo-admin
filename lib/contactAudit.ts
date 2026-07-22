@@ -502,20 +502,47 @@ export function isTrustedContactAuditOidcClaims(
   );
 }
 
-export async function verifyGithubActionsContactAuditToken(
+export type ContactAuditOidcEventName = "workflow_dispatch" | "schedule";
+
+function contactAuditOidcEventName(
+  payload: JWTPayload
+): ContactAuditOidcEventName | null {
+  if (!isTrustedContactAuditOidcClaims(payload)) return null;
+  return payload.event_name as ContactAuditOidcEventName;
+}
+
+async function verifyGithubActionsContactAuditEvent(
   token: string
-): Promise<boolean> {
-  if (token.split(".").length !== 3) return false;
+): Promise<ContactAuditOidcEventName | null> {
+  if (token.split(".").length !== 3) return null;
   try {
     const { payload } = await jwtVerify(token, githubActionsJwks, {
       issuer: CONTACT_AUDIT_OIDC_ISSUER,
       audience: CONTACT_AUDIT_OIDC_AUDIENCE,
       maxTokenAge: "10m",
     });
-    return isTrustedContactAuditOidcClaims(payload);
+    return contactAuditOidcEventName(payload);
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function getTrustedContactAuditOidcEvent(
+  authorization: string | null,
+  verifyEvent: (
+    token: string
+  ) => Promise<ContactAuditOidcEventName | null> =
+    verifyGithubActionsContactAuditEvent
+): Promise<ContactAuditOidcEventName | null> {
+  if (!authorization?.startsWith("Bearer ")) return null;
+  const token = authorization.slice("Bearer ".length);
+  return token ? verifyEvent(token) : null;
+}
+
+export async function verifyGithubActionsContactAuditToken(
+  token: string
+): Promise<boolean> {
+  return (await verifyGithubActionsContactAuditEvent(token)) !== null;
 }
 
 async function withSerializableRetry<T>(
@@ -635,7 +662,8 @@ export async function requestContactAudit(
 
 export async function prepareContactAudit(
   workflowRunIdValue: unknown,
-  now: Date = new Date()
+  now: Date = new Date(),
+  options: { requestIfMissing?: boolean } = {}
 ): Promise<{
   requested: boolean;
   requestId: string | null;
@@ -691,6 +719,21 @@ export async function prepareContactAudit(
           },
         },
       });
+    }
+    if (!request && options.requestIfMissing) {
+      const created = await tx.contactAuditRequest.create({
+        data: {
+          id: randomUUID(),
+          status: "pending",
+          requestedAt: now,
+        },
+        select: {
+          id: true,
+          startedAt: true,
+          runId: true,
+        },
+      });
+      request = { ...created, run: null };
     }
     if (!request) {
       return {

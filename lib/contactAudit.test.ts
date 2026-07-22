@@ -7,6 +7,7 @@ import {
   CONTACT_AUDIT_WORKFLOW_REF,
   buildContactAuditRosterPayload,
   contactStillMatchesAuditSnapshot,
+  getTrustedContactAuditOidcEvent,
   isTrustedContactAuditOidcClaims,
   isValidContactAuditAuthorization,
   parseContactAuditClaimLimit,
@@ -914,6 +915,32 @@ test("GitHub OIDC trust accepts only scheduled or manual main-branch audit workf
       event_name: "push",
     }),
     false
+  );
+});
+
+test("only a verified manual audit workflow token can request a full audit", async () => {
+  const bearer = (token: string) => `Bearer ${token}`;
+  assert.equal(
+    await getTrustedContactAuditOidcEvent(
+      bearer("manual-token"),
+      async (token) =>
+        token === "manual-token" ? "workflow_dispatch" : null,
+    ),
+    "workflow_dispatch",
+  );
+  assert.equal(
+    await getTrustedContactAuditOidcEvent(
+      bearer("scheduled-token"),
+      async (token) => (token === "scheduled-token" ? "schedule" : null),
+    ),
+    "schedule",
+  );
+  assert.equal(
+    await getTrustedContactAuditOidcEvent(
+      bearer("static-token"),
+      async () => null,
+    ),
+    null,
   );
 });
 

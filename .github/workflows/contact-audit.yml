@@ -29,6 +29,7 @@ jobs:
         shell: bash
         env:
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          REQUEST_FULL_AUDIT: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
 
@@ -65,7 +66,12 @@ jobs:
               --header "Authorization: Bear""er ${oidc_token}" \
               --header "Content-Type: application/json" \
               --header "Accept: application/json" \
-              --data "$(jq -cn --arg workflowRunId "${GITHUB_RUN_ID}" '{workflowRunId: $workflowRunId}')" \
+              --data "$(
+                jq -cn \
+                  --arg workflowRunId "${GITHUB_RUN_ID}" \
+                  --argjson requestFullAudit "${REQUEST_FULL_AUDIT}" \
+                  '{workflowRunId: $workflowRunId, requestFullAudit: $requestFullAudit}'
+              )" \
               "${APP_BASE_URL%/}/api/contact-audit/prepare"
           )"
           requested="$(

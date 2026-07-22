@@ -132,6 +132,118 @@ test("first, duplicate, running, completed, and concurrent requests preserve one
   }
 });
 
+test("manual preparation creates and starts one request in one serializable transaction", async () => {
+  const mutableDb = db as unknown as MutableDb;
+  const originalTransaction = mutableDb.$transaction;
+  const now = new Date("2026-07-21T01:02:00.000Z");
+  let transactionCalls = 0;
+  let request: RequestRow | null = null;
+  let runId: string | null = null;
+  let jobCount = 0;
+
+  const tx = {
+    contactAuditRequest: {
+      findFirst: async () =>
+        request
+          ? {
+              id: request.id,
+              startedAt: request.startedAt,
+              runId: request.runId,
+              run: null,
+            }
+          : null,
+      create: async ({
+        data,
+      }: {
+        data: { id: string; status: string; requestedAt: Date };
+      }) => {
+        request = {
+          id: data.id,
+          status: data.status,
+          requestedAt: data.requestedAt,
+          startedAt: null,
+          completedAt: null,
+          runId: null,
+          attemptCount: 0,
+          lastAttemptAt: null,
+          lastWorkflowRunId: null,
+          lastError: null,
+        };
+        return {
+          id: request.id,
+          startedAt: request.startedAt,
+          runId: request.runId,
+        };
+      },
+      update: async ({ data }: { data: Record<string, unknown> }) => {
+        assert.ok(request);
+        request = applyUpdate(request, data);
+        return request;
+      },
+    },
+    contactAuditRun: {
+      findFirst: async () => null,
+      create: async ({ data }: { data: { id: string } }) => {
+        runId = data.id;
+        return data;
+      },
+    },
+    contact: {
+      findMany: async () => [
+        {
+          id: "contact-1",
+          artistId: "artist-1",
+          email: "manager@example.com",
+          phone: null,
+          directOutreachNote: null,
+          name: "Manager",
+          role: "management",
+          source: "manual",
+          notes: null,
+          isFullTeam: false,
+          artist: { name: "Artist" },
+        },
+      ],
+    },
+    contactAuditRosterSnapshot: {
+      createMany: async () => ({ count: 1 }),
+    },
+    contactAuditRosterEntry: {
+      createMany: async () => ({ count: 1 }),
+    },
+    contactAuditJob: {
+      createMany: async ({ data }: { data: unknown[] }) => {
+        jobCount += data.length;
+        return { count: data.length };
+      },
+    },
+  };
+  mutableDb.$transaction = async (work) => {
+    transactionCalls += 1;
+    return work(tx);
+  };
+
+  try {
+    const result = await prepareContactAudit("1000", now, {
+      requestIfMissing: true,
+    });
+    assert.equal(transactionCalls, 1);
+    assert.equal(result.requested, true);
+    assert.equal(result.resumed, false);
+    assert.equal(result.contactCount, 1);
+    assert.equal(result.claimable, 1);
+    assert.equal(result.runId, runId);
+    assert.equal(jobCount, 1);
+    assert.ok(request);
+    const savedRequest = request as unknown as RequestRow;
+    assert.equal(savedRequest.status, "running");
+    assert.equal(savedRequest.runId, result.runId);
+    assert.equal(savedRequest.lastWorkflowRunId, "1000");
+  } finally {
+    mutableDb.$transaction = originalTransaction;
+  }
+});
+
 test("the first poll adopts an active legacy run without changing its snapshot or claims", async () => {
   const mutableDb = db as unknown as MutableDb;
   const originalTransaction = mutableDb.$transaction;
