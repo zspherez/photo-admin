@@ -205,6 +205,47 @@ POST
 <X-Trajectory-Dry-Run-Receipt or empty>
 ```
 
+For a producer that exists only on a trusted local machine, use the checked-in
+client rather than assembling headers by hand. Keep the dedicated HMAC secret
+in the operator's login Keychain, never in either repository:
+
+```bash
+export TRAJECTORY_INGEST_HMAC_SECRET="$(
+  security find-generic-password \
+    -s photo-admin-trajectory-ingest \
+    -a rehders-photos-admin \
+    -w
+)"
+
+npm run trajectory:promote -- \
+  --base-url https://your-photo-admin.example \
+  --manifest /absolute/path/to/photo_admin_manifest.json \
+  --digest-file /absolute/path/to/photo_admin_manifest.sha256 \
+  --receipt-file /absolute/path/to/photo_admin_dry_run.receipt \
+  --dry-run
+
+npm run trajectory:promote -- \
+  --base-url https://your-photo-admin.example \
+  --manifest /absolute/path/to/photo_admin_manifest.json \
+  --digest-file /absolute/path/to/photo_admin_manifest.sha256 \
+  --receipt-file /absolute/path/to/photo_admin_dry_run.receipt \
+  --apply
+
+unset TRAJECTORY_INGEST_HMAC_SECRET
+```
+
+The client independently verifies the raw digest and size, creates a fresh
+timestamp and idempotency key, signs the exact canonical request, and writes
+the short-lived dry-run receipt as a new mode-`0600` file. It never prints the
+HMAC secret or receipt. Use `--idempotency-key <key>` only when intentionally
+testing a successful apply replay. Remove the receipt after the apply.
+
+Operators can dispatch **Verify trajectory production** with the exact current
+`main` SHA before and after promotion. Its `production`-protected job opens a
+read-only transaction and emits only counts, run IDs, digests, freshness
+timestamps, issue codes, and hashes of canonical Artist/Show identity state.
+It never prints database credentials or model artifact contents.
+
 The producer workflow must remain manual initially and have
 `permissions: { contents: read, id-token: write }`. Before contacting this
 endpoint it must generate and validate the full artifact and slim manifest,
