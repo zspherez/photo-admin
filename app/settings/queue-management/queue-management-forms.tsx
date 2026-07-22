@@ -86,8 +86,9 @@ export function QueueManagementForms({
           <h2 className="font-medium">Reject audit decisions needed</h2>
           <p className="mt-1 text-sm text-zinc-500">
             {auditDecisions.toLocaleString()} unresolved flagged decision(s).
-            Marks them rejected without changing contacts or deleting audit
-            evidence, alternatives, or roster snapshots.
+            Eligible rows are marked rejected without changing contacts or
+            deleting audit evidence, alternatives, or roster snapshots. Active
+            claims and changed or missing contacts are reported and skipped.
           </p>
           <form action={auditAction}>
             <ConfirmationField confirmation={AUDIT_REJECTION_CONFIRMATION} />

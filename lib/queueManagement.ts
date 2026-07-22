@@ -1,7 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-
-const FLAGGED_AUDIT_FINDINGS = ["changed", "stale", "ambiguous"] as const;
+import {
+  CONTACT_AUDIT_FLAGGED_FINDINGS,
+  contactAuditResolutionClaimIsActive,
+  contactAuditResolutionClaimStaleBefore,
+  contactAuditResolutionEligibility,
+} from "@/lib/contactAuditResolutionPolicy";
 
 export interface QueueManagementCounts {
   auditDecisions: number;
@@ -15,6 +19,11 @@ export interface AuditRejectionResult {
   changed: number;
   stale: number;
   ambiguous: number;
+  skipped: {
+    active_claim: number;
+    contact_changed: number;
+    contact_missing: number;
+  };
 }
 
 export interface ResearchQueueDeactivationResult {
@@ -52,7 +61,8 @@ export async function readQueueManagementCounts(): Promise<QueueManagementCounts
     db.contactAuditJob.count({
       where: {
         status: "complete",
-        finding: { in: [...FLAGGED_AUDIT_FINDINGS] },
+        verifiedAt: { not: null },
+        finding: { in: [...CONTACT_AUDIT_FLAGGED_FINDINGS] },
         resolution: null,
       },
     }),
@@ -79,59 +89,120 @@ export async function rejectUnresolvedFlaggedAuditDecisions(
   runTransaction: QueueManagementTransactionRunner = withSerializableRetry,
 ): Promise<AuditRejectionResult> {
   return runTransaction(async (tx) => {
-    const rows = await tx.$queryRaw<AuditRejectionResult[]>(Prisma.sql`
-      WITH targets AS (
-        SELECT
-          job."id",
-          contact."state"::text AS "contactState"
-        FROM "ContactAuditJob" job
-        LEFT JOIN "Contact" contact ON contact."id" = job."contactId"
-        WHERE job."status" = 'complete'
-          AND job."finding" IN ('changed', 'stale', 'ambiguous')
-          AND job."resolution" IS NULL
-        ORDER BY job."id"
-        FOR UPDATE OF job
-      ),
-      updated AS (
-        UPDATE "ContactAuditJob" AS job
-        SET
-          "resolution" = 'rejected',
-          "resolvedAt" = ${now},
-          "reviewedAt" = ${now},
-          "selectedAlternativeId" = NULL,
-          "resolvedContactId" = job."contactId",
-          "resolvedArtistId" = job."artistId",
-          "resolvedArtistName" = job."snapshotArtistName",
-          "resolvedEmail" = job."snapshotEmail",
-          "resolvedPhone" = job."snapshotPhone",
-          "resolvedDirectOutreachNote" = job."snapshotDirectOutreachNote",
-          "resolvedName" = job."snapshotName",
-          "resolvedRole" = job."snapshotRole",
-          "resolvedSource" = job."snapshotSource",
-          "resolvedState" = targets."contactState",
-          "resolutionClaimToken" = NULL,
-          "resolutionClaimedAt" = NULL,
-          "updatedAt" = ${now}
-        FROM targets
-        WHERE job."id" = targets."id"
-          AND job."resolution" IS NULL
-        RETURNING job."finding"
-      )
-      SELECT
-        COUNT(*)::integer AS "rejected",
-        COUNT(*) FILTER (WHERE "finding" = 'changed')::integer AS "changed",
-        COUNT(*) FILTER (WHERE "finding" = 'stale')::integer AS "stale",
-        COUNT(*) FILTER (WHERE "finding" = 'ambiguous')::integer AS "ambiguous"
-      FROM updated
+    const targetRows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT job."id"
+      FROM "ContactAuditJob" job
+      WHERE job."status" = 'complete'
+        AND job."verifiedAt" IS NOT NULL
+        AND job."finding" IN (${Prisma.join([
+          ...CONTACT_AUDIT_FLAGGED_FINDINGS,
+        ])})
+        AND job."resolution" IS NULL
+      ORDER BY job."id"
+      FOR UPDATE
     `);
-    return (
-      rows[0] ?? {
-        rejected: 0,
-        changed: 0,
-        stale: 0,
-        ambiguous: 0,
-      }
+    const emptyResult: AuditRejectionResult = {
+      rejected: 0,
+      changed: 0,
+      stale: 0,
+      ambiguous: 0,
+      skipped: {
+        active_claim: 0,
+        contact_changed: 0,
+        contact_missing: 0,
+      },
+    };
+    if (targetRows.length === 0) return emptyResult;
+
+    const targetIds = targetRows.map((row) => row.id);
+    const initialJobs = await tx.contactAuditJob.findMany({
+      where: { id: { in: targetIds } },
+      include: { contact: true },
+      orderBy: { id: "asc" },
+    });
+    const contactIds = Array.from(
+      new Set(
+        initialJobs.flatMap((job) =>
+          !contactAuditResolutionClaimIsActive(job, now) && job.contact
+            ? [job.contact.id]
+            : [],
+        ),
+      ),
     );
+    if (contactIds.length > 0) {
+      await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT contact."id"
+        FROM "Contact" contact
+        WHERE contact."id" IN (${Prisma.join(contactIds)})
+        ORDER BY contact."id"
+        FOR SHARE
+      `);
+    }
+
+    const jobs = await tx.contactAuditJob.findMany({
+      where: { id: { in: targetIds } },
+      include: { contact: true },
+      orderBy: { id: "asc" },
+    });
+    const eligibleIds: string[] = [];
+    const result: AuditRejectionResult = structuredClone(emptyResult);
+    for (const job of jobs) {
+      const eligibility = contactAuditResolutionEligibility(job, now);
+      if (eligibility === "eligible") {
+        eligibleIds.push(job.id);
+      } else if (eligibility === "active_claim") {
+        result.skipped.active_claim += 1;
+      } else if (eligibility === "contact_changed") {
+        result.skipped.contact_changed += 1;
+      } else if (eligibility === "contact_missing") {
+        result.skipped.contact_missing += 1;
+      }
+    }
+    if (eligibleIds.length === 0) return result;
+
+    const staleClaimBefore = contactAuditResolutionClaimStaleBefore(now);
+    const updated = await tx.$queryRaw<
+      Array<{ id: string; finding: string }>
+    >(Prisma.sql`
+      UPDATE "ContactAuditJob" AS job
+      SET
+        "resolution" = 'rejected',
+        "resolvedAt" = ${now},
+        "reviewedAt" = ${now},
+        "selectedAlternativeId" = NULL,
+        "resolvedContactId" = job."contactId",
+        "resolvedArtistId" = job."artistId",
+        "resolvedArtistName" = job."snapshotArtistName",
+        "resolvedEmail" = job."snapshotEmail",
+        "resolvedPhone" = job."snapshotPhone",
+        "resolvedDirectOutreachNote" = job."snapshotDirectOutreachNote",
+        "resolvedName" = job."snapshotName",
+        "resolvedRole" = job."snapshotRole",
+        "resolvedSource" = job."snapshotSource",
+        "resolvedState" = 'active',
+        "resolutionClaimToken" = NULL,
+        "resolutionClaimedAt" = NULL,
+        "updatedAt" = ${now}
+      WHERE job."id" IN (${Prisma.join(eligibleIds)})
+        AND job."status" = 'complete'
+        AND job."verifiedAt" IS NOT NULL
+        AND job."finding" IN (${Prisma.join([
+          ...CONTACT_AUDIT_FLAGGED_FINDINGS,
+        ])})
+        AND job."resolution" IS NULL
+        AND (
+          job."resolutionClaimToken" IS NULL
+          OR job."resolutionClaimedAt" <= ${staleClaimBefore}
+        )
+      RETURNING job."id", job."finding"
+    `);
+    result.rejected = updated.length;
+    for (const row of updated) {
+      if (row.finding === "changed") result.changed += 1;
+      if (row.finding === "stale") result.stale += 1;
+      if (row.finding === "ambiguous") result.ambiguous += 1;
+    }
+    return result;
   });
 }
 

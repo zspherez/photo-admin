@@ -935,11 +935,21 @@ test("contact audit resolution reserves before Sheet work and rolls back failed 
   assert.ok(finalize > sheetUpdate);
   assert.ok(rollback > finalize);
   assert.match(source, /resolutionClaimToken: reservation\.claimToken/);
-  assert.equal(
-    source.match(/contactStillMatchesAuditSnapshot\(job, job\.contact\)/g)
-      ?.length,
-    2,
-    "reservation and finalization both enforce the complete snapshot match"
+  assert.match(
+    source,
+    /reserveContactAuditResolution[\s\S]*contactAuditResolutionEligibility\(job, now\)/,
+  );
+  assert.match(
+    source,
+    /finalizeContactAuditResolution[\s\S]*contactStillMatchesAuditSnapshot\(job, job\.contact\)/,
+  );
+  const resolutionPolicy = readFileSync(
+    new URL("./contactAuditResolutionPolicy.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    resolutionPolicy,
+    /contactAuditResolutionEligibility[\s\S]*contactStillMatchesAuditSnapshot\(job, job\.contact\)/,
   );
   assert.match(source, /isolationLevel: Prisma\.TransactionIsolationLevel\.Serializable/);
   assert.match(source, /outreach history will not be merged automatically/);

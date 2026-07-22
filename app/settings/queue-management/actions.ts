@@ -59,7 +59,10 @@ export async function rejectAuditDecisionsAction(
         `Rejected ${result.rejected.toLocaleString()} unresolved decision(s): ` +
         `${result.changed.toLocaleString()} changed, ` +
         `${result.stale.toLocaleString()} stale, ` +
-        `${result.ambiguous.toLocaleString()} ambiguous. ` +
+        `${result.ambiguous.toLocaleString()} ambiguous. Skipped ` +
+        `${result.skipped.active_claim.toLocaleString()} active_claim, ` +
+        `${result.skipped.contact_changed.toLocaleString()} contact_changed, ` +
+        `${result.skipped.contact_missing.toLocaleString()} contact_missing. ` +
         "Contacts and audit evidence were preserved.",
       affected: result.rejected,
     };

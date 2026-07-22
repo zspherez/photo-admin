@@ -44,10 +44,16 @@ test("each queue operation has its own exact typed confirmation and result", () 
   assert.match(actionSource, /retryAllReviewContactResearchJobs/);
   assert.match(actionSource, /rejectUnresolvedFlaggedAuditDecisions/);
   assert.match(actionSource, /deactivatePendingAndClaimedResearchJobs/);
+  assert.match(actionSource, /skipped\.active_claim/);
+  assert.match(actionSource, /skipped\.contact_changed/);
+  assert.match(actionSource, /skipped\.contact_missing/);
 });
 
 test("queue management preserves history and warns about hourly refill", () => {
-  assert.match(formSource, /without changing contacts or deleting audit/);
+  assert.match(
+    formSource,
+    /without changing contacts or[\s\S]*deleting audit/,
+  );
   assert.match(formSource, /candidates and evidence remain intact/);
   assert.match(formSource, /Job history, notes,[\s\S]*are not deleted/);
   assert.match(formSource, /hourly contact-research workflow/);
