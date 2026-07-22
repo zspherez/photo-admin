@@ -3,7 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { LinkButton } from "@/components/ui/button";
+import { EmailCenterHeader } from "@/components/email-center-header";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { cancelArbitraryEmailAction } from "@/app/emails/actions";
 import { db } from "@/lib/db";
@@ -95,15 +95,7 @@ export default async function EmailsPage({
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Emails</h1>
-          <p className="mt-1 text-sm text-zinc-500">
-            Custom emails and their Resend delivery and engagement statistics.
-          </p>
-        </div>
-        <LinkButton href="/emails/new">Compose</LinkButton>
-      </div>
+      <EmailCenterHeader active="custom" />
 
       {(sent || queued || cancelled || error) && (
         <div className={`mt-5 rounded-lg border px-4 py-3 text-sm ${

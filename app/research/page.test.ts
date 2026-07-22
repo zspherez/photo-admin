@@ -70,10 +70,18 @@ test("review and exhausted jobs have separate bulk requeue actions", () => {
   assert.match(source, /Requeue all review \(\{retryReviewCount\}\)/);
   assert.match(
     source,
-    /Requeue exhausted \(\{retryExhaustedCount\}\)/
+    /Requeue eligible exhausted \(\{retryExhaustedCount\}\)/
   );
   assert.match(source, /disabled=\{retryReviewCount === 0\}/);
   assert.match(source, /disabled=\{retryExhaustedCount === 0\}/);
+  assert.match(
+    source,
+    /currently pass all contact,[\s\S]*skip, proposal, and upcoming-show retry checks/,
+  );
+  assert.match(
+    source,
+    /Refresh queue archives[\s\S]*exhausted jobs without an eligible upcoming show as inactive/,
+  );
   assert.match(
     source,
     /countRetryableExhaustedContactResearchJobs\(now\)/

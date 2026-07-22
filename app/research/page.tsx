@@ -599,6 +599,7 @@ export default async function ContactResearchPage({
     (counts.get("pending") ?? 0) +
     (counts.get("claimed") ?? 0) +
     (counts.get("review") ?? 0);
+  const exhaustedCount = counts.get("exhausted") ?? 0;
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-10">
@@ -638,7 +639,7 @@ export default async function ContactResearchPage({
               pendingLabel="Requeueing…"
               disabled={retryExhaustedCount === 0}
             >
-              Requeue exhausted ({retryExhaustedCount})
+              Requeue eligible exhausted ({retryExhaustedCount})
             </PendingSubmitButton>
           </form>
           <form action={refreshQueueAction}>
@@ -652,6 +653,15 @@ export default async function ContactResearchPage({
           </form>
         </div>
       </div>
+      {exhaustedCount > retryExhaustedCount && (
+        <p className="mt-2 text-xs text-zinc-500">
+          {exhaustedCount.toLocaleString()} exhausted job(s) total;{" "}
+          {retryExhaustedCount.toLocaleString()} currently pass all contact,
+          skip, proposal, and upcoming-show retry checks. Refresh queue archives
+          exhausted jobs without an eligible upcoming show as inactive until a
+          future show makes them eligible again.
+        </p>
+      )}
 
       <nav
         aria-label="Filter contact research jobs by status"

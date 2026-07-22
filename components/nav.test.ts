@@ -20,6 +20,13 @@ test("primary navigation does not expose the legacy New tab", () => {
   assert.doesNotMatch(source, /label: "New"/);
 });
 
+test("primary navigation combines outreach and custom messages under Emails", () => {
+  assert.doesNotMatch(source, /label: "Sent"/);
+  assert.match(source, /href: "\/emails",\s+label: "Emails"/);
+  assert.match(source, /p === "\/outreach"/);
+  assert.match(source, /p\.startsWith\("\/outreach\/"\)/);
+});
+
 test("mobile navigation exposes core workflows and an accessible overflow menu", () => {
   assert.match(source, /aria-label="Mobile navigation"/);
   assert.match(source, /const MOBILE_ITEMS = \[/);
