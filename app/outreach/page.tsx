@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { Card } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { EmailCenterHeader } from "@/components/email-center-header";
 import { ArtistLink } from "@/components/artist-modal";
 import { FollowUpButton } from "@/components/follow-up-button";
 import { cn } from "@/lib/cn";
@@ -30,7 +31,7 @@ import {
 } from "@/lib/contactDisplay";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Outreach log" };
+export const metadata: Metadata = { title: "Outreach emails" };
 
 const OUTREACH_PAGE_SIZE = 50;
 
@@ -242,8 +243,7 @@ export default async function OutreachLogPage({
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Outreach log</h1>
-      <p className="mt-1 text-sm text-zinc-500">Every send, in order, with delivery + engagement status.</p>
+      <EmailCenterHeader active="outreach" />
 
       {(followUpSent || followUpScheduled || cancelled || actionError) && (
         <div

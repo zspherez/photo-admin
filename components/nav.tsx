@@ -8,13 +8,19 @@ import { cn } from "@/lib/cn";
 const ITEMS: { href: string; label: string; match: (p: string) => boolean }[] = [
   { href: "/dashboard", label: "Shows", match: (p) => p === "/dashboard" || p.startsWith("/dashboard/") },
   { href: "/recommendations", label: "Recommendations", match: (p) => p === "/recommendations" || p.startsWith("/recommendations/") },
-  { href: "/metrics", label: "Metrics", match: (p) => p === "/metrics" },
   { href: "/festivals", label: "Festivals", match: (p) => p === "/festivals" || p.startsWith("/festivals/") },
   { href: "/research", label: "Research", match: (p) => p === "/research" },
   { href: "/contacts", label: "Contacts", match: (p) => p === "/contacts" },
   { href: "/contact-audit", label: "Audit", match: (p) => p === "/contact-audit" },
-  { href: "/outreach", label: "Sent", match: (p) => p === "/outreach" || p.startsWith("/outreach/") },
-  { href: "/emails", label: "Emails", match: (p) => p === "/emails" || p.startsWith("/emails/") },
+  {
+    href: "/emails",
+    label: "Emails",
+    match: (p) =>
+      p === "/emails" ||
+      p.startsWith("/emails/") ||
+      p === "/outreach" ||
+      p.startsWith("/outreach/"),
+  },
   { href: "/shows", label: "All shows / Sync", match: (p) => p === "/shows" },
   { href: "/settings", label: "Settings", match: (p) => p === "/settings" || p.startsWith("/settings/") },
 ];

@@ -282,19 +282,6 @@ details, message content, artist/venue names, or private notes. For a single
 stream, use `--kind decisions|outcomes|engagement` with optional `--output
 <path>`; engagement remains the default for backward compatibility.
 
-Authenticated operators can review aggregate trajectory operations at
-`/metrics`. The page reports selected-run freshness, import and mapping counts,
-issue categories, contact readiness, same-night alternatives, and
-trajectory-attributed decision, engagement, access, and outcome counts. It
-does not display contact identities or recipient values, and it does not
-present probabilities or causal claims. Mapping uses source and mapped counts
-persisted in each run summary; legacy fields are labeled unavailable rather
-than inferred from inserted rows. Historical metrics retain all four model-arm
-attributions and select the latest non-superseded decision and outcome per
-recommendation. Export lag is explicitly unavailable until both a durable
-successful-export receipt and complete export-relevant change timestamps are
-stored.
-
 ## Contact research agent
 
 The hosted app automatically queues every non-festival artist with a show in
