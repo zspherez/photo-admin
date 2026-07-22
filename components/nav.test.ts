@@ -29,3 +29,13 @@ test("mobile navigation exposes core workflows and an accessible overflow menu",
   assert.match(source, /<summary/);
   assert.match(source, /All sections/);
 });
+
+test("mobile More menu closes on selection and persistent pathname changes", () => {
+  assert.match(source, /useRef<HTMLDetailsElement>/);
+  assert.match(source, /ref=\{mobileMenuRef\}/);
+  assert.match(source, /onClick=\{closeMobileMenu\}/);
+  assert.match(
+    source,
+    /useEffect\(\(\) => \{\s*closeMobileMenu\(\);\s*\}, \[pathname\]\)/,
+  );
+});

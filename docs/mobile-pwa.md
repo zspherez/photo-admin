@@ -42,10 +42,14 @@ HttpOnly cookie and redirects back to the requested route.
 ## Mobile workflow notes
 
 - The bottom bar keeps Shows, Research, Audit, and Emails one tap away; all
-  other sections and logout are in **More**.
+  other sections and logout are in **More**. The menu closes immediately when
+  a destination is selected and whenever persistent navigation changes route.
 - Forms use iPhone-safe input sizing and larger touch targets. Email editor
   controls remain reachable while editing, and send/save controls stay above
-  the Home indicator and mobile navigation.
+  the Home indicator and mobile navigation. Checkbox, radio, range, and other
+  non-text controls retain their intentional compact dimensions.
+- The translucent iOS status bar always overlays a dark safe-area strip, while
+  the app theme and header continue to adapt between light and dark modes.
 - Infinite show and recommendation lists retain automatic loading and manual
   fallback controls, with bottom spacing for the installed-app navigation.
 - Email history becomes labeled cards on narrow screens rather than requiring

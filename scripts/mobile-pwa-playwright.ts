@@ -106,6 +106,88 @@ async function run() {
     assert.ok(cachedUrls.includes("/offline.html"));
     assert.ok(!cachedUrls.some((url) => url === "/login" || url.startsWith("/api/")));
 
+    await page.goto(`${origin}/mobile-pwa-client-smoke`);
+    const mobileNavigation = page.getByRole("navigation", {
+      name: "Mobile navigation",
+    });
+    await mobileNavigation.waitFor();
+
+    const controlSizes = await page.evaluate(() => {
+      const host = document.createElement("div");
+      host.innerHTML = `
+        <input data-control="text" type="text">
+        <select data-control="select"><option>One</option></select>
+        <textarea data-control="textarea"></textarea>
+        <input data-control="checkbox" type="checkbox" class="h-4 w-4">
+        <input data-control="radio" type="radio" class="h-4 w-4">
+        <input data-control="range" type="range">
+      `;
+      document.body.append(host);
+      return Object.fromEntries(
+        Array.from(host.querySelectorAll<HTMLElement>("[data-control]")).map(
+          (control) => {
+            const rect = control.getBoundingClientRect();
+            return [
+              control.dataset.control!,
+              { width: rect.width, height: rect.height },
+            ];
+          },
+        ),
+      );
+    });
+    for (const name of ["text", "select", "textarea"]) {
+      assert.ok(controlSizes[name].height >= 43.5, `${name}: ${JSON.stringify(controlSizes[name])}`);
+    }
+    for (const name of ["checkbox", "radio"]) {
+      assert.ok(controlSizes[name].width <= 17, `${name}: ${JSON.stringify(controlSizes[name])}`);
+      assert.ok(controlSizes[name].height <= 17, `${name}: ${JSON.stringify(controlSizes[name])}`);
+    }
+    assert.ok(controlSizes.range.height < 43.5, JSON.stringify(controlSizes.range));
+
+    const moreMenu = mobileNavigation.locator("details");
+    await moreMenu.locator("summary").click();
+    assert.equal(
+      await moreMenu.evaluate(
+        (details) => (details as HTMLDetailsElement).open,
+      ),
+      true,
+    );
+    await page.evaluate(() => {
+      document.addEventListener(
+        "click",
+        (event) => {
+          if ((event.target as Element).closest(".mobile-nav-sheet a")) {
+            event.preventDefault();
+          }
+        },
+        { capture: true, once: true },
+      );
+    });
+    await moreMenu.locator(".mobile-nav-sheet a").first().click();
+    assert.equal(
+      await moreMenu.evaluate(
+        (details) => (details as HTMLDetailsElement).open,
+      ),
+      false,
+    );
+
+    await moreMenu.locator("summary").click();
+    assert.equal(
+      await moreMenu.evaluate(
+        (details) => (details as HTMLDetailsElement).open,
+      ),
+      true,
+    );
+    await page.evaluate(() => {
+      window.history.pushState({}, "", "/mobile-pwa-client-smoke-next");
+    });
+    await page.waitForFunction(
+      () =>
+        !document.querySelector<HTMLDetailsElement>(
+          'nav[aria-label="Mobile navigation"] details',
+        )?.open,
+    );
+
     await context.close();
   } finally {
     await browser.close();

@@ -47,7 +47,20 @@ textarea {
 }
 
 .app-header-safe {
+  position: sticky;
   padding-top: env(safe-area-inset-top);
+}
+
+.app-header-safe::before {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: env(safe-area-inset-top);
+  background: #09090b;
+  content: "";
+  pointer-events: none;
 }
 
 .mobile-tab-bar {
@@ -77,7 +90,21 @@ textarea {
     padding-left: max(1rem, env(safe-area-inset-left)) !important;
   }
 
-  input:not([type="hidden"]),
+  input:not([type]),
+  input:is(
+    [type="text"],
+    [type="search"],
+    [type="email"],
+    [type="password"],
+    [type="url"],
+    [type="tel"],
+    [type="number"],
+    [type="date"],
+    [type="datetime-local"],
+    [type="month"],
+    [type="time"],
+    [type="week"]
+  ),
   select,
   textarea {
     min-height: 2.75rem;

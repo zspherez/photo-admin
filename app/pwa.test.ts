@@ -13,6 +13,14 @@ const offlineShell = fs.readFileSync(
   path.join(root, "public/offline.html"),
   "utf8",
 );
+const globalStyles = fs.readFileSync(
+  path.join(root, "app/globals.css"),
+  "utf8",
+);
+const layoutSource = fs.readFileSync(
+  path.join(root, "app/layout.tsx"),
+  "utf8",
+);
 
 test("manifest defines an installable standalone admin app", () => {
   const value = manifest();
@@ -52,4 +60,24 @@ test("all declared PWA icons exist", () => {
   ]) {
     assert.ok(fs.statSync(path.join(root, file)).size > 100, file);
   }
+});
+
+test("mobile text controls are touch-sized without resizing selection controls", () => {
+  assert.doesNotMatch(globalStyles, /input:not\(\[type="hidden"\]\)/);
+  assert.match(globalStyles, /input:not\(\[type\]\)/);
+  assert.match(globalStyles, /\[type="text"\]/);
+  assert.match(globalStyles, /\[type="password"\]/);
+  assert.match(globalStyles, /select,\s+textarea \{\s+min-height: 2\.75rem/);
+  assert.doesNotMatch(globalStyles, /\[type="checkbox"\][\s\S]*min-height/);
+  assert.doesNotMatch(globalStyles, /\[type="radio"\][\s\S]*min-height/);
+});
+
+test("translucent iOS status indicators always sit over a dark safe area", () => {
+  assert.match(layoutSource, /statusBarStyle: "black-translucent"/);
+  assert.match(
+    globalStyles,
+    /\.app-header-safe::before \{[\s\S]*height: env\(safe-area-inset-top\);[\s\S]*background: #09090b;/,
+  );
+  assert.match(layoutSource, /prefers-color-scheme: light[\s\S]*#ffffff/);
+  assert.match(layoutSource, /prefers-color-scheme: dark[\s\S]*#09090b/);
 });

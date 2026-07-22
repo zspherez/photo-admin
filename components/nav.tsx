@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef } from "react";
 import { cn } from "@/lib/cn";
 
 const ITEMS: { href: string; label: string; match: (p: string) => boolean }[] = [
@@ -62,6 +63,16 @@ function NavIcon({
 
 export function Nav() {
   const pathname = usePathname() ?? "/";
+  const mobileMenuRef = useRef<HTMLDetailsElement>(null);
+
+  const closeMobileMenu = () => {
+    if (mobileMenuRef.current) mobileMenuRef.current.open = false;
+  };
+
+  useEffect(() => {
+    closeMobileMenu();
+  }, [pathname]);
+
   if (pathname === "/login" || pathname === "/test") return null;
   const activeItem = ITEMS.find((item) => item.match(pathname));
 
@@ -152,7 +163,7 @@ export function Nav() {
             </Link>
           );
         })}
-        <details className="group relative">
+        <details ref={mobileMenuRef} className="group relative">
           <summary className="flex min-h-14 cursor-pointer list-none flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-[10px] font-medium text-zinc-500 [&::-webkit-details-marker]:hidden dark:text-zinc-400">
             <NavIcon name="more" />
             <span>More</span>
@@ -168,6 +179,7 @@ export function Nav() {
                   <Link
                     key={item.href}
                     href={item.href}
+                    onClick={closeMobileMenu}
                     aria-current={active ? "page" : undefined}
                     className={cn(
                       "flex min-h-11 items-center rounded-lg px-3 text-sm",
