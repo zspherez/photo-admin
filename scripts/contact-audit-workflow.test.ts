@@ -118,6 +118,18 @@ test("audit agent and broker preserve review-only manager policy", () => {
   assert.match(agent, /Any active email in the roster is management context/);
   assert.match(
     agent,
+    /Every tool invocation must begin directly with `contact-audit-agent-tool`/,
+  );
+  assert.match(
+    agent,
+    /Never prefix it with `cd`[\s\S]*temporary files/,
+  );
+  assert.match(
+    agent,
+    /Pass the complete final JSON directly[\s\S]*`validate-result`[\s\S]*`submit-result`/,
+  );
+  assert.match(
+    agent,
     /exact management email published by the[\s\S]*official website[\s\S]*sufficient evidence by itself/,
   );
   assert.match(

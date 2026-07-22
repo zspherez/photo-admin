@@ -39,6 +39,13 @@ tools. Use only these commands from the repository root:
 
 Do not use general shell commands, direct network tools, filesystem inspection,
 or any command other than `contact-audit-agent-tool`.
+Every tool invocation must begin directly with `contact-audit-agent-tool`.
+Never prefix it with `cd`, never use `cat`, `printf`, Python, pipes, redirection,
+command substitution, or temporary files, and never combine it with another
+shell command. Pass the complete final JSON directly as the single quoted
+argument to `validate-result` and then `submit-result`. If a tool call is
+denied, retry it immediately in this exact direct-command form instead of
+trying another shell mechanism.
 
 The runner supplies one already-claimed job. Never call `claim`. Use the exact
 top-level `jobId` and `claimToken`; do not invent identifiers. The job includes

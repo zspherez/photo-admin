@@ -310,7 +310,13 @@ function publicClaimResponse(value, state) {
   }
   const [job] = jobs;
   const parsedJob = claimJobSchema.parse(job);
-  state.claim = { jobId: job.id, claimToken: job.claimToken };
+  state.claim = {
+    jobId: parsedJob.id,
+    claimToken: parsedJob.claimToken,
+    rosterEntryIds: parsedJob.contactRoster.contacts.map(
+      (contact) => contact.rosterEntryId
+    ),
+  };
   metrics.artistBySession[state.sessionId] = parsedJob.contact.artistName;
   metrics.sessions[state.sessionId] = {
     artist: parsedJob.contact.artistName,
@@ -335,6 +341,41 @@ function requireSessionClaim(state, input) {
       "submission must use the top-level jobId and claimToken from this session"
     );
   }
+}
+
+function validateClaimRosterReview(state, input) {
+  const expected = state.claim.rosterEntryIds;
+  const submitted = input.rosterReview.map((review) => review.rosterEntryId);
+  const submittedCounts = new Map();
+  for (const rosterEntryId of submitted) {
+    submittedCounts.set(
+      rosterEntryId,
+      (submittedCounts.get(rosterEntryId) ?? 0) + 1
+    );
+  }
+  const expectedSet = new Set(expected);
+  const missing = expected.filter(
+    (rosterEntryId) => !submittedCounts.has(rosterEntryId)
+  );
+  const unknown = [...submittedCounts.keys()].filter(
+    (rosterEntryId) => !expectedSet.has(rosterEntryId)
+  );
+  const duplicates = [...submittedCounts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([rosterEntryId]) => rosterEntryId);
+  if (missing.length === 0 && unknown.length === 0 && duplicates.length === 0) {
+    return;
+  }
+  throw new BrokerInputError(
+    [
+      "rosterReview must include every claimed rosterEntryId exactly once",
+      missing.length > 0 ? `missing: ${missing.join(", ")}` : null,
+      unknown.length > 0 ? `unknown: ${unknown.join(", ")}` : null,
+      duplicates.length > 0 ? `duplicates: ${duplicates.join(", ")}` : null,
+    ]
+      .filter(Boolean)
+      .join("; ")
+  );
 }
 
 async function runTool(name, input, sessionId) {
@@ -385,6 +426,7 @@ async function runTool(name, input, sessionId) {
       requireSessionClaim(state, input);
       try {
         validateAuditSubmissionPayload(input);
+        validateClaimRosterReview(state, input);
       } catch (error) {
         throw new BrokerInputError(
           error instanceof Error ? error.message : String(error)
@@ -395,6 +437,7 @@ async function runTool(name, input, sessionId) {
       requireSessionClaim(state, input);
       try {
         validateAuditSubmissionPayload(input);
+        validateClaimRosterReview(state, input);
       } catch (error) {
         throw new BrokerInputError(
           error instanceof Error ? error.message : String(error)

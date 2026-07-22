@@ -107,7 +107,7 @@ worker_loop() {
 
     set +e
     node scripts/run-contact-research-copilot.mjs \
-      "Complete this already-claimed contact audit job: ${job_json}. Review every contactRoster entry, identify the isTarget contact, and inventory every rosterEntryId in rosterReview. Existing roster contacts are stored context, never new alternatives. Use the top-level jobId and submit exactly one review-only result. Do not call claim."
+      "Complete this already-claimed contact audit job: ${job_json}. Review every contactRoster entry, identify the isTarget contact, and inventory every rosterEntryId in rosterReview. Existing roster contacts are stored context, never new alternatives. Use the top-level jobId and submit exactly one review-only result. Do not call claim. Invoke only direct contact-audit-agent-tool commands: no cd, files, cat, printf, Python, pipes, redirection, command substitution, or combined shell commands. Pass the final JSON inline to validate-result and submit-result."
     local copilot_status="$?"
     set -e
 
