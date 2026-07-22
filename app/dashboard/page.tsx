@@ -10,7 +10,6 @@ import {
 } from "@/lib/dashboardQuery";
 import { getTestOverride } from "@/lib/resend";
 import {
-  formatNextDispatchActionLabel,
   getNextNormalOutreachDispatch,
   isWeekendET,
 } from "@/lib/schedule";
@@ -72,6 +71,7 @@ export default async function DashboardPage({
   const followUpSent = firstSearchParam(params.followup_sent);
   const followUpScheduled = firstSearchParam(params.followup_scheduled);
   const now = new Date();
+  const nextDispatch = getNextNormalOutreachDispatch(now);
   const configuration = getAuthConfiguration();
   const cookieValue = (await cookies()).get(SESSION_COOKIE)?.value;
   const { ownerKey, persistenceScope } = dashboardSessionIdentity(
@@ -150,9 +150,10 @@ export default async function DashboardPage({
         query={query}
         persistenceScope={persistenceScope}
         isWeekend={isWeekendET(now)}
-        nextDispatchLabel={formatNextDispatchActionLabel(
-          getNextNormalOutreachDispatch(now),
-        )}
+        nextDispatchBoundary={{
+          renderedAtMs: now.getTime(),
+          dispatchAtMs: nextDispatch.getTime(),
+        }}
         {...interactionState}
       />
     </main>

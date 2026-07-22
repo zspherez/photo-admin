@@ -32,6 +32,7 @@ import { ArtistLink } from "@/components/artist-modal";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { SendButton } from "@/components/send-button";
 import { QueueOutreachButton } from "@/components/queue-outreach-button";
+import type { NextDispatchBoundaryData } from "@/components/next-dispatch-label";
 import { FollowUpButton } from "@/components/follow-up-button";
 import { cn } from "@/lib/cn";
 import {
@@ -94,7 +95,7 @@ interface Props {
   query: DashboardQuery;
   persistenceScope: string;
   isWeekend: boolean;
-  nextDispatchLabel: string;
+  nextDispatchBoundary: NextDispatchBoundaryData;
   sendabilityRows: OutreachSendability[];
   followUpEligibilityRows: FollowUpEligibility[];
   recommendationBadges: DashboardRecommendationBadge[];
@@ -172,7 +173,7 @@ export function DashboardClient({
   query,
   persistenceScope,
   isWeekend,
-  nextDispatchLabel,
+  nextDispatchBoundary,
   sendabilityRows: initialSendabilityRows,
   followUpEligibilityRows: initialFollowUpEligibilityRows,
   recommendationBadges: initialRecommendationBadges,
@@ -1324,7 +1325,7 @@ export function DashboardClient({
                                 showId={show.id}
                                 contactId={emailContact.id}
                                 returnTo={returnTo}
-                                queueLabel={nextDispatchLabel}
+                                nextDispatchBoundary={nextDispatchBoundary}
                                 customizeHref={queueCustomizeHref}
                                 action={queueForNextDispatchAction}
                               />

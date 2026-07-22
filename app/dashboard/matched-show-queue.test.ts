@@ -11,6 +11,7 @@ const actions = source("app/dashboard/actions.ts");
 const client = source("app/dashboard/dashboard-client.tsx");
 const page = source("app/dashboard/page.tsx");
 const queueButton = source("components/queue-outreach-button.tsx");
+const liveLabel = source("components/next-dispatch-label.ts");
 const sendButton = source("components/send-button.tsx");
 const sendOutreach = source("lib/sendOutreach.ts");
 const customizePage = source(
@@ -28,8 +29,9 @@ function actionSource(name: string): string {
 }
 
 test("sendable matched cards expose the shared next-dispatch action only for new outreach", () => {
-  assert.match(page, /formatNextDispatchActionLabel\(/);
-  assert.match(page, /getNextNormalOutreachDispatch\(now\)/);
+  assert.match(page, /const nextDispatch = getNextNormalOutreachDispatch\(now\)/);
+  assert.match(page, /renderedAtMs: now\.getTime\(\)/);
+  assert.match(page, /dispatchAtMs: nextDispatch\.getTime\(\)/);
   assert.match(client, /const queueEligible =[\s\S]*artist\.workflowEligible/);
   assert.match(client, /!!emailContact/);
   assert.match(client, /sendability\?\.sendable === true/);
@@ -38,8 +40,11 @@ test("sendable matched cards expose the shared next-dispatch action only for new
     client,
     /\{queueEligible && emailContact && \([\s\S]*<QueueOutreachButton/,
   );
+  assert.match(queueButton, /useNextDispatchActionLabel\(nextDispatchBoundary\)/);
   assert.match(queueButton, /\{queueLabel\}/);
   assert.match(queueButton, /pendingLabel="Queueing…"/);
+  assert.match(liveLabel, /getNextNormalOutreachDispatch\(new Date\(nowMs\)\)/);
+  assert.doesNotMatch(liveLabel, /\.getHours\(|\.getDay\(|\.getTimezoneOffset\(/);
 });
 
 test("ambiguous manager contacts route to Customize with explicit queue intent", () => {
@@ -79,6 +84,7 @@ test("dashboard queue action authenticates, preserves return state, and never se
     queue,
     /scheduleOutreach\([\s\S]*getNextNormalOutreachDispatch\(\)/,
   );
+  assert.doesNotMatch(queue, /dispatchAtMs|renderedAtMs/);
   assert.doesNotMatch(queue, /sendOutreach\(/);
   assert.match(queue, /refreshWorkflowViews\(returnTo/);
   assert.match(queue, /festivalReturnPath\(showId\)/);

@@ -2,6 +2,10 @@
 
 import { LinkButton } from "@/components/ui/button";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import {
+  type NextDispatchBoundaryData,
+  useNextDispatchActionLabel,
+} from "@/components/next-dispatch-label";
 
 type FormAction = (formData: FormData) => void | Promise<void>;
 
@@ -9,17 +13,19 @@ export function QueueOutreachButton({
   showId,
   contactId,
   returnTo,
-  queueLabel,
+  nextDispatchBoundary,
   customizeHref,
   action,
 }: {
   showId: string;
   contactId: string;
   returnTo: string;
-  queueLabel: string;
+  nextDispatchBoundary: NextDispatchBoundaryData;
   customizeHref: string | null;
   action: FormAction;
 }) {
+  const queueLabel = useNextDispatchActionLabel(nextDispatchBoundary);
+
   if (customizeHref) {
     return (
       <LinkButton href={customizeHref} variant="secondary" size="sm">
