@@ -613,7 +613,7 @@ export default async function ContactResearchPage({
             nothing is ever sent.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="mobile-action-grid flex flex-wrap gap-2 sm:w-auto">
           <LinkButton
             href={WORKFLOW_URL}
             target="_blank"
@@ -894,7 +894,7 @@ export default async function ContactResearchPage({
                         ))}
                       </div>
                       {!activeSkip && (
-                        <div className="mt-3 flex gap-2">
+                        <div className="mobile-action-grid mt-3 flex gap-2 sm:w-auto">
                           <form action={approveDirectOutreachAction}>
                             <input
                               type="hidden"
@@ -972,7 +972,7 @@ export default async function ContactResearchPage({
                             ))}
                           </div>
                           {!activeSkip && (
-                            <div className="mt-3 flex gap-2">
+                            <div className="mobile-action-grid mt-3 flex gap-2 sm:w-auto">
                               <form action={approveCandidateAction}>
                                 <input
                                   type="hidden"

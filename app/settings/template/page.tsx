@@ -271,7 +271,7 @@ export default async function TemplateSettingsPage({
               initialHtml={template.htmlBody}
               variables={allVars}
             />
-            <div className="mt-4 flex items-center justify-between gap-2">
+            <div className="mobile-sticky-actions mt-4 flex items-center justify-between gap-2">
               <Button type="submit" variant="primary">
                 Save {templateLabel(kind).toLowerCase()} template
               </Button>

@@ -189,7 +189,7 @@ export function TemplateEditor({
       <div
         role="toolbar"
         aria-label="Template editor controls"
-        className="flex flex-wrap items-center gap-1 rounded-md border border-zinc-200 p-1 dark:border-zinc-800"
+        className="sticky top-[calc(3rem+env(safe-area-inset-top))] z-20 flex flex-wrap items-center gap-1 rounded-md border border-zinc-200 bg-white/95 p-1 backdrop-blur lg:static dark:border-zinc-800 dark:bg-zinc-950/95"
       >
         <Tab active={view === "visual"} onClick={() => setView("visual")}>Visual</Tab>
         <Tab active={view === "html"} onClick={() => setView("html")}>HTML</Tab>
@@ -258,7 +258,7 @@ export function TemplateEditor({
                 insertVar(v);
                 e.target.value = "";
               }}
-              className="rounded border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+              className="min-h-10 rounded border border-zinc-300 px-2 py-0.5 text-xs sm:min-h-0 dark:border-zinc-700 dark:bg-zinc-900"
               defaultValue=""
               disabled={disabled}
             >
@@ -303,7 +303,7 @@ export function TemplateEditor({
                 ? normalizedPreview ?? EMPTY_PREVIEW
                 : html
             }
-            className="min-h-[360px] w-full rounded-md border border-zinc-200 bg-white dark:border-zinc-800"
+            className="min-h-[55dvh] w-full rounded-md border border-zinc-200 bg-white sm:min-h-[360px] dark:border-zinc-800"
           />
         </div>
       )}
@@ -317,7 +317,7 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`rounded px-2.5 py-1 text-xs font-medium ${
+      className={`min-h-10 rounded px-2.5 py-1 text-xs font-medium sm:min-h-0 ${
         active
           ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
           : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
@@ -349,7 +349,7 @@ function ToolbarBtn({
       disabled={disabled}
       onClick={onClick}
       title={title}
-      className={`rounded px-2 py-1 text-xs ${
+      className={`min-h-10 min-w-10 rounded px-2 py-1 text-xs sm:min-h-0 sm:min-w-0 ${
         active
           ? "bg-zinc-200 dark:bg-zinc-700"
           : "hover:bg-zinc-100 dark:hover:bg-zinc-800"

@@ -2,7 +2,7 @@ import * as React from "react";
 import { cn } from "@/lib/cn";
 
 const INPUT_CLASS =
-  "block w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:placeholder:text-zinc-600";
+  "block min-h-11 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-base placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none sm:min-h-9 sm:text-sm dark:border-zinc-800 dark:bg-zinc-950 dark:placeholder:text-zinc-600";
 
 interface FieldProps {
   name: string;

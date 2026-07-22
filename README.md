@@ -8,6 +8,10 @@ This is built around my own workflow (EDMTrain for shows, Spotify + Stats.fm
 for listening signals, Resend for sending). It's not a generic product, but the
 code is hopefully readable enough to fork.
 
+The admin is installable on iPhone and other devices as a deliberately
+network-only PWA for private data. See [the mobile PWA guide](docs/mobile-pwa.md)
+for installation, cache boundaries, validation, and the App Clip assessment.
+
 ## What's in here
 
 - **`/dashboard`** — ranked list of upcoming shows for artists I listen to, with

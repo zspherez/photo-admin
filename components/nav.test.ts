@@ -19,3 +19,13 @@ test("primary navigation does not expose the legacy New tab", () => {
   assert.doesNotMatch(source, /href: "\/new"/);
   assert.doesNotMatch(source, /label: "New"/);
 });
+
+test("mobile navigation exposes core workflows and an accessible overflow menu", () => {
+  assert.match(source, /aria-label="Mobile navigation"/);
+  assert.match(source, /const MOBILE_ITEMS = \[/);
+  assert.match(source, /label: "Research"/);
+  assert.match(source, /label: "Audit"/);
+  assert.match(source, /label: "Emails"/);
+  assert.match(source, /<summary/);
+  assert.match(source, /All sections/);
+});

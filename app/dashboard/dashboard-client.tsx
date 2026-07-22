@@ -783,7 +783,7 @@ export function DashboardClient({
         {data.totalSignals.toLocaleString()} listen signals
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-1 border-b border-zinc-200 dark:border-zinc-800">
+      <div className="-mx-4 mt-4 flex items-center gap-1 overflow-x-auto border-b border-zinc-200 px-4 dark:border-zinc-800 sm:mx-0 sm:px-0">
         {tabs.map((tab) => {
           const active = query.mode === tab.key;
           return (
@@ -795,7 +795,7 @@ export function DashboardClient({
               )}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition",
+                "-mb-px shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition",
                 active
                   ? tab.tone === "amber"
                     ? "border-amber-500 text-amber-700 dark:text-amber-400"
@@ -817,7 +817,7 @@ export function DashboardClient({
           action="/dashboard"
           scroll={false}
           data-dashboard-filter-form="true"
-          className="flex gap-2"
+          className="flex flex-wrap gap-2"
         >
           {query.mode !== "matched" && (
             <input type="hidden" name="mode" value={query.mode} />
@@ -840,9 +840,9 @@ export function DashboardClient({
             name="search"
             defaultValue={filters.search}
             placeholder="Search artist name…"
-            className="h-9 min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-3 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950"
+            className="min-h-11 w-full min-w-0 flex-1 basis-full rounded-md border border-zinc-200 bg-white px-3 text-base placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none sm:min-h-9 sm:basis-auto sm:text-sm dark:border-zinc-800 dark:bg-zinc-950"
           />
-          <PendingSubmitButton pendingLabel="Searching…">Search</PendingSubmitButton>
+          <PendingSubmitButton className="flex-1 sm:flex-none" pendingLabel="Searching…">Search</PendingSubmitButton>
           {filtersDirty && (
             <LinkButton
               href={buildDashboardHref({
@@ -850,6 +850,7 @@ export function DashboardClient({
                 filters: DEFAULT_FILTERS,
               })}
               variant="ghost"
+              className="flex-1 sm:flex-none"
             >
               Clear
             </LinkButton>
@@ -927,7 +928,7 @@ export function DashboardClient({
             <Card
               key={show.id}
               data-dashboard-show-id={show.id}
-              className="p-5"
+              className="p-4 sm:p-5"
             >
               <div className="flex items-start justify-between gap-2">
                 <p className="text-sm text-zinc-500">
@@ -1306,9 +1307,9 @@ export function DashboardClient({
                         )}
                       </div>
 
-                      <div className="flex shrink-0 flex-col items-end gap-1">
+                      <div className="flex w-full shrink-0 flex-col items-stretch gap-2 sm:w-auto sm:items-end sm:gap-1">
                         {outreachControlsEligible && (
-                          <div className="flex gap-1.5">
+                          <div className="flex flex-wrap gap-1.5">
                             <SendButton
                               showId={show.id}
                               contactId={emailContact?.id ?? null}
@@ -1458,7 +1459,7 @@ export function DashboardClient({
 
       <div
         ref={sentinelRef}
-        className="mt-6 flex min-h-20 flex-col items-center justify-center gap-3 text-center"
+        className="mt-6 flex min-h-20 scroll-mb-24 flex-col items-center justify-center gap-3 text-center"
       >
         {loading && (
           <div

@@ -95,7 +95,7 @@ export default async function EmailsPage({
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Emails</h1>
           <p className="mt-1 text-sm text-zinc-500">
@@ -144,9 +144,9 @@ export default async function EmailsPage({
           No custom emails yet.
         </div>
       ) : (
-        <div className="mt-6 overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+        <div className="mt-6 sm:overflow-hidden sm:rounded-xl sm:border sm:border-zinc-200 sm:dark:border-zinc-800">
+          <div className="sm:overflow-x-auto">
+            <table className="mobile-stack w-full text-left text-sm">
               <thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
                 <tr>
                   <th className="px-4 py-3">Email</th>
@@ -160,7 +160,7 @@ export default async function EmailsPage({
               <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                 {emails.map((email) => (
                   <tr key={email.id}>
-                    <td className="max-w-md px-4 py-3">
+                    <td data-label="Email" className="max-w-md px-4 py-3">
                       <div className="truncate font-medium">{email.subject}</div>
                       <div className="truncate text-xs text-zinc-500">
                         {email.recipientEmails.join(", ")}
@@ -195,7 +195,7 @@ export default async function EmailsPage({
                         </div>
                       </details>
                     </td>
-                    <td className="px-4 py-3">
+                    <td data-label="Status" className="px-4 py-3">
                       <Badge tone={statusTone(email.status)}>{email.status.replace("_", " ")}</Badge>
                       {["scheduled", "retry_scheduled"].includes(
                         email.status,
@@ -215,10 +215,10 @@ export default async function EmailsPage({
                         </form>
                       )}
                     </td>
-                    <td className="px-4 py-3">{email.deliveredAt ? "Yes" : "—"}</td>
-                    <td className="px-4 py-3">{email.openCount}</td>
-                    <td className="px-4 py-3">{email.clickCount}</td>
-                    <td className="whitespace-nowrap px-4 py-3 text-zinc-500">
+                    <td data-label="Delivered" className="px-4 py-3">{email.deliveredAt ? "Yes" : "—"}</td>
+                    <td data-label="Opens" className="px-4 py-3">{email.openCount}</td>
+                    <td data-label="Clicks" className="px-4 py-3">{email.clickCount}</td>
+                    <td data-label="Target / sent" className="whitespace-nowrap px-4 py-3 text-zinc-500">
                       {email.sentAt
                         ? email.sentAt.toLocaleString()
                         : email.nextAttemptAt
