@@ -210,6 +210,12 @@ export default async function RecommendationsPage({
                 ? "Marked as sent."
                 : firstSearchParam(params.unmarked)
                   ? "Manual mark removed."
+                  : firstSearchParam(params.decision_saved)
+                    ? "Trajectory decision saved."
+                    : firstSearchParam(params.outcome_saved)
+                      ? "Show outcome saved."
+                      : firstSearchParam(params.outreach_attributed)
+                        ? "Outreach attribution saved."
                   : null);
   const resultIsError = Boolean(firstSearchParam(params.error));
   const configuration = getAuthConfiguration();

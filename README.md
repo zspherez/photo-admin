@@ -257,6 +257,27 @@ after the endpoint's exact-digest dry-run gate succeeds. The producer needs
 only the endpoint URL (and the dedicated HMAC secret only in fallback mode);
 it must never receive `DATABASE_URL` or `DIRECT_URL`.
 
+## Trajectory feedback export
+
+Authenticated recommendation cards record append-only decisions, corrections,
+and structured show outcomes. Private notes remain in photo-admin. Export the
+current decision and outcome for each recommendation plus attributed outreach
+engagement into the producer evaluator's expected snapshot filenames:
+
+```bash
+npm run trajectory:feedback:export -- \
+  --output-dir /absolute/path/to/artist_trajectory/output/snapshots
+```
+
+This writes `decisions.jsonl`, `post_show_outcomes.jsonl`, and
+`outreach_engagement.jsonl`. The export uses producer run IDs and EDMTrain show
+IDs, maps dismissals to declined decisions, retains manual-override metadata,
+and emits the producer's exact run/show/arm/artist recommendation key on every
+stream. It allowlists every emitted field and never selects or emits contact
+details, message content, artist/venue names, or private notes. For a single
+stream, use `--kind decisions|outcomes|engagement` with optional `--output
+<path>`; engagement remains the default for backward compatibility.
+
 Authenticated operators can review aggregate trajectory operations at
 `/metrics`. The page reports selected-run freshness, import and mapping counts,
 issue categories, contact readiness, same-night alternatives, and

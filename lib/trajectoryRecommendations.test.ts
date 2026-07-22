@@ -288,6 +288,90 @@ test("canonical show and artist fields override stale model snapshots", async ()
   ]);
 });
 
+test("decision and outcome correction history expose current evidence and private notes", async () => {
+  const result = await getTrajectoryRecommendationPage(QUERY, {
+    now: NOW,
+    store: store({
+      recommendations: [
+        recommendation("history", {
+          feedback: [
+            {
+              id: "feedback-new",
+              action: "saved",
+              propensity: null,
+              manualOverride: false,
+              notes: "Keep this private",
+              supersedesId: "feedback-old",
+              recordedAt: new Date("2026-07-21T15:00:00.000Z"),
+            },
+            {
+              id: "feedback-old",
+              action: "selected",
+              propensity: 0.5,
+              manualOverride: false,
+              notes: null,
+              supersedesId: null,
+              recordedAt: new Date("2026-07-21T14:00:00.000Z"),
+            },
+          ],
+          outcomes: [
+            {
+              id: "outcome-new",
+              attended: true,
+              access: "photo_pass",
+              keeperCount: 8,
+              relationshipValue: 2,
+              publicationValue: 1,
+              shootability: "good",
+              venueAccessibility: "medium",
+              notes: "Lighting was strong",
+              supersedesId: "outcome-old",
+              recordedAt: new Date("2026-08-02T15:00:00.000Z"),
+            },
+            {
+              id: "outcome-old",
+              attended: false,
+              access: "none",
+              keeperCount: 0,
+              relationshipValue: 0,
+              publicationValue: 0,
+              shootability: null,
+              venueAccessibility: null,
+              notes: null,
+              supersedesId: null,
+              recordedAt: new Date("2026-08-02T14:00:00.000Z"),
+            },
+          ],
+        }),
+      ],
+    }),
+    sendability: sendable,
+  });
+
+  assert.deepEqual(
+    result.recommendations[0].decisionHistory.map((row) => [
+      row.id,
+      row.isCurrent,
+      row.notes,
+    ]),
+    [
+      ["feedback-new", true, "Keep this private"],
+      ["feedback-old", false, null],
+    ],
+  );
+  assert.deepEqual(
+    result.recommendations[0].outcomeHistory.map((row) => [
+      row.id,
+      row.isCurrent,
+      row.notes,
+    ]),
+    [
+      ["outcome-new", true, "Lighting was strong"],
+      ["outcome-old", false, null],
+    ],
+  );
+});
+
 test("duplicate recommendation identities and inactive canonical shows do not render", async () => {
   const first = recommendation("one");
   const duplicate = recommendation("duplicate", {

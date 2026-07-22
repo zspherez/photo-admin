@@ -36,6 +36,8 @@ import type {
   AnalogSummaryView,
   ContactCategory,
   RecommendationView,
+  TrajectoryDecisionView,
+  TrajectoryOutcomeView,
 } from "@/lib/trajectoryRecommendationView";
 
 export const RECOMMENDATION_BATCH_SIZE = 48;
@@ -100,6 +102,28 @@ interface RecommendationRecord {
   billingPosition: number;
   lineupSize: number;
   isFirstBilled: boolean;
+  feedback?: Array<{
+    id: string;
+    action: "selected" | "declined" | "saved" | "dismissed" | "manual_override";
+    propensity: number | null;
+    manualOverride: boolean;
+    notes: string | null;
+    supersedesId: string | null;
+    recordedAt: Date;
+  }>;
+  outcomes?: Array<{
+    id: string;
+    attended: boolean | null;
+    access: "none" | "guestlist" | "photo_pass" | "other" | null;
+    keeperCount: number | null;
+    relationshipValue: number | null;
+    publicationValue: number | null;
+    shootability: "good" | "ok" | "poor" | null;
+    venueAccessibility: "high" | "medium" | "low" | null;
+    notes: string | null;
+    supersedesId: string | null;
+    recordedAt: Date;
+  }>;
   show: {
     id: string;
     date: Date;
@@ -247,6 +271,34 @@ const DEFAULT_STORE: TrajectoryRecommendationStore = {
         billingPosition: true,
         lineupSize: true,
         isFirstBilled: true,
+        feedback: {
+          orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
+          select: {
+            id: true,
+            action: true,
+            propensity: true,
+            manualOverride: true,
+            notes: true,
+            supersedesId: true,
+            recordedAt: true,
+          },
+        },
+        outcomes: {
+          orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
+          select: {
+            id: true,
+            attended: true,
+            access: true,
+            keeperCount: true,
+            relationshipValue: true,
+            publicationValue: true,
+            shootability: true,
+            venueAccessibility: true,
+            notes: true,
+            supersedesId: true,
+            recordedAt: true,
+          },
+        },
         show: {
           select: {
             id: true,
@@ -486,6 +538,37 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function currentEvidenceId(
+  rows: readonly { id: string; supersedesId: string | null }[],
+): string | null {
+  const supersededIds = new Set(
+    rows.flatMap((row) => (row.supersedesId ? [row.supersedesId] : [])),
+  );
+  return rows.find((row) => !supersededIds.has(row.id))?.id ?? null;
+}
+
+function decisionHistory(
+  rows: NonNullable<RecommendationRecord["feedback"]>,
+): TrajectoryDecisionView[] {
+  const currentId = currentEvidenceId(rows);
+  return rows.map((row) => ({
+    ...row,
+    recordedAt: row.recordedAt.toISOString(),
+    isCurrent: row.id === currentId,
+  }));
+}
+
+function outcomeHistory(
+  rows: NonNullable<RecommendationRecord["outcomes"]>,
+): TrajectoryOutcomeView[] {
+  const currentId = currentEvidenceId(rows);
+  return rows.map((row) => ({
+    ...row,
+    recordedAt: row.recordedAt.toISOString(),
+    isCurrent: row.id === currentId,
+  }));
 }
 
 function matchesWorkflow(
@@ -808,6 +891,8 @@ export async function getTrajectoryRecommendationPage(
       workflowPriority: { rank: 0, label: "" },
       framingLabel: framingLabel(record.arm),
       outreachLabels: outreachLabels(relevantOutreach),
+      decisionHistory: decisionHistory(record.feedback ?? []),
+      outcomeHistory: outcomeHistory(record.outcomes ?? []),
       rationale: rationaleFor(record),
       analogSummary: analogSummary(record.runArtist.analogSummary),
       details: {

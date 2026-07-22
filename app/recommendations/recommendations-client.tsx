@@ -36,6 +36,10 @@ import {
   setInterestedAction,
   unmarkSentAction,
 } from "@/app/dashboard/actions";
+import {
+  recordTrajectoryFeedbackAction,
+  recordTrajectoryOutcomeAction,
+} from "./actions";
 
 const TABS: Array<{ value: RecommendationTab; label: string }> = [
   { value: "suggested", label: "Suggested slate" },
@@ -74,6 +78,384 @@ const DATE_BANDS: Array<{
 interface BatchPayload {
   recommendations: RecommendationView[];
   nextCursor: string | null;
+}
+
+const FEEDBACK_INPUT_CLASS =
+  "mt-1 block min-h-10 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-zinc-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-zinc-800 dark:bg-zinc-950";
+
+function evidenceTimestamp(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function decisionLabel(action: RecommendationView["decisionHistory"][number]["action"]): string {
+  return action === "manual_override"
+    ? "Manual override"
+    : action.replaceAll("_", " ");
+}
+
+function outcomeSummary(
+  outcome: RecommendationView["outcomeHistory"][number],
+): string {
+  const parts = [
+    outcome.attended === null
+      ? null
+      : outcome.attended
+        ? "Attended"
+        : "Did not attend",
+    outcome.access ? `Access: ${outcome.access.replaceAll("_", " ")}` : null,
+    outcome.keeperCount === null ? null : `${outcome.keeperCount} keepers`,
+    outcome.relationshipValue === null
+      ? null
+      : `Relationship ${outcome.relationshipValue}/2`,
+    outcome.publicationValue === null
+      ? null
+      : `Publication ${outcome.publicationValue}/2`,
+    outcome.shootability ? `Shootability: ${outcome.shootability}` : null,
+    outcome.venueAccessibility
+      ? `Venue access: ${outcome.venueAccessibility}`
+      : null,
+  ].filter((value): value is string => value !== null);
+  return parts.join(" · ");
+}
+
+function FeedbackPanel({
+  recommendation,
+  returnTo,
+}: {
+  recommendation: RecommendationView;
+  returnTo: string;
+}) {
+  const currentDecision = recommendation.decisionHistory.find(
+    (item) => item.isCurrent,
+  );
+  const currentOutcome = recommendation.outcomeHistory.find(
+    (item) => item.isCurrent,
+  );
+  const attributionFields = [
+    { name: "recommendationId", value: recommendation.id },
+    { name: "runId", value: recommendation.runId },
+    { name: "showId", value: recommendation.showId },
+    { name: "artistId", value: recommendation.artistId },
+    { name: "returnTo", value: returnTo },
+  ];
+
+  return (
+    <details className="rounded-lg border border-zinc-200 px-3 py-3 dark:border-zinc-800">
+      <summary className="cursor-pointer text-sm font-semibold">
+        Decision &amp; show outcome
+      </summary>
+      <div className="mt-4 space-y-6">
+        <section aria-labelledby={`decision-${recommendation.id}`}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 id={`decision-${recommendation.id}`} className="text-sm font-semibold">
+              Decision
+            </h4>
+            {currentDecision ? (
+              <Badge tone="info">
+                Latest: {decisionLabel(currentDecision.action)}
+              </Badge>
+            ) : (
+              <Badge tone="muted">Not recorded</Badge>
+            )}
+          </div>
+          <form
+            action={recordTrajectoryFeedbackAction}
+            className="mt-3 space-y-3"
+          >
+            {attributionFields.map((field) => (
+              <input key={field.name} type="hidden" {...field} />
+            ))}
+            <input
+              type="hidden"
+              name="idempotencyKey"
+              value={`trajectory-feedback/${recommendation.trajectoryActionId}`}
+            />
+            {currentDecision && (
+              <input
+                type="hidden"
+                name="supersedesId"
+                value={currentDecision.id}
+              />
+            )}
+            <div>
+              <label
+                htmlFor={`decision-notes-${recommendation.id}`}
+                className="text-xs font-medium text-zinc-600 dark:text-zinc-400"
+              >
+                Optional private note
+              </label>
+              <textarea
+                id={`decision-notes-${recommendation.id}`}
+                name="notes"
+                rows={2}
+                maxLength={4000}
+                defaultValue={currentDecision?.notes ?? ""}
+                className={FEEDBACK_INPUT_CLASS}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+              <PendingSubmitButton
+                name="action"
+                value="selected"
+                size="sm"
+                className="min-h-10"
+                pendingLabel="Saving…"
+              >
+                Selected
+              </PendingSubmitButton>
+              <PendingSubmitButton
+                name="action"
+                value="saved"
+                variant="secondary"
+                size="sm"
+                className="min-h-10"
+                pendingLabel="Saving…"
+              >
+                Saved
+              </PendingSubmitButton>
+              <PendingSubmitButton
+                name="action"
+                value="declined"
+                variant="secondary"
+                size="sm"
+                className="min-h-10"
+                pendingLabel="Saving…"
+              >
+                Declined
+              </PendingSubmitButton>
+              <PendingSubmitButton
+                name="action"
+                value="manual_override"
+                variant="secondary"
+                size="sm"
+                className="min-h-10"
+                pendingLabel="Saving…"
+              >
+                Manual override
+              </PendingSubmitButton>
+            </div>
+          </form>
+          {recommendation.decisionHistory.length > 0 && (
+            <details className="mt-3 text-xs">
+              <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">
+                Decision correction history ({recommendation.decisionHistory.length})
+              </summary>
+              <ol className="mt-2 space-y-2">
+                {recommendation.decisionHistory.map((item) => (
+                  <li
+                    key={item.id}
+                    className="rounded-md bg-zinc-50 px-3 py-2 dark:bg-zinc-900"
+                  >
+                    <span className="font-medium">
+                      {decisionLabel(item.action)}
+                    </span>{" "}
+                    · {evidenceTimestamp(item.recordedAt)}
+                    {item.isCurrent ? " · current" : " · corrected"}
+                    {item.notes && (
+                      <p className="mt-1 whitespace-pre-wrap text-zinc-600 dark:text-zinc-400">
+                        Private note: {item.notes}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          )}
+        </section>
+
+        <section
+          aria-labelledby={`outcome-${recommendation.id}`}
+          className="border-t border-zinc-200 pt-5 dark:border-zinc-800"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 id={`outcome-${recommendation.id}`} className="text-sm font-semibold">
+              Attendance, access &amp; photo outcome
+            </h4>
+            {currentOutcome ? (
+              <Badge tone="success">Latest outcome recorded</Badge>
+            ) : (
+              <Badge tone="muted">Not recorded</Badge>
+            )}
+          </div>
+          <form
+            action={recordTrajectoryOutcomeAction}
+            className="mt-3 space-y-3"
+          >
+            {attributionFields.map((field) => (
+              <input key={field.name} type="hidden" {...field} />
+            ))}
+            <input
+              type="hidden"
+              name="idempotencyKey"
+              value={`trajectory-outcome/${recommendation.trajectoryActionId}`}
+            />
+            {currentOutcome && (
+              <input
+                type="hidden"
+                name="supersedesId"
+                value={currentOutcome.id}
+              />
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-xs font-medium">
+                Attended
+                <select
+                  name="attended"
+                  required
+                  defaultValue={
+                    currentOutcome?.attended === true
+                      ? "true"
+                      : currentOutcome?.attended === false
+                        ? "false"
+                        : ""
+                  }
+                  className={FEEDBACK_INPUT_CLASS}
+                >
+                  <option value="" disabled>
+                    Choose…
+                  </option>
+                  <option value="true">Yes</option>
+                  <option value="false">No</option>
+                </select>
+              </label>
+              <label className="text-xs font-medium">
+                Access
+                <select
+                  name="access"
+                  defaultValue={currentOutcome?.access ?? ""}
+                  className={FEEDBACK_INPUT_CLASS}
+                >
+                  <option value="">Not recorded</option>
+                  <option value="none">None</option>
+                  <option value="guestlist">Guest list</option>
+                  <option value="photo_pass">Photo pass</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+              <label className="text-xs font-medium">
+                Keeper count
+                <input
+                  name="keeperCount"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  step={1}
+                  defaultValue={currentOutcome?.keeperCount ?? ""}
+                  className={FEEDBACK_INPUT_CLASS}
+                />
+              </label>
+              <label className="text-xs font-medium">
+                Relationship value
+                <select
+                  name="relationshipValue"
+                  defaultValue={currentOutcome?.relationshipValue ?? ""}
+                  className={FEEDBACK_INPUT_CLASS}
+                >
+                  <option value="">Not recorded</option>
+                  <option value="0">0 — none</option>
+                  <option value="1">1 — some</option>
+                  <option value="2">2 — strong</option>
+                </select>
+              </label>
+              <label className="text-xs font-medium">
+                Publication value
+                <select
+                  name="publicationValue"
+                  defaultValue={currentOutcome?.publicationValue ?? ""}
+                  className={FEEDBACK_INPUT_CLASS}
+                >
+                  <option value="">Not recorded</option>
+                  <option value="0">0 — none</option>
+                  <option value="1">1 — some</option>
+                  <option value="2">2 — strong</option>
+                </select>
+              </label>
+              <label className="text-xs font-medium">
+                Shootability
+                <select
+                  name="shootability"
+                  defaultValue={currentOutcome?.shootability ?? ""}
+                  className={FEEDBACK_INPUT_CLASS}
+                >
+                  <option value="">Not recorded</option>
+                  <option value="good">Good</option>
+                  <option value="ok">OK</option>
+                  <option value="poor">Poor</option>
+                </select>
+              </label>
+              <label className="text-xs font-medium">
+                Venue accessibility
+                <select
+                  name="venueAccessibility"
+                  defaultValue={currentOutcome?.venueAccessibility ?? ""}
+                  className={FEEDBACK_INPUT_CLASS}
+                >
+                  <option value="">Not recorded</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+            </div>
+            <div>
+              <label
+                htmlFor={`outcome-notes-${recommendation.id}`}
+                className="text-xs font-medium"
+              >
+                Optional private note
+              </label>
+              <textarea
+                id={`outcome-notes-${recommendation.id}`}
+                name="notes"
+                rows={2}
+                maxLength={4000}
+                defaultValue={currentOutcome?.notes ?? ""}
+                className={FEEDBACK_INPUT_CLASS}
+              />
+            </div>
+            <PendingSubmitButton
+              size="sm"
+              className="min-h-10 w-full sm:w-auto"
+              pendingLabel="Saving outcome…"
+            >
+              {currentOutcome ? "Save outcome correction" : "Save outcome"}
+            </PendingSubmitButton>
+          </form>
+          {recommendation.outcomeHistory.length > 0 && (
+            <details className="mt-3 text-xs">
+              <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">
+                Outcome correction history ({recommendation.outcomeHistory.length})
+              </summary>
+              <ol className="mt-2 space-y-2">
+                {recommendation.outcomeHistory.map((item) => (
+                  <li
+                    key={item.id}
+                    className="rounded-md bg-zinc-50 px-3 py-2 dark:bg-zinc-900"
+                  >
+                    <span className="font-medium">{outcomeSummary(item)}</span>
+                    <br />
+                    {evidenceTimestamp(item.recordedAt)}
+                    {item.isCurrent ? " · current" : " · corrected"}
+                    {item.notes && (
+                      <p className="mt-1 whitespace-pre-wrap text-zinc-600 dark:text-zinc-400">
+                        Private note: {item.notes}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          )}
+          <p className="mt-2 text-xs text-zinc-500">
+            Notes stay in photo-admin and are never included in the producer export.
+          </p>
+        </section>
+      </div>
+    </details>
+  );
 }
 
 function armTone(arm: RecommendationView["arm"]): BadgeTone {
@@ -240,7 +622,16 @@ function RecommendationCard({
               {label}
             </Badge>
           ))}
-          <Badge tone="muted">Access not recorded</Badge>
+          {recommendation.outcomeHistory.find((item) => item.isCurrent)?.access ? (
+            <Badge tone="success">
+              Access:{" "}
+              {recommendation.outcomeHistory
+                .find((item) => item.isCurrent)
+                ?.access?.replaceAll("_", " ")}
+            </Badge>
+          ) : (
+            <Badge tone="muted">Access not recorded</Badge>
+          )}
         </div>
 
         {recommendation.contactDetail && (
@@ -415,6 +806,8 @@ function RecommendationCard({
             </form>
           )}
         </div>
+
+        <FeedbackPanel recommendation={recommendation} returnTo={returnTo} />
 
         <div>
           <h4 className="text-sm font-semibold">Why it is here</h4>
