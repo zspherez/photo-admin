@@ -6,6 +6,7 @@ import { festivalLeadTimeWhere } from "./festivalEligibility";
 import { directOutreachInstructionsStorage } from "./agentRules";
 import {
   type ContactResearchTransactionRunner,
+  countRetryableExhaustedContactResearchJobs,
   claimContactResearchJobs,
   contactResearchPriority,
   CONTACT_RESEARCH_OIDC_AUDIENCE,
@@ -34,6 +35,7 @@ import {
   isOfficialManagementAutoApprovalEligible,
   isContactResearchApprovalEffective,
   refreshContactResearchQueue,
+  retryAllExhaustedContactResearchJobs,
   retryAllReviewContactResearchJobs,
   retryContactResearchJob,
   skipContactResearchArtist,
@@ -697,6 +699,210 @@ test("direct exhausted retry supersedes obsolete approval history", async () => 
 
   assert.equal(retried, true);
   assert.equal(state.candidateStatus, "superseded");
+});
+
+test("exhausted retry count uses the same current eligibility rules as the action", async () => {
+  let source = "";
+  async function runQuery<T>(query: Prisma.Sql): Promise<T> {
+    source = sqlText(query);
+    return [{ count: 2 }] as T;
+  }
+
+  assert.equal(
+    await countRetryableExhaustedContactResearchJobs(
+      new Date("2026-07-21T12:00:00.000Z"),
+      runQuery
+    ),
+    2
+  );
+  assert.match(source, /job\."status" = \?/);
+  assert.match(
+    source,
+    /candidate\."status" = 'approved'[\s\S]*THEN 'effective_approval'/
+  );
+  assert.match(
+    source,
+    /contact\."state" = 'active'[\s\S]*contact\."email" IS NOT NULL[\s\S]*THEN 'active_contact'/
+  );
+  assert.match(
+    source,
+    /research_skip\."clearedAt" IS NULL[\s\S]*THEN 'intentional_skip'/
+  );
+  assert.match(
+    source,
+    /direct_outreach\."status" = 'pending'[\s\S]*THEN 'pending_direct_outreach'/
+  );
+  assert.match(
+    source,
+    /show\."date" >= \?[\s\S]*show\."syncStatus" = 'active'/
+  );
+  assert.match(
+    source,
+    /show\."isFestival" = false[\s\S]*show\."date" <= \?[\s\S]*show\."isFestival" = true[\s\S]*job\."requestedShowId" = show\."id"/
+  );
+  assert.match(
+    source,
+    /show\."festivalNycStatus" = 'inside_nyc'[\s\S]*show\."date" >= \?/
+  );
+  assert.match(source, /retry_eligibility\."reason" = 'eligible'/);
+});
+
+test("bulk exhausted retry reports every exclusion and preserves retry state", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const queries: string[] = [];
+  const result = await retryAllExhaustedContactResearchJobs(
+    now,
+    runWithTransaction({
+      contactResearchCandidate: {
+        findMany: async () => [],
+      },
+      $queryRaw: async (query: unknown) => {
+        const source = sqlText(query);
+        queries.push(source);
+        if (
+          source.includes('FROM "ContactResearchJob" job') &&
+          source.includes("FOR UPDATE")
+        ) {
+          return [
+            "eligible-1",
+            "approval-1",
+            "contact-1",
+            "skip-1",
+            "proposal-1",
+            "show-1",
+          ].map((id) => ({ id, artistId: `artist-${id}` }));
+        }
+        if (source.includes("FOR UPDATE")) return [];
+        if (source.includes('UPDATE "ContactResearchJob"')) {
+          return [{ id: "eligible-1" }];
+        }
+        return [
+          { id: "eligible-1", reason: "eligible" },
+          { id: "approval-1", reason: "effective_approval" },
+          { id: "contact-1", reason: "active_contact" },
+          { id: "skip-1", reason: "intentional_skip" },
+          { id: "proposal-1", reason: "pending_direct_outreach" },
+          { id: "show-1", reason: "no_eligible_show" },
+        ];
+      },
+    })
+  );
+
+  assert.deepEqual(result, {
+    requeued: 1,
+    skipped: {
+      status_changed: 0,
+      effective_approval: 1,
+      active_contact: 1,
+      intentional_skip: 1,
+      pending_direct_outreach: 1,
+      no_eligible_show: 1,
+    },
+  });
+  const update = queries.find((query) =>
+    query.includes('UPDATE "ContactResearchJob"')
+  );
+  assert.ok(update);
+  assert.match(update, /"status" = 'pending'/);
+  assert.match(update, /"completedAt" = NULL/);
+  assert.match(update, /"claimToken" = NULL/);
+  assert.match(update, /"claimedAt" = NULL/);
+  assert.match(update, /"claimExpiresAt" = NULL/);
+  assert.doesNotMatch(update, /"attemptCount"\s*=/);
+  assert.doesNotMatch(update, /"userNotes"\s*=/);
+  assert.doesNotMatch(update, /\bINSERT\b/);
+  for (const table of [
+    "ContactResearchJob",
+    "Artist",
+    "Contact",
+    "ArtistResearchSkip",
+    "ContactResearchDirectOutreachProposal",
+    "ContactResearchCandidate",
+  ]) {
+    assert.ok(
+      queries.some(
+        (query) => query.includes(`FROM "${table}"`) && query.includes("FOR UPDATE")
+      ),
+      `${table} eligibility state must be locked before requeue`
+    );
+  }
+});
+
+test("bulk exhausted retry supersedes obsolete approvals before requeue", async () => {
+  const events: string[] = [];
+  let candidateStatus = "approved";
+  const result = await retryAllExhaustedContactResearchJobs(
+    new Date("2026-07-21T12:00:00.000Z"),
+    runWithTransaction({
+      contactResearchCandidate: {
+        findMany: async () => [
+          {
+            id: "candidate-1",
+            normalizedEmail: "old@example.com",
+            job: { artistId: "artist-1" },
+          },
+        ],
+        updateMany: async () => {
+          candidateStatus = "superseded";
+          events.push("superseded");
+          return { count: 1 };
+        },
+      },
+      contact: { findMany: async () => [] },
+      $queryRaw: async (query: unknown) => {
+        const source = sqlText(query);
+        if (
+          source.includes('FROM "ContactResearchJob" job') &&
+          source.includes("FOR UPDATE")
+        ) {
+          return [{ id: "job-1", artistId: "artist-1" }];
+        }
+        if (source.includes("FOR UPDATE")) return [];
+        if (!source.includes('UPDATE "ContactResearchJob"')) {
+          return [{ id: "job-1", reason: "eligible" }];
+        }
+        assert.equal(candidateStatus, "superseded");
+        events.push("requeued");
+        return [{ id: "job-1" }];
+      },
+    })
+  );
+
+  assert.equal(result.requeued, 1);
+  assert.deepEqual(events, ["superseded", "requeued"]);
+});
+
+test("concurrent contact or skip changes prevent unsafe exhausted requeue", async () => {
+  for (const reason of ["active_contact", "intentional_skip"] as const) {
+    let queryCount = 0;
+    const result = await retryAllExhaustedContactResearchJobs(
+      new Date("2026-07-21T12:00:00.000Z"),
+      runWithTransaction({
+        contactResearchCandidate: { findMany: async () => [] },
+        $queryRaw: async (query: unknown) => {
+          const source = sqlText(query);
+          if (
+            source.includes('FROM "ContactResearchJob" job') &&
+            source.includes("FOR UPDATE")
+          ) {
+            return [{ id: "job-1", artistId: "artist-1" }];
+          }
+          if (source.includes("FOR UPDATE")) return [];
+          queryCount += 1;
+          if (queryCount === 1) {
+            return [{ id: "job-1", reason: "eligible" }];
+          }
+          if (source.includes('UPDATE "ContactResearchJob"')) {
+            return [];
+          }
+          return [{ id: "job-1", reason }];
+        },
+      })
+    );
+
+    assert.equal(result.requeued, 0);
+    assert.equal(result.skipped[reason], 1);
+  }
 });
 
 test("pending direct outreach blocks per-job and bulk review requeue until reviewed", async () => {
@@ -3789,7 +3995,11 @@ test("claims require current eligibility and unexpired ownership", () => {
   );
   assert.match(
     source,
-    /retryAllExhaustedContactResearchJobs[\s\S]*retryContactResearchJobsByStatus\("exhausted", now, runTransaction\)/
+    /countRetryableExhaustedContactResearchJobs[\s\S]*contactResearchRetryEligibilityRowsSql\("exhausted", now\)/
+  );
+  assert.match(
+    source,
+    /retryAllExhaustedContactResearchJobs[\s\S]*contactResearchRetryEligibilityRowsSql\([\s\S]*"exhausted"/
   );
   assert.match(
     source,
@@ -3797,7 +4007,7 @@ test("claims require current eligibility and unexpired ownership", () => {
   );
   assert.match(
     source,
-    /retryEligibleContactResearchJobs[\s\S]*show\."syncStatus" = 'active'[\s\S]*show\."date" <= \$\{end\}[\s\S]*job\."requestedShowId" = show\."id"/
+    /retryEligibleContactResearchJobs[\s\S]*show\."syncStatus" = 'active'[\s\S]*show\."date" <= \$\{end\}[\s\S]*show\."isFestival" = true[\s\S]*job\."requestedShowId" = show\."id"/
   );
   assert.match(
     source,

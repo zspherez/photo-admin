@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import {
   approveContactResearchCandidate,
   approveContactResearchDirectOutreach,
+  countRetryableExhaustedContactResearchJobs,
   refreshContactResearchQueue,
   rejectContactResearchCandidate,
   rejectContactResearchDirectOutreach,
@@ -239,9 +240,41 @@ async function retryAllExhaustedJobsAction(formData: FormData) {
   await requireServerActionAuth(
     researchStatusHref(actionResearchFilter(formData))
   );
-  await retryAllExhaustedContactResearchJobs();
+  const filter = actionResearchFilter(formData);
+  let destination: string;
+  try {
+    const result = await retryAllExhaustedContactResearchJobs();
+    const skipped = Object.values(result.skipped).reduce(
+      (total, count) => total + count,
+      0
+    );
+    destination = researchStatusHref(filter, {
+      requeue_exhausted: "1",
+      requeued: String(result.requeued),
+      skipped: String(skipped),
+      skipped_status_changed: String(result.skipped.status_changed),
+      skipped_effective_approval: String(
+        result.skipped.effective_approval
+      ),
+      skipped_active_contact: String(result.skipped.active_contact),
+      skipped_intentional_skip: String(result.skipped.intentional_skip),
+      skipped_pending_direct_outreach: String(
+        result.skipped.pending_direct_outreach
+      ),
+      skipped_no_eligible_show: String(result.skipped.no_eligible_show),
+    });
+  } catch (error) {
+    destination = researchStatusHref(filter, {
+      error: "requeue_exhausted",
+      detail: (error instanceof Error ? error.message : String(error)).slice(
+        0,
+        180
+      ),
+    });
+  }
   revalidatePath("/research");
   revalidatePath("/settings");
+  redirect(destination);
 }
 
 async function retryAllReviewJobsAction(formData: FormData) {
@@ -335,6 +368,15 @@ export default async function ContactResearchPage({
     error?: SearchParamValue;
     detail?: SearchParamValue;
     sheet_error?: SearchParamValue;
+    requeue_exhausted?: SearchParamValue;
+    requeued?: SearchParamValue;
+    skipped?: SearchParamValue;
+    skipped_status_changed?: SearchParamValue;
+    skipped_effective_approval?: SearchParamValue;
+    skipped_active_contact?: SearchParamValue;
+    skipped_intentional_skip?: SearchParamValue;
+    skipped_pending_direct_outreach?: SearchParamValue;
+    skipped_no_eligible_show?: SearchParamValue;
     status?: SearchParamValue;
     view?: SearchParamValue;
   }>;
@@ -358,7 +400,35 @@ export default async function ContactResearchPage({
     error: firstSearchParam(raw.error),
     detail: firstSearchParam(raw.detail),
     sheetError: firstSearchParam(raw.sheet_error),
+    requeueExhausted: firstSearchParam(raw.requeue_exhausted),
+    requeued: firstSearchParam(raw.requeued),
+    skipped: firstSearchParam(raw.skipped),
+    skippedStatusChanged: firstSearchParam(raw.skipped_status_changed),
+    skippedEffectiveApproval: firstSearchParam(
+      raw.skipped_effective_approval
+    ),
+    skippedActiveContact: firstSearchParam(raw.skipped_active_contact),
+    skippedIntentionalSkip: firstSearchParam(
+      raw.skipped_intentional_skip
+    ),
+    skippedPendingDirectOutreach: firstSearchParam(
+      raw.skipped_pending_direct_outreach
+    ),
+    skippedNoEligibleShow: firstSearchParam(
+      raw.skipped_no_eligible_show
+    ),
   };
+  const requeueSkipDetails = [
+    [status.skippedStatusChanged, "status changed"],
+    [status.skippedEffectiveApproval, "effective approval"],
+    [status.skippedActiveContact, "active email contact"],
+    [status.skippedIntentionalSkip, "intentional skip"],
+    [status.skippedPendingDirectOutreach, "pending direct outreach"],
+    [status.skippedNoEligibleShow, "no eligible show"],
+  ]
+    .filter(([count]) => count && count !== "0")
+    .map(([count, label]) => `${count} ${label}`)
+    .join(" · ");
   const now = new Date();
   const today = easternTodayStoredDate(now);
   const bestTierExpression = venueTierSql(
@@ -391,6 +461,7 @@ export default async function ContactResearchPage({
     groupedCounts,
     skippedCount,
     retryReviewCount,
+    retryExhaustedCount,
     rankedSummaries,
   ] = await Promise.all([
     db.contactResearchJob.groupBy({
@@ -412,6 +483,7 @@ export default async function ContactResearchPage({
         },
       },
     }),
+    countRetryableExhaustedContactResearchJobs(now),
     db.$queryRaw<
       Array<{
         id: string;
@@ -527,7 +599,6 @@ export default async function ContactResearchPage({
     (counts.get("pending") ?? 0) +
     (counts.get("claimed") ?? 0) +
     (counts.get("review") ?? 0);
-  const retryExhaustedCount = counts.get("exhausted") ?? 0;
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-10">
@@ -621,6 +692,15 @@ export default async function ContactResearchPage({
           <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
             Queue refreshed: {status.eligible ?? "0"} eligible ·{" "}
             {status.enqueued ?? "0"} newly queued.
+          </div>
+        </AutoDismissStatus>
+      )}
+      {status.requeueExhausted && (
+        <AutoDismissStatus>
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Exhausted research requeue: {status.requeued ?? "0"} requeued ·{" "}
+            {status.skipped ?? "0"} skipped
+            {requeueSkipDetails ? ` (${requeueSkipDetails})` : ""}.
           </div>
         </AutoDismissStatus>
       )}
