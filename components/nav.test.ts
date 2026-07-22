@@ -14,3 +14,8 @@ test("primary navigation keeps dashboard shows and manual show sync distinct", (
     /\{ href: "\/shows", label: "All shows \/ Sync", match: \(p\) => p === "\/shows" \}/
   );
 });
+
+test("primary navigation does not expose the legacy New tab", () => {
+  assert.doesNotMatch(source, /href: "\/new"/);
+  assert.doesNotMatch(source, /label: "New"/);
+});
