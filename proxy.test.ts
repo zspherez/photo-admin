@@ -65,3 +65,15 @@ test("the fixed release verification route reaches its own fail-closed bearer au
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-middleware-next"), "1");
 });
+
+test("trajectory ingest reaches its own fail-closed request authentication", async () => {
+  const response = await proxy(
+    new NextRequest(
+      "https://admin.example/api/integrations/trajectory-runs",
+      { method: "POST" },
+    ),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-middleware-next"), "1");
+});
