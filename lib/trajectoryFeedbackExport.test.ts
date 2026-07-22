@@ -107,8 +107,14 @@ test("export is deterministic, PII-free, and carries exact attribution", () => {
     ["outreach-a", "outreach-b"],
   );
   assert.equal(events[0].run_id, "producer-run-1");
+  assert.equal(
+    events[0].recommendation_id,
+    "producer-run-1:12345:trajectory:67890",
+  );
   assert.equal(events[0].show_id, "12345");
+  assert.equal(events[0].artist_id, "67890");
   assert.equal(events[0].edmtrain_artist_id, 67890);
+  assert.equal(events[0].arm, "trajectory");
   assert.equal(events[0].open_count, 7);
   assert.equal(events[0].click_count, 4);
   assert.match(
@@ -158,9 +164,12 @@ test("decision export maps corrections to the producer evaluator contract", () =
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   assert.deepEqual(events[0], {
-    show_id: "12345",
-    action: "selected",
-    arm: "manual",
+      recommendation_id: "producer-run-1:12345:trajectory:67890",
+      show_id: "12345",
+      artist_id: "67890",
+      edmtrain_artist_id: 67890,
+      action: "selected",
+      arm: "trajectory",
     propensity: 0.75,
     manual_override: true,
     outreach_id: "outreach-1",
@@ -171,13 +180,20 @@ test("decision export maps corrections to the producer evaluator contract", () =
   assert.equal(events[1].action, "declined");
   assert.equal(events[1].arm, "trajectory");
   assert.equal(events[1].outreach_id, undefined);
-  assert.doesNotMatch(first, /artist|venue|contact|email|phone|notes/i);
+  assert.doesNotMatch(
+    first,
+    /artist_name|venue|contact|email|phone|notes/i,
+  );
 });
 
 test("outcome export uses producer field names and excludes private notes", () => {
   const event = buildTrajectoryOutcomeExportEvent(outcomeRow());
   assert.deepEqual(event, {
+    recommendation_id: "producer-run-1:12345:trajectory:67890",
     show_id: "12345",
+    artist_id: "67890",
+    edmtrain_artist_id: 67890,
+    arm: "trajectory",
     attended: "yes",
     access: "photo_pass",
     keepers: 5,
@@ -193,6 +209,42 @@ test("outcome export uses producer field names and excludes private notes", () =
     serializeTrajectoryOutcomeJsonl([outcomeRow()]),
     `${JSON.stringify(event)}\n`,
   );
+});
+
+test("shared shows retain distinct exact recommendation attribution across every stream", () => {
+  const secondRecommendation = {
+    ...recommendation(),
+    id: "recommendation-2",
+    arm: "portfolio",
+    runArtist: { edmtrainArtistId: 67891 },
+    outreaches: [{ id: "outreach-2" }],
+  };
+  const firstIds = [
+    buildTrajectoryDecisionExportEvent(decisionRow()).recommendation_id,
+    buildTrajectoryOutcomeExportEvent(outcomeRow()).recommendation_id,
+    buildTrajectoryEngagementExportEvent(engagementRow()).recommendation_id,
+  ];
+  const secondIds = [
+    buildTrajectoryDecisionExportEvent(
+      decisionRow({ recommendation: secondRecommendation }),
+    ).recommendation_id,
+    buildTrajectoryOutcomeExportEvent(
+      outcomeRow({ recommendation: secondRecommendation }),
+    ).recommendation_id,
+    buildTrajectoryEngagementExportEvent(
+      engagementRow({
+        id: "outreach-2",
+        trajectoryRecommendation: secondRecommendation,
+      }),
+    ).recommendation_id,
+  ];
+  assert.deepEqual(new Set(firstIds), new Set([
+    "producer-run-1:12345:trajectory:67890",
+  ]));
+  assert.deepEqual(new Set(secondIds), new Set([
+    "producer-run-1:12345:portfolio:67891",
+  ]));
+  assert.notEqual(firstIds[0], secondIds[0]);
 });
 
 test("only the latest unsuperseded evidence per recommendation is exported", () => {
@@ -287,7 +339,9 @@ test("database export queries select current evidence without contact or message
   );
 });
 
-const producerRoot = "/Users/joshrehders/misc/artist_trajectory";
+const producerRoot =
+  process.env.TRAJECTORY_PRODUCER_ROOT ??
+  "/Users/joshrehders/misc/artist_trajectory";
 test(
   "decision, outcome, and engagement fixtures pass the producer evaluator",
   { skip: !existsSync(`${producerRoot}/model_contract.py`) },
@@ -302,8 +356,11 @@ test(
       "decision, outcome, engagement = payload['decision'], payload['outcome'], payload['engagement']",
       "assert decision['integration_contract_version'] == model_contract.CONTRACT_VERSION",
       "assert outcome['integration_contract_version'] == model_contract.CONTRACT_VERSION",
+      "assert decision['recommendation_id'] == outcome['recommendation_id'] == engagement['recommendation_id']",
       "assert model_contract.sanitize_outreach_engagement_event(engagement) == engagement",
       "assert evaluate_decision_utility.worth_it(outcome)",
+      "outcomes_by_recommendation, outcomes_by_show = evaluate_decision_utility.index_latest_outcomes([outcome])",
+      "assert evaluate_decision_utility.outcome_for_decision(decision, outcomes_by_recommendation, outcomes_by_show) == outcome",
       "summary = evaluate_decision_utility.engagement_summary_by_arm([decision], [engagement])",
       "assert summary['trajectory']['selected'] == 1",
       "assert summary['trajectory']['opened'] == 1",

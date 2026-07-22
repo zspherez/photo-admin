@@ -26,6 +26,7 @@ function recommendation(
     artistId: "artist-1",
     runStatus: "ready",
     validUntil: new Date("2026-07-22T16:00:00.000Z"),
+    showDate: new Date("2026-07-21T00:00:00.000Z"),
     showSyncStatus: "active",
     ...overrides,
   };
@@ -243,6 +244,7 @@ test("stale recommendations still accept historical outcomes but not new decisio
       }),
     ],
   });
+
   const result = await recordTrajectoryOutcome(
     {
       ...attribution,
@@ -274,6 +276,111 @@ test("stale recommendations still accept historical outcomes but not new decisio
       error instanceof TrajectoryFeedbackError &&
       error.code === "recommendation_not_actionable",
   );
+});
+
+test("initial outcomes use canonical UTC show dates and the current Eastern day", async () => {
+  const state = fakePersistence({
+    recommendations: [
+      recommendation({
+        showDate: new Date("2026-07-22T00:00:00.000Z"),
+      }),
+    ],
+  });
+  const input = {
+    ...attribution,
+    attended: true,
+    idempotencyKey: "outcome-date-gate",
+  };
+
+  await assert.rejects(
+    recordTrajectoryOutcome(input, {
+      persistence: state.persistence,
+      now: () => new Date("2026-07-22T03:59:59.999Z"),
+    }),
+    (error) =>
+      error instanceof TrajectoryFeedbackError &&
+      error.code === "show_not_occurred",
+  );
+  assert.equal(state.outcomes.length, 0);
+
+  await recordTrajectoryOutcome(input, {
+    persistence: state.persistence,
+    now: () => new Date("2026-07-22T04:00:00.000Z"),
+  });
+  assert.equal(state.outcomes.length, 1);
+});
+
+test("past and today outcomes are accepted while future outcomes are rejected", async () => {
+  for (const [showDate, accepted] of [
+    ["2026-07-20T00:00:00.000Z", true],
+    ["2026-07-21T00:00:00.000Z", true],
+    ["2026-07-22T00:00:00.000Z", false],
+  ] as const) {
+    const state = fakePersistence({
+      recommendations: [recommendation({ showDate: new Date(showDate) })],
+    });
+    const promise = recordTrajectoryOutcome(
+      {
+        ...attribution,
+        attended: false,
+        idempotencyKey: `date-${showDate}`,
+      },
+      { persistence: state.persistence, now: () => now },
+    );
+    if (accepted) {
+      await promise;
+      assert.equal(state.outcomes.length, 1);
+    } else {
+      await assert.rejects(
+        promise,
+        (error) =>
+          error instanceof TrajectoryFeedbackError &&
+          error.code === "show_not_occurred",
+      );
+      assert.equal(state.outcomes.length, 0);
+    }
+  }
+});
+
+test("canonical date changes block premature roots but not corrections", async () => {
+  const mutable = recommendation();
+  const state = fakePersistence({ recommendations: [mutable] });
+  const first = await recordTrajectoryOutcome(
+    {
+      ...attribution,
+      attended: true,
+      keeperCount: 4,
+      idempotencyKey: "before-date-change",
+    },
+    { persistence: state.persistence, now: () => now },
+  );
+
+  mutable.showDate = new Date("2026-07-25T00:00:00.000Z");
+  await assert.rejects(
+    recordTrajectoryOutcome(
+      {
+        ...attribution,
+        attended: false,
+        idempotencyKey: "new-root-after-date-change",
+      },
+      { persistence: state.persistence, now: () => now },
+    ),
+    (error) =>
+      error instanceof TrajectoryFeedbackError &&
+      error.code === "show_not_occurred",
+  );
+
+  await recordTrajectoryOutcome(
+    {
+      ...attribution,
+      attended: true,
+      keeperCount: 6,
+      idempotencyKey: "correction-after-date-change",
+      supersedesId: first.outcome.id,
+    },
+    { persistence: state.persistence, now: () => now },
+  );
+  assert.equal(state.outcomes.length, 2);
 });
 
 test("outcome retries remain idempotent after the run stops accepting new outcomes", async () => {

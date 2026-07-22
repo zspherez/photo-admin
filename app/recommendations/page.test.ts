@@ -128,7 +128,7 @@ test("authenticated cards record decisions, structured outcomes, and correction 
   const client = source("app/recommendations/recommendations-client.tsx");
   const actions = source("app/recommendations/actions.ts");
   for (const marker of [
-    "Decision &amp; show outcome",
+    "Decision & show outcome",
     "recordTrajectoryFeedbackAction",
     "recordTrajectoryOutcomeAction",
     "manual_override",
@@ -140,9 +140,14 @@ test("authenticated cards record decisions, structured outcomes, and correction 
     "shootability",
     "venueAccessibility",
     "Notes stay in photo-admin",
+    "outcomeRecordable",
   ]) {
     assert.match(client, new RegExp(marker));
   }
+  assert.match(
+    source("lib/trajectoryRecommendations.ts"),
+    /Outcome entry opens on/,
+  );
   assert.match(actions, /requireServerActionAuth\(formData\.get\("returnTo"\)/);
   assert.match(actions, /redirect\(appendWorkflowResult/);
 });

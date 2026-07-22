@@ -1,5 +1,9 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import {
+  dateOnlyFromStoredDate,
+  easternDateOnly,
+} from "@/lib/calendarDate";
 import { db } from "@/lib/db";
 
 const opaqueId = z.string().trim().min(1).max(200);
@@ -129,6 +133,7 @@ export interface TrajectoryRecommendationContext {
   artistId: string | null;
   runStatus: string;
   validUntil: Date;
+  showDate: Date;
   showSyncStatus: string;
 }
 
@@ -207,6 +212,7 @@ export class TrajectoryFeedbackError extends Error {
       | "recommendation_attribution_mismatch"
       | "recommendation_not_actionable"
       | "historical_recommendation_unknown"
+      | "show_not_occurred"
       | "superseded_evidence_not_found"
       | "cross_recommendation_supersession"
       | "idempotency_conflict"
@@ -274,6 +280,7 @@ function prismaTrajectoryFeedbackTransaction(
           },
           show: {
             select: {
+              date: true,
               syncStatus: true,
             },
           },
@@ -292,6 +299,7 @@ function prismaTrajectoryFeedbackTransaction(
             artistId: recommendation.runArtist.artistId,
             runStatus: recommendation.run.status,
             validUntil: recommendation.run.validUntil,
+            showDate: recommendation.show.date,
             showSyncStatus: recommendation.show.syncStatus,
           }
         : null;
@@ -438,6 +446,13 @@ function assertKnownHistoricalRun(
   }
 }
 
+export function hasTrajectoryShowOccurred(
+  showDate: Date,
+  now: Date,
+): boolean {
+  return dateOnlyFromStoredDate(showDate) <= easternDateOnly(now);
+}
+
 function assertSameFeedback(
   existing: StoredTrajectoryFeedback,
   input: ParsedTrajectoryFeedbackInput,
@@ -582,6 +597,16 @@ export async function recordTrajectoryOutcome(
     }
 
     assertKnownHistoricalRun(recommendation);
+
+    if (
+      !input.supersedesId &&
+      !hasTrajectoryShowOccurred(recommendation.showDate, now)
+    ) {
+      throw new TrajectoryFeedbackError(
+        "show_not_occurred",
+        "Show outcomes cannot be recorded before the canonical show date",
+      );
+    }
 
     if (input.supersedesId) {
       const superseded = await tx.findOutcome(input.supersedesId);

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { Badge } from "@/components/ui/badge";
+import { LinkButton } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import {
   SESSION_COOKIE,
@@ -253,6 +254,15 @@ export default async function RecommendationsPage({
           Model evidence joined to current photo-admin workflow state. Outreach
           changes happen only when you choose an action below.
         </p>
+        <div className="mt-3">
+          <LinkButton
+            href="/recommendations/outcomes"
+            variant="secondary"
+            size="sm"
+          >
+            Post-show outcomes
+          </LinkButton>
+        </div>
       </div>
 
       {resultMessage && (

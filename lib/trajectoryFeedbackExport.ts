@@ -4,7 +4,10 @@ import { db } from "@/lib/db";
 export const PRODUCER_FEEDBACK_CONTRACT_VERSION = "photo-admin-model-v1";
 
 const DECISION_ALLOWED_FIELDS = new Set([
+  "recommendation_id",
   "show_id",
+  "artist_id",
+  "edmtrain_artist_id",
   "action",
   "arm",
   "propensity",
@@ -16,7 +19,11 @@ const DECISION_ALLOWED_FIELDS = new Set([
 ]);
 
 const OUTCOME_ALLOWED_FIELDS = new Set([
+  "recommendation_id",
   "show_id",
+  "artist_id",
+  "edmtrain_artist_id",
+  "arm",
   "attended",
   "access",
   "keepers",
@@ -31,7 +38,9 @@ const OUTCOME_ALLOWED_FIELDS = new Set([
 
 export const PRODUCER_OUTREACH_ENGAGEMENT_ALLOWED_FIELDS = new Set([
   "outreach_id",
+  "recommendation_id",
   "show_id",
+  "artist_id",
   "artist",
   "ra_artist_id",
   "spotify_artist_id",
@@ -51,6 +60,7 @@ export const PRODUCER_OUTREACH_ENGAGEMENT_ALLOWED_FIELDS = new Set([
   "run_id",
   "logged_at_utc",
   "source",
+  "arm",
 ]);
 
 const producerStatuses = new Set([
@@ -75,7 +85,6 @@ const producerDecisionArms = new Set([
   "momentum",
   "exploration",
   "portfolio",
-  "manual",
 ]);
 const producerAccessValues = new Set([
   "none",
@@ -146,9 +155,12 @@ export interface TrajectoryEngagementExportRow {
 }
 
 export interface ProducerDecisionEvent {
+  recommendation_id: string;
   show_id: string;
+  artist_id: string;
+  edmtrain_artist_id: number;
   action: "selected" | "declined" | "saved";
-  arm: "trajectory" | "momentum" | "exploration" | "portfolio" | "manual";
+  arm: "trajectory" | "momentum" | "exploration" | "portfolio";
   propensity?: number;
   manual_override: boolean;
   outreach_id?: string;
@@ -158,7 +170,11 @@ export interface ProducerDecisionEvent {
 }
 
 export interface ProducerOutcomeEvent {
+  recommendation_id: string;
   show_id: string;
+  artist_id: string;
+  edmtrain_artist_id: number;
+  arm: "trajectory" | "momentum" | "exploration" | "portfolio";
   attended?: "yes" | "no";
   access?: "none" | "guestlist" | "photo_pass" | "other";
   keepers?: number;
@@ -173,8 +189,11 @@ export interface ProducerOutcomeEvent {
 
 export interface ProducerOutreachEngagementEvent {
   outreach_id: string;
+  recommendation_id: string;
   show_id: string;
+  artist_id: string;
   edmtrain_artist_id: number;
+  arm: "trajectory" | "momentum" | "exploration" | "portfolio";
   status: string;
   sent_at?: string;
   delivered_at?: string;
@@ -223,6 +242,35 @@ function assertSafeAllowedEvent(
   }
 }
 
+function assertExactProducerAttribution(
+  record: Record<string, unknown>,
+): void {
+  if (
+    typeof record.recommendation_id !== "string" ||
+    typeof record.run_id !== "string" ||
+    typeof record.show_id !== "string" ||
+    typeof record.artist_id !== "string" ||
+    typeof record.edmtrain_artist_id !== "number" ||
+    !Number.isInteger(record.edmtrain_artist_id) ||
+    record.edmtrain_artist_id <= 0 ||
+    typeof record.arm !== "string"
+  ) {
+    throw new Error("Incomplete producer recommendation attribution");
+  }
+  if (record.artist_id !== String(record.edmtrain_artist_id)) {
+    throw new Error("Producer artist attribution does not match");
+  }
+  const expected = [
+    record.run_id,
+    record.show_id,
+    record.arm,
+    record.edmtrain_artist_id,
+  ].join(":");
+  if (record.recommendation_id !== expected) {
+    throw new Error("Producer recommendation attribution does not match");
+  }
+}
+
 function externalShowId(recommendation: ExportRecommendation): string {
   const showId = recommendation.show.edmtrainId;
   if (!showId || !Number.isInteger(showId) || showId <= 0) {
@@ -231,6 +279,41 @@ function externalShowId(recommendation: ExportRecommendation): string {
     );
   }
   return String(showId);
+}
+
+function externalArtistId(recommendation: ExportRecommendation): number {
+  const artistId = recommendation.runArtist.edmtrainArtistId;
+  if (!Number.isInteger(artistId) || artistId <= 0) {
+    throw new Error(
+      `Recommendation ${recommendation.id} has no EDMTrain artist attribution`,
+    );
+  }
+  return artistId;
+}
+
+function producerRecommendationArm(
+  recommendation: ExportRecommendation,
+): "trajectory" | "momentum" | "exploration" | "portfolio" {
+  if (
+    recommendation.arm !== "trajectory" &&
+    recommendation.arm !== "momentum" &&
+    recommendation.arm !== "exploration" &&
+    recommendation.arm !== "portfolio"
+  ) {
+    throw new Error(`Unapproved producer recommendation arm: ${recommendation.arm}`);
+  }
+  return recommendation.arm;
+}
+
+export function producerRecommendationId(
+  recommendation: ExportRecommendation,
+): string {
+  return [
+    recommendation.run.producerRunId,
+    externalShowId(recommendation),
+    producerRecommendationArm(recommendation),
+    externalArtistId(recommendation),
+  ].join(":");
 }
 
 function decisionAction(
@@ -244,11 +327,7 @@ function decisionAction(
 function decisionArm(
   row: TrajectoryDecisionExportRow,
 ): ProducerDecisionEvent["arm"] {
-  if (row.action === "manual_override" || row.manualOverride) return "manual";
-  if (!producerDecisionArms.has(row.recommendation.arm)) {
-    throw new Error(`Unapproved producer decision arm: ${row.recommendation.arm}`);
-  }
-  return row.recommendation.arm as ProducerDecisionEvent["arm"];
+  return producerRecommendationArm(row.recommendation);
 }
 
 export function assertProducerCompatibleDecision(
@@ -256,6 +335,7 @@ export function assertProducerCompatibleDecision(
 ): void {
   assertSafeAllowedEvent(event, DECISION_ALLOWED_FIELDS, "trajectory decision");
   const record = event as Record<string, unknown>;
+  assertExactProducerAttribution(record);
   if (
     typeof record.action !== "string" ||
     !producerDecisionActions.has(record.action)
@@ -289,7 +369,10 @@ export function buildTrajectoryDecisionExportEvent(
   const outreachId =
     action === "selected" ? row.recommendation.outreaches[0]?.id : undefined;
   const event: ProducerDecisionEvent = {
+    recommendation_id: producerRecommendationId(row.recommendation),
     show_id: externalShowId(row.recommendation),
+    artist_id: String(externalArtistId(row.recommendation)),
+    edmtrain_artist_id: externalArtistId(row.recommendation),
     action,
     arm: decisionArm(row),
     ...(row.propensity === null ? {} : { propensity: row.propensity }),
@@ -306,6 +389,7 @@ export function buildTrajectoryDecisionExportEvent(
 export function assertProducerCompatibleOutcome(event: object): void {
   assertSafeAllowedEvent(event, OUTCOME_ALLOWED_FIELDS, "trajectory outcome");
   const record = event as Record<string, unknown>;
+  assertExactProducerAttribution(record);
   if (
     record.attended !== undefined &&
     record.attended !== "yes" &&
@@ -355,7 +439,11 @@ export function buildTrajectoryOutcomeExportEvent(
   row: TrajectoryOutcomeExportRow,
 ): ProducerOutcomeEvent {
   const event: ProducerOutcomeEvent = {
+    recommendation_id: producerRecommendationId(row.recommendation),
     show_id: externalShowId(row.recommendation),
+    artist_id: String(externalArtistId(row.recommendation)),
+    edmtrain_artist_id: externalArtistId(row.recommendation),
+    arm: producerRecommendationArm(row.recommendation),
     ...(row.attended === null
       ? {}
       : { attended: row.attended ? ("yes" as const) : ("no" as const) }),
@@ -404,6 +492,7 @@ export function assertProducerCompatibleEvent(event: object): void {
     "trajectory feedback",
   );
   const record = event as Record<string, unknown>;
+  assertExactProducerAttribution(record);
   if (
     typeof record.open_count !== "number" ||
     !Number.isInteger(record.open_count) ||
@@ -429,17 +518,25 @@ export function buildTrajectoryEngagementExportEvent(
     ...row.trajectoryRecommendation,
     outreaches: [],
   });
-  const artistId = row.trajectoryRecommendation.runArtist.edmtrainArtistId;
-  if (!Number.isInteger(artistId) || artistId <= 0) {
-    throw new Error(
-      `Recommendation ${row.trajectoryRecommendation.id} has no EDMTrain artist attribution`,
-    );
-  }
+  const artistId = externalArtistId({
+    ...row.trajectoryRecommendation,
+    outreaches: [],
+  });
+  const arm = producerRecommendationArm({
+    ...row.trajectoryRecommendation,
+    outreaches: [],
+  });
 
   const event: ProducerOutreachEngagementEvent = {
     outreach_id: row.id,
+    recommendation_id: producerRecommendationId({
+      ...row.trajectoryRecommendation,
+      outreaches: [],
+    }),
     show_id: showId,
+    artist_id: String(artistId),
     edmtrain_artist_id: artistId,
+    arm,
     status: normalizeProducerOutreachStatus(row),
     ...(iso(row.sentAt) ? { sent_at: iso(row.sentAt) } : {}),
     ...(iso(row.deliveredAt) ? { delivered_at: iso(row.deliveredAt) } : {}),

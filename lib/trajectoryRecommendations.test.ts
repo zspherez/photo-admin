@@ -372,6 +372,63 @@ test("decision and outcome correction history expose current evidence and privat
   );
 });
 
+test("outcome controls use canonical show dates and preserve corrections after date changes", async () => {
+  const rows = [
+    recommendation("today", {
+      show: {
+        ...recommendation("today").show,
+        date: new Date("2026-07-21T00:00:00.000Z"),
+      },
+    }),
+    recommendation("future", {
+      show: {
+        ...recommendation("future").show,
+        date: new Date("2026-07-22T00:00:00.000Z"),
+      },
+    }),
+    recommendation("moved", {
+      show: {
+        ...recommendation("moved").show,
+        date: new Date("2026-07-25T00:00:00.000Z"),
+      },
+      outcomes: [
+        {
+          id: "existing-outcome",
+          attended: true,
+          access: "photo_pass",
+          keeperCount: 3,
+          relationshipValue: 1,
+          publicationValue: 0,
+          shootability: "good",
+          venueAccessibility: "medium",
+          notes: null,
+          supersedesId: null,
+          recordedAt: new Date("2026-07-21T15:00:00.000Z"),
+        },
+      ],
+    }),
+  ];
+  const result = await getTrajectoryRecommendationPage(QUERY, {
+    now: NOW,
+    store: store({ recommendations: rows }),
+    sendability: sendable,
+  });
+  const byName = new Map(
+    result.recommendations.map((row) => [row.artistName, row]),
+  );
+  assert.equal(byName.get("Canonical today")?.outcomeRecordable, true);
+  assert.equal(byName.get("Canonical future")?.outcomeRecordable, false);
+  assert.match(
+    byName.get("Canonical future")?.outcomeRecordabilityMessage ?? "",
+    /2026-07-22/,
+  );
+  assert.equal(byName.get("Canonical moved")?.outcomeRecordable, true);
+  assert.match(
+    byName.get("Canonical moved")?.outcomeRecordabilityMessage ?? "",
+    /Correction remains available/,
+  );
+});
+
 test("duplicate recommendation identities and inactive canonical shows do not render", async () => {
   const first = recommendation("one");
   const duplicate = recommendation("duplicate", {

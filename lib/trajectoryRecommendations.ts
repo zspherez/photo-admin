@@ -31,7 +31,10 @@ import {
   trajectoryFreshnessCutoff,
   type TrajectoryRunAvailability,
 } from "@/lib/trajectoryActiveRun";
-import { dateOnlyFromStoredDate } from "@/lib/calendarDate";
+import {
+  dateOnlyFromStoredDate,
+  easternDateOnly,
+} from "@/lib/calendarDate";
 import type {
   AnalogSummaryView,
   ContactCategory,
@@ -571,6 +574,33 @@ function outcomeHistory(
   }));
 }
 
+export function trajectoryOutcomeRecordability(
+  showDate: Date,
+  now: Date,
+  hasExistingOutcome: boolean,
+): {
+  recordable: boolean;
+  message: string | null;
+} {
+  const showDateOnly = dateOnlyFromStoredDate(showDate);
+  if (hasExistingOutcome) {
+    return {
+      recordable: true,
+      message:
+        showDateOnly > easternDateOnly(now)
+          ? "Correction remains available because an outcome was already recorded before the canonical date changed."
+          : null,
+    };
+  }
+  if (showDateOnly <= easternDateOnly(now)) {
+    return { recordable: true, message: null };
+  }
+  return {
+    recordable: false,
+    message: `Outcome entry opens on ${showDateOnly}, using the canonical show date and Eastern calendar day.`,
+  };
+}
+
 function matchesWorkflow(
   row: RecommendationView,
   outreach: readonly OutreachRecord[],
@@ -807,6 +837,11 @@ export async function getTrajectoryRecommendationPage(
         ? "direct_outreach"
         : "needs_email";
     const displayContact = email ?? phone ?? direct;
+    const outcomeAvailability = trajectoryOutcomeRecordability(
+      record.show.date,
+      now,
+      (record.outcomes?.length ?? 0) > 0,
+    );
     const view: RecommendationView = {
       id: record.id,
       runId: resolved.run.id,
@@ -893,6 +928,8 @@ export async function getTrajectoryRecommendationPage(
       outreachLabels: outreachLabels(relevantOutreach),
       decisionHistory: decisionHistory(record.feedback ?? []),
       outcomeHistory: outcomeHistory(record.outcomes ?? []),
+      outcomeRecordable: outcomeAvailability.recordable,
+      outcomeRecordabilityMessage: outcomeAvailability.message,
       rationale: rationaleFor(record),
       analogSummary: analogSummary(record.runArtist.analogSummary),
       details: {

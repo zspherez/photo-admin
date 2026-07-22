@@ -112,6 +112,8 @@ export interface RecommendationView {
   outreachLabels: string[];
   decisionHistory: TrajectoryDecisionView[];
   outcomeHistory: TrajectoryOutcomeView[];
+  outcomeRecordable: boolean;
+  outcomeRecordabilityMessage: string | null;
   rationale: string[];
   analogSummary: AnalogSummaryView | null;
   details: {

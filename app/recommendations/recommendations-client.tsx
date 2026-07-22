@@ -121,12 +121,27 @@ function outcomeSummary(
   return parts.join(" · ");
 }
 
-function FeedbackPanel({
+type FeedbackRecommendation = Pick<
+  RecommendationView,
+  | "id"
+  | "runId"
+  | "showId"
+  | "artistId"
+  | "trajectoryActionId"
+  | "decisionHistory"
+  | "outcomeHistory"
+  | "outcomeRecordable"
+  | "outcomeRecordabilityMessage"
+>;
+
+export function RecommendationFeedbackPanel({
   recommendation,
   returnTo,
+  outcomeOnly = false,
 }: {
-  recommendation: RecommendationView;
+  recommendation: FeedbackRecommendation;
   returnTo: string;
+  outcomeOnly?: boolean;
 }) {
   const currentDecision = recommendation.decisionHistory.find(
     (item) => item.isCurrent,
@@ -145,10 +160,11 @@ function FeedbackPanel({
   return (
     <details className="rounded-lg border border-zinc-200 px-3 py-3 dark:border-zinc-800">
       <summary className="cursor-pointer text-sm font-semibold">
-        Decision &amp; show outcome
+        {outcomeOnly ? "Show outcome" : "Decision & show outcome"}
       </summary>
       <div className="mt-4 space-y-6">
-        <section aria-labelledby={`decision-${recommendation.id}`}>
+        {!outcomeOnly && (
+          <section aria-labelledby={`decision-${recommendation.id}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h4 id={`decision-${recommendation.id}`} className="text-sm font-semibold">
               Decision
@@ -264,11 +280,16 @@ function FeedbackPanel({
               </ol>
             </details>
           )}
-        </section>
+          </section>
+        )}
 
         <section
           aria-labelledby={`outcome-${recommendation.id}`}
-          className="border-t border-zinc-200 pt-5 dark:border-zinc-800"
+          className={
+            outcomeOnly
+              ? undefined
+              : "border-t border-zinc-200 pt-5 dark:border-zinc-800"
+          }
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h4 id={`outcome-${recommendation.id}`} className="text-sm font-semibold">
@@ -305,6 +326,7 @@ function FeedbackPanel({
                 <select
                   name="attended"
                   required
+                  disabled={!recommendation.outcomeRecordable}
                   defaultValue={
                     currentOutcome?.attended === true
                       ? "true"
@@ -325,6 +347,7 @@ function FeedbackPanel({
                 Access
                 <select
                   name="access"
+                  disabled={!recommendation.outcomeRecordable}
                   defaultValue={currentOutcome?.access ?? ""}
                   className={FEEDBACK_INPUT_CLASS}
                 >
@@ -343,6 +366,7 @@ function FeedbackPanel({
                   inputMode="numeric"
                   min={0}
                   step={1}
+                  disabled={!recommendation.outcomeRecordable}
                   defaultValue={currentOutcome?.keeperCount ?? ""}
                   className={FEEDBACK_INPUT_CLASS}
                 />
@@ -351,6 +375,7 @@ function FeedbackPanel({
                 Relationship value
                 <select
                   name="relationshipValue"
+                  disabled={!recommendation.outcomeRecordable}
                   defaultValue={currentOutcome?.relationshipValue ?? ""}
                   className={FEEDBACK_INPUT_CLASS}
                 >
@@ -364,6 +389,7 @@ function FeedbackPanel({
                 Publication value
                 <select
                   name="publicationValue"
+                  disabled={!recommendation.outcomeRecordable}
                   defaultValue={currentOutcome?.publicationValue ?? ""}
                   className={FEEDBACK_INPUT_CLASS}
                 >
@@ -377,6 +403,7 @@ function FeedbackPanel({
                 Shootability
                 <select
                   name="shootability"
+                  disabled={!recommendation.outcomeRecordable}
                   defaultValue={currentOutcome?.shootability ?? ""}
                   className={FEEDBACK_INPUT_CLASS}
                 >
@@ -390,6 +417,7 @@ function FeedbackPanel({
                 Venue accessibility
                 <select
                   name="venueAccessibility"
+                  disabled={!recommendation.outcomeRecordable}
                   defaultValue={currentOutcome?.venueAccessibility ?? ""}
                   className={FEEDBACK_INPUT_CLASS}
                 >
@@ -412,6 +440,7 @@ function FeedbackPanel({
                 name="notes"
                 rows={2}
                 maxLength={4000}
+                disabled={!recommendation.outcomeRecordable}
                 defaultValue={currentOutcome?.notes ?? ""}
                 className={FEEDBACK_INPUT_CLASS}
               />
@@ -420,10 +449,16 @@ function FeedbackPanel({
               size="sm"
               className="min-h-10 w-full sm:w-auto"
               pendingLabel="Saving outcome…"
+              disabled={!recommendation.outcomeRecordable}
             >
               {currentOutcome ? "Save outcome correction" : "Save outcome"}
             </PendingSubmitButton>
           </form>
+          {recommendation.outcomeRecordabilityMessage && (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+              {recommendation.outcomeRecordabilityMessage}
+            </p>
+          )}
           {recommendation.outcomeHistory.length > 0 && (
             <details className="mt-3 text-xs">
               <summary className="cursor-pointer text-zinc-600 dark:text-zinc-400">
@@ -807,7 +842,10 @@ function RecommendationCard({
           )}
         </div>
 
-        <FeedbackPanel recommendation={recommendation} returnTo={returnTo} />
+        <RecommendationFeedbackPanel
+          recommendation={recommendation}
+          returnTo={returnTo}
+        />
 
         <div>
           <h4 className="text-sm font-semibold">Why it is here</h4>
