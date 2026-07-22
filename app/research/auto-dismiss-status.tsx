@@ -9,10 +9,19 @@ const STATUS_PARAMS = [
   "enqueued",
   "error",
   "notes_saved",
+  "requeue_exhausted",
+  "requeued",
   "refreshed",
   "rejected",
   "retried",
   "sheet_error",
+  "skipped",
+  "skipped_active_contact",
+  "skipped_effective_approval",
+  "skipped_intentional_skip",
+  "skipped_no_eligible_show",
+  "skipped_pending_direct_outreach",
+  "skipped_status_changed",
 ];
 
 export function AutoDismissStatus({

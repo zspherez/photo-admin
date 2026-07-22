@@ -142,6 +142,27 @@ export type ContactResearchTransactionRunner = <T>(
   work: (tx: Prisma.TransactionClient) => Promise<T>
 ) => Promise<T>;
 
+export const CONTACT_RESEARCH_RETRY_SKIP_REASONS = [
+  "status_changed",
+  "effective_approval",
+  "active_contact",
+  "intentional_skip",
+  "pending_direct_outreach",
+  "no_eligible_show",
+] as const;
+
+export type ContactResearchRetrySkipReason =
+  (typeof CONTACT_RESEARCH_RETRY_SKIP_REASONS)[number];
+
+export interface ContactResearchBulkRetryResult {
+  requeued: number;
+  skipped: Record<ContactResearchRetrySkipReason, number>;
+}
+
+export type ContactResearchQueryRunner = <T>(
+  query: Prisma.Sql
+) => Promise<T>;
+
 export type ArtistContactResearchMutationFailure =
   | "artist_not_found"
   | "active_contact"
@@ -3516,6 +3537,180 @@ export async function reconcileContactResearchJobAfterProbeCleanup(
   return status;
 }
 
+type ContactResearchRetryEligibilityReason =
+  | "eligible"
+  | ContactResearchRetrySkipReason;
+
+interface ContactResearchRetryEligibilityRow {
+  id: string;
+  reason: ContactResearchRetryEligibilityReason;
+}
+
+interface ContactResearchRetryTarget {
+  id: string;
+  artistId: string;
+}
+
+function contactResearchRetryEligibilityRowsSql(
+  status: "exhausted" | "review",
+  now: Date,
+  jobIds?: readonly string[]
+): Prisma.Sql {
+  const today = easternTodayStoredDate(now);
+  const end = parseDateOnly(
+    addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
+  );
+  const scope = jobIds
+    ? jobIds.length > 0
+      ? Prisma.sql`job."id" IN (${Prisma.join([...jobIds])})`
+      : Prisma.sql`FALSE`
+    : Prisma.sql`job."status" = ${status}`;
+  return Prisma.sql`
+    SELECT
+      job."id",
+      CASE
+        WHEN job."status" <> ${status} THEN 'status_changed'
+        WHEN EXISTS (
+          SELECT 1
+          FROM "ContactResearchCandidate" candidate
+          JOIN "Contact" approved_contact
+            ON approved_contact."artistId" = job."artistId"
+           AND approved_contact."state" = 'active'
+           AND approved_contact."email" IS NOT NULL
+           AND LOWER(BTRIM(approved_contact."email"))
+             = candidate."normalizedEmail"
+          WHERE candidate."jobId" = job."id"
+            AND candidate."status" = 'approved'
+        ) THEN 'effective_approval'
+        WHEN EXISTS (
+          SELECT 1
+          FROM "Contact" contact
+          WHERE contact."artistId" = job."artistId"
+            AND contact."state" = 'active'
+            AND contact."email" IS NOT NULL
+        ) THEN 'active_contact'
+        WHEN EXISTS (
+          SELECT 1
+          FROM "ArtistResearchSkip" research_skip
+          WHERE research_skip."artistId" = job."artistId"
+            AND research_skip."clearedAt" IS NULL
+        ) THEN 'intentional_skip'
+        WHEN EXISTS (
+          SELECT 1
+          FROM "ContactResearchDirectOutreachProposal" direct_outreach
+          WHERE direct_outreach."jobId" = job."id"
+            AND direct_outreach."status" = 'pending'
+        ) THEN 'pending_direct_outreach'
+        WHEN NOT EXISTS (
+          SELECT 1
+          FROM "ShowArtist" show_artist
+          JOIN "Show" show
+            ON show."id" = show_artist."showId"
+          WHERE show_artist."artistId" = job."artistId"
+            AND show."date" >= ${today}
+            AND show."syncStatus" = 'active'
+            AND ${festivalLeadTimeSql(now)}
+            AND (
+              (
+                show."isFestival" = false
+                AND show."date" <= ${end}
+              )
+              OR (
+                show."isFestival" = true
+                AND job."requestedShowId" = show."id"
+              )
+            )
+        ) THEN 'no_eligible_show'
+        ELSE 'eligible'
+      END AS "reason"
+    FROM "ContactResearchJob" job
+    WHERE ${scope}
+  `;
+}
+
+function emptyContactResearchRetrySkipped(): Record<
+  ContactResearchRetrySkipReason,
+  number
+> {
+  return Object.fromEntries(
+    CONTACT_RESEARCH_RETRY_SKIP_REASONS.map((reason) => [reason, 0])
+  ) as Record<ContactResearchRetrySkipReason, number>;
+}
+
+function addContactResearchRetrySkip(
+  skipped: Record<ContactResearchRetrySkipReason, number>,
+  reason: ContactResearchRetryEligibilityReason
+): void {
+  if (reason === "eligible") return;
+  skipped[reason] += 1;
+}
+
+async function lockContactResearchRetryTargets(
+  tx: Prisma.TransactionClient,
+  status: "exhausted" | "review"
+): Promise<ContactResearchRetryTarget[]> {
+  const targets = await tx.$queryRaw<ContactResearchRetryTarget[]>(Prisma.sql`
+    SELECT job."id", job."artistId"
+    FROM "ContactResearchJob" job
+    WHERE job."status" = ${status}
+    ORDER BY job."id"
+    FOR UPDATE
+  `);
+  if (targets.length === 0) return [];
+  const jobIds = targets.map((target) => target.id);
+  const artistIds = Array.from(
+    new Set(targets.map((target) => target.artistId))
+  );
+  await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT artist."id"
+    FROM "Artist" artist
+    WHERE artist."id" IN (${Prisma.join(artistIds)})
+    ORDER BY artist."id"
+    FOR UPDATE
+  `);
+  await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT contact."id"
+    FROM "Contact" contact
+    WHERE contact."artistId" IN (${Prisma.join(artistIds)})
+    ORDER BY contact."id"
+    FOR UPDATE
+  `);
+  await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT research_skip."id"
+    FROM "ArtistResearchSkip" research_skip
+    WHERE research_skip."artistId" IN (${Prisma.join(artistIds)})
+    ORDER BY research_skip."id"
+    FOR UPDATE
+  `);
+  await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT direct_outreach."id"
+    FROM "ContactResearchDirectOutreachProposal" direct_outreach
+    WHERE direct_outreach."jobId" IN (${Prisma.join(jobIds)})
+    ORDER BY direct_outreach."id"
+    FOR UPDATE
+  `);
+  await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT candidate."id"
+    FROM "ContactResearchCandidate" candidate
+    WHERE candidate."jobId" IN (${Prisma.join(jobIds)})
+    ORDER BY candidate."id"
+    FOR UPDATE
+  `);
+  return targets;
+}
+
+export async function countRetryableExhaustedContactResearchJobs(
+  now: Date = new Date(),
+  runQuery: ContactResearchQueryRunner = (query) => db.$queryRaw(query)
+): Promise<number> {
+  const rows = await runQuery<Array<{ count: number }>>(Prisma.sql`
+    SELECT COUNT(*)::integer AS "count"
+    FROM (${contactResearchRetryEligibilityRowsSql("exhausted", now)}) retry_eligibility
+    WHERE retry_eligibility."reason" = 'eligible'
+  `);
+  return rows[0]?.count ?? 0;
+}
+
 async function retryContactResearchJobsByStatus(
   status: "exhausted" | "review",
   now: Date = new Date(),
@@ -3548,6 +3743,10 @@ async function retryEligibleContactResearchJobs(
       UPDATE "ContactResearchJob" AS job
       SET
         "status" = 'pending',
+        "completedAt" = NULL,
+        "claimToken" = NULL,
+        "claimedAt" = NULL,
+        "claimExpiresAt" = NULL,
         "updatedAt" = ${now}
       WHERE ${statusWhere}
       AND NOT EXISTS (
@@ -3604,18 +3803,100 @@ async function retryEligibleContactResearchJobs(
               show."isFestival" = false
               AND show."date" <= ${end}
             )
-            OR job."requestedShowId" = show."id"
+            OR (
+              show."isFestival" = true
+              AND job."requestedShowId" = show."id"
+            )
           )
       )
     `);
   });
 }
 
-export function retryAllExhaustedContactResearchJobs(
+export async function retryAllExhaustedContactResearchJobs(
   now: Date = new Date(),
-  runTransaction?: ContactResearchTransactionRunner
-): Promise<number> {
-  return retryContactResearchJobsByStatus("exhausted", now, runTransaction);
+  runTransaction: ContactResearchTransactionRunner = (work) =>
+    withSerializableRetry(work)
+): Promise<ContactResearchBulkRetryResult> {
+  return runTransaction(async (tx) => {
+    const targets = await lockContactResearchRetryTargets(tx, "exhausted");
+    if (targets.length === 0) {
+      return {
+        requeued: 0,
+        skipped: emptyContactResearchRetrySkipped(),
+      };
+    }
+    const initialRows =
+      await tx.$queryRaw<ContactResearchRetryEligibilityRow[]>(
+        contactResearchRetryEligibilityRowsSql(
+          "exhausted",
+          now,
+          targets.map((target) => target.id)
+        )
+      );
+    const skipped = emptyContactResearchRetrySkipped();
+    const eligibleIds: string[] = [];
+    for (const row of initialRows) {
+      if (row.reason === "eligible") {
+        eligibleIds.push(row.id);
+      } else {
+        addContactResearchRetrySkip(skipped, row.reason);
+      }
+    }
+    if (eligibleIds.length === 0) {
+      return { requeued: 0, skipped };
+    }
+
+    await supersedeObsoleteContactResearchApprovals(tx, {
+      jobIds: eligibleIds,
+    });
+    const requeuedRows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      WITH retry_eligibility AS (
+        ${contactResearchRetryEligibilityRowsSql(
+          "exhausted",
+          now,
+          eligibleIds
+        )}
+      )
+      UPDATE "ContactResearchJob" AS job
+      SET
+        "status" = 'pending',
+        "completedAt" = NULL,
+        "claimToken" = NULL,
+        "claimedAt" = NULL,
+        "claimExpiresAt" = NULL,
+        "updatedAt" = ${now}
+      FROM retry_eligibility
+      WHERE job."id" = retry_eligibility."id"
+        AND retry_eligibility."reason" = 'eligible'
+      RETURNING job."id"
+    `);
+    const requeuedIds = new Set(requeuedRows.map((row) => row.id));
+    const remainingIds = eligibleIds.filter((id) => !requeuedIds.has(id));
+    if (remainingIds.length > 0) {
+      const remainingRows =
+        await tx.$queryRaw<ContactResearchRetryEligibilityRow[]>(
+          contactResearchRetryEligibilityRowsSql(
+            "exhausted",
+            now,
+            remainingIds
+          )
+        );
+      const remainingById = new Map(
+        remainingRows.map((row) => [row.id, row.reason])
+      );
+      for (const id of remainingIds) {
+        addContactResearchRetrySkip(
+          skipped,
+          remainingById.get(id) ?? "status_changed"
+        );
+      }
+    }
+    return {
+      requeued: requeuedRows.length,
+      skipped,
+    };
+  });
 }
 
 export function retryAllReviewContactResearchJobs(

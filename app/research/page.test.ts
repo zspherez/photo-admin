@@ -22,7 +22,7 @@ function actionSource(name: string, nextName: string): string {
   );
 }
 
-test("successful research actions revalidate without redirecting to the top", () => {
+test("research actions preserve filters and bulk exhausted reports a result", () => {
   const approve = actionSource(
     "approveCandidateAction",
     "rejectCandidateAction"
@@ -56,8 +56,13 @@ test("successful research actions revalidate without redirecting to the top", ()
   assert.match(notes, /if \(!updated\) \{[\s\S]*redirect/);
   assert.doesNotMatch(notes, /notes_saved: "1"/);
   assert.match(retryExhausted, /retryAllExhaustedContactResearchJobs/);
+  assert.match(retryExhausted, /const filter = actionResearchFilter\(formData\)/);
+  assert.match(retryExhausted, /requeue_exhausted: "1"/);
+  assert.match(retryExhausted, /requeued: String\(result\.requeued\)/);
+  assert.match(retryExhausted, /skipped: String\(skipped\)/);
+  assert.match(retryExhausted, /error: "requeue_exhausted"/);
+  assert.match(retryExhausted, /redirect\(destination\)/);
   assert.match(retryReview, /retryAllReviewContactResearchJobs/);
-  assert.doesNotMatch(retryExhausted, /redirect\(/);
   assert.doesNotMatch(retryReview, /redirect\(/);
 });
 
@@ -71,12 +76,35 @@ test("review and exhausted jobs have separate bulk requeue actions", () => {
   assert.match(source, /disabled=\{retryExhaustedCount === 0\}/);
   assert.match(
     source,
-    /none: \{ status: \{ in: \["approved", "superseded"\] \} \}/
+    /countRetryableExhaustedContactResearchJobs\(now\)/
   );
   assert.match(
     source,
     /directOutreachProposals: \{\s*none: \{ status: "pending" \}/
   );
+});
+
+test("bulk exhausted result is URL-backed and auto-dismissed", () => {
+  assert.match(source, /status\.requeueExhausted/);
+  assert.match(
+    source,
+    /Exhausted research requeue: \{status\.requeued \?\? "0"\} requeued/
+  );
+  assert.match(source, /status\.skipped \?\? "0"/);
+  assert.match(source, /requeueSkipDetails/);
+  for (const parameter of [
+    "requeue_exhausted",
+    "requeued",
+    "skipped",
+    "skipped_active_contact",
+    "skipped_effective_approval",
+    "skipped_intentional_skip",
+    "skipped_no_eligible_show",
+    "skipped_pending_direct_outreach",
+    "skipped_status_changed",
+  ]) {
+    assert.match(dismissSource, new RegExp(`"${parameter}"`));
+  }
 });
 
 test("research page links to the trusted queue-draining workflow", () => {
