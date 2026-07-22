@@ -37,6 +37,7 @@ async function main(): Promise<void> {
     artistClaimProbe,
     contactResearchJobProbe,
     contactResearchCandidateProbe,
+    contactResearchCandidateStatusConstraintProbe,
     contactResearchDirectOutreachProbe,
     artistResearchSkipProbe,
     agentRuleSetProbe,
@@ -161,6 +162,28 @@ async function main(): Promise<void> {
         officialSourceEvidence: true,
       },
     }),
+    db.$queryRaw<
+      Array<{
+        constraintName: string;
+        constraintDefinition: string;
+        validated: boolean;
+      }>
+    >(Prisma.sql`
+      SELECT
+        constraint_row."conname" AS "constraintName",
+        pg_get_constraintdef(constraint_row.oid) AS "constraintDefinition",
+        constraint_row."convalidated" AS "validated"
+      FROM pg_constraint AS constraint_row
+      JOIN pg_class AS table_row
+        ON table_row.oid = constraint_row."conrelid"
+      JOIN pg_namespace AS namespace_row
+        ON namespace_row.oid = table_row."relnamespace"
+      WHERE namespace_row."nspname" = current_schema()
+        AND table_row."relname" = 'ContactResearchCandidate'
+        AND constraint_row."conname" =
+          'ContactResearchCandidate_status_check'
+        AND constraint_row."contype" = 'c'
+    `),
     db.contactResearchDirectOutreachProposal.findMany({
       take: 1,
       select: {
@@ -655,6 +678,7 @@ async function main(): Promise<void> {
         [
           contactResearchJobProbe,
           contactResearchCandidateProbe,
+          contactResearchCandidateStatusConstraintProbe,
           contactResearchDirectOutreachProbe,
           directOutreachProvenanceProbe,
           outreachKindProbe,
@@ -685,6 +709,16 @@ async function main(): Promise<void> {
           trajectoryFeedbackTriggerProbe,
           trajectoryFeedbackIndexProbe,
         ].every(Array.isArray) &&
+        contactResearchCandidateStatusConstraintProbe.some(
+          (constraint) =>
+            constraint.constraintName ===
+              "ContactResearchCandidate_status_check" &&
+            constraint.validated &&
+            constraint.constraintDefinition.includes("pending") &&
+            constraint.constraintDefinition.includes("approved") &&
+            constraint.constraintDefinition.includes("rejected") &&
+            constraint.constraintDefinition.includes("superseded"),
+        ) &&
         contactAuditRosterConstraintProbe.length === 6 &&
         contactAuditRosterConstraintProbe.every(
           (constraint) => constraint.validated,
@@ -728,6 +762,7 @@ async function main(): Promise<void> {
       sheetAdoptionRequired: requireSheetAdoption,
       addedRuntimeRoleProbes: [
         "ArtistResearchSkip",
+        "ContactResearchCandidate_status_check",
         "ContactResearchDirectOutreachProposal",
         "Contact.agentDirectOutreachProvenance",
         "ContactAuditRequest",
