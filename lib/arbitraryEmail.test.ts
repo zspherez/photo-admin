@@ -513,7 +513,16 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
     migrationNames.indexOf(trajectoryFeedbackMigrationName) <
       migrationNames.indexOf(trajectoryIngestMigrationName),
   );
-  assert.equal(migrationNames.at(-1), trajectoryIngestMigrationName);
+  const contactResearchCandidateStatusMigrationName =
+    "20260722050000_contact_research_candidate_superseded_status";
+  assert.ok(
+    migrationNames.indexOf(trajectoryIngestMigrationName) <
+      migrationNames.indexOf(contactResearchCandidateStatusMigrationName),
+  );
+  assert.equal(
+    migrationNames.at(-1),
+    contactResearchCandidateStatusMigrationName,
+  );
 
   const migration = readFileSync(
     new URL(`${migrationName}/migration.sql`, migrationsDirectory),
