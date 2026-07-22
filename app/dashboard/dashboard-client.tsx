@@ -1165,8 +1165,16 @@ export function DashboardClient({
                         returnTo,
                       )}#recommendation-${recommendationBadge.recommendationId}`
                     : null;
+                  const outreachControlsEligible =
+                    query.mode === "all-nyc"
+                      ? artist.outreachEligible &&
+                        (isScheduled ||
+                          (sendability?.sendable === true &&
+                            sendability.mode === "new"))
+                      : artist.workflowEligible &&
+                        Boolean(emailContact || phoneContact);
                   const queueEligible =
-                    artist.workflowEligible &&
+                    outreachControlsEligible &&
                     !!emailContact &&
                     sendability?.sendable === true &&
                     sendability.mode === "new";
@@ -1299,8 +1307,7 @@ export function DashboardClient({
                       </div>
 
                       <div className="flex shrink-0 flex-col items-end gap-1">
-                        {artist.workflowEligible &&
-                          (emailContact || phoneContact) && (
+                        {outreachControlsEligible && (
                           <div className="flex gap-1.5">
                             <SendButton
                               showId={show.id}

@@ -26,7 +26,7 @@ export async function getDashboardInteractionState(
     getOutreachSendabilityBatch(
       shows.flatMap((show) =>
         show.matchedArtists.flatMap((artist) => {
-          if (!artist.workflowEligible) return [];
+          if (!artist.outreachEligible) return [];
           const contact = pickEmailContact(artist.contacts);
           return contact ? [{ showId: show.id, contactId: contact.id }] : [];
         })

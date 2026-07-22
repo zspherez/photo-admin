@@ -7,6 +7,7 @@ import {
   getDashboardDateRange,
   getPagination,
   isDashboardArtistMatch,
+  isDashboardArtistOutreachEligible,
   isDashboardArtistVisible,
   parseDashboardQuery,
 } from "./match";
@@ -163,7 +164,7 @@ test("all NYC mode uses cached inside-NYC geography without a match requirement"
   assert.equal(matchedWhere.edmtrainVenue, undefined);
 });
 
-test("all NYC artist cards include unmatched artists without granting workflow eligibility", () => {
+test("all NYC artist cards keep unmatched visibility and use active email eligibility", () => {
   const now = new Date("2026-07-21T12:00:00.000Z");
   const unmatched = { popularity: null, listenSignals: [] };
   const matched = {
@@ -182,6 +183,18 @@ test("all NYC artist cards include unmatched artists without granting workflow e
   assert.equal(isDashboardArtistVisible(matched, "all-nyc", now), true);
   assert.equal(isDashboardArtistMatch(matched, "matched", now), true);
   assert.equal(isDashboardArtistVisible(unmatched, "matched", now), false);
+  assert.equal(
+    isDashboardArtistOutreachEligible("all-nyc", false, true),
+    true
+  );
+  assert.equal(
+    isDashboardArtistOutreachEligible("all-nyc", true, false),
+    false
+  );
+  assert.equal(
+    isDashboardArtistOutreachEligible("matched", true, false),
+    true
+  );
 });
 
 test("pagination reports stable bounds and clamps stale page links", () => {

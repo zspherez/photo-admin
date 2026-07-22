@@ -32,7 +32,7 @@ test("sendable matched cards expose the shared next-dispatch action only for new
   assert.match(page, /const nextDispatch = getNextNormalOutreachDispatch\(now\)/);
   assert.match(page, /renderedAtMs: now\.getTime\(\)/);
   assert.match(page, /dispatchAtMs: nextDispatch\.getTime\(\)/);
-  assert.match(client, /const queueEligible =[\s\S]*artist\.workflowEligible/);
+  assert.match(client, /const queueEligible =[\s\S]*outreachControlsEligible/);
   assert.match(client, /!!emailContact/);
   assert.match(client, /sendability\?\.sendable === true/);
   assert.match(client, /sendability\.mode === "new"/);
@@ -127,17 +127,17 @@ test("queued state disables duplicate queue and keeps confirmation and cancellat
   assert.match(page, /You can cancel it from the listing/);
 });
 
-test("immediate Send behavior and All NYC workflow gating remain unchanged", () => {
+test("immediate Send behavior stays shared while All NYC uses policy eligibility", () => {
   const sendNow = actionSource("sendNowAction");
   assert.match(sendNow, /if \(isWeekendET\(\)\)/);
   assert.match(sendNow, /sendOutreach\(\{/);
   assert.doesNotMatch(sendNow, /getNextNormalOutreachDispatch/);
   assert.match(
     client,
-    /artist\.workflowEligible &&[\s\S]*<SendButton/,
+    /query\.mode === "all-nyc"[\s\S]*artist\.outreachEligible[\s\S]*sendability\?\.sendable === true/,
   );
   assert.match(
     client,
-    /const queueEligible =[\s\S]*artist\.workflowEligible/,
+    /const queueEligible =[\s\S]*outreachControlsEligible/,
   );
 });
