@@ -14,6 +14,13 @@ const broker = readFileSync(
   new URL("./contact-audit-broker.mjs", import.meta.url),
   "utf8"
 );
+const prepareRoute = readFileSync(
+  new URL(
+    "../app/api/contact-audit/prepare/route.ts",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const migration = readFileSync(
   new URL(
     "../prisma/migrations/20260720080000_contact_audit/migration.sql",
@@ -54,6 +61,20 @@ test("contact audit workflow polls explicitly requested work and is OIDC-authent
   assert.match(workflow, /Authorization:[^\n]*oidc_token/);
   assert.match(workflow, /\/api\/contact-audit\/prepare/);
   assert.match(workflow, /workflowRunId/);
+  assert.match(
+    workflow,
+    /REQUEST_FULL_AUDIT: \$\{\{ github\.event_name == 'workflow_dispatch' \}\}/,
+  );
+  assert.match(workflow, /requestFullAudit: \$requestFullAudit/);
+  assert.match(prepareRoute, /requestFullAudit must be a boolean/);
+  assert.match(
+    prepareRoute,
+    /getTrustedContactAuditOidcEvent\(authorization\)[\s\S]*"workflow_dispatch"/,
+  );
+  assert.match(
+    prepareRoute,
+    /prepareContactAudit\(workflowRunId, new Date\(\), \{[\s\S]*requestIfMissing: requestFullAudit/,
+  );
   assert.match(workflow, /requested=\$\{requested\}/);
   assert.match(
     workflow,
