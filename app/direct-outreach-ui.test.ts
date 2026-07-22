@@ -60,7 +60,7 @@ test("direct-only contacts expose manual marking without email actions", () => {
     actions.indexOf("export async function unmarkSentAction"),
   );
 
-  assert.match(dashboard, /\(emailContact \|\| phoneContact\) && \(/);
+  assert.match(dashboard, /Boolean\(emailContact \|\| phoneContact\)/);
   assert.match(dashboard, /emailContact && followUpEligibility/);
   assert.match(dashboard, /artist\.canMarkManually && \(/);
   assert.match(festival, /r\.contact && r\.followUpEligibility/);

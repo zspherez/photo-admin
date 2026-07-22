@@ -18,13 +18,16 @@ test("dashboard replaces page navigation with infinite loading states", () => {
   assert.match(source, /aria-live="polite"/);
 });
 
-test("all NYC cards keep badges optional and new outreach actions eligibility-gated", () => {
+test("all NYC cards keep badges optional and load policy state for active contacts", () => {
   assert.match(source, /key: "all-nyc", label: "All NYC shows"/);
   assert.match(source, /\{artist\.topSignal && \(/);
   assert.match(
     source,
-    /artist\.workflowEligible &&\s*\(emailContact \|\| phoneContact\)/
+    /query\.mode === "all-nyc"[\s\S]*artist\.outreachEligible/
   );
+  assert.match(source, /sendability\?\.sendable === true/);
+  assert.match(source, /sendability\.mode === "new"/);
+  assert.match(source, /isScheduled/);
   assert.match(source, /!contact && artist\.workflowEligible/);
   assert.match(source, /returnTo=\{returnTo\}/);
 });

@@ -16,6 +16,7 @@ import {
   canMarkOutreachManually,
   isActiveManualOutreachMarker,
 } from "@/lib/manualOutreach";
+import { pickEmailContact } from "@/lib/contactSelection";
 import {
   DASHBOARD_BATCH_SIZE,
   type DashboardMode,
@@ -70,6 +71,7 @@ export interface MatchedShow {
     id: string;
     name: string;
     workflowEligible: boolean;
+    outreachEligible: boolean;
     genres: string[];
     popularity: number | null;
     topSignal: { source: string; rank: number | null } | null;
@@ -184,6 +186,14 @@ export function isDashboardArtistVisible(
     mode === "all-nyc" ||
     isDashboardArtistMatch(artist, mode, now, minPopularity, source)
   );
+}
+
+export function isDashboardArtistOutreachEligible(
+  mode: DashboardMode,
+  workflowEligible: boolean,
+  hasActiveEmailContact: boolean
+): boolean {
+  return mode === "all-nyc" ? hasActiveEmailContact : workflowEligible;
 }
 
 function sourcePrefix(source: SourceFilter): string | null {
@@ -508,15 +518,22 @@ async function hydrateDashboardShowRows(
         (outreach) =>
           outreach.artistId === artist.id && outreach.kind === "original"
       );
+      const contacts = contactsByArtist.get(artist.id) ?? [];
+      const workflowEligible = isDashboardArtistMatch(
+        artist,
+        query.mode,
+        now,
+        UNKNOWN_BIG_MIN_POPULARITY,
+        query.filters.source
+      );
       matchedArtists.push({
         id: artist.id,
         name: artist.name,
-        workflowEligible: isDashboardArtistMatch(
-          artist,
+        workflowEligible,
+        outreachEligible: isDashboardArtistOutreachEligible(
           query.mode,
-          now,
-          UNKNOWN_BIG_MIN_POPULARITY,
-          query.filters.source
+          workflowEligible,
+          pickEmailContact(contacts) !== null
         ),
         genres: parseGenres(artist.genres),
         popularity: artist.popularity,
@@ -533,7 +550,7 @@ async function hydrateDashboardShowRows(
             sendAttemptCount: outreach._count.sendAttempts,
           }))
         ),
-        contacts: contactsByArtist.get(artist.id) ?? [],
+        contacts,
       });
     }
 
