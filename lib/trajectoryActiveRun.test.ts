@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Prisma } from "@prisma/client";
 import {
+  runActionableTrajectoryMutation,
   requireActionableTrajectoryRecommendationInTransaction,
   resolveTrajectoryRun,
+  TrajectoryActionError,
   trajectoryActionContextFromFormData,
 } from "./trajectoryActiveRun";
 
@@ -117,4 +119,45 @@ test("transactional recommendation validation checks the current run and exact t
     },
     select: { id: true },
   });
+});
+
+test("transactional recommendation failures do not run mutations", async () => {
+  const context = {
+    recommendationId: "recommendation-1",
+    runId: "run-1",
+    showId: "show-1",
+    artistId: "artist-1",
+  };
+  let mutated = false;
+  const tx = {
+    trajectoryModelRun: {
+      findMany: async () => [
+        {
+          id: "run-1",
+          generatedAt: new Date("2026-07-21T18:00:00.000Z"),
+          validUntil: new Date("2026-07-21T19:00:00.000Z"),
+          status: "ready" as const,
+        },
+      ],
+      findFirst: async () => null,
+    },
+    trajectoryRecommendation: {
+      findFirst: async () => ({ id: "recommendation-1" }),
+    },
+  } as unknown as Prisma.TransactionClient;
+
+  await assert.rejects(
+    runActionableTrajectoryMutation(
+      tx,
+      context,
+      async () => {
+        mutated = true;
+      },
+      now,
+    ),
+    (error) =>
+      error instanceof TrajectoryActionError &&
+      error.code === "recommendation_not_actionable",
+  );
+  assert.equal(mutated, false);
 });

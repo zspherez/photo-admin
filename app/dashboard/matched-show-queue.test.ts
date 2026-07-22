@@ -58,7 +58,7 @@ test("ambiguous manager contacts route to Customize with explicit queue intent",
   assert.match(queue, /pickEmailContact\(artistContacts\)/);
   assert.match(queue, /defaultContact\.id !== contact\.id/);
   assert.match(queue, /emailContactsRequireSelection\(artistContacts\)/);
-  assert.match(queue, /\?intent=queue/);
+  assert.match(queue, /customizeUrl\.searchParams\.set\("intent", "queue"\)/);
   assert.ok(
     queue.indexOf("emailContactsRequireSelection") <
       queue.indexOf("scheduleOutreach"),

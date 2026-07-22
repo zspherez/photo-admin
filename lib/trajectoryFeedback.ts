@@ -255,128 +255,132 @@ function isRetryable(error: unknown): boolean {
   );
 }
 
+function prismaTrajectoryFeedbackTransaction(
+  tx: Prisma.TransactionClient,
+): TrajectoryFeedbackTransaction {
+  return {
+    async findRecommendation(recommendationId) {
+      const recommendation = await tx.trajectoryRecommendation.findUnique({
+        where: { id: recommendationId },
+        select: {
+          id: true,
+          runId: true,
+          showId: true,
+          run: {
+            select: {
+              status: true,
+              validUntil: true,
+            },
+          },
+          show: {
+            select: {
+              syncStatus: true,
+            },
+          },
+          runArtist: {
+            select: {
+              artistId: true,
+            },
+          },
+        },
+      });
+      return recommendation
+        ? {
+            id: recommendation.id,
+            runId: recommendation.runId,
+            showId: recommendation.showId,
+            artistId: recommendation.runArtist.artistId,
+            runStatus: recommendation.run.status,
+            validUntil: recommendation.run.validUntil,
+            showSyncStatus: recommendation.show.syncStatus,
+          }
+        : null;
+    },
+    findFeedbackByIdempotencyKey(idempotencyKey) {
+      return tx.trajectoryFeedbackEvent.findUnique({
+        where: { idempotencyKey },
+        select: feedbackSelect,
+      });
+    },
+    findFeedback(id) {
+      return tx.trajectoryFeedbackEvent.findUnique({
+        where: { id },
+        select: feedbackSelect,
+      });
+    },
+    createFeedback(input, recordedAt) {
+      return tx.trajectoryFeedbackEvent.create({
+        data: {
+          recommendationId: input.recommendationId,
+          action: input.action,
+          propensity: input.propensity,
+          manualOverride: input.manualOverride,
+          notes: input.notes,
+          idempotencyKey: input.idempotencyKey,
+          supersedesId: input.supersedesId,
+          recordedAt,
+        },
+        select: feedbackSelect,
+      });
+    },
+    findOutcomeByIdempotencyKey(idempotencyKey) {
+      return tx.trajectoryShowOutcome.findUnique({
+        where: { idempotencyKey },
+        select: outcomeSelect,
+      });
+    },
+    findOutcome(id) {
+      return tx.trajectoryShowOutcome.findUnique({
+        where: { id },
+        select: outcomeSelect,
+      });
+    },
+    createOutcome(input, recordedAt) {
+      return tx.trajectoryShowOutcome.create({
+        data: {
+          recommendationId: input.recommendationId,
+          attended: input.attended,
+          access: input.access,
+          keeperCount: input.keeperCount,
+          relationshipValue: input.relationshipValue,
+          publicationValue: input.publicationValue,
+          shootability: input.shootability,
+          venueAccessibility: input.venueAccessibility,
+          notes: input.notes,
+          idempotencyKey: input.idempotencyKey,
+          supersedesId: input.supersedesId,
+          recordedAt,
+        },
+        select: outcomeSelect,
+      });
+    },
+    findOutreach(outreachId) {
+      return tx.outreach.findUnique({
+        where: { id: outreachId },
+        select: {
+          id: true,
+          showId: true,
+          artistId: true,
+          trajectoryRecommendationId: true,
+        },
+      });
+    },
+    async attributeOutreach(outreachId, recommendationId) {
+      await tx.outreach.update({
+        where: { id: outreachId },
+        data: { trajectoryRecommendationId: recommendationId },
+      });
+    },
+  };
+}
+
 export function createPrismaTrajectoryFeedbackPersistence(): TrajectoryFeedbackPersistence {
   return {
     async withTransaction(work) {
       for (let attempt = 0; attempt < 4; attempt += 1) {
         try {
           return await db.$transaction(
-            async (tx) =>
-              work({
-                async findRecommendation(recommendationId) {
-                  const recommendation =
-                    await tx.trajectoryRecommendation.findUnique({
-                      where: { id: recommendationId },
-                      select: {
-                        id: true,
-                        runId: true,
-                        showId: true,
-                        run: {
-                          select: {
-                            status: true,
-                            validUntil: true,
-                          },
-                        },
-                        show: {
-                          select: {
-                            syncStatus: true,
-                          },
-                        },
-                        runArtist: {
-                          select: {
-                            artistId: true,
-                          },
-                        },
-                      },
-                    });
-                  return recommendation
-                    ? {
-                        id: recommendation.id,
-                        runId: recommendation.runId,
-                        showId: recommendation.showId,
-                        artistId: recommendation.runArtist.artistId,
-                        runStatus: recommendation.run.status,
-                        validUntil: recommendation.run.validUntil,
-                        showSyncStatus: recommendation.show.syncStatus,
-                      }
-                    : null;
-                },
-                findFeedbackByIdempotencyKey(idempotencyKey) {
-                  return tx.trajectoryFeedbackEvent.findUnique({
-                    where: { idempotencyKey },
-                    select: feedbackSelect,
-                  });
-                },
-                findFeedback(id) {
-                  return tx.trajectoryFeedbackEvent.findUnique({
-                    where: { id },
-                    select: feedbackSelect,
-                  });
-                },
-                createFeedback(input, recordedAt) {
-                  return tx.trajectoryFeedbackEvent.create({
-                    data: {
-                      recommendationId: input.recommendationId,
-                      action: input.action,
-                      propensity: input.propensity,
-                      manualOverride: input.manualOverride,
-                      notes: input.notes,
-                      idempotencyKey: input.idempotencyKey,
-                      supersedesId: input.supersedesId,
-                      recordedAt,
-                    },
-                    select: feedbackSelect,
-                  });
-                },
-                findOutcomeByIdempotencyKey(idempotencyKey) {
-                  return tx.trajectoryShowOutcome.findUnique({
-                    where: { idempotencyKey },
-                    select: outcomeSelect,
-                  });
-                },
-                findOutcome(id) {
-                  return tx.trajectoryShowOutcome.findUnique({
-                    where: { id },
-                    select: outcomeSelect,
-                  });
-                },
-                createOutcome(input, recordedAt) {
-                  return tx.trajectoryShowOutcome.create({
-                    data: {
-                      recommendationId: input.recommendationId,
-                      attended: input.attended,
-                      access: input.access,
-                      keeperCount: input.keeperCount,
-                      relationshipValue: input.relationshipValue,
-                      publicationValue: input.publicationValue,
-                      shootability: input.shootability,
-                      venueAccessibility: input.venueAccessibility,
-                      notes: input.notes,
-                      idempotencyKey: input.idempotencyKey,
-                      supersedesId: input.supersedesId,
-                      recordedAt,
-                    },
-                    select: outcomeSelect,
-                  });
-                },
-                findOutreach(outreachId) {
-                  return tx.outreach.findUnique({
-                    where: { id: outreachId },
-                    select: {
-                      id: true,
-                      showId: true,
-                      artistId: true,
-                      trajectoryRecommendationId: true,
-                    },
-                  });
-                },
-                async attributeOutreach(outreachId, recommendationId) {
-                  await tx.outreach.update({
-                    where: { id: outreachId },
-                    data: { trajectoryRecommendationId: recommendationId },
-                  });
-                },
-              }),
+            async (tx) => work(prismaTrajectoryFeedbackTransaction(tx)),
             { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
           );
         } catch (error) {
@@ -453,6 +457,64 @@ function assertSameFeedback(
   }
 }
 
+async function recordTrajectoryFeedbackWithTransaction(
+  input: ParsedTrajectoryFeedbackInput,
+  tx: TrajectoryFeedbackTransaction,
+  now: Date,
+): Promise<{ created: boolean; event: StoredTrajectoryFeedback }> {
+  const recommendation = await tx.findRecommendation(input.recommendationId);
+  assertExactAttribution(recommendation, input);
+
+  const existing = await tx.findFeedbackByIdempotencyKey(input.idempotencyKey);
+  if (existing) {
+    assertSameFeedback(existing, input);
+    return { created: false, event: existing };
+  }
+
+  if (input.supersedesId) {
+    assertKnownHistoricalRun(recommendation);
+    const superseded = await tx.findFeedback(input.supersedesId);
+    if (!superseded) {
+      throw new TrajectoryFeedbackError(
+        "superseded_evidence_not_found",
+        "Superseded trajectory feedback was not found",
+      );
+    }
+    if (superseded.recommendationId !== input.recommendationId) {
+      throw new TrajectoryFeedbackError(
+        "cross_recommendation_supersession",
+        "A correction cannot supersede feedback from another recommendation",
+      );
+    }
+  } else if (
+    recommendation.runStatus !== "ready" ||
+    recommendation.validUntil <= now ||
+    recommendation.showSyncStatus !== "active"
+  ) {
+    throw new TrajectoryFeedbackError(
+      "recommendation_not_actionable",
+      "New recommendation decisions require a current ready run and active show",
+    );
+  }
+
+  return {
+    created: true,
+    event: await tx.createFeedback(input, now),
+  };
+}
+
+export function recordTrajectoryFeedbackInTransaction(
+  rawInput: TrajectoryFeedbackInput,
+  tx: Prisma.TransactionClient,
+  now: Date = new Date(),
+): Promise<{ created: boolean; event: StoredTrajectoryFeedback }> {
+  return recordTrajectoryFeedbackWithTransaction(
+    trajectoryFeedbackInputSchema.parse(rawInput),
+    prismaTrajectoryFeedbackTransaction(tx),
+    now,
+  );
+}
+
 function assertSameOutcome(
   existing: StoredTrajectoryOutcome,
   input: ParsedTrajectoryOutcomeInput,
@@ -488,51 +550,9 @@ export async function recordTrajectoryFeedback(
     options.persistence ?? createPrismaTrajectoryFeedbackPersistence();
   const now = options.now?.() ?? new Date();
 
-  return persistence.withTransaction(async (tx) => {
-    const recommendation = await tx.findRecommendation(
-      input.recommendationId,
-    );
-    assertExactAttribution(recommendation, input);
-
-    const existing = await tx.findFeedbackByIdempotencyKey(
-      input.idempotencyKey,
-    );
-    if (existing) {
-      assertSameFeedback(existing, input);
-      return { created: false, event: existing };
-    }
-
-    if (input.supersedesId) {
-      assertKnownHistoricalRun(recommendation);
-      const superseded = await tx.findFeedback(input.supersedesId);
-      if (!superseded) {
-        throw new TrajectoryFeedbackError(
-          "superseded_evidence_not_found",
-          "Superseded trajectory feedback was not found",
-        );
-      }
-      if (superseded.recommendationId !== input.recommendationId) {
-        throw new TrajectoryFeedbackError(
-          "cross_recommendation_supersession",
-          "A correction cannot supersede feedback from another recommendation",
-        );
-      }
-    } else if (
-      recommendation.runStatus !== "ready" ||
-      recommendation.validUntil <= now ||
-      recommendation.showSyncStatus !== "active"
-    ) {
-      throw new TrajectoryFeedbackError(
-        "recommendation_not_actionable",
-        "New recommendation decisions require a current ready run and active show",
-      );
-    }
-
-    return {
-      created: true,
-      event: await tx.createFeedback(input, now),
-    };
-  });
+  return persistence.withTransaction((tx) =>
+    recordTrajectoryFeedbackWithTransaction(input, tx, now),
+  );
 }
 
 export async function recordTrajectoryOutcome(

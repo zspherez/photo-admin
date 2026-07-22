@@ -40,6 +40,26 @@ export interface TrajectoryActionContext {
   artistId: string;
 }
 
+export class TrajectoryActionError extends Error {
+  constructor(
+    readonly code:
+      | "incomplete_attribution"
+      | "recommendation_not_actionable"
+      | "recommendation_target_mismatch",
+    message: string,
+  ) {
+    super(message);
+    this.name = "TrajectoryActionError";
+  }
+}
+
+export function trajectoryActionTargetMismatch(): TrajectoryActionError {
+  return new TrajectoryActionError(
+    "recommendation_target_mismatch",
+    "The trajectory recommendation does not match this show and artist",
+  );
+}
+
 interface TrajectoryActionStore extends TrajectoryRunStore {
   findRecommendation(
     context: TrajectoryActionContext,
@@ -168,7 +188,10 @@ export function trajectoryActionContextFromFormData(
     return null;
   }
   if (!values.recommendationId || !values.runId || !values.artistId || !showId) {
-    throw new Error("Incomplete trajectory recommendation attribution");
+    throw new TrajectoryActionError(
+      "incomplete_attribution",
+      "Incomplete trajectory recommendation attribution",
+    );
   }
   return { ...values, showId };
 }
@@ -205,13 +228,14 @@ async function requireActionableTrajectoryRecommendationFromStore(
     !resolved.run ||
     resolved.run.id !== context.runId
   ) {
-    throw new Error("The trajectory recommendation run is no longer actionable");
+    throw new TrajectoryActionError(
+      "recommendation_not_actionable",
+      "The trajectory recommendation run is no longer actionable",
+    );
   }
   const recommendation = await store.findRecommendation(context);
   if (!recommendation) {
-    throw new Error(
-      "The trajectory recommendation does not match this show and artist",
-    );
+    throw trajectoryActionTargetMismatch();
   }
 }
 
@@ -225,4 +249,18 @@ export async function requireActionableTrajectoryRecommendationInTransaction(
     now,
     transactionActionStore(tx),
   );
+}
+
+export async function runActionableTrajectoryMutation<T>(
+  tx: Prisma.TransactionClient,
+  context: TrajectoryActionContext,
+  mutation: () => Promise<T>,
+  now: Date = new Date(),
+): Promise<T> {
+  await requireActionableTrajectoryRecommendationInTransaction(
+    tx,
+    context,
+    now,
+  );
+  return mutation();
 }

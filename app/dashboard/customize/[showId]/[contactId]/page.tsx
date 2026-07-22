@@ -37,6 +37,7 @@ import {
   requireActionableTrajectoryRecommendation,
   type TrajectoryActionContext,
 } from "@/lib/trajectoryActiveRun";
+import { trajectoryActionErrorMessage } from "@/lib/trajectoryActionError";
 
 export const dynamic = "force-dynamic";
 
@@ -126,10 +127,8 @@ export default async function CustomizePage({
       try {
         await requireActionableTrajectoryRecommendation(trajectoryContext);
       } catch (error) {
-        trajectoryError =
-          error instanceof Error
-            ? error.message
-            : "Recommendation is no longer actionable.";
+        trajectoryError = trajectoryActionErrorMessage(error);
+        if (!trajectoryError) throw error;
       }
     }
   }

@@ -36,10 +36,16 @@ import {
   festivalLeadTimeError,
   festivalLeadTimeExclusion,
 } from "@/lib/festivalEligibility";
-import { recordTrajectoryFeedback } from "@/lib/trajectoryFeedback";
+import { recordTrajectoryFeedbackInTransaction } from "@/lib/trajectoryFeedback";
+import {
+  captureTrajectoryAction,
+  trajectoryActionResultHref,
+} from "@/lib/trajectoryActionError";
 import {
   requireActionableTrajectoryRecommendation,
   requireActionableTrajectoryRecommendationInTransaction,
+  runActionableTrajectoryMutation,
+  trajectoryActionTargetMismatch,
   trajectoryActionContextFromFormData,
   type TrajectoryActionContext,
 } from "@/lib/trajectoryActiveRun";
@@ -63,7 +69,8 @@ function hasTrajectoryContext(formData: FormData): boolean {
   );
 }
 
-async function recordRecommendationDecision(
+async function recordRecommendationDecisionInTransaction(
+  tx: Prisma.TransactionClient,
   formData: FormData,
   context: TrajectoryActionContext | null,
   action: "selected" | "declined" | "saved" | "dismissed" | "manual_override",
@@ -71,11 +78,14 @@ async function recordRecommendationDecision(
   if (!context) return;
   const actionId = String(formData.get("trajectoryActionId") ?? "").trim();
   if (!actionId) throw new Error("Missing trajectory action identity");
-  await recordTrajectoryFeedback({
-    ...context,
-    action,
-    idempotencyKey: `recommendations/${action}/${actionId}`,
-  });
+  await recordTrajectoryFeedbackInTransaction(
+    {
+      ...context,
+      action,
+      idempotencyKey: `recommendations/${action}/${actionId}`,
+    },
+    tx,
+  );
 }
 
 async function withSerializableRetry<T>(
@@ -108,7 +118,13 @@ export async function sendNowAction(formData: FormData) {
       dashboardResultHref(returnTo, "error", "Missing show or email contact")
     );
   }
-  const recommendation = await trajectoryContext(formData, showId);
+  const capturedRecommendation = await captureTrajectoryAction(returnTo, () =>
+    trajectoryContext(formData, showId),
+  );
+  if (!capturedRecommendation.ok) {
+    redirect(capturedRecommendation.errorHref);
+  }
+  const recommendation = capturedRecommendation.value;
   const contact = await db.contact.findFirst({
     where: { id: contactId, state: "active" },
     select: { email: true },
@@ -125,6 +141,8 @@ export async function sendNowAction(formData: FormData) {
       { showId, contactId, trajectoryContext: recommendation ?? undefined },
       scheduledFor,
     );
+    const trajectoryErrorHref = trajectoryActionResultHref(returnTo, result);
+    if (trajectoryErrorHref) redirect(trajectoryErrorHref);
     refreshWorkflowViews(returnTo, [
       "/outreach",
       festivalReturnPath(showId),
@@ -142,6 +160,8 @@ export async function sendNowAction(formData: FormData) {
     contactId,
     trajectoryContext: recommendation ?? undefined,
   });
+  const trajectoryErrorHref = trajectoryActionResultHref(returnTo, result);
+  if (trajectoryErrorHref) redirect(trajectoryErrorHref);
   refreshWorkflowViews(returnTo, ["/outreach", festivalReturnPath(showId)]);
   if (result.ok) {
     redirect(dashboardResultHref(returnTo, "sent"));
@@ -163,12 +183,28 @@ export async function queueForNextDispatchAction(formData: FormData) {
     );
   }
 
+  const capturedRecommendation = await captureTrajectoryAction(returnTo, () =>
+    trajectoryContext(formData, showId),
+  );
+  if (!capturedRecommendation.ok) {
+    redirect(capturedRecommendation.errorHref);
+  }
+  const recommendation = capturedRecommendation.value;
   const contact = await db.contact.findUnique({
     where: { id: contactId },
     select: { id: true, artistId: true },
   });
   if (!contact) {
     redirect(dashboardResultHref(returnTo, "error", "Contact not found"));
+  }
+  if (recommendation && recommendation.artistId !== contact.artistId) {
+    redirect(
+      dashboardResultHref(
+        returnTo,
+        "error",
+        "Contact does not match the recommendation artist",
+      ),
+    );
   }
   const artistContacts = await db.contact.findMany({
     where: { artistId: contact.artistId },
@@ -191,18 +227,33 @@ export async function queueForNextDispatchAction(formData: FormData) {
     );
   }
   if (emailContactsRequireSelection(artistContacts)) {
+    const customizeUrl = new URL(
+      `/dashboard/customize/${encodeURIComponent(showId)}/${encodeURIComponent(contactId)}`,
+      "https://dashboard.local",
+    );
+    customizeUrl.searchParams.set("intent", "queue");
+    if (recommendation) {
+      customizeUrl.searchParams.set(
+        "recommendationId",
+        recommendation.recommendationId,
+      );
+      customizeUrl.searchParams.set("runId", recommendation.runId);
+      customizeUrl.searchParams.set("artistId", recommendation.artistId);
+    }
     redirect(
       withWorkflowReturnTo(
-        `/dashboard/customize/${encodeURIComponent(showId)}/${encodeURIComponent(contactId)}?intent=queue`,
+        `${customizeUrl.pathname}${customizeUrl.search}`,
         returnTo,
       ),
     );
   }
 
   const result = await scheduleOutreach(
-    { showId, contactId },
+    { showId, contactId, trajectoryContext: recommendation ?? undefined },
     getNextNormalOutreachDispatch(),
   );
+  const trajectoryErrorHref = trajectoryActionResultHref(returnTo, result);
+  if (trajectoryErrorHref) redirect(trajectoryErrorHref);
   refreshWorkflowViews(returnTo, ["/outreach", festivalReturnPath(showId)]);
   if (result.ok) {
     redirect(
@@ -245,7 +296,13 @@ export async function sendFollowUpAction(formData: FormData) {
       dashboardResultHref(returnTo, "error", "Original outreach not found"),
     );
   }
-  const recommendation = await trajectoryContext(formData, parent.showId);
+  const capturedRecommendation = await captureTrajectoryAction(returnTo, () =>
+    trajectoryContext(formData, parent.showId),
+  );
+  if (!capturedRecommendation.ok) {
+    redirect(capturedRecommendation.errorHref);
+  }
+  const recommendation = capturedRecommendation.value;
   if (recommendation && recommendation.artistId !== parent.artistId) {
     redirect(
       dashboardResultHref(
@@ -263,6 +320,8 @@ export async function sendFollowUpAction(formData: FormData) {
         recommendation ?? undefined,
       )
     : await sendFollowUp(parentOutreachId, recommendation ?? undefined);
+  const trajectoryErrorHref = trajectoryActionResultHref(returnTo, result);
+  if (trajectoryErrorHref) redirect(trajectoryErrorHref);
   refreshWorkflowViews(returnTo, [
     "/outreach",
     festivalReturnPath(parent.showId),
@@ -292,6 +351,7 @@ export async function cancelScheduledAction(formData: FormData) {
     redirect(dashboardResultHref(returnTo, "error", "Missing outreach"));
   }
   const requestedShowId = String(formData.get("showId") ?? "").trim();
+  let recommendation: TrajectoryActionContext | null = null;
   if (requestedShowId) {
     const outreach = await db.outreach.findUnique({
       where: { id: outreachId },
@@ -302,7 +362,13 @@ export async function cancelScheduledAction(formData: FormData) {
         dashboardResultHref(returnTo, "error", "Scheduled outreach not found"),
       );
     }
-    const recommendation = await trajectoryContext(formData, outreach.showId);
+    const capturedRecommendation = await captureTrajectoryAction(returnTo, () =>
+      trajectoryContext(formData, outreach.showId),
+    );
+    if (!capturedRecommendation.ok) {
+      redirect(capturedRecommendation.errorHref);
+    }
+    recommendation = capturedRecommendation.value;
     if (recommendation && recommendation.artistId !== outreach.artistId) {
       redirect(
         dashboardResultHref(
@@ -312,9 +378,22 @@ export async function cancelScheduledAction(formData: FormData) {
         ),
       );
     }
+  } else if (hasTrajectoryContext(formData)) {
+    const capturedRecommendation = await captureTrajectoryAction(returnTo, () =>
+      trajectoryContext(formData, ""),
+    );
+    if (!capturedRecommendation.ok) {
+      redirect(capturedRecommendation.errorHref);
+    }
   }
 
-  const result = await cancelScheduledOutreach(outreachId);
+  const capturedResult = await captureTrajectoryAction(returnTo, () =>
+    cancelScheduledOutreach(outreachId, recommendation ?? undefined),
+  );
+  if (!capturedResult.ok) {
+    redirect(capturedResult.errorHref);
+  }
+  const result = capturedResult.value;
   refreshWorkflowViews(returnTo, [
     "/outreach",
     ...(result.showId ? [festivalReturnPath(result.showId)] : []),
@@ -346,17 +425,35 @@ export async function dismissShowAction(formData: FormData) {
   if (hasTrajectoryContext(formData) && showIds.length !== 1) {
     throw new Error("Recommendation actions must target exactly one show");
   }
-  const recommendation =
-    showIds.length === 1 ? await trajectoryContext(formData, showIds[0]) : null;
-  await db.show.updateMany({
-    where: { id: { in: showIds } },
-    data: { dismissedAt: new Date() },
-  });
-  await recordRecommendationDecision(
-    formData,
-    recommendation,
-    "dismissed",
+  const capturedRecommendation = await captureTrajectoryAction(returnTo, () =>
+    showIds.length === 1
+      ? trajectoryContext(formData, showIds[0])
+      : Promise.resolve(null),
   );
+  if (!capturedRecommendation.ok) {
+    redirect(capturedRecommendation.errorHref);
+  }
+  const recommendation = capturedRecommendation.value;
+  const capturedMutation = await captureTrajectoryAction(returnTo, () =>
+    withSerializableRetry(async (tx) => {
+      const mutate = async () => {
+        await tx.show.updateMany({
+          where: { id: { in: showIds } },
+          data: { dismissedAt: new Date() },
+        });
+        await recordRecommendationDecisionInTransaction(
+          tx,
+          formData,
+          recommendation,
+          "dismissed",
+        );
+      };
+      return recommendation
+        ? runActionableTrajectoryMutation(tx, recommendation, mutate)
+        : mutate();
+    }),
+  );
+  if (!capturedMutation.ok) redirect(capturedMutation.errorHref);
   refreshWorkflowViews(returnTo, ["/festivals"]);
 }
 
@@ -375,13 +472,35 @@ export async function restoreShowAction(formData: FormData) {
   if (hasTrajectoryContext(formData) && showIds.length !== 1) {
     throw new Error("Recommendation actions must target exactly one show");
   }
-  const recommendation =
-    showIds.length === 1 ? await trajectoryContext(formData, showIds[0]) : null;
-  await db.show.updateMany({
-    where: { id: { in: showIds } },
-    data: { dismissedAt: null },
-  });
-  await recordRecommendationDecision(formData, recommendation, "saved");
+  const capturedRecommendation = await captureTrajectoryAction(returnTo, () =>
+    showIds.length === 1
+      ? trajectoryContext(formData, showIds[0])
+      : Promise.resolve(null),
+  );
+  if (!capturedRecommendation.ok) {
+    redirect(capturedRecommendation.errorHref);
+  }
+  const recommendation = capturedRecommendation.value;
+  const capturedMutation = await captureTrajectoryAction(returnTo, () =>
+    withSerializableRetry(async (tx) => {
+      const mutate = async () => {
+        await tx.show.updateMany({
+          where: { id: { in: showIds } },
+          data: { dismissedAt: null },
+        });
+        await recordRecommendationDecisionInTransaction(
+          tx,
+          formData,
+          recommendation,
+          "saved",
+        );
+      };
+      return recommendation
+        ? runActionableTrajectoryMutation(tx, recommendation, mutate)
+        : mutate();
+    }),
+  );
+  if (!capturedMutation.ok) redirect(capturedMutation.errorHref);
   refreshWorkflowViews(returnTo, ["/festivals"]);
 }
 
@@ -393,16 +512,33 @@ export async function setInterestedAction(formData: FormData) {
   if (!showId || (desired !== "true" && desired !== "false")) {
     throw new Error("Missing show or interested state");
   }
-  const recommendation = await trajectoryContext(formData, showId);
-  await db.show.update({
-    where: { id: showId },
-    data: { interestedAt: desired === "true" ? new Date() : null },
-  });
-  await recordRecommendationDecision(
-    formData,
-    recommendation,
-    desired === "true" ? "selected" : "declined",
+  const capturedRecommendation = await captureTrajectoryAction(returnTo, () =>
+    trajectoryContext(formData, showId),
   );
+  if (!capturedRecommendation.ok) {
+    redirect(capturedRecommendation.errorHref);
+  }
+  const recommendation = capturedRecommendation.value;
+  const capturedMutation = await captureTrajectoryAction(returnTo, () =>
+    withSerializableRetry(async (tx) => {
+      const mutate = async () => {
+        await tx.show.update({
+          where: { id: showId },
+          data: { interestedAt: desired === "true" ? new Date() : null },
+        });
+        await recordRecommendationDecisionInTransaction(
+          tx,
+          formData,
+          recommendation,
+          desired === "true" ? "selected" : "declined",
+        );
+      };
+      return recommendation
+        ? runActionableTrajectoryMutation(tx, recommendation, mutate)
+        : mutate();
+    }),
+  );
+  if (!capturedMutation.ok) redirect(capturedMutation.errorHref);
   refreshWorkflowViews(returnTo);
 }
 
@@ -422,7 +558,13 @@ export async function markSentAction(formData: FormData) {
   if (!showId) {
     redirect(dashboardResultHref(returnTo, "error", "Missing show"));
   }
-  const recommendation = await trajectoryContext(formData, showId);
+  const capturedRecommendation = await captureTrajectoryAction(returnTo, () =>
+    trajectoryContext(formData, showId),
+  );
+  if (!capturedRecommendation.ok) {
+    redirect(capturedRecommendation.errorHref);
+  }
+  const recommendation = capturedRecommendation.value;
   if (contactId) {
     const contact = await db.contact.findFirst({
       where: { id: contactId, state: "active" },
@@ -456,182 +598,179 @@ export async function markSentAction(formData: FormData) {
   }
   const targetArtistId = artistId;
 
-  const result = await withSerializableRetry(async (tx) => {
-    const [show, artist, association, rows, manualMarker, currentContact] =
-      await Promise.all([
-        tx.show.findUnique({
-          where: { id: showId },
-          select: {
-            id: true,
-            isFestival: true,
-            date: true,
-            festivalNycStatus: true,
-            syncStatus: true,
-            dismissedAt: true,
-          },
-        }),
-        tx.artist.findUnique({
-          where: { id: targetArtistId },
-          select: { id: true },
-        }),
-        tx.showArtist.findUnique({
-          where: {
-            showId_artistId: { showId, artistId: targetArtistId },
-          },
-          select: { showId: true },
-        }),
-        tx.outreach.findMany({
-          where: {
-            showId,
-            artistId: targetArtistId,
-            kind: "original",
-          },
-          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-          select: {
-            id: true,
-            status: true,
-            contactId: true,
-            providerMessageId: true,
-            attemptCount: true,
-            _count: { select: { sendAttempts: true } },
-          },
-        }),
-        tx.outreach.findFirst({
-          where: {
-            showId,
-            artistId: targetArtistId,
-            ...REUSABLE_MANUAL_OUTREACH_MARKER_WHERE,
-          },
-          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-          select: { id: true },
-        }),
-        contactId
-          ? tx.contact.findUnique({
-              where: { id: contactId },
-              select: { artistId: true, state: true },
-            })
-          : Promise.resolve(null),
-      ]);
-    if (
-      contactId &&
-      (!currentContact ||
-        currentContact.state !== "active" ||
-        currentContact.artistId !== targetArtistId ||
-        (recommendation &&
-          currentContact.artistId !== recommendation.artistId))
-    ) {
-      return {
-        ok: false,
-        error: "Contact no longer matches the outreach artist",
-      };
-    }
-    if (recommendation) {
-      try {
+  const capturedResult = await captureTrajectoryAction(returnTo, () =>
+    withSerializableRetry(async (tx) => {
+      const [show, artist, association, rows, manualMarker, currentContact] =
+        await Promise.all([
+          tx.show.findUnique({
+            where: { id: showId },
+            select: {
+              id: true,
+              isFestival: true,
+              date: true,
+              festivalNycStatus: true,
+              syncStatus: true,
+              dismissedAt: true,
+            },
+          }),
+          tx.artist.findUnique({
+            where: { id: targetArtistId },
+            select: { id: true },
+          }),
+          tx.showArtist.findUnique({
+            where: {
+              showId_artistId: { showId, artistId: targetArtistId },
+            },
+            select: { showId: true },
+          }),
+          tx.outreach.findMany({
+            where: {
+              showId,
+              artistId: targetArtistId,
+              kind: "original",
+            },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+            select: {
+              id: true,
+              status: true,
+              contactId: true,
+              providerMessageId: true,
+              attemptCount: true,
+              _count: { select: { sendAttempts: true } },
+            },
+          }),
+          tx.outreach.findFirst({
+            where: {
+              showId,
+              artistId: targetArtistId,
+              ...REUSABLE_MANUAL_OUTREACH_MARKER_WHERE,
+            },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+            select: { id: true },
+          }),
+          contactId
+            ? tx.contact.findUnique({
+                where: { id: contactId },
+                select: { artistId: true, state: true },
+              })
+            : Promise.resolve(null),
+        ]);
+      if (
+        contactId &&
+        (!currentContact ||
+          currentContact.state !== "active" ||
+          currentContact.artistId !== targetArtistId ||
+          (recommendation &&
+            currentContact.artistId !== recommendation.artistId))
+      ) {
+        return {
+          ok: false,
+          error: "Contact no longer matches the outreach artist",
+        };
+      }
+      if (recommendation) {
         await requireActionableTrajectoryRecommendationInTransaction(
           tx,
           recommendation,
         );
-      } catch (error) {
+      }
+      if (!show) return { ok: false, error: "Show not found" };
+      if (show.syncStatus !== "active") {
+        return { ok: false, error: "Show is inactive" };
+      }
+      const leadTimeExclusion = festivalLeadTimeExclusion(show);
+      if (leadTimeExclusion) {
         return {
           ok: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Trajectory recommendation is no longer actionable",
+          error: festivalLeadTimeError(leadTimeExclusion),
         };
       }
-    }
-    if (!show) return { ok: false, error: "Show not found" };
-    if (show.syncStatus !== "active") {
-      return { ok: false, error: "Show is inactive" };
-    }
-    const leadTimeExclusion = festivalLeadTimeExclusion(show);
-    if (leadTimeExclusion) {
-      return {
-        ok: false,
-        error: festivalLeadTimeError(leadTimeExclusion),
-      };
-    }
-    if (show.isFestival && show.dismissedAt) {
-      return {
-        ok: false,
-        error: "Restore this festival before marking outreach",
-      };
-    }
-    if (!artist) return { ok: false, error: "Artist not found" };
-    if (!association) {
-      return { ok: false, error: "Artist is not on this show" };
-    }
-    const blockingReason = manualMarkBlockingReason(
-      rows.map((row) => ({
-        status: row.status,
-        providerMessageId: row.providerMessageId,
-        attemptCount: row.attemptCount,
-        sendAttemptCount: row._count.sendAttempts,
-      }))
-    );
-    if (blockingReason) return { ok: false, error: blockingReason };
+      if (show.isFestival && show.dismissedAt) {
+        return {
+          ok: false,
+          error: "Restore this festival before marking outreach",
+        };
+      }
+      if (!artist) return { ok: false, error: "Artist not found" };
+      if (!association) {
+        return { ok: false, error: "Artist is not on this show" };
+      }
+      const blockingReason = manualMarkBlockingReason(
+        rows.map((row) => ({
+          status: row.status,
+          providerMessageId: row.providerMessageId,
+          attemptCount: row.attemptCount,
+          sendAttemptCount: row._count.sendAttempts,
+        }))
+      );
+      if (blockingReason) return { ok: false, error: blockingReason };
 
-    const now = new Date();
-    if (manualMarker) {
-      await tx.outreach.update({
-        where: { id: manualMarker.id },
+      const now = new Date();
+      if (manualMarker) {
+        await tx.outreach.update({
+          where: { id: manualMarker.id },
+          data: {
+            status: "sent",
+            sentAt: now,
+            error: null,
+            scheduledFor: null,
+            claimedAt: null,
+            claimToken: null,
+            ...(recommendation
+              ? {
+                  trajectoryRecommendationId:
+                    recommendation.recommendationId,
+                }
+              : {}),
+          },
+        });
+        await recordRecommendationDecisionInTransaction(
+          tx,
+          formData,
+          recommendation,
+          "manual_override",
+        );
+        return { ok: true };
+      }
+
+      const contactSlotAvailable =
+        contactId !== null && !rows.some((row) => row.contactId === contactId);
+      await tx.outreach.create({
         data: {
-          status: "sent",
-          sentAt: now,
-          error: null,
-          scheduledFor: null,
-          claimedAt: null,
-          claimToken: null,
+          kind: "original",
+          showId,
+          artistId: targetArtistId,
+          contactId: contactSlotAvailable ? contactId : null,
+          finalSubject: MANUAL_OUTREACH_SUBJECT,
+          finalHtml: MANUAL_OUTREACH_HTML,
           ...(recommendation
             ? {
-                trajectoryRecommendationId:
-                  recommendation.recommendationId,
+                trajectoryRecommendationId: recommendation.recommendationId,
               }
             : {}),
+          status: "sent",
+          sentAt: now,
         },
       });
+      await recordRecommendationDecisionInTransaction(
+        tx,
+        formData,
+        recommendation,
+        "manual_override",
+      );
       return { ok: true };
-    }
-
-    const contactSlotAvailable =
-      contactId !== null && !rows.some((row) => row.contactId === contactId);
-    await tx.outreach.create({
-      data: {
-        kind: "original",
-        showId,
-        artistId: targetArtistId,
-        contactId: contactSlotAvailable ? contactId : null,
-        finalSubject: MANUAL_OUTREACH_SUBJECT,
-        finalHtml: MANUAL_OUTREACH_HTML,
-        ...(recommendation
-          ? {
-              trajectoryRecommendationId: recommendation.recommendationId,
-            }
-          : {}),
-        status: "sent",
-        sentAt: now,
-      },
-    });
-    return { ok: true };
-  });
+    }),
+  );
+  if (!capturedResult.ok) {
+    redirect(capturedResult.errorHref);
+  }
+  const result = capturedResult.value;
 
   if (!result.ok) {
-    redirect(
-      dashboardResultHref(
-        returnTo,
-        "error",
-        result.error
-      )
-    );
+    redirect(dashboardResultHref(returnTo, "error", result.error));
   }
 
   refreshWorkflowViews(returnTo, ["/outreach", festivalReturnPath(showId)]);
-  await recordRecommendationDecision(
-    formData,
-    recommendation,
-    "manual_override",
-  );
   redirect(dashboardResultHref(returnTo, "marked"));
 }
 
@@ -646,6 +785,7 @@ export async function unmarkSentAction(formData: FormData) {
     redirect(dashboardResultHref(returnTo, "error", "Missing outreach"));
   }
   const requestedShowId = String(formData.get("showId") ?? "").trim();
+  let recommendation: TrajectoryActionContext | null = null;
   if (requestedShowId) {
     const outreach = await db.outreach.findUnique({
       where: { id: outreachId },
@@ -656,7 +796,13 @@ export async function unmarkSentAction(formData: FormData) {
         dashboardResultHref(returnTo, "error", "Manual outreach not found"),
       );
     }
-    const recommendation = await trajectoryContext(formData, outreach.showId);
+    const capturedRecommendation = await captureTrajectoryAction(returnTo, () =>
+      trajectoryContext(formData, outreach.showId),
+    );
+    if (!capturedRecommendation.ok) {
+      redirect(capturedRecommendation.errorHref);
+    }
+    recommendation = capturedRecommendation.value;
     if (recommendation && recommendation.artistId !== outreach.artistId) {
       redirect(
         dashboardResultHref(
@@ -666,55 +812,80 @@ export async function unmarkSentAction(formData: FormData) {
         ),
       );
     }
+  } else if (hasTrajectoryContext(formData)) {
+    const capturedRecommendation = await captureTrajectoryAction(returnTo, () =>
+      trajectoryContext(formData, ""),
+    );
+    if (!capturedRecommendation.ok) {
+      redirect(capturedRecommendation.errorHref);
+    }
   }
 
-  const marker = await withSerializableRetry((tx) =>
-    removeManualOutreachMarker(
-      {
-        async findById(id) {
-          const row = await tx.outreach.findUnique({
-            where: { id },
-            select: {
-              id: true,
-              kind: true,
-              showId: true,
-              artistId: true,
-              status: true,
-              providerMessageId: true,
-              attemptCount: true,
-              finalSubject: true,
-              finalHtml: true,
-              _count: { select: { sendAttempts: true } },
-            },
-          });
-          return row
-            ? {
-                id: row.id,
-                kind: row.kind,
-                showId: row.showId,
-                artistId: row.artistId,
-                status: row.status,
-                providerMessageId: row.providerMessageId,
-                attemptCount: row.attemptCount,
-                sendAttemptCount: row._count.sendAttempts,
-                finalSubject: row.finalSubject,
-                finalHtml: row.finalHtml,
+  const capturedMarker = await captureTrajectoryAction(returnTo, () =>
+    withSerializableRetry((tx) => {
+      const remove = () =>
+        removeManualOutreachMarker(
+          {
+            async findById(id) {
+              const row = await tx.outreach.findUnique({
+                where: { id },
+                select: {
+                  id: true,
+                  kind: true,
+                  showId: true,
+                  artistId: true,
+                  status: true,
+                  providerMessageId: true,
+                  attemptCount: true,
+                  finalSubject: true,
+                  finalHtml: true,
+                  _count: { select: { sendAttempts: true } },
+                },
+              });
+              if (
+                row &&
+                recommendation &&
+                (row.showId !== recommendation.showId ||
+                  row.artistId !== recommendation.artistId)
+              ) {
+                throw trajectoryActionTargetMismatch();
               }
-            : null;
-        },
-        async deleteActiveMarker(id) {
-          const deleted = await tx.outreach.deleteMany({
-            where: {
-              id,
-              ...MANUAL_OUTREACH_MARKER_WHERE,
+              return row
+                ? {
+                    id: row.id,
+                    kind: row.kind,
+                    showId: row.showId,
+                    artistId: row.artistId,
+                    status: row.status,
+                    providerMessageId: row.providerMessageId,
+                    attemptCount: row.attemptCount,
+                    sendAttemptCount: row._count.sendAttempts,
+                    finalSubject: row.finalSubject,
+                    finalHtml: row.finalHtml,
+                  }
+                : null;
             },
-          });
-          return deleted.count === 1;
-        },
-      },
-      outreachId
-    )
+            async deleteActiveMarker(id) {
+              const deleted = await tx.outreach.deleteMany({
+                where: {
+                  id,
+                  ...MANUAL_OUTREACH_MARKER_WHERE,
+                },
+              });
+              return deleted.count === 1;
+            },
+          },
+          outreachId,
+        );
+      return recommendation
+        ? runActionableTrajectoryMutation(tx, recommendation, remove)
+        : remove();
+    }),
   );
+  if (!capturedMarker.ok) {
+    redirect(capturedMarker.errorHref);
+  }
+  const marker = capturedMarker.value;
   if (!marker) {
     redirect(
       dashboardResultHref(
