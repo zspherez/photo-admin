@@ -17,6 +17,11 @@ test("every original send path selects the show-purpose template before snapshot
   const festival = source("app/festivals/[showId]/page.tsx");
 
   assert.match(preparation, /ensureOriginalTemplateForShow\(show\)/);
+  assert.match(preparation, /runAfterActionableTrajectoryValidation\(/);
+  assert.ok(
+    preparation.indexOf("runAfterActionableTrajectoryValidation") <
+      preparation.indexOf("ensureOriginalTemplateForShow(show)"),
+  );
   assert.match(preparation, /templateId: template\.id/);
   assert.match(preparation, /subject: normalizedSubjectOverride \|\| applyTemplate/);
   assert.match(preparation, /renderTrackedEmailHtml\(/);
@@ -76,8 +81,19 @@ test("Customize uses the festival template and still personalizes each selected 
   const actions = source(
     "app/dashboard/customize/[showId]/[contactId]/actions.ts",
   );
+  const pageBody = page.slice(page.indexOf("export default async function"));
 
   assert.match(page, /ensureOriginalTemplateForShow\(show\)/);
+  assert.match(pageBody, /captureTrajectoryAction\(\s*safeReturnTo/);
+  assert.match(pageBody, /runAfterActionableTrajectoryValidation\(/);
+  assert.ok(
+    pageBody.indexOf("runAfterActionableTrajectoryValidation") <
+      pageBody.indexOf("ensureOriginalTemplateForShow(show)"),
+  );
+  assert.ok(
+    pageBody.indexOf("redirect(capturedTemplate.errorHref)") <
+      pageBody.indexOf("const template = capturedTemplate.value"),
+  );
   assert.match(
     page,
     /eligibleContacts\.map\(async \(candidate\)[\s\S]*managerName: candidate\.name/,
@@ -88,6 +104,42 @@ test("Customize uses the festival template and still personalizes each selected 
   assert.match(actions, /expectedRecipientIdentity/);
   assert.match(actions, /sendOutreach\(input\)/);
   assert.match(actions, /scheduleOutreach\(input, getNextMondaySlot\(\)\)/);
+});
+
+test("trajectory-aware original, follow-up, and customize paths validate before template writes", () => {
+  const send = source("lib/sendOutreach.ts");
+  const original = send.slice(
+    send.indexOf("async function prepareOriginalOutreach"),
+    send.indexOf("async function prepareFollowUpOutreach"),
+  );
+  const followUp = send.slice(
+    send.indexOf("async function prepareFollowUpOutreach"),
+    send.indexOf("async function currentAttempt"),
+  );
+  const customizeSource = source(
+    "app/dashboard/customize/[showId]/[contactId]/page.tsx",
+  );
+  const customize = customizeSource.slice(
+    customizeSource.indexOf("export default async function"),
+  );
+
+  for (const [pathName, preparation, provision] of [
+    ["original", original, "ensureOriginalTemplateForShow"],
+    ["follow-up", followUp, "ensureFollowUpTemplate"],
+    ["customize", customize, "ensureOriginalTemplateForShow"],
+  ] as const) {
+    assert.match(preparation, /runAfterActionableTrajectoryValidation\(/);
+    assert.ok(
+      preparation.indexOf("runAfterActionableTrajectoryValidation") <
+        preparation.indexOf(provision),
+      `${pathName} validates before template provisioning`,
+    );
+  }
+
+  assert.match(original, /captureTrajectoryPreparation\(/);
+  assert.match(followUp, /captureTrajectoryPreparation\(/);
+  assert.match(customize, /captureTrajectoryAction\(\s*safeReturnTo/);
+  assert.match(customize, /redirect\(capturedTemplate\.errorHref\)/);
 });
 
 test("scheduled sends and retries retain stored festival snapshots", () => {

@@ -6,7 +6,10 @@ import {
   trajectoryActionErrorMessage,
   trajectoryActionResultHref,
 } from "./trajectoryActionError";
-import { TrajectoryActionError } from "./trajectoryActiveRun";
+import {
+  runAfterActionableTrajectoryValidation,
+  TrajectoryActionError,
+} from "./trajectoryActiveRun";
 import { TrajectoryFeedbackError } from "./trajectoryFeedback";
 
 test("trajectory action redirects preserve recommendation filters and returnTo", () => {
@@ -67,4 +70,77 @@ test("structured outreach failures redirect only when trajectory-specific", () =
     }),
     null,
   );
+});
+
+test("expired, superseded, and mismatched provisioning redirects without writes", async () => {
+  const context = {
+    recommendationId: "recommendation-1",
+    runId: "run-1",
+    showId: "show-1",
+    artistId: "artist-1",
+  };
+  const target = { showId: "show-1", artistId: "artist-1" };
+  const cases = [
+    {
+      context,
+      validate: async () => {
+        throw new TrajectoryActionError(
+          "recommendation_not_actionable",
+          "Recommendation expired",
+        );
+      },
+    },
+    {
+      context,
+      validate: async () => {
+        throw new TrajectoryActionError(
+          "recommendation_not_actionable",
+          "Recommendation superseded",
+        );
+      },
+    },
+    {
+      context: { ...context, artistId: "different-artist" },
+      validate: async () => {},
+    },
+  ];
+
+  for (const actionCase of cases) {
+    let templateWrites = 0;
+    const captured = await captureTrajectoryAction(
+      "/recommendations?workflow=ready",
+      () =>
+        runAfterActionableTrajectoryValidation(
+          actionCase.context,
+          target,
+          async () => {
+            templateWrites += 1;
+            return "template";
+          },
+          actionCase.validate,
+        ),
+    );
+    assert.equal(captured.ok, false);
+    if (!captured.ok) {
+      assert.match(captured.errorHref, /^\/recommendations\?/);
+      assert.match(captured.errorHref, /workflow=ready/);
+      assert.match(captured.errorHref, /error=/);
+    }
+    assert.equal(templateWrites, 0);
+  }
+
+  let validWrites = 0;
+  const valid = await captureTrajectoryAction("/recommendations", () =>
+    runAfterActionableTrajectoryValidation(
+      context,
+      target,
+      async () => {
+        validWrites += 1;
+        return "template";
+      },
+      async () => {},
+    ),
+  );
+  assert.deepEqual(valid, { ok: true, value: "template" });
+  assert.equal(validWrites, 1);
 });

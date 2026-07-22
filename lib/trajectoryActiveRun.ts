@@ -251,6 +251,26 @@ export async function requireActionableTrajectoryRecommendationInTransaction(
   );
 }
 
+export async function runAfterActionableTrajectoryValidation<T>(
+  context: TrajectoryActionContext | null | undefined,
+  target: { showId: string; artistId: string },
+  action: () => Promise<T>,
+  validate: (
+    context: TrajectoryActionContext,
+  ) => Promise<void> = requireActionableTrajectoryRecommendation,
+): Promise<T> {
+  if (context) {
+    if (
+      context.showId !== target.showId ||
+      context.artistId !== target.artistId
+    ) {
+      throw trajectoryActionTargetMismatch();
+    }
+    await validate(context);
+  }
+  return action();
+}
+
 export async function runActionableTrajectoryMutation<T>(
   tx: Prisma.TransactionClient,
   context: TrajectoryActionContext,
