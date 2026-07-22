@@ -95,6 +95,18 @@ test("audit agent and broker preserve review-only manager policy", () => {
   assert.match(agent, /every supplied roster entry exactly once/);
   assert.match(agent, /Existing roster contacts must remain separate/);
   assert.match(agent, /Any active email in the roster is management context/);
+  assert.match(
+    agent,
+    /exact management email published by the[\s\S]*official website[\s\S]*sufficient evidence by itself/,
+  );
+  assert.match(
+    agent,
+    /Never use `stale`[\s\S]*official artist\/team source publishes a different management[\s\S]*that is `changed`/,
+  );
+  assert.match(
+    agent,
+    /also labeled for press[\s\S]*does not disqualify it[\s\S]*explicitly assigns it to management/,
+  );
   assert.match(broker, /contactRoster/);
   assert.match(broker, /rosterReview/);
   assert.doesNotMatch(broker, /contactResearchCandidate/);

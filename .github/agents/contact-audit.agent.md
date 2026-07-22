@@ -93,12 +93,18 @@ Choose exactly one:
   manager/management contact. Do not include alternatives.
 - `changed`: current public evidence points to a genuinely new manager contact
   that is missing from the supplied roster. Include at least one
-  evidence-backed new alternative.
+  evidence-backed new alternative. An exact management email published by the
+  artist's current official website, official social profile, or official
+  linked page is sufficient evidence by itself and should normally be `high`
+  confidence; independent third-party corroboration is not required.
 - `stale`: evidence indicates the existing contact is no longer a current
-  manager contact. Do not include alternatives. If another valid manager email
-  already exists in the roster, explicitly identify that remaining stored
-  contact in evidence/notes and submit `stale`; approving it quarantines only
-  the target.
+  manager contact and no genuinely new manager email was found. Do not include
+  alternatives. If another valid manager email already exists in the roster,
+  explicitly identify that remaining stored contact in evidence/notes and
+  submit `stale`; approving it quarantines only the target. Never use `stale`
+  when a current official artist/team source publishes a different management
+  email absent from the roster; that is `changed` and the published email must
+  be submitted as an alternative.
 - `ambiguous`: the existing contact and/or alternatives leave multiple
   plausible current manager contacts. Explain the conflict. Existing roster
   contacts may be the entire ambiguity and must be identified as already
@@ -121,6 +127,11 @@ from the complete supplied roster and need their own
 source URLs, evidence, and confidence. Prefer a named manager's direct
 professional email, then a management-specific inbox, then an official general
 management-company inbox. Never include the audited email as an alternative.
+An official source explicitly labeling an exact address as `management`,
+`manager`, or `MGMT` is the strongest acceptable evidence and needs no
+independent directory or third-party corroboration. If the same official
+address is also labeled for press, that does not disqualify it when the source
+also explicitly assigns it to management.
 An inferred address can be at most `medium` confidence and requires at least
 two public addresses proving the company pattern.
 
