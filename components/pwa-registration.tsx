@@ -5,6 +5,17 @@ import { useEffect } from "react";
 export function PwaRegistration() {
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
+    const developmentTestEnabled =
+      process.env.NEXT_PUBLIC_ENABLE_PWA_TEST === "true";
+    if (process.env.NODE_ENV !== "production" && !developmentTestEnabled) {
+      void navigator.serviceWorker
+        .getRegistration("/")
+        .then((registration) => registration?.unregister())
+        .catch((error) => {
+          console.error("Unable to remove the development service worker", error);
+        });
+      return;
+    }
     if (
       window.location.protocol !== "https:" &&
       window.location.hostname !== "localhost"

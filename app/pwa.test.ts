@@ -21,6 +21,10 @@ const layoutSource = fs.readFileSync(
   path.join(root, "app/layout.tsx"),
   "utf8",
 );
+const registrationSource = fs.readFileSync(
+  path.join(root, "components/pwa-registration.tsx"),
+  "utf8",
+);
 
 test("manifest defines an installable standalone admin app", () => {
   const value = manifest();
@@ -41,6 +45,16 @@ test("service worker caches static assets but keeps pages and APIs network-only"
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/_next\/static\/"\)/);
   assert.doesNotMatch(serviceWorker, /cache\.put\(request[\s\S]*navigate/);
   assert.doesNotMatch(serviceWorker, /\/dashboard|\/research|\/contact-audit/);
+});
+
+test("service worker registration is production-only outside explicit browser smoke tests", () => {
+  assert.match(registrationSource, /process\.env\.NODE_ENV !== "production"/);
+  assert.match(
+    registrationSource,
+    /process\.env\.NEXT_PUBLIC_ENABLE_PWA_TEST === "true"/,
+  );
+  assert.match(registrationSource, /\.getRegistration\("\/"\)/);
+  assert.match(registrationSource, /registration\?\.unregister\(\)/);
 });
 
 test("offline shell states that private data is not available offline", () => {
@@ -76,8 +90,9 @@ test("translucent iOS status indicators always sit over a dark safe area", () =>
   assert.match(layoutSource, /statusBarStyle: "black-translucent"/);
   assert.match(
     globalStyles,
-    /\.app-header-safe::before \{[\s\S]*height: env\(safe-area-inset-top\);[\s\S]*background: #09090b;/,
+    /\.ios-status-bar-safe-area \{[\s\S]*position: fixed;[\s\S]*height: env\(safe-area-inset-top\);[\s\S]*background: #09090b;/,
   );
+  assert.match(layoutSource, /className="ios-status-bar-safe-area"/);
   assert.match(layoutSource, /prefers-color-scheme: light[\s\S]*#ffffff/);
   assert.match(layoutSource, /prefers-color-scheme: dark[\s\S]*#09090b/);
 });

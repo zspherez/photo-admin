@@ -56,6 +56,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-full bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
+        <div aria-hidden="true" className="ios-status-bar-safe-area" />
         <PwaRegistration />
         <Nav />
         {children}

@@ -47,19 +47,17 @@ textarea {
 }
 
 .app-header-safe {
-  position: sticky;
   padding-top: env(safe-area-inset-top);
 }
 
-.app-header-safe::before {
-  position: absolute;
-  z-index: 1;
+.ios-status-bar-safe-area {
+  position: fixed;
+  z-index: 50;
   top: 0;
   right: 0;
   left: 0;
   height: env(safe-area-inset-top);
   background: #09090b;
-  content: "";
   pointer-events: none;
 }
 

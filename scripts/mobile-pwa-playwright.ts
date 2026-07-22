@@ -22,6 +22,7 @@ const server = spawn(
       ADMIN_PASSWORD: "mobile-pwa-test-password",
       ADMIN_SESSION_SECRET: "mobile-pwa-test-session-secret-with-adequate-length",
       ALLOW_INSECURE_OPEN_MODE: "false",
+      NEXT_PUBLIC_ENABLE_PWA_TEST: "true",
     },
     stdio: ["ignore", "pipe", "pipe"],
   },
