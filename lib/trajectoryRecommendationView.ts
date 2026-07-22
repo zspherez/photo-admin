@@ -17,6 +17,32 @@ export type ContactCategory =
   | "direct_outreach"
   | "email_blocked";
 
+export interface TrajectoryDecisionView {
+  id: string;
+  action: "selected" | "declined" | "saved" | "dismissed" | "manual_override";
+  propensity: number | null;
+  manualOverride: boolean;
+  notes: string | null;
+  supersedesId: string | null;
+  recordedAt: string;
+  isCurrent: boolean;
+}
+
+export interface TrajectoryOutcomeView {
+  id: string;
+  attended: boolean | null;
+  access: "none" | "guestlist" | "photo_pass" | "other" | null;
+  keeperCount: number | null;
+  relationshipValue: number | null;
+  publicationValue: number | null;
+  shootability: "good" | "ok" | "poor" | null;
+  venueAccessibility: "high" | "medium" | "low" | null;
+  notes: string | null;
+  supersedesId: string | null;
+  recordedAt: string;
+  isCurrent: boolean;
+}
+
 export interface RecommendationView {
   id: string;
   runId: string;
@@ -84,6 +110,10 @@ export interface RecommendationView {
   };
   framingLabel: string;
   outreachLabels: string[];
+  decisionHistory: TrajectoryDecisionView[];
+  outcomeHistory: TrajectoryOutcomeView[];
+  outcomeRecordable: boolean;
+  outcomeRecordabilityMessage: string | null;
   rationale: string[];
   analogSummary: AnalogSummaryView | null;
   details: {

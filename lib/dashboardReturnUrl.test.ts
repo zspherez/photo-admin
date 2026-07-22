@@ -111,6 +111,14 @@ test("workflow returns allow exact workflow routes and preserve their filters", 
     ),
     "/recommendations?tab=portfolio&workflow=needs&date=45-90&returnTo=%2Fdashboard%3Fmode%3Dunknown%26contact%3Dneeds",
   );
+  assert.equal(
+    workflowReturnPath("/recommendations/outcomes?page=3&error=old"),
+    "/recommendations/outcomes?page=3",
+  );
+  assert.equal(
+    workflowReturnPath("/recommendations/outcomes?page=bad"),
+    "/recommendations/outcomes",
+  );
 });
 
 test("festival search parameters normalize repeated values safely", () => {

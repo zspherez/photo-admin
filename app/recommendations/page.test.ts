@@ -124,6 +124,34 @@ test("artist workflow links preserve the active recommendation filters", () => {
   );
 });
 
+test("authenticated cards record decisions, structured outcomes, and correction history", () => {
+  const client = source("app/recommendations/recommendations-client.tsx");
+  const actions = source("app/recommendations/actions.ts");
+  for (const marker of [
+    "Decision & show outcome",
+    "recordTrajectoryFeedbackAction",
+    "recordTrajectoryOutcomeAction",
+    "manual_override",
+    "Decision correction history",
+    "Outcome correction history",
+    "keeperCount",
+    "relationshipValue",
+    "publicationValue",
+    "shootability",
+    "venueAccessibility",
+    "Notes stay in photo-admin",
+    "outcomeRecordable",
+  ]) {
+    assert.match(client, new RegExp(marker));
+  }
+  assert.match(
+    source("lib/trajectoryRecommendations.ts"),
+    /Outcome entry opens on/,
+  );
+  assert.match(actions, /requireServerActionAuth\(formData\.get\("returnTo"\)/);
+  assert.match(actions, /redirect\(appendWorkflowResult/);
+});
+
 test("navigation and loading state expose the recommendations route", () => {
   assert.match(source("components/nav.tsx"), /\/recommendations/);
   assert.match(

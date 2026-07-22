@@ -90,3 +90,63 @@ test("unauthenticated actions never reach persistence", async () => {
   );
   assert.equal(wrote, false);
 });
+
+test("outcome action parses the full structured photography result", async () => {
+  const form = baseForm();
+  form.set("attended", "true");
+  form.set("access", "photo_pass");
+  form.set("keeperCount", "12");
+  form.set("relationshipValue", "2");
+  form.set("publicationValue", "1");
+  form.set("shootability", "good");
+  form.set("venueAccessibility", "medium");
+  form.set("notes", "Private operational detail");
+  form.set("supersedesId", "outcome-previous");
+  let refreshed = false;
+
+  await executeTrajectoryOutcomeAction(
+    form,
+    dependencies({
+      recordOutcome: async (input) => {
+        assert.deepEqual(input, {
+          recommendationId: "recommendation-1",
+          runId: "run-1",
+          showId: "show-1",
+          artistId: "artist-1",
+          attended: true,
+          access: "photo_pass",
+          keeperCount: 12,
+          relationshipValue: 2,
+          publicationValue: 1,
+          shootability: "good",
+          venueAccessibility: "medium",
+          notes: "Private operational detail",
+          idempotencyKey: "key-1",
+          supersedesId: "outcome-previous",
+        });
+        return {
+          created: true,
+          outcome: {
+            id: "outcome-1",
+            recommendationId: input.recommendationId,
+            attended: true,
+            access: "photo_pass",
+            keeperCount: 12,
+            relationshipValue: 2,
+            publicationValue: 1,
+            shootability: "good",
+            venueAccessibility: "medium",
+            notes: "Private operational detail",
+            idempotencyKey: input.idempotencyKey,
+            supersedesId: "outcome-previous",
+            recordedAt: new Date(),
+          },
+        };
+      },
+      refresh: () => {
+        refreshed = true;
+      },
+    }),
+  );
+  assert.equal(refreshed, true);
+});

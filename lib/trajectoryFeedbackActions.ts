@@ -51,9 +51,8 @@ function attribution(formData: FormData) {
   };
 }
 
-function optionalBoolean(formData: FormData, key: string): boolean | null {
-  const value = nullable(formData, key);
-  if (value === null) return null;
+function requiredBoolean(formData: FormData, key: string): boolean {
+  const value = required(formData, key);
   if (value === "true") return true;
   if (value === "false") return false;
   throw new Error(`${key} must be true or false`);
@@ -83,7 +82,7 @@ export async function executeTrajectoryOutcomeAction(
   await dependencies.authorize();
   const input: TrajectoryOutcomeInput = {
     ...attribution(formData),
-    attended: optionalBoolean(formData, "attended"),
+    attended: requiredBoolean(formData, "attended"),
     access: nullable(formData, "access") as TrajectoryOutcomeInput["access"],
     keeperCount: nullableInteger(formData, "keeperCount"),
     relationshipValue: nullableInteger(formData, "relationshipValue"),
