@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  emailContactsRequireSelection,
   pickDirectOutreachContact,
   pickEmailContact,
   pickPhoneContact,
@@ -40,6 +41,30 @@ test("email selection prefers an email-bearing full-team contact", () => {
     "manager"
   );
   assert.equal(pickEmailContact([contacts[0]]), null);
+});
+
+test("multiple active email contacts require selection without a full-team marker", () => {
+  const managerContacts = contacts.filter(
+    (contact) => contact.id !== "phone-only",
+  );
+
+  assert.equal(
+    emailContactsRequireSelection(
+      managerContacts.map((contact) => ({
+        ...contact,
+        isFullTeam: false,
+      })),
+    ),
+    true,
+  );
+  assert.equal(emailContactsRequireSelection(managerContacts), false);
+  assert.equal(
+    emailContactsRequireSelection([
+      managerContacts[0],
+      { ...managerContacts[1], state: "quarantined" },
+    ]),
+    false,
+  );
 });
 
 test("phone selection preserves SMS when the email contact has no phone", () => {

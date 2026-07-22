@@ -9,7 +9,10 @@ import {
   parseDashboardQuery,
 } from "@/lib/dashboardQuery";
 import { getTestOverride } from "@/lib/resend";
-import { isWeekendET } from "@/lib/schedule";
+import {
+  getNextNormalOutreachDispatch,
+  isWeekendET,
+} from "@/lib/schedule";
 import { cn } from "@/lib/cn";
 import { getDashboardInteractionState } from "@/lib/dashboardInteractionState";
 import {
@@ -62,11 +65,13 @@ export default async function DashboardPage({
   const sheetErrors = firstSearchParam(params.sheet_errors);
   const marked = firstSearchParam(params.marked);
   const unmarked = firstSearchParam(params.unmarked);
+  const queued = firstSearchParam(params.queued);
   const scheduled = firstSearchParam(params.scheduled);
   const cancelled = firstSearchParam(params.cancelled);
   const followUpSent = firstSearchParam(params.followup_sent);
   const followUpScheduled = firstSearchParam(params.followup_scheduled);
   const now = new Date();
+  const nextDispatch = getNextNormalOutreachDispatch(now);
   const configuration = getAuthConfiguration();
   const cookieValue = (await cookies()).get(SESSION_COOKIE)?.value;
   const { ownerKey, persistenceScope } = dashboardSessionIdentity(
@@ -97,6 +102,11 @@ export default async function DashboardPage({
           </Banner>
         )}
         {sent && <Banner tone="success">Email sent.</Banner>}
+        {queued && (
+          <Banner tone="success">
+            Email queued for {queued} ET. You can cancel it from the listing.
+          </Banner>
+        )}
         {scheduled && (
           <Banner tone="success">
             Email scheduled for Monday morning (9–10 AM ET). You can cancel it
@@ -140,6 +150,10 @@ export default async function DashboardPage({
         query={query}
         persistenceScope={persistenceScope}
         isWeekend={isWeekendET(now)}
+        nextDispatchBoundary={{
+          renderedAtMs: now.getTime(),
+          dispatchAtMs: nextDispatch.getTime(),
+        }}
         {...interactionState}
       />
     </main>

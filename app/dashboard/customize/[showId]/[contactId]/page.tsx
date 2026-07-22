@@ -93,11 +93,14 @@ export default async function CustomizePage({
     recommendationId?: SearchParamValue;
     runId?: SearchParamValue;
     artistId?: SearchParamValue;
+    intent?: SearchParamValue;
   }>;
 }) {
   const { showId, contactId } = await params;
   const search = await searchParams;
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
+  const initialIntent =
+    firstSearchParam(search.intent) === "queue" ? "queue" : "send";
   const [show, contact] = await getCustomizeContext(showId, contactId);
   if (!show || !contact) return notFound();
   const trajectoryValues = {
@@ -301,7 +304,9 @@ export default async function CustomizePage({
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
       <Link href={safeReturnTo} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Back</Link>
-      <h1 className="mt-2 text-2xl font-semibold tracking-tight">Customize &amp; send</h1>
+      <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+        Customize &amp; {initialIntent === "queue" ? "queue" : "send"}
+      </h1>
       <p className="mt-1 text-sm text-zinc-500">
         {contact.artist.name} at {show.venueName},{" "}
         {formatShowDate(show.date, {})}
@@ -324,6 +329,7 @@ export default async function CustomizePage({
               returnTo={safeReturnTo}
               recipientOptions={recipientOptions}
               weekend={isWeekendET()}
+              initialIntent={initialIntent}
               queueLabel={formatNextDispatchActionLabel(
                 getNextNormalOutreachDispatch(),
               )}

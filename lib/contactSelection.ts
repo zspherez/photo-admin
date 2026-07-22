@@ -25,6 +25,20 @@ export function pickEmailContact<T extends ContactChannels>(
   );
 }
 
+export function emailContactsRequireSelection<T extends ContactChannels>(
+  contacts: readonly T[],
+): boolean {
+  const activeEmailContacts = contacts.filter(
+    (contact) =>
+      contact.state === "active" &&
+      hasValue(contact.email),
+  );
+  return (
+    activeEmailContacts.length > 1 &&
+    !activeEmailContacts.some((contact) => contact.isFullTeam)
+  );
+}
+
 export function pickPhoneContact<T extends ContactChannels>(
   contacts: readonly T[],
   preferred: T | null = null

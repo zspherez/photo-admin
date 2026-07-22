@@ -31,9 +31,12 @@ import { LinkButton } from "@/components/ui/button";
 import { ArtistLink } from "@/components/artist-modal";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { SendButton } from "@/components/send-button";
+import { QueueOutreachButton } from "@/components/queue-outreach-button";
+import type { NextDispatchBoundaryData } from "@/components/next-dispatch-label";
 import { FollowUpButton } from "@/components/follow-up-button";
 import { cn } from "@/lib/cn";
 import {
+  emailContactsRequireSelection,
   pickDirectOutreachContact,
   pickEmailContact,
   pickPhoneContact,
@@ -75,6 +78,7 @@ import {
 } from "@/lib/trajectoryRecommendationQuery";
 import {
   sendNowAction,
+  queueForNextDispatchAction,
   dismissShowAction,
   restoreShowAction,
   setInterestedAction,
@@ -91,6 +95,7 @@ interface Props {
   query: DashboardQuery;
   persistenceScope: string;
   isWeekend: boolean;
+  nextDispatchBoundary: NextDispatchBoundaryData;
   sendabilityRows: OutreachSendability[];
   followUpEligibilityRows: FollowUpEligibility[];
   recommendationBadges: DashboardRecommendationBadge[];
@@ -168,6 +173,7 @@ export function DashboardClient({
   query,
   persistenceScope,
   isWeekend,
+  nextDispatchBoundary,
   sendabilityRows: initialSendabilityRows,
   followUpEligibilityRows: initialFollowUpEligibilityRows,
   recommendationBadges: initialRecommendationBadges,
@@ -1159,6 +1165,19 @@ export function DashboardClient({
                         returnTo,
                       )}#recommendation-${recommendationBadge.recommendationId}`
                     : null;
+                  const queueEligible =
+                    artist.workflowEligible &&
+                    !!emailContact &&
+                    sendability?.sendable === true &&
+                    sendability.mode === "new";
+                  const queueCustomizeHref =
+                    queueEligible &&
+                    emailContactsRequireSelection(artist.contacts)
+                      ? withWorkflowReturnTo(
+                          `/dashboard/customize/${show.id}/${emailContact.id}?intent=queue`,
+                          returnTo,
+                        )
+                      : null;
 
                   return (
                     <div
@@ -1301,6 +1320,16 @@ export function DashboardClient({
                               action={sendNowAction}
                               cancelAction={cancelScheduledAction}
                             />
+                            {queueEligible && emailContact && (
+                              <QueueOutreachButton
+                                showId={show.id}
+                                contactId={emailContact.id}
+                                returnTo={returnTo}
+                                nextDispatchBoundary={nextDispatchBoundary}
+                                customizeHref={queueCustomizeHref}
+                                action={queueForNextDispatchAction}
+                              />
+                            )}
                             {emailContact &&
                               sendability?.mode !== "retry" && (
                               <LinkButton

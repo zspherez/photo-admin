@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import {
   dashboardResultHref,
   festivalReturnPath,
+  withWorkflowReturnTo,
   workflowReturnPath,
 } from "@/lib/dashboardReturnUrl";
 import {
@@ -23,7 +24,12 @@ import {
   sendFollowUp,
   sendOutreach,
 } from "@/lib/sendOutreach";
-import { isWeekendET, getNextMondaySlot } from "@/lib/schedule";
+import {
+  formatScheduledTime,
+  getNextMondaySlot,
+  getNextNormalOutreachDispatch,
+  isWeekendET,
+} from "@/lib/schedule";
 import { requireServerActionAuth } from "@/lib/auth";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
 import {
@@ -37,6 +43,10 @@ import {
   trajectoryActionContextFromFormData,
   type TrajectoryActionContext,
 } from "@/lib/trajectoryActiveRun";
+import {
+  emailContactsRequireSelection,
+  pickEmailContact,
+} from "@/lib/contactSelection";
 
 async function trajectoryContext(
   formData: FormData,
@@ -140,6 +150,78 @@ export async function sendNowAction(formData: FormData) {
       dashboardResultHref(returnTo, "error", result.error ?? "Unknown error")
     );
   }
+}
+
+export async function queueForNextDispatchAction(formData: FormData) {
+  await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
+  const showId = String(formData.get("showId") ?? "").trim();
+  const contactId = String(formData.get("contactId") ?? "").trim();
+  if (!showId || !contactId) {
+    redirect(
+      dashboardResultHref(returnTo, "error", "Missing show or email contact"),
+    );
+  }
+
+  const contact = await db.contact.findUnique({
+    where: { id: contactId },
+    select: { id: true, artistId: true },
+  });
+  if (!contact) {
+    redirect(dashboardResultHref(returnTo, "error", "Contact not found"));
+  }
+  const artistContacts = await db.contact.findMany({
+    where: { artistId: contact.artistId },
+    select: {
+      id: true,
+      email: true,
+      phone: true,
+      state: true,
+      isFullTeam: true,
+    },
+  });
+  const defaultContact = pickEmailContact(artistContacts);
+  if (!defaultContact || defaultContact.id !== contact.id) {
+    redirect(
+      dashboardResultHref(
+        returnTo,
+        "error",
+        "Default email contact changed; refresh and try again",
+      ),
+    );
+  }
+  if (emailContactsRequireSelection(artistContacts)) {
+    redirect(
+      withWorkflowReturnTo(
+        `/dashboard/customize/${encodeURIComponent(showId)}/${encodeURIComponent(contactId)}?intent=queue`,
+        returnTo,
+      ),
+    );
+  }
+
+  const result = await scheduleOutreach(
+    { showId, contactId },
+    getNextNormalOutreachDispatch(),
+  );
+  refreshWorkflowViews(returnTo, ["/outreach", festivalReturnPath(showId)]);
+  if (result.ok) {
+    redirect(
+      dashboardResultHref(
+        returnTo,
+        "queued",
+        result.scheduledFor
+          ? formatScheduledTime(result.scheduledFor)
+          : "the next dispatch",
+      ),
+    );
+  }
+  redirect(
+    dashboardResultHref(
+      returnTo,
+      "error",
+      result.error ?? "Unable to queue outreach",
+    ),
+  );
 }
 
 export async function sendFollowUpAction(formData: FormData) {
