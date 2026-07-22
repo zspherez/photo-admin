@@ -89,7 +89,8 @@ test("show dismissal actions support grouped festivals and refresh festival view
 
   for (const source of [dismiss, restore]) {
     assert.match(source, /formData\s*\.getAll\("showId"\)/);
-    assert.match(source, /db\.show\.updateMany/);
+    assert.match(source, /tx\.show\.updateMany/);
+    assert.match(source, /runActionableTrajectoryMutation/);
     assert.match(source, /refreshWorkflowViews\(returnTo, \["\/festivals"\]\)/);
   }
   assert.match(dismiss, /dismissedAt: new Date\(\)/);

@@ -58,10 +58,12 @@ import {
   OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
 } from "@/lib/schedule";
 import {
-  requireActionableTrajectoryRecommendation,
   requireActionableTrajectoryRecommendationInTransaction,
+  runAfterActionableTrajectoryValidation,
+  trajectoryActionTargetMismatch,
   type TrajectoryActionContext,
 } from "@/lib/trajectoryActiveRun";
+import { trajectoryActionErrorMessage } from "@/lib/trajectoryActionError";
 
 export { OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS } from "@/lib/schedule";
 
@@ -81,6 +83,7 @@ export interface SendOutreachOutput {
   ok: boolean;
   outreachId?: string;
   error?: string;
+  trajectoryError?: boolean;
   scheduled?: boolean;
   scheduledFor?: Date;
   skipped?: boolean;
@@ -2484,9 +2487,25 @@ export async function getFollowUpEligibilityBatch(
   });
 }
 
+type CapturedTrajectoryPreparation<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: string };
+
+async function captureTrajectoryPreparation<T>(
+  prepare: () => Promise<T>,
+): Promise<CapturedTrajectoryPreparation<T>> {
+  try {
+    return { ok: true, value: await prepare() };
+  } catch (error) {
+    const message = trajectoryActionErrorMessage(error);
+    if (!message) throw error;
+    return { ok: false, error: message };
+  }
+}
+
 async function prepareOriginalOutreach(
   input: SendOutreachInput,
-): Promise<PreparedOutreach | { error: string }> {
+): Promise<PreparedOutreach | { error: string; trajectoryError?: boolean }> {
   const {
     showId,
     contactId,
@@ -2518,10 +2537,6 @@ async function prepareOriginalOutreach(
   const festivalBlocked = festivalOutreachBlockingReason(show, "original");
   if (festivalBlocked) return { error: festivalBlocked };
   const templatePurpose = originalTemplatePurposeForShow(show);
-  const template = await ensureOriginalTemplateForShow(show);
-  if (template.purpose !== templatePurpose) {
-    return { error: "The selected outreach template purpose is unavailable" };
-  }
   if (!contact) return { error: "Contact not found" };
   if (contact.state !== "active") {
     return { error: "Selected contact is quarantined" };
@@ -2541,23 +2556,22 @@ async function prepareOriginalOutreach(
     select: { showId: true },
   });
   if (!association) return { error: artistNotOnShowError() };
-  if (trajectoryContext) {
-    if (
-      trajectoryContext.showId !== showId ||
-      trajectoryContext.artistId !== contact.artistId
-    ) {
-      return { error: "Trajectory recommendation outreach target changed" };
-    }
-    try {
-      await requireActionableTrajectoryRecommendation(trajectoryContext);
-    } catch (error) {
-      return {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Trajectory recommendation is no longer actionable",
-      };
-    }
+  const capturedTemplate = await captureTrajectoryPreparation(() =>
+    runAfterActionableTrajectoryValidation(
+      trajectoryContext,
+      { showId, artistId: contact.artistId },
+      () => ensureOriginalTemplateForShow(show),
+    ),
+  );
+  if (!capturedTemplate.ok) {
+    return {
+      error: capturedTemplate.error,
+      trajectoryError: true,
+    };
+  }
+  const template = capturedTemplate.value;
+  if (template.purpose !== templatePurpose) {
+    return { error: "The selected outreach template purpose is unavailable" };
   }
 
   const vars = await buildVarsForShow({
@@ -2614,7 +2628,7 @@ async function prepareOriginalOutreach(
 async function prepareFollowUpOutreach(
   parentOutreachId: string,
   trajectoryContext?: TrajectoryActionContext,
-): Promise<PreparedOutreach | { error: string }> {
+): Promise<PreparedOutreach | { error: string; trajectoryError?: boolean }> {
   const [eligibility] = await getFollowUpEligibilityBatch([
     parentOutreachId,
   ]);
@@ -2625,7 +2639,7 @@ async function prepareFollowUpOutreach(
     };
   }
 
-  const [parent, template, utmSettings] = await Promise.all([
+  const [parent, utmSettings] = await Promise.all([
     db.outreach.findUnique({
       where: { id: parentOutreachId },
       select: {
@@ -2664,14 +2678,10 @@ async function prepareFollowUpOutreach(
         },
       },
     }),
-    ensureFollowUpTemplate(),
     readEmailUtmSettingsSnapshot(),
   ]);
   if (!parent || parent.kind !== "original") {
     return { error: "Original outreach not found" };
-  }
-  if (template.purpose !== "follow_up") {
-    return { error: "The follow-up template purpose is unavailable" };
   }
   if (parent.show.syncStatus !== "active") {
     return { error: showInactiveError(parent.show.syncStatus) };
@@ -2706,23 +2716,22 @@ async function prepareFollowUpOutreach(
     select: { showId: true },
   });
   if (!association) return { error: artistNotOnShowError() };
-  if (trajectoryContext) {
-    if (
-      trajectoryContext.showId !== parent.showId ||
-      trajectoryContext.artistId !== parent.artistId
-    ) {
-      return { error: "Trajectory recommendation follow-up target changed" };
-    }
-    try {
-      await requireActionableTrajectoryRecommendation(trajectoryContext);
-    } catch (error) {
-      return {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Trajectory recommendation is no longer actionable",
-      };
-    }
+  const capturedTemplate = await captureTrajectoryPreparation(() =>
+    runAfterActionableTrajectoryValidation(
+      trajectoryContext,
+      { showId: parent.showId, artistId: parent.artistId },
+      ensureFollowUpTemplate,
+    ),
+  );
+  if (!capturedTemplate.ok) {
+    return {
+      error: capturedTemplate.error,
+      trajectoryError: true,
+    };
+  }
+  const template = capturedTemplate.value;
+  if (template.purpose !== "follow_up") {
+    return { error: "The follow-up template purpose is unavailable" };
   }
 
   const vars = await buildVarsForShow({
@@ -3252,13 +3261,16 @@ async function preparedTrajectoryBlockingReason(
   tx: Prisma.TransactionClient,
   prep: PreparedOutreach,
   now: Date,
-): Promise<string | null> {
+): Promise<{ error: string; trajectoryError: true } | null> {
   if (!prep.trajectoryContext) return null;
   if (
     prep.trajectoryContext.showId !== prep.showId ||
     prep.trajectoryContext.artistId !== prep.artistId
   ) {
-    return "Trajectory recommendation outreach target changed";
+    return {
+      error: "Trajectory recommendation outreach target changed",
+      trajectoryError: true,
+    };
   }
   try {
     await requireActionableTrajectoryRecommendationInTransaction(
@@ -3268,9 +3280,9 @@ async function preparedTrajectoryBlockingReason(
     );
     return null;
   } catch (error) {
-    return error instanceof Error
-      ? error.message
-      : "Trajectory recommendation is no longer actionable";
+    const message = trajectoryActionErrorMessage(error);
+    if (!message) throw error;
+    return { error: message, trajectoryError: true };
   }
 }
 
@@ -3469,7 +3481,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
     if (trajectoryBlocked) {
       return {
         kind: "complete",
-        result: { ok: false, error: trajectoryBlocked },
+        result: { ok: false, ...trajectoryBlocked },
       };
     }
     const policyBlocked = await preparedDeliveryPolicyBlockingReason(tx, prep);
@@ -5286,7 +5298,7 @@ export async function sendOutreach(
   if (configurationError) return { ok: false, error: configurationError };
 
   const prep = await prepareOriginalOutreach(input);
-  if ("error" in prep) return { ok: false, error: prep.error };
+  if ("error" in prep) return { ok: false, ...prep };
   const claim = await claimImmediateOutreach(prep);
   if (claim.kind === "complete") return claim.result;
   return executeClaimedSend(claim.outreach);
@@ -5306,7 +5318,7 @@ export async function sendFollowUp(
     parentOutreachId,
     trajectoryContext,
   );
-  if ("error" in prep) return { ok: false, error: prep.error };
+  if ("error" in prep) return { ok: false, ...prep };
   const claim = await claimImmediateOutreach(prep);
   if (claim.kind === "complete") return claim.result;
   return executeClaimedSend(claim.outreach);
@@ -5361,7 +5373,7 @@ async function schedulePreparedOutreach(
       prep,
       now,
     );
-    if (trajectoryBlocked) return { ok: false, error: trajectoryBlocked };
+    if (trajectoryBlocked) return { ok: false, ...trajectoryBlocked };
     const policyBlocked = await preparedDeliveryPolicyBlockingReason(tx, prep);
     if (policyBlocked) return { ok: false, error: policyBlocked };
 
@@ -5889,7 +5901,7 @@ export async function scheduleOutreach(
   scheduledFor: Date,
 ): Promise<SendOutreachOutput> {
   const prep = await prepareOriginalOutreach(input);
-  if ("error" in prep) return { ok: false, error: prep.error };
+  if ("error" in prep) return { ok: false, ...prep };
   return schedulePreparedOutreach(prep, scheduledFor);
 }
 
@@ -5902,7 +5914,7 @@ export async function scheduleFollowUp(
     parentOutreachId,
     trajectoryContext,
   );
-  if ("error" in prep) return { ok: false, error: prep.error };
+  if ("error" in prep) return { ok: false, ...prep };
   return schedulePreparedOutreach(prep, scheduledFor);
 }
 
@@ -5913,6 +5925,7 @@ export interface CancelScheduledOutreachResult {
 
 export async function cancelScheduledOutreach(
   outreachId: string,
+  trajectoryContext?: TrajectoryActionContext,
 ): Promise<CancelScheduledOutreachResult> {
   return withSerializableRetry(async (tx) => {
     const outreach = await tx.outreach.findUnique({
@@ -5920,6 +5933,7 @@ export async function cancelScheduledOutreach(
       select: {
         id: true,
         showId: true,
+        artistId: true,
         status: true,
         idempotencyKey: true,
       },
@@ -5929,6 +5943,18 @@ export async function cancelScheduledOutreach(
         cancelled: false,
         showId: outreach?.showId ?? null,
       };
+    }
+    if (trajectoryContext) {
+      if (
+        trajectoryContext.showId !== outreach.showId ||
+        trajectoryContext.artistId !== outreach.artistId
+      ) {
+        throw trajectoryActionTargetMismatch();
+      }
+      await requireActionableTrajectoryRecommendationInTransaction(
+        tx,
+        trajectoryContext,
+      );
     }
 
     const attempt = await currentAttempt(tx, outreach.idempotencyKey);

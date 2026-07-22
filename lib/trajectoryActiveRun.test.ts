@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Prisma } from "@prisma/client";
 import {
+  runAfterActionableTrajectoryValidation,
+  runActionableTrajectoryMutation,
   requireActionableTrajectoryRecommendationInTransaction,
   resolveTrajectoryRun,
+  TrajectoryActionError,
   trajectoryActionContextFromFormData,
 } from "./trajectoryActiveRun";
 
@@ -117,4 +120,118 @@ test("transactional recommendation validation checks the current run and exact t
     },
     select: { id: true },
   });
+});
+
+test("transactional recommendation failures do not run mutations", async () => {
+  const context = {
+    recommendationId: "recommendation-1",
+    runId: "run-1",
+    showId: "show-1",
+    artistId: "artist-1",
+  };
+  let mutated = false;
+  const tx = {
+    trajectoryModelRun: {
+      findMany: async () => [
+        {
+          id: "run-1",
+          generatedAt: new Date("2026-07-21T18:00:00.000Z"),
+          validUntil: new Date("2026-07-21T19:00:00.000Z"),
+          status: "ready" as const,
+        },
+      ],
+      findFirst: async () => null,
+    },
+    trajectoryRecommendation: {
+      findFirst: async () => ({ id: "recommendation-1" }),
+    },
+  } as unknown as Prisma.TransactionClient;
+
+  await assert.rejects(
+    runActionableTrajectoryMutation(
+      tx,
+      context,
+      async () => {
+        mutated = true;
+      },
+      now,
+    ),
+    (error) =>
+      error instanceof TrajectoryActionError &&
+      error.code === "recommendation_not_actionable",
+  );
+  assert.equal(mutated, false);
+});
+
+test("trajectory validation gates template provisioning", async () => {
+  const context = {
+    recommendationId: "recommendation-1",
+    runId: "run-1",
+    showId: "show-1",
+    artistId: "artist-1",
+  };
+  const target = { showId: "show-1", artistId: "artist-1" };
+
+  for (const message of [
+    "The trajectory recommendation run expired",
+    "The trajectory recommendation run was superseded",
+  ]) {
+    let templateWrites = 0;
+    await assert.rejects(
+      runAfterActionableTrajectoryValidation(
+        context,
+        target,
+        async () => {
+          templateWrites += 1;
+          return "template";
+        },
+        async () => {
+          throw new TrajectoryActionError(
+            "recommendation_not_actionable",
+            message,
+          );
+        },
+      ),
+      (error) =>
+        error instanceof TrajectoryActionError &&
+        error.code === "recommendation_not_actionable",
+    );
+    assert.equal(templateWrites, 0);
+  }
+
+  let mismatchWrites = 0;
+  let mismatchValidated = false;
+  await assert.rejects(
+    runAfterActionableTrajectoryValidation(
+      { ...context, artistId: "different-artist" },
+      target,
+      async () => {
+        mismatchWrites += 1;
+        return "template";
+      },
+      async () => {
+        mismatchValidated = true;
+      },
+    ),
+    (error) =>
+      error instanceof TrajectoryActionError &&
+      error.code === "recommendation_target_mismatch",
+  );
+  assert.equal(mismatchWrites, 0);
+  assert.equal(mismatchValidated, false);
+
+  let validWrites = 0;
+  assert.equal(
+    await runAfterActionableTrajectoryValidation(
+      context,
+      target,
+      async () => {
+        validWrites += 1;
+        return "template";
+      },
+      async () => {},
+    ),
+    "template",
+  );
+  assert.equal(validWrites, 1);
 });

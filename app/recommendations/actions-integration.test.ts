@@ -82,8 +82,57 @@ test("outreach and decisions retain exact recommendation attribution", () => {
     actions,
     /trajectoryRecommendationId:\s*recommendation\.recommendationId/,
   );
-  assert.match(actions, /recordTrajectoryFeedback\(\{/);
+  assert.match(actions, /recordTrajectoryFeedbackInTransaction\(/);
   assert.match(actions, /recommendations\/\$\{action\}\/\$\{actionId\}/);
+});
+
+test("stale recommendation failures redirect before action mutations", () => {
+  const actions = source("app/dashboard/actions.ts");
+  for (const [name, nextName] of [
+    ["sendNowAction", "queueForNextDispatchAction"],
+    ["queueForNextDispatchAction", "sendFollowUpAction"],
+    ["sendFollowUpAction", "cancelScheduledAction"],
+    ["cancelScheduledAction", "dismissShowAction"],
+    ["dismissShowAction", "restoreShowAction"],
+    ["restoreShowAction", "setInterestedAction"],
+    ["setInterestedAction", "markSentAction"],
+    ["markSentAction", "unmarkSentAction"],
+  ] as const) {
+    assert.match(
+      exportedAction(actions, name, nextName),
+      /captureTrajectoryAction/,
+      name,
+    );
+  }
+  assert.match(
+    actions.slice(actions.indexOf("export async function unmarkSentAction")),
+    /captureTrajectoryAction/,
+  );
+
+  for (const name of [
+    "dismissShowAction",
+    "restoreShowAction",
+    "setInterestedAction",
+  ]) {
+    const action = actions.slice(
+      actions.indexOf(`export async function ${name}`),
+      actions.indexOf(
+        "\nexport async function ",
+        actions.indexOf(`export async function ${name}`) + 1,
+      ),
+    );
+    assert.match(action, /const mutate = async \(\) => \{[\s\S]*tx\.show\./);
+    assert.match(
+      action,
+      /runActionableTrajectoryMutation\(tx, recommendation, mutate\)/,
+    );
+  }
+
+  const customize = source(
+    "app/dashboard/customize/[showId]/[contactId]/actions.ts",
+  );
+  assert.match(customize, /captureTrajectoryAction\(returnTo/);
+  assert.match(customize, /trajectoryActionResultHref\(returnTo, result\)/);
 });
 
 test("customize keeps normal templates, explicit send/schedule/queue, and return state", () => {
@@ -97,7 +146,8 @@ test("customize keeps normal templates, explicit send/schedule/queue, and return
     "app/dashboard/customize/[showId]/[contactId]/customize-form.tsx",
   );
   assert.match(page, /ensureOriginalTemplateForShow\(show\)/);
-  assert.match(page, /requireActionableTrajectoryRecommendation/);
+  assert.match(page, /runAfterActionableTrajectoryValidation/);
+  assert.match(page, /redirect\(capturedTemplate\.errorHref\)/);
   assert.match(actions, /trajectoryContext: context\.trajectoryContext/);
   assert.match(actions, /intent === "queue"/);
   assert.match(actions, /getNextNormalOutreachDispatch/);

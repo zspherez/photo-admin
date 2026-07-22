@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 import { db } from "@/lib/db";
 import { workflowReturnPath } from "@/lib/dashboardReturnUrl";
@@ -34,9 +34,11 @@ import {
 } from "./customize-form";
 import { sendCustom } from "./actions";
 import {
-  requireActionableTrajectoryRecommendation,
+  runAfterActionableTrajectoryValidation,
+  TrajectoryActionError,
   type TrajectoryActionContext,
 } from "@/lib/trajectoryActiveRun";
+import { captureTrajectoryAction } from "@/lib/trajectoryActionError";
 
 export const dynamic = "force-dynamic";
 
@@ -116,24 +118,26 @@ export default async function CustomizePage({
     trajectoryValues.artistId
       ? { ...trajectoryValues, showId }
       : null;
-  let trajectoryError: string | null = null;
-  if (hasTrajectoryContext && !trajectoryContext) {
-    trajectoryError = "Recommendation attribution is incomplete.";
-  } else if (trajectoryContext) {
-    if (trajectoryContext.artistId !== contact.artistId) {
-      trajectoryError = "Recommendation does not match this artist.";
-    } else {
-      try {
-        await requireActionableTrajectoryRecommendation(trajectoryContext);
-      } catch (error) {
-        trajectoryError =
-          error instanceof Error
-            ? error.message
-            : "Recommendation is no longer actionable.";
+  const capturedTemplate = await captureTrajectoryAction(
+    safeReturnTo,
+    async () => {
+      if (hasTrajectoryContext && !trajectoryContext) {
+        throw new TrajectoryActionError(
+          "incomplete_attribution",
+          "Incomplete trajectory recommendation attribution",
+        );
       }
-    }
+      return runAfterActionableTrajectoryValidation(
+        trajectoryContext,
+        { showId, artistId: contact.artistId },
+        () => ensureOriginalTemplateForShow(show),
+      );
+    },
+  );
+  if (!capturedTemplate.ok) {
+    redirect(capturedTemplate.errorHref);
   }
-  const template = await ensureOriginalTemplateForShow(show);
+  const template = capturedTemplate.value;
 
   const artistContacts = await db.contact.findMany({
     where: { artistId: contact.artistId },
@@ -318,32 +322,25 @@ export default async function CustomizePage({
       )}
       <Card className="mt-6">
         <CardBody>
-          {trajectoryError ? (
-            <p className="text-sm text-amber-800 dark:text-amber-200">
-              {trajectoryError} Return to recommendations and refresh before
-              sending.
-            </p>
-          ) : (
-            <CustomizeForm
-              contextContactId={contactId}
-              returnTo={safeReturnTo}
-              recipientOptions={recipientOptions}
-              weekend={isWeekendET()}
-              initialIntent={initialIntent}
-              queueLabel={formatNextDispatchActionLabel(
-                getNextNormalOutreachDispatch(),
-              )}
-              action={sendCustom.bind(null, {
-                showId,
-                contextContactId: contactId,
-                contextArtistId: contact.artistId,
-                returnTo: safeReturnTo,
-                retryContactId:
-                  routeSendability?.mode === "retry" ? contactId : null,
-                trajectoryContext,
-              })}
-            />
-          )}
+          <CustomizeForm
+            contextContactId={contactId}
+            returnTo={safeReturnTo}
+            recipientOptions={recipientOptions}
+            weekend={isWeekendET()}
+            initialIntent={initialIntent}
+            queueLabel={formatNextDispatchActionLabel(
+              getNextNormalOutreachDispatch(),
+            )}
+            action={sendCustom.bind(null, {
+              showId,
+              contextContactId: contactId,
+              contextArtistId: contact.artistId,
+              returnTo: safeReturnTo,
+              retryContactId:
+                routeSendability?.mode === "retry" ? contactId : null,
+              trajectoryContext,
+            })}
+          />
         </CardBody>
       </Card>
     </main>

@@ -28,6 +28,10 @@ import {
 } from "@/lib/schedule";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
 import type { TrajectoryActionContext } from "@/lib/trajectoryActiveRun";
+import {
+  captureTrajectoryAction,
+  trajectoryActionResultHref,
+} from "@/lib/trajectoryActionError";
 
 export interface CustomizeActionState {
   error: string | null;
@@ -200,12 +204,21 @@ export async function sendCustom(
     expectedRecipientIdentity,
     trajectoryContext: context.trajectoryContext ?? undefined,
   };
-  const result =
+  const capturedResult = await captureTrajectoryAction(returnTo, () =>
     intent === "queue"
-      ? await scheduleOutreach(input, getNextNormalOutreachDispatch())
+      ? scheduleOutreach(input, getNextNormalOutreachDispatch())
       : isWeekendET()
-        ? await scheduleOutreach(input, getNextMondaySlot())
-        : await sendOutreach(input);
+        ? scheduleOutreach(input, getNextMondaySlot())
+        : sendOutreach(input),
+  );
+  if (!capturedResult.ok) {
+    redirect(capturedResult.errorHref);
+  }
+  const result = capturedResult.value;
+  const trajectoryErrorHref = trajectoryActionResultHref(returnTo, result);
+  if (trajectoryErrorHref) {
+    redirect(trajectoryErrorHref);
+  }
   if (!result.ok) {
     return actionError(
       selectedContactId,
