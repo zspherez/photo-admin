@@ -8,11 +8,14 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Settings" };
 
 export default async function SettingsIndex() {
-  const [spotify, statsfm, contactCount, researchReviewCount, auditReviewCount, template, showCount, settings, agentRules] = await Promise.all([
+  const [spotify, statsfm, contactCount, researchReviewCount, researchQueueCount, auditReviewCount, template, showCount, settings, agentRules] = await Promise.all([
     db.integrationCredential.findUnique({ where: { provider: "spotify" } }),
     db.integrationCredential.findUnique({ where: { provider: "statsfm" } }),
     db.contact.count({ where: { state: "active" } }),
     db.contactResearchJob.count({ where: { status: "review" } }),
+    db.contactResearchJob.count({
+      where: { status: { in: ["pending", "claimed"] } },
+    }),
     db.contactAuditJob.count({
       where: {
         finding: { in: ["changed", "stale", "ambiguous"] },
@@ -82,6 +85,18 @@ export default async function SettingsIndex() {
       status: `${auditReviewCount.toLocaleString()} flagged to review`,
       ok: true,
       description: "Review-only verification of existing manager contacts.",
+    },
+    {
+      title: "Queue management",
+      href: "/settings/queue-management",
+      status: `${(
+        auditReviewCount +
+        researchReviewCount +
+        researchQueueCount
+      ).toLocaleString()} active items`,
+      ok: true,
+      description:
+        "Reject audit decisions, requeue reviews, or deactivate research jobs.",
     },
     {
       title: "Email template",

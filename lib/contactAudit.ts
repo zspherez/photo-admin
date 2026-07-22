@@ -22,8 +22,14 @@ import {
   rollbackAuditedContactInSheet,
   updateAuditedContactInSheet,
 } from "@/lib/sheets";
-import { CONTACT_AUDIT_RESOLUTION_CLAIM_TTL_MS } from "@/lib/contactAuditResolutionPolicy";
+import {
+  contactAuditResolutionEligibility,
+  contactAuditResolutionClaimStaleBefore,
+  contactStillMatchesAuditSnapshot,
+} from "@/lib/contactAuditResolutionPolicy";
 import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
+
+export { contactStillMatchesAuditSnapshot } from "@/lib/contactAuditResolutionPolicy";
 
 export const CONTACT_AUDIT_DEFAULT_CLAIM_LIMIT = 1;
 export const CONTACT_AUDIT_MAX_CLAIM_LIMIT = 10;
@@ -1208,12 +1214,6 @@ export async function markContactAuditReviewed(
   return result.count === 1;
 }
 
-const FLAGGED_CONTACT_AUDIT_FINDINGS = new Set([
-  "changed",
-  "stale",
-  "ambiguous",
-]);
-
 type ResolutionDecision =
   | { resolution: "approved"; alternativeId: string | null }
   | { resolution: "rejected"; alternativeId: null };
@@ -1261,44 +1261,6 @@ const CONTACT_AUDIT_SHEET_MUTATIONS: ContactAuditSheetMutations = {
   update: updateAuditedContactInSheet,
   rollback: rollbackAuditedContactInSheet,
 };
-
-export function contactStillMatchesAuditSnapshot(
-  job: {
-    snapshotEmail: string | null;
-    snapshotPhone: string | null;
-    snapshotDirectOutreachNote: string | null;
-    snapshotName: string | null;
-    snapshotRole: string | null;
-    snapshotSource: string | null;
-    snapshotNotes: string | null;
-    snapshotIsFullTeam: boolean | null;
-  },
-  contact: Pick<
-    ResolutionContact,
-    | "state"
-    | "email"
-    | "phone"
-    | "directOutreachNote"
-    | "name"
-    | "role"
-    | "source"
-    | "notes"
-    | "isFullTeam"
-  >
-): boolean {
-  return (
-    contact.state === "active" &&
-    contact.email === job.snapshotEmail &&
-    contact.phone === job.snapshotPhone &&
-    contact.directOutreachNote === job.snapshotDirectOutreachNote &&
-    contact.name === job.snapshotName &&
-    contact.role === job.snapshotRole &&
-    contact.source === job.snapshotSource &&
-    contact.notes === job.snapshotNotes &&
-    (job.snapshotIsFullTeam === null ||
-      contact.isFullTeam === job.snapshotIsFullTeam)
-  );
-}
 
 function isSameResolution(
   existing: {
@@ -1386,9 +1348,7 @@ async function reserveContactAuditResolution(
   | { ok: true; reservation: ResolutionReservation }
   | { ok: false; result: ContactAuditResolutionResult }
 > {
-  const staleClaimBefore = new Date(
-    now.getTime() - CONTACT_AUDIT_RESOLUTION_CLAIM_TTL_MS
-  );
+  const staleClaimBefore = contactAuditResolutionClaimStaleBefore(now);
   return withSerializableRetry(async (tx) => {
     const job = await tx.contactAuditJob.findUnique({
       where: { id: jobId },
@@ -1425,12 +1385,8 @@ async function reserveContactAuditResolution(
         },
       };
     }
-    if (
-      job.status !== "complete" ||
-      !job.verifiedAt ||
-      !job.finding ||
-      !FLAGGED_CONTACT_AUDIT_FINDINGS.has(job.finding)
-    ) {
+    const eligibility = contactAuditResolutionEligibility(job, now);
+    if (eligibility === "not_eligible") {
       return {
         ok: false as const,
         result: {
@@ -1439,16 +1395,33 @@ async function reserveContactAuditResolution(
         },
       };
     }
-    if (!job.contact || !contactStillMatchesAuditSnapshot(job, job.contact)) {
+    if (eligibility === "active_claim") {
       return {
         ok: false as const,
         result: {
           ok: false,
           error:
-            "The contact changed after this audit was saved. Run a new audit before deciding it.",
+            "Another decision is currently being applied to this finding. Refresh before trying again.",
         },
       };
     }
+    if (
+      eligibility === "contact_missing" ||
+      eligibility === "contact_changed" ||
+      !job.contact
+    ) {
+      return {
+        ok: false as const,
+        result: {
+          ok: false,
+          error:
+            eligibility === "contact_missing"
+              ? "The audited contact no longer exists. Run a new audit before deciding it."
+              : "The contact changed after this audit was saved. Run a new audit before deciding it.",
+        },
+      };
+    }
+    const contact = job.contact;
 
     const alternative =
       decision.alternativeId && job.alternatives
@@ -1488,8 +1461,8 @@ async function reserveContactAuditResolution(
     }
     if (alternative) {
       const duplicate = await contactAuditAlternativeAlreadyStored(tx, {
-        artistId: job.contact.artistId,
-        targetContactId: job.contact.id,
+        artistId: contact.artistId,
+        targetContactId: contact.id,
         rosterSnapshotId: job.rosterSnapshotId,
         normalizedEmail: alternative.normalizedEmail,
       });
@@ -1539,7 +1512,7 @@ async function reserveContactAuditResolution(
         jobId: job.id,
         finding: job.finding as ResolutionReservation["finding"],
         claimToken: claimedJob.resolutionClaimToken!,
-        contact: job.contact as ResolutionContact,
+        contact: contact as ResolutionContact,
         alternative: alternative as ResolutionAlternative | null,
       },
     };
