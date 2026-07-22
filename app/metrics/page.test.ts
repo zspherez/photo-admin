@@ -22,9 +22,12 @@ test("metrics disclose limits and avoid PII, probability, and causality claims",
     "Export lag",
     "Unavailable",
     "Primary/backup comparison unavailable",
+    "Source non-suggested",
+    "<ArmTable",
   ]) {
     assert.match(page, new RegExp(marker));
   }
   assert.doesNotMatch(page, /recipientEmails|expectedRecipientEmail|contactDetail/);
   assert.doesNotMatch(page, /success rate|conversion rate|lift|impact/i);
+  assert.doesNotMatch(page, /latestExportableChangeAt|Latest exportable change/);
 });

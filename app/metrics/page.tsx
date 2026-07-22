@@ -3,8 +3,10 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardBody } from "@/components/ui/card";
 import {
   getTrajectoryOperationalMetrics,
+  type OperationalCount,
   type TrajectoryOperationalMetrics,
 } from "@/lib/trajectoryMetrics";
+import { TRAJECTORY_ARMS } from "@/lib/trajectoryContract";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Trajectory metrics" };
@@ -25,6 +27,12 @@ function bytes(value: number): string {
   return `${number.format(Math.round(value / 1024))} KiB`;
 }
 
+function operationalCount(value: OperationalCount): string {
+  return value.value === null
+    ? `Unavailable — ${value.unavailableReason}`
+    : number.format(value.value);
+}
+
 function MetricList({
   rows,
 }: {
@@ -41,6 +49,44 @@ function MetricList({
         </div>
       ))}
     </dl>
+  );
+}
+
+function ArmTable({
+  columns,
+}: {
+  columns: Array<{
+    label: string;
+    value: (arm: (typeof TRAJECTORY_ARMS)[number]) => string | number;
+  }>;
+}) {
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="min-w-full text-left text-xs">
+        <thead className="text-zinc-500 dark:text-zinc-400">
+          <tr>
+            <th className="px-2 py-2 font-medium">Arm</th>
+            {columns.map((column) => (
+              <th key={column.label} className="px-2 py-2 font-medium">
+                {column.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {TRAJECTORY_ARMS.map((arm) => (
+            <tr key={arm} className="border-t border-zinc-200 dark:border-zinc-800">
+              <th className="px-2 py-2 font-medium">{arm}</th>
+              {columns.map((column) => (
+                <td key={column.label} className="px-2 py-2">
+                  {column.value(arm)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -116,12 +162,18 @@ function RunMetrics({
                 { label: "Imported", value: timestamp(run.importedAt) },
                 { label: "Activated", value: timestamp(run.activatedAt) },
                 { label: "Artifact size", value: bytes(run.artifactByteLength) },
-                { label: "Artist rows", value: metrics.import.artistRows },
                 {
-                  label: "Recommendation rows",
-                  value: metrics.import.recommendationRows,
+                  label: "Persisted artist rows",
+                  value: metrics.import.persistedArtistRows,
                 },
-                { label: "Suggested rows", value: metrics.import.suggestedRows },
+                {
+                  label: "Persisted recommendation rows",
+                  value: metrics.import.persistedRecommendationRows,
+                },
+                {
+                  label: "Persisted suggested rows",
+                  value: metrics.import.persistedSuggestedRows,
+                },
               ]}
             />
             <p className="mt-3 break-all text-xs text-zinc-500">
@@ -138,24 +190,66 @@ function RunMetrics({
       <MetricCard
         title="Mapping and import issues"
         scope={metrics.scope.run}
-        available={metrics.mapping.available}
+        available={metrics.import.available}
       >
-        {metrics.mapping.available ? (
+        {metrics.import.available ? (
           <MetricList
             rows={[
-              { label: "Artist rows", value: metrics.mapping.artistRows },
-              { label: "Mapped artists", value: metrics.mapping.mappedArtistRows },
               {
-                label: "Unmapped artists",
-                value: metrics.mapping.unmappedArtistRows,
+                label: "Source artist rows",
+                value: operationalCount(metrics.mapping.sourceArtistRows),
               },
               {
-                label: "Imported recommendations",
-                value: metrics.mapping.importedRecommendationRows,
+                label: "Mapped artist rows",
+                value: operationalCount(metrics.mapping.mappedArtistRows),
               },
               {
-                label: "Unresolved recommendation rows",
-                value: metrics.mapping.unresolvedRecommendationRows,
+                label: "Source recommendations",
+                value: operationalCount(
+                  metrics.mapping.sourceRecommendationRows,
+                ),
+              },
+              {
+                label: "Mapped recommendations",
+                value: operationalCount(
+                  metrics.mapping.mappedRecommendationRows,
+                ),
+              },
+              {
+                label: "Source suggested",
+                value: operationalCount(metrics.mapping.sourceSuggestedRows),
+              },
+              {
+                label: "Mapped suggested",
+                value: operationalCount(metrics.mapping.mappedSuggestedRows),
+              },
+              {
+                label: "Source non-suggested",
+                value: operationalCount(
+                  metrics.mapping.sourceNonSuggestedRows,
+                ),
+              },
+              {
+                label: "Mapped non-suggested",
+                value: operationalCount(
+                  metrics.mapping.mappedNonSuggestedRows,
+                ),
+              },
+              {
+                label: "All unresolved rows",
+                value: metrics.mapping.unresolvedRows,
+              },
+              {
+                label: "Unresolved suggested",
+                value: operationalCount(
+                  metrics.mapping.unresolvedSuggestedRows,
+                ),
+              },
+              {
+                label: "Unresolved non-suggested",
+                value: operationalCount(
+                  metrics.mapping.unresolvedNonSuggestedRows,
+                ),
               },
               { label: "All issue records", value: metrics.issues.total },
               { label: "Show not found", value: metrics.issues.showNotFound },
@@ -238,6 +332,34 @@ export default async function MetricsPage() {
               { label: "Latest decision", value: timestamp(metrics.decisions.latestAt) },
             ]}
           />
+          <ArmTable
+            columns={[
+              {
+                label: "Records",
+                value: (arm) => metrics.decisions.byArm[arm].records,
+              },
+              {
+                label: "Selected",
+                value: (arm) => metrics.decisions.byArm[arm].selected,
+              },
+              {
+                label: "Declined",
+                value: (arm) => metrics.decisions.byArm[arm].declined,
+              },
+              {
+                label: "Saved",
+                value: (arm) => metrics.decisions.byArm[arm].saved,
+              },
+              {
+                label: "Dismissed",
+                value: (arm) => metrics.decisions.byArm[arm].dismissed,
+              },
+              {
+                label: "Override",
+                value: (arm) => metrics.decisions.byArm[arm].manualOverride,
+              },
+            ]}
+          />
         </MetricCard>
 
         <MetricCard title="Observed engagement" scope={metrics.scope.history}>
@@ -250,9 +372,38 @@ export default async function MetricsPage() {
               { label: "Provider-reported clicked", value: metrics.engagement.clicked },
               { label: "Bounced", value: metrics.engagement.bounced },
               { label: "Complained", value: metrics.engagement.complained },
+            ]}
+          />
+          <ArmTable
+            columns={[
               {
-                label: "Latest observed change",
-                value: timestamp(metrics.engagement.latestObservedAt),
+                label: "Outreach",
+                value: (arm) =>
+                  metrics.engagement.byArm[arm].attributedOutreach,
+              },
+              {
+                label: "Sent",
+                value: (arm) => metrics.engagement.byArm[arm].sent,
+              },
+              {
+                label: "Delivered",
+                value: (arm) => metrics.engagement.byArm[arm].delivered,
+              },
+              {
+                label: "Opened",
+                value: (arm) => metrics.engagement.byArm[arm].opened,
+              },
+              {
+                label: "Clicked",
+                value: (arm) => metrics.engagement.byArm[arm].clicked,
+              },
+              {
+                label: "Bounced",
+                value: (arm) => metrics.engagement.byArm[arm].bounced,
+              },
+              {
+                label: "Complained",
+                value: (arm) => metrics.engagement.byArm[arm].complained,
               },
             ]}
           />
@@ -267,6 +418,34 @@ export default async function MetricsPage() {
               { label: "Guest list", value: metrics.access.guestlist },
               { label: "Photo pass", value: metrics.access.photoPass },
               { label: "Other access", value: metrics.access.other },
+            ]}
+          />
+          <ArmTable
+            columns={[
+              {
+                label: "Records",
+                value: (arm) => metrics.access.byArm[arm].records,
+              },
+              {
+                label: "Not recorded",
+                value: (arm) => metrics.access.byArm[arm].notRecorded,
+              },
+              {
+                label: "None",
+                value: (arm) => metrics.access.byArm[arm].none,
+              },
+              {
+                label: "Guest list",
+                value: (arm) => metrics.access.byArm[arm].guestlist,
+              },
+              {
+                label: "Photo pass",
+                value: (arm) => metrics.access.byArm[arm].photoPass,
+              },
+              {
+                label: "Other",
+                value: (arm) => metrics.access.byArm[arm].other,
+              },
             ]}
           />
         </MetricCard>
@@ -305,6 +484,26 @@ export default async function MetricsPage() {
               { label: "Latest outcome", value: timestamp(metrics.outcomes.latestAt) },
             ]}
           />
+          <ArmTable
+            columns={[
+              {
+                label: "Records",
+                value: (arm) => metrics.outcomes.byArm[arm].records,
+              },
+              {
+                label: "Attended",
+                value: (arm) => metrics.outcomes.byArm[arm].attended,
+              },
+              {
+                label: "Not attended",
+                value: (arm) => metrics.outcomes.byArm[arm].notAttended,
+              },
+              {
+                label: "Keepers",
+                value: (arm) => metrics.outcomes.byArm[arm].keeperTotal,
+              },
+            ]}
+          />
         </MetricCard>
 
         <MetricCard
@@ -320,10 +519,6 @@ export default async function MetricsPage() {
               {
                 label: "Currently exportable outreach rows",
                 value: metrics.exportLag.exportableOutreachRows,
-              },
-              {
-                label: "Latest exportable change",
-                value: timestamp(metrics.exportLag.latestExportableChangeAt),
               },
             ]}
           />

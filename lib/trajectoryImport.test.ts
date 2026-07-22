@@ -25,6 +25,7 @@ interface TestRun extends ExistingTrajectoryRun {
   producerRunId: string;
   activatedAt: Date | null;
   generatedAt: Date;
+  summary?: Record<string, unknown>;
 }
 
 function evidence() {
@@ -236,7 +237,7 @@ class MemoryPersistence implements TrajectoryImportPersistence {
         }
       },
       acquireMembershipLock: async () => undefined,
-      createRun: async ({ id, parsed }) => {
+      createRun: async ({ id, parsed, summary }) => {
         this.runs.push({
           id,
           producer: parsed.manifest.producer,
@@ -245,6 +246,7 @@ class MemoryPersistence implements TrajectoryImportPersistence {
           status: "importing",
           activatedAt: null,
           generatedAt: parsed.generatedAt,
+          summary,
         });
       },
       createRunArtists: async (runId, artists) => {
@@ -323,6 +325,27 @@ test("exact EDMTrain mappings and ShowArtist membership import atomically", asyn
   assert.equal(persistence.runArtists.length, 2);
   assert.equal(persistence.recommendations.length, 2);
   assert.equal(persistence.issues.length, 0);
+  assert.deepEqual(
+    persistence.runs.find((run) => run.status === "ready")?.summary,
+    {
+      recommendationCount: 2,
+      mappedRecommendationCount: 2,
+      suggestedRecommendationCount: 1,
+      mappedSuggestedRecommendationCount: 1,
+      nonSuggestedRecommendationCount: 1,
+      mappedNonSuggestedRecommendationCount: 1,
+      artistCount: 2,
+      mappedArtistCount: 2,
+      importIssueCount: 0,
+      unresolvedNonSuggestedRate: 0,
+      recommendationHorizonEnd: "2026-10-18T00:00:00.000Z",
+      freshnessPolicy: {
+        staleAfterHours: 72,
+        expectedRefreshCadenceHours: 24,
+        timezone: "America/New_York",
+      },
+    },
+  );
 });
 
 test("names never provide fallback identity mapping", async () => {
@@ -379,6 +402,27 @@ test("non-suggested mapping issues persist at the 2% default threshold", async (
   assert.deepEqual(persistence.issues.map((issue) => issue.code), [
     "show_not_found",
   ]);
+  assert.deepEqual(
+    persistence.runs.find((run) => run.status === "ready")?.summary,
+    {
+      recommendationCount: 51,
+      mappedRecommendationCount: 50,
+      suggestedRecommendationCount: 1,
+      mappedSuggestedRecommendationCount: 1,
+      nonSuggestedRecommendationCount: 50,
+      mappedNonSuggestedRecommendationCount: 49,
+      artistCount: 51,
+      mappedArtistCount: 50,
+      importIssueCount: 1,
+      unresolvedNonSuggestedRate: 0.02,
+      recommendationHorizonEnd: "2026-10-18T00:00:00.000Z",
+      freshnessPolicy: {
+        staleAfterHours: 72,
+        expectedRefreshCadenceHours: 24,
+        timezone: "America/New_York",
+      },
+    },
+  );
 });
 
 test("non-suggested mapping issues above 2% reject before writes", async () => {

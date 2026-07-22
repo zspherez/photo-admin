@@ -1,4 +1,5 @@
 import type {
+  TrajectoryArm,
   TrajectoryFeedbackAction,
   TrajectoryImportIssueCode,
   TrajectoryRunStatus,
@@ -15,6 +16,7 @@ import {
   type TrajectoryRunAvailability,
   type TrajectoryRunStore,
 } from "@/lib/trajectoryActiveRun";
+import { TRAJECTORY_ARMS } from "@/lib/trajectoryContract";
 
 interface MetricsRunRecord {
   id: string;
@@ -25,11 +27,13 @@ interface MetricsRunRecord {
   activatedAt: Date | null;
   artifactByteLength: number;
   status: TrajectoryRunStatus;
+  summary: unknown;
 }
 
 interface RunIssueInput {
   code: TrajectoryImportIssueCode;
   recommendationKey: string | null;
+  detail: unknown;
 }
 
 interface ContactInput {
@@ -48,10 +52,10 @@ interface SuggestedRecommendationInput {
 }
 
 interface RunMetricsInput {
-  artistRows: number;
-  mappedArtistRows: number;
-  recommendationRows: number;
-  suggestedRows: number;
+  persistedArtistRows: number;
+  persistedRecommendationRows: number;
+  persistedSuggestedRows: number;
+  summary: unknown;
   issues: RunIssueInput[];
   activeSuggested: SuggestedRecommendationInput[];
   readiness: Array<{
@@ -62,11 +66,20 @@ interface RunMetricsInput {
 }
 
 interface DecisionInput {
+  id: string;
+  recommendationId: string;
+  runId: string;
+  arm: TrajectoryArm;
   action: TrajectoryFeedbackAction;
   recordedAt: Date;
+  superseded: boolean;
 }
 
 interface OutcomeInput {
+  id: string;
+  recommendationId: string;
+  runId: string;
+  arm: TrajectoryArm;
   attended: boolean | null;
   access: "none" | "guestlist" | "photo_pass" | "other" | null;
   keeperCount: number | null;
@@ -75,9 +88,12 @@ interface OutcomeInput {
   shootability: "good" | "ok" | "poor" | null;
   venueAccessibility: "high" | "medium" | "low" | null;
   recordedAt: Date;
+  superseded: boolean;
 }
 
 interface EngagementInput {
+  runId: string;
+  arm: TrajectoryArm;
   status: string;
   createdAt: Date;
   sentAt: Date | null;
@@ -113,6 +129,7 @@ const RUN_SELECT = {
   activatedAt: true,
   artifactByteLength: true,
   status: true,
+  summary: true,
 } as const;
 
 const DEFAULT_STORE: TrajectoryMetricsStore = {
@@ -131,24 +148,25 @@ const DEFAULT_STORE: TrajectoryMetricsStore = {
     }),
   async loadRunMetrics(runId, now) {
     const [
-      artistRows,
-      mappedArtistRows,
-      recommendationRows,
-      suggestedRows,
+      persistedArtistRows,
+      persistedRecommendationRows,
+      persistedSuggestedRows,
+      run,
       issues,
       recommendations,
     ] = await Promise.all([
       db.trajectoryRunArtist.count({ where: { runId } }),
-      db.trajectoryRunArtist.count({
-        where: { runId, artistId: { not: null } },
-      }),
       db.trajectoryRecommendation.count({ where: { runId } }),
       db.trajectoryRecommendation.count({
         where: { runId, isSuggested: true },
       }),
+      db.trajectoryModelRun.findUniqueOrThrow({
+        where: { id: runId },
+        select: { summary: true },
+      }),
       db.trajectoryImportIssue.findMany({
         where: { runId },
-        select: { code: true, recommendationKey: true },
+        select: { code: true, recommendationKey: true, detail: true },
       }),
       db.trajectoryRecommendation.findMany({
         where: {
@@ -210,10 +228,10 @@ const DEFAULT_STORE: TrajectoryMetricsStore = {
         : await getOutreachSendabilityBatch([...targets.values()], now);
 
     return {
-      artistRows,
-      mappedArtistRows,
-      recommendationRows,
-      suggestedRows,
+      persistedArtistRows,
+      persistedRecommendationRows,
+      persistedSuggestedRows,
+      summary: run.summary,
       issues,
       activeSuggested,
       readiness: readiness.map((row) => ({
@@ -226,12 +244,19 @@ const DEFAULT_STORE: TrajectoryMetricsStore = {
   async loadHistoricalMetrics() {
     const [decisions, outcomes, engagement] = await Promise.all([
       db.trajectoryFeedbackEvent.findMany({
-        where: { supersededBy: { is: null } },
-        select: { action: true, recordedAt: true },
+        select: {
+          id: true,
+          recommendationId: true,
+          action: true,
+          recordedAt: true,
+          recommendation: { select: { arm: true, runId: true } },
+          supersededBy: { select: { id: true } },
+        },
       }),
       db.trajectoryShowOutcome.findMany({
-        where: { supersededBy: { is: null } },
         select: {
+          id: true,
+          recommendationId: true,
           attended: true,
           access: true,
           keeperCount: true,
@@ -240,6 +265,8 @@ const DEFAULT_STORE: TrajectoryMetricsStore = {
           shootability: true,
           venueAccessibility: true,
           recordedAt: true,
+          recommendation: { select: { arm: true, runId: true } },
+          supersededBy: { select: { id: true } },
         },
       }),
       db.outreach.findMany({
@@ -257,12 +284,99 @@ const DEFAULT_STORE: TrajectoryMetricsStore = {
           clickCount: true,
           bouncedAt: true,
           complainedAt: true,
+          trajectoryRecommendation: { select: { arm: true, runId: true } },
         },
       }),
     ]);
-    return { decisions, outcomes, engagement };
+    return {
+      decisions: decisions.map((row) => ({
+        id: row.id,
+        recommendationId: row.recommendationId,
+        runId: row.recommendation.runId,
+        arm: row.recommendation.arm,
+        action: row.action,
+        recordedAt: row.recordedAt,
+        superseded: row.supersededBy !== null,
+      })),
+      outcomes: outcomes.map((row) => ({
+        id: row.id,
+        recommendationId: row.recommendationId,
+        runId: row.recommendation.runId,
+        arm: row.recommendation.arm,
+        attended: row.attended,
+        access: row.access,
+        keeperCount: row.keeperCount,
+        relationshipValue: row.relationshipValue,
+        publicationValue: row.publicationValue,
+        shootability: row.shootability,
+        venueAccessibility: row.venueAccessibility,
+        recordedAt: row.recordedAt,
+        superseded: row.supersededBy !== null,
+      })),
+      engagement: engagement.flatMap((row) =>
+        row.trajectoryRecommendation
+          ? [
+              {
+                ...row,
+                runId: row.trajectoryRecommendation.runId,
+                arm: row.trajectoryRecommendation.arm,
+              },
+            ]
+          : [],
+      ),
+    };
   },
 };
+
+export interface OperationalCount {
+  value: number | null;
+  unavailableReason: string | null;
+}
+
+interface DecisionMetrics {
+  records: number;
+  latestAt: string | null;
+  selected: number;
+  declined: number;
+  saved: number;
+  dismissed: number;
+  manualOverride: number;
+}
+
+interface EngagementMetrics {
+  attributedOutreach: number;
+  sent: number;
+  delivered: number;
+  opened: number;
+  clicked: number;
+  bounced: number;
+  complained: number;
+}
+
+interface AccessMetrics {
+  records: number;
+  notRecorded: number;
+  none: number;
+  guestlist: number;
+  photoPass: number;
+  other: number;
+}
+
+interface OutcomeMetrics {
+  records: number;
+  attended: number;
+  notAttended: number;
+  attendanceNotRecorded: number;
+  keeperCountRecorded: number;
+  keeperTotal: number;
+  relationshipValue: [number, number, number];
+  publicationValue: [number, number, number];
+  shootability: { good: number; ok: number; poor: number };
+  venueAccessibility: { high: number; medium: number; low: number };
+  latestAt: string | null;
+}
+
+export type MetricsByArm<T> = Record<TrajectoryArm, T>;
 
 export interface TrajectoryOperationalMetrics {
   generatedAt: string;
@@ -283,17 +397,23 @@ export interface TrajectoryOperationalMetrics {
   } | null;
   import: {
     available: boolean;
-    artistRows: number;
-    recommendationRows: number;
-    suggestedRows: number;
+    persistedArtistRows: number;
+    persistedRecommendationRows: number;
+    persistedSuggestedRows: number;
   };
   mapping: {
     available: boolean;
-    artistRows: number;
-    mappedArtistRows: number;
-    unmappedArtistRows: number;
-    importedRecommendationRows: number;
-    unresolvedRecommendationRows: number;
+    sourceArtistRows: OperationalCount;
+    mappedArtistRows: OperationalCount;
+    sourceRecommendationRows: OperationalCount;
+    mappedRecommendationRows: OperationalCount;
+    sourceSuggestedRows: OperationalCount;
+    mappedSuggestedRows: OperationalCount;
+    sourceNonSuggestedRows: OperationalCount;
+    mappedNonSuggestedRows: OperationalCount;
+    unresolvedRows: number;
+    unresolvedSuggestedRows: OperationalCount;
+    unresolvedNonSuggestedRows: OperationalCount;
   };
   issues: {
     total: number;
@@ -309,51 +429,22 @@ export interface TrajectoryOperationalMetrics {
     directOutreach: number;
     needsContact: number;
   };
-  decisions: {
-    records: number;
-    latestAt: string | null;
-    selected: number;
-    declined: number;
-    saved: number;
-    dismissed: number;
-    manualOverride: number;
+  decisions: DecisionMetrics & {
+    byArm: MetricsByArm<DecisionMetrics>;
   };
-  engagement: {
-    attributedOutreach: number;
-    sent: number;
-    delivered: number;
-    opened: number;
-    clicked: number;
-    bounced: number;
-    complained: number;
-    latestObservedAt: string | null;
+  engagement: EngagementMetrics & {
+    byArm: MetricsByArm<EngagementMetrics>;
   };
-  access: {
-    records: number;
-    notRecorded: number;
-    none: number;
-    guestlist: number;
-    photoPass: number;
-    other: number;
+  access: AccessMetrics & {
+    byArm: MetricsByArm<AccessMetrics>;
   };
-  outcomes: {
-    records: number;
-    attended: number;
-    notAttended: number;
-    attendanceNotRecorded: number;
-    keeperCountRecorded: number;
-    keeperTotal: number;
-    relationshipValue: [number, number, number];
-    publicationValue: [number, number, number];
-    shootability: { good: number; ok: number; poor: number };
-    venueAccessibility: { high: number; medium: number; low: number };
-    latestAt: string | null;
+  outcomes: OutcomeMetrics & {
+    byArm: MetricsByArm<OutcomeMetrics>;
   };
   exportLag: {
     available: false;
     reason: string;
     exportableOutreachRows: number;
-    latestExportableChangeAt: string | null;
   };
   sameNight: {
     available: boolean;
@@ -389,22 +480,61 @@ function countValue<T>(
   return values.filter((value) => select(value) === expected).length;
 }
 
+function unavailableCount(reason: string): OperationalCount {
+  return { value: null, unavailableReason: reason };
+}
+
+function summaryCount(
+  summary: unknown,
+  field: string,
+): OperationalCount {
+  const reason = `Run summary does not persist ${field}; unavailable for legacy or incomplete imports.`;
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return unavailableCount(reason);
+  }
+  const value = (summary as Record<string, unknown>)[field];
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0
+    ? { value, unavailableReason: null }
+    : unavailableCount(reason);
+}
+
+function issueSuggestionState(issue: RunIssueInput): boolean | null {
+  if (
+    !issue.detail ||
+    typeof issue.detail !== "object" ||
+    Array.isArray(issue.detail)
+  ) {
+    return null;
+  }
+  const value = (issue.detail as Record<string, unknown>).isSuggested;
+  return typeof value === "boolean" ? value : null;
+}
+
 function aggregateRunMetrics(input: RunMetricsInput | null) {
   if (!input) {
+    const noRun = "No selected trajectory run exists.";
     return {
       importMetrics: {
         available: false,
-        artistRows: 0,
-        recommendationRows: 0,
-        suggestedRows: 0,
+        persistedArtistRows: 0,
+        persistedRecommendationRows: 0,
+        persistedSuggestedRows: 0,
       },
       mapping: {
         available: false,
-        artistRows: 0,
-        mappedArtistRows: 0,
-        unmappedArtistRows: 0,
-        importedRecommendationRows: 0,
-        unresolvedRecommendationRows: 0,
+        sourceArtistRows: unavailableCount(noRun),
+        mappedArtistRows: unavailableCount(noRun),
+        sourceRecommendationRows: unavailableCount(noRun),
+        mappedRecommendationRows: unavailableCount(noRun),
+        sourceSuggestedRows: unavailableCount(noRun),
+        mappedSuggestedRows: unavailableCount(noRun),
+        sourceNonSuggestedRows: unavailableCount(noRun),
+        mappedNonSuggestedRows: unavailableCount(noRun),
+        unresolvedRows: 0,
+        unresolvedSuggestedRows: unavailableCount(noRun),
+        unresolvedNonSuggestedRows: unavailableCount(noRun),
       },
       issues: {
         total: 0,
@@ -470,23 +600,66 @@ function aggregateRunMetrics(input: RunMetricsInput | null) {
   const alternativeDates = [...dateShows.entries()].filter(
     ([, shows]) => shows.size > 1,
   );
+  const sourceRecommendationRows = summaryCount(
+    input.summary,
+    "recommendationCount",
+  );
+  const mappedRecommendationRows = summaryCount(
+    input.summary,
+    "mappedRecommendationCount",
+  );
+  const issueSuggestionStates = input.issues.map(issueSuggestionState);
+  const issueClassificationUnavailable =
+    issueSuggestionStates.some((value) => value === null);
+  const issueClassificationReason =
+    "One or more import issues do not persist suggested/non-suggested classification.";
 
   return {
     importMetrics: {
       available: true,
-      artistRows: input.artistRows,
-      recommendationRows: input.recommendationRows,
-      suggestedRows: input.suggestedRows,
+      persistedArtistRows: input.persistedArtistRows,
+      persistedRecommendationRows: input.persistedRecommendationRows,
+      persistedSuggestedRows: input.persistedSuggestedRows,
     },
     mapping: {
-      available: true,
-      artistRows: input.artistRows,
-      mappedArtistRows: input.mappedArtistRows,
-      unmappedArtistRows: input.artistRows - input.mappedArtistRows,
-      importedRecommendationRows: input.recommendationRows,
-      unresolvedRecommendationRows: input.issues.filter(
-        (issue) => issue.recommendationKey !== null,
-      ).length,
+      available:
+        sourceRecommendationRows.value !== null &&
+        mappedRecommendationRows.value !== null,
+      sourceArtistRows: summaryCount(input.summary, "artistCount"),
+      mappedArtistRows: summaryCount(input.summary, "mappedArtistCount"),
+      sourceRecommendationRows,
+      mappedRecommendationRows,
+      sourceSuggestedRows: summaryCount(
+        input.summary,
+        "suggestedRecommendationCount",
+      ),
+      mappedSuggestedRows: summaryCount(
+        input.summary,
+        "mappedSuggestedRecommendationCount",
+      ),
+      sourceNonSuggestedRows: summaryCount(
+        input.summary,
+        "nonSuggestedRecommendationCount",
+      ),
+      mappedNonSuggestedRows: summaryCount(
+        input.summary,
+        "mappedNonSuggestedRecommendationCount",
+      ),
+      unresolvedRows: input.issues.length,
+      unresolvedSuggestedRows: issueClassificationUnavailable
+        ? unavailableCount(issueClassificationReason)
+        : {
+            value: issueSuggestionStates.filter((value) => value === true)
+              .length,
+            unavailableReason: null,
+          },
+      unresolvedNonSuggestedRows: issueClassificationUnavailable
+        ? unavailableCount(issueClassificationReason)
+        : {
+            value: issueSuggestionStates.filter((value) => value === false)
+              .length,
+            unavailableReason: null,
+          },
     },
     issues: {
       total: input.issues.length,
@@ -528,6 +701,115 @@ function aggregateRunMetrics(input: RunMetricsInput | null) {
   };
 }
 
+function latestPerRecommendation<
+  Row extends {
+    id: string;
+    recommendationId: string;
+    recordedAt: Date;
+    superseded: boolean;
+  },
+>(rows: readonly Row[]): Row[] {
+  const latest = new Map<string, Row>();
+  for (const row of rows) {
+    if (row.superseded) continue;
+    const prior = latest.get(row.recommendationId);
+    if (
+      !prior ||
+      row.recordedAt.getTime() > prior.recordedAt.getTime() ||
+      (row.recordedAt.getTime() === prior.recordedAt.getTime() &&
+        row.id.localeCompare(prior.id) > 0)
+    ) {
+      latest.set(row.recommendationId, row);
+    }
+  }
+  return [...latest.values()];
+}
+
+function metricsByArm<Row extends { arm: TrajectoryArm }, T>(
+  rows: readonly Row[],
+  aggregate: (rows: readonly Row[]) => T,
+): MetricsByArm<T> {
+  return Object.fromEntries(
+    TRAJECTORY_ARMS.map((arm) => [
+      arm,
+      aggregate(rows.filter((row) => row.arm === arm)),
+    ]),
+  ) as MetricsByArm<T>;
+}
+
+function decisionMetrics(rows: readonly DecisionInput[]): DecisionMetrics {
+  return {
+    records: rows.length,
+    latestAt: latestDate(rows.map((row) => row.recordedAt)),
+    selected: countActions(rows, "selected"),
+    declined: countActions(rows, "declined"),
+    saved: countActions(rows, "saved"),
+    dismissed: countActions(rows, "dismissed"),
+    manualOverride: countActions(rows, "manual_override"),
+  };
+}
+
+function engagementMetrics(
+  rows: readonly EngagementInput[],
+): EngagementMetrics {
+  return {
+    attributedOutreach: rows.length,
+    sent: rows.filter((row) => row.sentAt !== null || row.status === "sent")
+      .length,
+    delivered: rows.filter((row) => row.deliveredAt !== null).length,
+    opened: rows.filter(
+      (row) => row.firstOpenedAt !== null || row.openCount > 0,
+    ).length,
+    clicked: rows.filter(
+      (row) => row.firstClickedAt !== null || row.clickCount > 0,
+    ).length,
+    bounced: rows.filter((row) => row.bouncedAt !== null).length,
+    complained: rows.filter((row) => row.complainedAt !== null).length,
+  };
+}
+
+function accessMetrics(rows: readonly OutcomeInput[]): AccessMetrics {
+  return {
+    records: rows.length,
+    notRecorded: countValue(rows, (row) => row.access, null),
+    none: countValue(rows, (row) => row.access, "none"),
+    guestlist: countValue(rows, (row) => row.access, "guestlist"),
+    photoPass: countValue(rows, (row) => row.access, "photo_pass"),
+    other: countValue(rows, (row) => row.access, "other"),
+  };
+}
+
+function outcomeMetrics(rows: readonly OutcomeInput[]): OutcomeMetrics {
+  return {
+    records: rows.length,
+    attended: countValue(rows, (row) => row.attended, true),
+    notAttended: countValue(rows, (row) => row.attended, false),
+    attendanceNotRecorded: countValue(rows, (row) => row.attended, null),
+    keeperCountRecorded: rows.filter((row) => row.keeperCount !== null).length,
+    keeperTotal: rows.reduce(
+      (total, row) => total + (row.keeperCount ?? 0),
+      0,
+    ),
+    relationshipValue: [0, 1, 2].map((value) =>
+      countValue(rows, (row) => row.relationshipValue, value),
+    ) as [number, number, number],
+    publicationValue: [0, 1, 2].map((value) =>
+      countValue(rows, (row) => row.publicationValue, value),
+    ) as [number, number, number],
+    shootability: {
+      good: countValue(rows, (row) => row.shootability, "good"),
+      ok: countValue(rows, (row) => row.shootability, "ok"),
+      poor: countValue(rows, (row) => row.shootability, "poor"),
+    },
+    venueAccessibility: {
+      high: countValue(rows, (row) => row.venueAccessibility, "high"),
+      medium: countValue(rows, (row) => row.venueAccessibility, "medium"),
+      low: countValue(rows, (row) => row.venueAccessibility, "low"),
+    },
+    latestAt: latestDate(rows.map((row) => row.recordedAt)),
+  };
+}
+
 export async function getTrajectoryOperationalMetrics(
   options: {
     now?: Date;
@@ -544,19 +826,12 @@ export async function getTrajectoryOperationalMetrics(
     store.loadHistoricalMetrics(),
   ]);
   const runMetrics = aggregateRunMetrics(runInput);
-  const latestEngagementAt = latestDate(
-    history.engagement.flatMap((row) => [
-      row.createdAt,
-      row.sentAt,
-      row.deliveredAt,
-      row.firstOpenedAt,
-      row.lastOpenedAt,
-      row.firstClickedAt,
-      row.lastClickedAt,
-      row.bouncedAt,
-      row.complainedAt,
-    ]),
-  );
+  const decisions = latestPerRecommendation(history.decisions);
+  const outcomes = latestPerRecommendation(history.outcomes);
+  const decisionTotals = decisionMetrics(decisions);
+  const engagementTotals = engagementMetrics(history.engagement);
+  const accessTotals = accessMetrics(outcomes);
+  const outcomeTotals = outcomeMetrics(outcomes);
 
   return {
     generatedAt: now.toISOString(),
@@ -582,97 +857,26 @@ export async function getTrajectoryOperationalMetrics(
     issues: runMetrics.issues,
     contactReadiness: runMetrics.contactReadiness,
     decisions: {
-      records: history.decisions.length,
-      latestAt: latestDate(history.decisions.map((row) => row.recordedAt)),
-      selected: countActions(history.decisions, "selected"),
-      declined: countActions(history.decisions, "declined"),
-      saved: countActions(history.decisions, "saved"),
-      dismissed: countActions(history.decisions, "dismissed"),
-      manualOverride: countActions(history.decisions, "manual_override"),
+      ...decisionTotals,
+      byArm: metricsByArm(decisions, decisionMetrics),
     },
     engagement: {
-      attributedOutreach: history.engagement.length,
-      sent: history.engagement.filter(
-        (row) => row.sentAt !== null || row.status === "sent",
-      ).length,
-      delivered: history.engagement.filter((row) => row.deliveredAt !== null)
-        .length,
-      opened: history.engagement.filter(
-        (row) => row.firstOpenedAt !== null || row.openCount > 0,
-      ).length,
-      clicked: history.engagement.filter(
-        (row) => row.firstClickedAt !== null || row.clickCount > 0,
-      ).length,
-      bounced: history.engagement.filter((row) => row.bouncedAt !== null).length,
-      complained: history.engagement.filter(
-        (row) => row.complainedAt !== null,
-      ).length,
-      latestObservedAt: latestEngagementAt,
+      ...engagementTotals,
+      byArm: metricsByArm(history.engagement, engagementMetrics),
     },
     access: {
-      records: history.outcomes.length,
-      notRecorded: countValue(history.outcomes, (row) => row.access, null),
-      none: countValue(history.outcomes, (row) => row.access, "none"),
-      guestlist: countValue(history.outcomes, (row) => row.access, "guestlist"),
-      photoPass: countValue(
-        history.outcomes,
-        (row) => row.access,
-        "photo_pass",
-      ),
-      other: countValue(history.outcomes, (row) => row.access, "other"),
+      ...accessTotals,
+      byArm: metricsByArm(outcomes, accessMetrics),
     },
     outcomes: {
-      records: history.outcomes.length,
-      attended: countValue(history.outcomes, (row) => row.attended, true),
-      notAttended: countValue(history.outcomes, (row) => row.attended, false),
-      attendanceNotRecorded: countValue(
-        history.outcomes,
-        (row) => row.attended,
-        null,
-      ),
-      keeperCountRecorded: history.outcomes.filter(
-        (row) => row.keeperCount !== null,
-      ).length,
-      keeperTotal: history.outcomes.reduce(
-        (total, row) => total + (row.keeperCount ?? 0),
-        0,
-      ),
-      relationshipValue: [0, 1, 2].map((value) =>
-        countValue(history.outcomes, (row) => row.relationshipValue, value),
-      ) as [number, number, number],
-      publicationValue: [0, 1, 2].map((value) =>
-        countValue(history.outcomes, (row) => row.publicationValue, value),
-      ) as [number, number, number],
-      shootability: {
-        good: countValue(history.outcomes, (row) => row.shootability, "good"),
-        ok: countValue(history.outcomes, (row) => row.shootability, "ok"),
-        poor: countValue(history.outcomes, (row) => row.shootability, "poor"),
-      },
-      venueAccessibility: {
-        high: countValue(
-          history.outcomes,
-          (row) => row.venueAccessibility,
-          "high",
-        ),
-        medium: countValue(
-          history.outcomes,
-          (row) => row.venueAccessibility,
-          "medium",
-        ),
-        low: countValue(
-          history.outcomes,
-          (row) => row.venueAccessibility,
-          "low",
-        ),
-      },
-      latestAt: latestDate(history.outcomes.map((row) => row.recordedAt)),
+      ...outcomeTotals,
+      byArm: metricsByArm(outcomes, outcomeMetrics),
     },
     exportLag: {
       available: false,
       reason:
-        "No durable export receipt or successful-export timestamp is stored; JSONL generation alone cannot establish export lag.",
+        "No durable export receipt, successful-export timestamp, or complete export-relevant change timestamp is stored; export lag is unavailable.",
       exportableOutreachRows: history.engagement.length,
-      latestExportableChangeAt: latestEngagementAt,
     },
     sameNight: runMetrics.sameNight,
   };

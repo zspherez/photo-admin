@@ -262,8 +262,13 @@ Authenticated operators can review aggregate trajectory operations at
 issue categories, contact readiness, same-night alternatives, and
 trajectory-attributed decision, engagement, access, and outcome counts. It
 does not display contact identities or recipient values, and it does not
-present probabilities or causal claims. Export lag is explicitly unavailable
-until a durable successful-export receipt is stored.
+present probabilities or causal claims. Mapping uses source and mapped counts
+persisted in each run summary; legacy fields are labeled unavailable rather
+than inferred from inserted rows. Historical metrics retain all four model-arm
+attributions and select the latest non-superseded decision and outcome per
+recommendation. Export lag is explicitly unavailable until both a durable
+successful-export receipt and complete export-relevant change timestamps are
+stored.
 
 ## Contact research agent
 
