@@ -3923,6 +3923,10 @@ test("claims require current eligibility and unexpired ownership", () => {
   );
   assert.match(source, /show\."syncStatus" = 'active'/);
   assert.match(source, /status: "inactive"/);
+  assert.match(
+    source,
+    /status: \{ in: \["pending", "claimed", "exhausted"\] \}/,
+  );
   assert.match(source, /job\."requestedShowId" = show\."id"/);
   assert.match(source, /showArtist\.artistId === row\.artistId/);
   assert.doesNotMatch(

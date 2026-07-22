@@ -1665,7 +1665,7 @@ export async function refreshContactResearchQueue(
       },
     });
     const ineligibleWhere: Prisma.ContactResearchJobWhereInput = {
-      status: { in: ["pending", "claimed"] },
+      status: { in: ["pending", "claimed", "exhausted"] },
       artist: {
         contacts: {
           none: ACTIVE_EMAIL_CONTACT_WHERE,
