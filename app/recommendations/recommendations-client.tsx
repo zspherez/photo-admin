@@ -676,7 +676,7 @@ function RecommendationCard({
           </p>
         )}
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="mobile-action-grid flex flex-wrap items-center gap-2 sm:w-auto">
           {(recommendation.emailContact || recommendation.phoneContact) && (
             <SendButton
               showId={recommendation.showId}
@@ -739,7 +739,7 @@ function RecommendationCard({
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3 dark:border-zinc-900">
+        <div className="mobile-action-grid flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3 dark:border-zinc-900">
           <form action={setInterestedAction}>
             <input type="hidden" name="returnTo" value={returnTo} />
             <input type="hidden" name="showId" value={recommendation.showId} />
@@ -1037,7 +1037,7 @@ export function RecommendationsClient({
             )}
             aria-current={query.tab === tab.value ? "page" : undefined}
             className={cn(
-              "shrink-0 rounded-full px-3 py-1.5 text-sm font-medium",
+              "inline-flex min-h-10 shrink-0 items-center rounded-full px-3 py-1.5 text-sm font-medium sm:min-h-0",
               query.tab === tab.value
                 ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                 : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900",
@@ -1068,7 +1068,7 @@ export function RecommendationsClient({
                   query.workflow === workflow.value ? "true" : undefined
                 }
                 className={cn(
-                  "rounded-md border px-2.5 py-1 text-xs",
+                  "inline-flex min-h-10 items-center rounded-md border px-2.5 py-1 text-xs sm:min-h-0",
                   query.workflow === workflow.value
                     ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
                     : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:bg-zinc-900",
@@ -1095,7 +1095,7 @@ export function RecommendationsClient({
                 title={band.description}
                 aria-current={query.dateBand === band.value ? "true" : undefined}
                 className={cn(
-                  "rounded-md border px-2.5 py-1 text-xs",
+                  "inline-flex min-h-10 items-center rounded-md border px-2.5 py-1 text-xs sm:min-h-0",
                   query.dateBand === band.value
                     ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
                     : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:bg-zinc-900",
@@ -1165,7 +1165,7 @@ export function RecommendationsClient({
         </div>
       )}
 
-      <div ref={sentinelRef} className="mt-6 flex min-h-10 justify-center">
+      <div ref={sentinelRef} className="mt-6 flex min-h-10 scroll-mb-24 justify-center">
         {nextCursor ? (
           <Button
             type="button"

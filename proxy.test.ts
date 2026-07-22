@@ -3,9 +3,32 @@ import test from "node:test";
 import { NextRequest } from "next/server";
 import {
   isServerActionRequest,
+  networkOnlyResponse,
   proxy,
   unauthenticatedResponse,
 } from "./proxy";
+
+test("authenticated responses are explicitly network-only", () => {
+  const response = networkOnlyResponse();
+
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  assert.equal(response.headers.get("pragma"), "no-cache");
+});
+
+test("PWA shell assets remain public", async () => {
+  for (const pathname of [
+    "/manifest.webmanifest",
+    "/sw.js",
+    "/offline.html",
+    "/icons/icon-192.png",
+  ]) {
+    const response = await proxy(
+      new NextRequest(`https://admin.example${pathname}`),
+    );
+    assert.equal(response.status, 200, pathname);
+    assert.equal(response.headers.get("x-middleware-next"), "1", pathname);
+  }
+});
 
 test("unauthenticated Server Action POSTs continue to the guarded action", () => {
   const request = new NextRequest("https://admin.example/dashboard", {

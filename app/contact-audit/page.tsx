@@ -352,7 +352,7 @@ export default async function ContactAuditPage({
             replacement or reject the finding here.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="mobile-action-grid flex flex-wrap items-center gap-2 sm:w-auto">
           <form action={queueContactAuditAction}>
             <PendingSubmitButton
               pendingLabel="Queueing audit…"

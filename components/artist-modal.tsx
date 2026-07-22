@@ -144,7 +144,7 @@ function ArtistModal({
         // Backdrop click closes
         if (e.target === dialogRef.current) dialogRef.current?.close();
       }}
-      className="m-auto w-full max-w-2xl rounded-xl border border-zinc-200 bg-white p-0 text-zinc-900 shadow-2xl backdrop:bg-black/40 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100"
+      className="mobile-dialog m-auto w-full max-w-2xl rounded-xl border border-zinc-200 bg-white p-0 text-zinc-900 shadow-2xl backdrop:bg-black/40 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100"
     >
       <div className="flex items-start justify-between gap-2 border-b border-zinc-100 px-5 py-3 dark:border-zinc-900">
         <div className="flex min-w-0 items-center gap-3">
@@ -180,7 +180,7 @@ function ArtistModal({
         </button>
       </div>
 
-      <div className="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-4">
+      <div className="max-h-[calc(100dvh-8rem)] space-y-5 overflow-y-auto px-4 py-4 sm:max-h-[70vh] sm:px-5">
         {error && (
           <p className="text-sm text-red-700 dark:text-red-400">Error: {error}</p>
         )}

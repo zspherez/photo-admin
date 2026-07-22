@@ -63,7 +63,7 @@ export default async function LoginPage({
   const safeNext = sanitizeNextPath(next);
   const configuration = getAuthConfiguration();
   return (
-    <main className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-md flex-col items-center justify-center px-6">
+    <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center px-6">
       <div className="mb-8 flex items-center gap-2">
         <span className="inline-block h-3 w-3 rounded-sm bg-zinc-900 dark:bg-zinc-100" />
         <h1 className="text-2xl font-semibold tracking-tight">photo-admin</h1>
@@ -109,7 +109,7 @@ export default async function LoginPage({
                 autoFocus
                 required
                 placeholder="Password"
-                className="block h-9 w-full rounded-md border border-zinc-200 bg-white px-3 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950"
+                className="block min-h-11 w-full rounded-md border border-zinc-200 bg-white px-3 text-base placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none sm:min-h-9 sm:text-sm dark:border-zinc-800 dark:bg-zinc-950"
               />
               <Button type="submit" variant="primary" size="md" className="w-full">
                 Sign in
@@ -119,7 +119,7 @@ export default async function LoginPage({
           {configuration.mode === "open" && (
             <Link
               href={safeNext}
-              className="mt-4 inline-flex h-9 w-full items-center justify-center rounded-md bg-zinc-900 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+              className="mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-md bg-zinc-900 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 sm:min-h-9 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
             >
               Continue
             </Link>

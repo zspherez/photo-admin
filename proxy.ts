@@ -14,6 +14,11 @@ const PUBLIC_PATHS = new Set([
   "/api/resend/webhook",
   "/api/spotify/callback",
   "/favicon.ico",
+  "/apple-icon.png",
+  "/icon.svg",
+  "/manifest.webmanifest",
+  "/offline.html",
+  "/sw.js",
   "/logo.svg",
   "/robots.txt",
 ]);
@@ -22,8 +27,16 @@ const PUBLIC_PREFIXES = [
   "/api/contact-audit/",
   "/api/contact-research/",
   "/api/cron/",
+  "/icons/",
   "/_next/",
 ];
+
+export function networkOnlyResponse(): NextResponse {
+  const response = NextResponse.next();
+  response.headers.set("Cache-Control", "private, no-store");
+  response.headers.set("Pragma", "no-cache");
+  return response;
+}
 
 function loginUrlFor(request: NextRequest): URL {
   const loginUrl = new URL("/login", request.url);
@@ -64,7 +77,9 @@ export async function proxy(request: NextRequest) {
     PUBLIC_PATHS.has(publicPath) ||
     PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix))
   ) {
-    return NextResponse.next();
+    return pathname.startsWith("/api/") || pathname === "/login"
+      ? networkOnlyResponse()
+      : NextResponse.next();
   }
 
   const configuration = getAuthConfiguration();
@@ -75,10 +90,10 @@ export async function proxy(request: NextRequest) {
       { status: 500 },
     );
   }
-  if (configuration.mode === "open") return NextResponse.next();
+  if (configuration.mode === "open") return networkOnlyResponse();
 
   const cookie = request.cookies.get(SESSION_COOKIE)?.value;
-  if (await isAuthenticated(cookie)) return NextResponse.next();
+  if (await isAuthenticated(cookie)) return networkOnlyResponse();
 
   return unauthenticatedResponse(request);
 }

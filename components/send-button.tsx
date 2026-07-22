@@ -66,7 +66,7 @@ function SmsButton({
         onClick={(event) => {
           if (event.target === dialogRef.current) dialogRef.current.close();
         }}
-        className="m-auto w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-0 text-zinc-900 shadow-xl backdrop:bg-black/40 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
+        className="mobile-dialog m-auto w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-0 text-zinc-900 shadow-xl backdrop:bg-black/40 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
       >
         <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl dark:bg-zinc-900">
           <h2 id={titleId} className="text-sm font-semibold">
@@ -90,7 +90,7 @@ function SmsButton({
             </Button>
             <a
               href={`sms:${phone}`}
-              className="inline-flex h-7 items-center rounded-md bg-zinc-900 px-2.5 text-xs font-medium text-white hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+              className="inline-flex min-h-10 items-center rounded-md bg-zinc-900 px-3 text-xs font-medium text-white hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 sm:min-h-7 sm:px-2.5 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
               onClick={() => dialogRef.current?.close()}
             >
               Open Messages

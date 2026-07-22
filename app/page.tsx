@@ -32,12 +32,12 @@ export default async function Home() {
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-12">
-      <div className="flex items-end justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">photo-admin</h1>
           <p className="mt-2 text-sm text-zinc-500">Outreach automation for NYC EDM shows.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="mobile-action-grid flex gap-2 sm:w-auto">
           <LinkButton href="/dashboard" variant="primary">Open dashboard</LinkButton>
           <LinkButton href="/festivals" variant="secondary">Festivals</LinkButton>
         </div>

@@ -4,6 +4,7 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --mobile-nav-height: 3.5rem;
 }
 
 @theme inline {
@@ -20,8 +21,220 @@
   }
 }
 
+html {
+  min-height: 100%;
+  background: var(--background);
+  -webkit-text-size-adjust: 100%;
+  scroll-padding-bottom: calc(
+    var(--mobile-nav-height) + env(safe-area-inset-bottom)
+  );
+}
+
 body {
+  min-height: 100dvh;
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+a,
+summary,
+input,
+select,
+textarea {
+  touch-action: manipulation;
+}
+
+.app-header-safe {
+  padding-top: env(safe-area-inset-top);
+}
+
+.ios-status-bar-safe-area {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: env(safe-area-inset-top);
+  background: #09090b;
+  pointer-events: none;
+}
+
+.mobile-tab-bar {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.mobile-nav-sheet {
+  max-height: calc(
+    100dvh - var(--mobile-nav-height) - env(safe-area-inset-top) - 1rem
+  );
+  overflow-y: auto;
+}
+
+@media (max-width: 1023px) {
+  body {
+    padding-bottom: calc(
+      var(--mobile-nav-height) + env(safe-area-inset-bottom)
+    );
+  }
+}
+
+@media (max-width: 767px) {
+  body > main {
+    padding-top: 1.5rem !important;
+    padding-right: max(1rem, env(safe-area-inset-right)) !important;
+    padding-bottom: 2rem !important;
+    padding-left: max(1rem, env(safe-area-inset-left)) !important;
+  }
+
+  input:not([type]),
+  input:is(
+    [type="text"],
+    [type="search"],
+    [type="email"],
+    [type="password"],
+    [type="url"],
+    [type="tel"],
+    [type="number"],
+    [type="date"],
+    [type="datetime-local"],
+    [type="month"],
+    [type="time"],
+    [type="week"]
+  ),
+  select,
+  textarea {
+    min-height: 2.75rem;
+    font-size: 16px !important;
+  }
+
+  button,
+  summary {
+    min-height: 2.75rem;
+  }
+
+  dialog.mobile-dialog {
+    width: calc(100% - 1rem);
+    max-width: none;
+    max-height: calc(100dvh - env(safe-area-inset-top) - 1rem);
+    margin: auto 0.5rem max(0.5rem, env(safe-area-inset-bottom));
+    border-radius: 1rem;
+  }
+
+  dialog.mobile-dialog > div {
+    max-width: none;
+  }
+
+  .mobile-action-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .mobile-action-grid > form,
+  .mobile-action-grid > a,
+  .mobile-action-grid > button {
+    width: 100%;
+  }
+
+  .mobile-action-grid > form > button,
+  .mobile-action-grid > form > a {
+    width: 100%;
+  }
+
+  table.mobile-stack,
+  table.mobile-stack thead,
+  table.mobile-stack tbody,
+  table.mobile-stack tr,
+  table.mobile-stack th,
+  table.mobile-stack td {
+    display: block;
+    width: 100%;
+  }
+
+  table.mobile-stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  table.mobile-stack tbody {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  table.mobile-stack tbody tr {
+    overflow: hidden;
+    border: 1px solid rgb(228 228 231);
+    border-radius: 0.75rem;
+    background: rgb(255 255 255);
+  }
+
+  table.mobile-stack tbody td {
+    display: grid;
+    grid-template-columns: minmax(5.5rem, 0.35fr) minmax(0, 1fr);
+    gap: 0.75rem;
+    max-width: none;
+    padding: 0.75rem 1rem;
+    white-space: normal;
+  }
+
+  table.mobile-stack tbody td:first-child {
+    display: block;
+    padding-top: 1rem;
+  }
+
+  table.mobile-stack tbody td::before {
+    content: attr(data-label);
+    color: rgb(113 113 122);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  table.mobile-stack tbody td:first-child::before {
+    display: none;
+  }
+
+  .mobile-sticky-actions {
+    position: sticky;
+    z-index: 20;
+    bottom: calc(
+      var(--mobile-nav-height) + env(safe-area-inset-bottom) + 0.5rem
+    );
+    margin-right: -0.5rem;
+    margin-left: -0.5rem;
+    padding: 0.5rem;
+    border: 1px solid rgb(228 228 231);
+    border-radius: 0.75rem;
+    background: rgb(255 255 255 / 0.94);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+    backdrop-filter: blur(12px);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    table.mobile-stack tbody tr {
+      border-color: rgb(39 39 42);
+      background: rgb(9 9 11);
+    }
+
+    .mobile-sticky-actions {
+      border-color: rgb(39 39 42);
+      background: rgb(9 9 11 / 0.94);
+    }
+  }
+}
+
+@media (min-width: 1024px) {
+  html {
+    scroll-padding-bottom: 0;
+  }
 }

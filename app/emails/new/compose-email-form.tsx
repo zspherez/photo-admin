@@ -90,7 +90,7 @@ export function ComposeEmailForm({
         </div>
       </fieldset>
 
-      <div className="flex flex-wrap justify-end gap-2">
+      <div className="mobile-sticky-actions mobile-action-grid flex flex-wrap justify-end gap-2 sm:w-auto">
         <PendingSubmitButton
           name="intent"
           value="queue"
