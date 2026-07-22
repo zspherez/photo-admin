@@ -17,6 +17,8 @@
     "db:adopt-sheet-contacts": "tsx scripts/adopt-sheet-contacts.ts",
     "db:setup": "npm run db:generate && npm run db:migrate:deploy && npm run db:backfill:normalized-artists",
     "trajectory:import": "tsx scripts/import-trajectory-run.ts",
+    "trajectory:promote": "tsx scripts/promote-trajectory-run.ts",
+    "trajectory:production:verify": "tsx scripts/verify-trajectory-production.ts",
     "trajectory:feedback:export": "tsx scripts/export-trajectory-feedback.ts",
     "contact-audit:agent": "bash scripts/run-contact-audit-agent.sh",
     "contact-research:agent": "bash scripts/run-contact-research-agent.sh",
