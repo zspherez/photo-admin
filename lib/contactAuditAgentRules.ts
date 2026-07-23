@@ -141,6 +141,7 @@ export function contactAuditAutoAppendAlternativeId(
   jobs: readonly {
     status: string;
     finding: string | null;
+    confidence: string | null;
     claimedAutoAppendAdditionalContact: boolean | null;
     rosterReview: Prisma.JsonValue;
     alternatives: readonly {
@@ -156,6 +157,7 @@ export function contactAuditAutoAppendAlternativeId(
       (job) =>
         job.status !== "complete" ||
         job.claimedAutoAppendAdditionalContact !== true ||
+        job.confidence !== "high" ||
         (job.finding !== "current" && job.finding !== "changed"),
     )
   ) {

@@ -19,6 +19,7 @@ function job(
   return {
     status: "complete",
     finding: "changed",
+    confidence: "high",
     claimedAutoAppendAdditionalContact: true,
     rosterReview,
     alternatives: [
@@ -58,6 +59,14 @@ test("auto append requires one high-confidence coexisting contact", () => {
             notes: "Stale.",
           },
         ],
+      }),
+    ]),
+    null,
+  );
+  assert.equal(
+    contactAuditAutoAppendAlternativeId([
+      job({
+        confidence: "medium",
       }),
     ]),
     null,

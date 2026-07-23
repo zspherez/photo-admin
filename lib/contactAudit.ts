@@ -1367,6 +1367,7 @@ export async function submitContactAuditResult(
           select: {
             status: true,
             finding: true,
+            confidence: true,
             claimedAutoAppendAdditionalContact: true,
             rosterReview: true,
             alternatives: {
