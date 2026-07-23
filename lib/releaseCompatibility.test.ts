@@ -49,8 +49,9 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /contactProbe,\s*directOutreachNoteProbe,\s*directOutreachProvenanceProbe,\s*festivalGeographyProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*outreachAttemptProbe/,
+    /contactProbe,\s*contactExportSnapshotProbe,\s*directOutreachNoteProbe,\s*directOutreachProvenanceProbe,\s*festivalGeographyProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*outreachAttemptProbe/,
   );
+  assert.match(source, /db\.contactExportSnapshot\.findMany/);
   assert.deepEqual(
     selectedScalarFields(source, "outreach"),
     [
@@ -132,7 +133,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*contactResearchCandidateStatusConstraintProbe,\s*contactResearchDirectOutreachProbe,\s*directOutreachProvenanceProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditRosterSnapshotProbe,\s*contactAuditRosterEntryProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*contactAuditArtistDecisionProbe,\s*contactAuditDecisionContactProbe,\s*contactAuditRosterConstraintProbe,\s*contactAuditRosterIndexProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryFeedbackEventProbe,\s*trajectoryShowOutcomeProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*trajectoryFeedbackTriggerProbe,\s*trajectoryFeedbackIndexProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*contactResearchCandidateProbe,\s*contactResearchCandidateStatusConstraintProbe,\s*contactExportSnapshotProbe,\s*contactResearchDirectOutreachProbe,\s*directOutreachProvenanceProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditRosterSnapshotProbe,\s*contactAuditRosterEntryProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*contactAuditArtistDecisionProbe,\s*contactAuditDecisionContactProbe,\s*contactAuditRosterConstraintProbe,\s*contactAuditRosterIndexProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryFeedbackEventProbe,\s*trajectoryShowOutcomeProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*trajectoryFeedbackTriggerProbe,\s*trajectoryFeedbackIndexProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,

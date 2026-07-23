@@ -146,7 +146,6 @@ async function createContacts(formData: FormData) {
             role,
             customPrice,
             notes,
-            source: "manual",
             state: "active",
           },
         });

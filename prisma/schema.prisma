@@ -333,7 +333,7 @@ model Contact {
   customPrice        String?
   notes              String?
   source             String?
-  /// Stable provider-owned identity. Sheet contacts use spreadsheet/tab/row/slot identity.
+  /// Historical provider-owned identity retained for provenance.
   sourceKey          String?           @unique
   sourceSyncedAt     DateTime?
   /// Only active contacts are eligible for normal selection; quarantined preserves unresolved legacy history.

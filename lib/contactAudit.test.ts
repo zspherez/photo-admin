@@ -1017,7 +1017,7 @@ test("changed and ambiguous replacement atomically clears agent direct-outreach 
     replacement,
     /\.\.\.CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/,
   );
-  assert.match(replacement, /source: "agent"/);
+  assert.doesNotMatch(replacement, /source:/);
 });
 
 test("approved stale and changed decisions mutate only the audited target", () => {

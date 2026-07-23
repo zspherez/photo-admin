@@ -14,7 +14,6 @@ const STATUS_PARAMS = [
   "refreshed",
   "rejected",
   "retried",
-  "sheet_error",
   "skipped",
   "skipped_active_contact",
   "skipped_effective_approval",

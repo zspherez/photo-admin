@@ -74,7 +74,7 @@ export default async function SettingsIndex() {
       href: "/settings/contacts",
       status: `${contactCount.toLocaleString()} contacts`,
       ok: contactCount > 0,
-      description: "Sync from Google Sheet.",
+      description: "Database contacts and optional Sheet snapshots.",
     },
     {
       title: "Contact research",

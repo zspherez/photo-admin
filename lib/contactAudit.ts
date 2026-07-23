@@ -1788,7 +1788,6 @@ async function finalizeContactAuditResolution(
           ...CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE,
           name: alternative.name,
           role: "management",
-          source: "agent",
           state: "active",
         },
         include: { artist: { select: { name: true } } },

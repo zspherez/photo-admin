@@ -12,7 +12,10 @@ import {
   type CanonicalContactSnapshot,
   type ContactSnapshotRow,
 } from "@/lib/contactSnapshot";
-import { getSheetsClient } from "@/lib/sheets";
+import {
+  getGoogleSheetsClient,
+  hasGoogleSheetsCredentials,
+} from "@/lib/googleSheets";
 import {
   makeIntegrationSyncLeaseKey,
   withIntegrationSyncLease,
@@ -109,9 +112,7 @@ export function googleContactExportSpreadsheetId(
 }
 
 export function hasGoogleContactExportConfiguration(): boolean {
-  const hasCredentials =
-    Boolean(process.env.GOOGLE_CREDENTIALS_JSON?.trim()) ||
-    Boolean(process.env.GOOGLE_CREDENTIALS_PATH?.trim());
+  const hasCredentials = hasGoogleSheetsCredentials();
   try {
     googleContactExportSpreadsheetId();
     return hasCredentials;
@@ -129,7 +130,7 @@ export function contactSnapshotTabName(
   timestamp: Date,
   snapshotId: string,
 ): string {
-  return `contacts_${tabTimestamp(timestamp)}_${snapshotId.slice(0, 8)}`;
+  return `contacts_${tabTimestamp(timestamp)}_${snapshotId}`;
 }
 
 function quoteSheetTitle(title: string): string {
@@ -271,16 +272,99 @@ async function prepareContactExportSnapshot(
   );
 }
 
+async function assertSnapshotTabOwnership(
+  client: sheets_v4.Sheets,
+  spreadsheetId: string,
+  title: string,
+  snapshot: CanonicalContactSnapshot,
+): Promise<void> {
+  try {
+    const response = await client.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${quoteSheetTitle(title)}!A1:B2`,
+      majorDimension: "ROWS",
+      valueRenderOption: "UNFORMATTED_VALUE",
+    });
+    const rows = response.data.values ?? [];
+    if (rows.length === 0) return;
+    const header = rows[0] ?? [];
+    const firstContact = rows[1] ?? [];
+    const headerOwned =
+      header[0] === CONTACT_SNAPSHOT_HEADERS[0] &&
+      header[1] === CONTACT_SNAPSHOT_HEADERS[1];
+    const contentOwned =
+      firstContact.length === 0 || firstContact[1] === snapshot.id;
+    if (!headerOwned || !contentOwned) {
+      throw new ContactExportError(
+        "Google Sheets snapshot tab title is already owned by another export",
+      );
+    }
+  } catch (error) {
+    if (error instanceof ContactExportError) throw error;
+    throw new ContactExportError(
+      "Google Sheets snapshot tab ownership could not be verified",
+    );
+  }
+}
+
+async function resizeSnapshotTab(
+  client: sheets_v4.Sheets,
+  spreadsheetId: string,
+  sheetTabId: number,
+  currentRows: number,
+  currentColumns: number,
+  requiredRows: number,
+): Promise<void> {
+  if (
+    currentRows >= requiredRows &&
+    currentColumns >= CONTACT_SNAPSHOT_HEADERS.length
+  ) {
+    return;
+  }
+  try {
+    await client.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            updateSheetProperties: {
+              properties: {
+                sheetId: sheetTabId,
+                gridProperties: {
+                  rowCount: Math.max(currentRows, requiredRows),
+                  columnCount: Math.max(
+                    currentColumns,
+                    CONTACT_SNAPSHOT_HEADERS.length,
+                  ),
+                },
+              },
+              fields:
+                "gridProperties.rowCount,gridProperties.columnCount",
+            },
+          },
+        ],
+      },
+    });
+  } catch {
+    throw new ContactExportError(
+      "Google Sheets snapshot tab could not be resized",
+    );
+  }
+}
+
 async function findOrCreateSnapshotTab(
   client: sheets_v4.Sheets,
   spreadsheetId: string,
   title: string,
+  snapshot: CanonicalContactSnapshot,
+  expectedSheetTabId: number | null,
 ): Promise<number> {
   let sheets: sheets_v4.Schema$Sheet[] | undefined;
   try {
     const response = await client.spreadsheets.get({
       spreadsheetId,
-      fields: "sheets.properties(sheetId,title)",
+      fields:
+        "sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))",
     });
     sheets = response.data.sheets;
   } catch {
@@ -292,13 +376,54 @@ async function findOrCreateSnapshotTab(
     (sheet) => sheet.properties?.title === title,
   );
   const existingId = existing?.properties?.sheetId;
-  if (typeof existingId === "number") return existingId;
+  if (typeof existingId === "number") {
+    if (
+      expectedSheetTabId !== null &&
+      expectedSheetTabId !== existingId
+    ) {
+      throw new ContactExportError(
+        "Stored contact export tab ID does not match Google Sheets",
+      );
+    }
+    await assertSnapshotTabOwnership(
+      client,
+      spreadsheetId,
+      title,
+      snapshot,
+    );
+    await resizeSnapshotTab(
+      client,
+      spreadsheetId,
+      existingId,
+      existing?.properties?.gridProperties?.rowCount ?? 0,
+      existing?.properties?.gridProperties?.columnCount ?? 0,
+      snapshot.contactCount + 1,
+    );
+    return existingId;
+  }
+  if (expectedSheetTabId !== null) {
+    throw new ContactExportError(
+      "Stored contact export tab no longer exists",
+    );
+  }
 
   try {
     const response = await client.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: {
-        requests: [{ addSheet: { properties: { title } } }],
+        requests: [
+          {
+            addSheet: {
+              properties: {
+                title,
+                gridProperties: {
+                  rowCount: Math.max(snapshot.contactCount + 1, 1),
+                  columnCount: CONTACT_SNAPSHOT_HEADERS.length,
+                },
+              },
+            },
+          },
+        ],
       },
     });
     const sheetId = response.data.replies?.[0]?.addSheet?.properties?.sheetId;
@@ -369,21 +494,15 @@ async function verifySnapshotWrite(
   client: sheets_v4.Sheets,
   spreadsheetId: string,
   title: string,
-  contactCount: number,
+  snapshot: CanonicalContactSnapshot,
 ): Promise<void> {
   try {
-    const [headerResponse, countResponse] = await Promise.all([
-      client.spreadsheets.values.get({
-        spreadsheetId,
-        range: rowRange(title, 1, 1),
-        majorDimension: "ROWS",
-      }),
-      client.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${quoteSheetTitle(title)}!A1:A${contactCount + 2}`,
-        majorDimension: "ROWS",
-      }),
-    ]);
+    const headerResponse = await client.spreadsheets.values.get({
+      spreadsheetId,
+      range: rowRange(title, 1, 1),
+      majorDimension: "ROWS",
+      valueRenderOption: "UNFORMATTED_VALUE",
+    });
     const header = headerResponse.data.values?.[0] ?? [];
     if (
       header.length !== CONTACT_SNAPSHOT_HEADERS.length ||
@@ -395,11 +514,45 @@ async function verifySnapshotWrite(
         "Google Sheets snapshot header verification failed",
       );
     }
-    const writtenRows = countResponse.data.values?.length ?? 0;
-    if (writtenRows !== contactCount + 1) {
-      throw new ContactExportError(
-        "Google Sheets snapshot row-count verification failed",
+
+    const expectedRows = contactSnapshotGoogleRows(snapshot.rows);
+    for (
+      let offset = 0;
+      offset < expectedRows.length;
+      offset += EXPORT_WRITE_BATCH_ROWS
+    ) {
+      const expectedBatch = expectedRows.slice(
+        offset,
+        offset + EXPORT_WRITE_BATCH_ROWS,
       );
+      const response = await client.spreadsheets.values.get({
+        spreadsheetId,
+        range: rowRange(title, offset + 2, expectedBatch.length),
+        majorDimension: "ROWS",
+        valueRenderOption: "UNFORMATTED_VALUE",
+      });
+      const actualBatch = response.data.values ?? [];
+      if (actualBatch.length !== expectedBatch.length) {
+        throw new ContactExportError(
+          "Google Sheets snapshot row-count verification failed",
+        );
+      }
+      for (const [rowIndex, expectedRow] of expectedBatch.entries()) {
+        const actualRow = actualBatch[rowIndex] ?? [];
+        for (
+          let columnIndex = 0;
+          columnIndex < CONTACT_SNAPSHOT_HEADERS.length;
+          columnIndex += 1
+        ) {
+          const expectedValue = expectedRow[columnIndex] ?? "";
+          const actualValue = actualRow[columnIndex] ?? "";
+          if (actualValue !== expectedValue) {
+            throw new ContactExportError(
+              "Google Sheets snapshot content verification failed",
+            );
+          }
+        }
+      }
     }
   } catch (error) {
     if (error instanceof ContactExportError) throw error;
@@ -412,12 +565,14 @@ async function verifySnapshotWrite(
 export async function writeContactSnapshotToGoogleSheet(
   snapshot: CanonicalContactSnapshot,
   destination: { spreadsheetId: string; sheetTabName: string },
-  client: sheets_v4.Sheets = getSheetsClient(),
+  client: sheets_v4.Sheets = getGoogleSheetsClient(),
 ): Promise<{ sheetTabId: number; sheetUrl: string }> {
   const sheetTabId = await findOrCreateSnapshotTab(
     client,
     destination.spreadsheetId,
     destination.sheetTabName,
+    snapshot,
+    null,
   );
   await writeSnapshotRows(
     client,
@@ -429,7 +584,7 @@ export async function writeContactSnapshotToGoogleSheet(
     client,
     destination.spreadsheetId,
     destination.sheetTabName,
-    snapshot.contactCount,
+    snapshot,
   );
   return {
     sheetTabId,
@@ -494,11 +649,41 @@ export async function exportGoogleContactSnapshot(
           spreadsheetId: prepared.record.spreadsheetId,
           sheetTabName: prepared.record.sheetTabName,
         };
-        const written = await writeContactSnapshotToGoogleSheet(
+        const client =
+          dependencies.sheetsClient ?? getGoogleSheetsClient();
+        const sheetTabId = await findOrCreateSnapshotTab(
+          client,
+          destination.spreadsheetId,
+          destination.sheetTabName,
           snapshot,
-          destination,
-          dependencies.sheetsClient ?? getSheetsClient(),
+          prepared.record.sheetTabId,
         );
+        await db.$transaction(async (tx) => {
+          await lease.fenceTransaction(tx);
+          await tx.contactExportSnapshot.update({
+            where: { id: prepared.record.id },
+            data: { sheetTabId },
+          });
+        });
+        await writeSnapshotRows(
+          client,
+          destination.spreadsheetId,
+          destination.sheetTabName,
+          snapshot.rows,
+        );
+        await verifySnapshotWrite(
+          client,
+          destination.spreadsheetId,
+          destination.sheetTabName,
+          snapshot,
+        );
+        const written = {
+          sheetTabId,
+          sheetUrl: spreadsheetUrl(
+            destination.spreadsheetId,
+            sheetTabId,
+          ),
+        };
         await lease.assertOwned();
         const completedAt = dependencies.now?.() ?? new Date();
         const completed = (await db.$transaction(async (tx) => {

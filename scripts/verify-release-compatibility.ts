@@ -6,6 +6,7 @@ import { assertReleaseCompatibility } from "@/lib/releaseCompatibility";
 async function main(): Promise<void> {
   const [
     contactProbe,
+    contactExportSnapshotProbe,
     directOutreachNoteProbe,
     directOutreachProvenanceProbe,
     festivalGeographyProbe,
@@ -48,6 +49,28 @@ async function main(): Promise<void> {
     trajectoryFeedbackIndexProbe,
   ] = await Promise.all([
     db.contact.count({ where: { state: "active" }, take: 1 }),
+    db.contactExportSnapshot.findMany({
+      take: 1,
+      select: {
+        id: true,
+        provider: true,
+        status: true,
+        idempotencyKey: true,
+        contactCount: true,
+        contentSha256: true,
+        spreadsheetId: true,
+        sheetTabId: true,
+        sheetTabName: true,
+        sheetUrl: true,
+        requestedByRole: true,
+        canonicalRows: true,
+        error: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
     db.contact.count({
       where: { directOutreachNote: { not: null } },
       take: 1,
@@ -678,6 +701,7 @@ async function main(): Promise<void> {
           contactResearchJobProbe,
           contactResearchCandidateProbe,
           contactResearchCandidateStatusConstraintProbe,
+          contactExportSnapshotProbe,
           contactResearchDirectOutreachProbe,
           directOutreachProvenanceProbe,
           outreachKindProbe,
@@ -761,6 +785,7 @@ async function main(): Promise<void> {
         "ContactResearchDirectOutreachProposal",
         "Contact.agentDirectOutreachProvenance",
         "ContactAuditRequest",
+        "ContactExportSnapshot",
         "ContactAuditRun",
         "ContactAuditRosterSnapshot",
         "ContactAuditRosterEntry",

@@ -14,6 +14,9 @@ test("contact settings replaces inbound sync with database counts and snapshots"
   assert.match(page, /state: "active"/);
   assert.match(page, /state: "quarantined"/);
   assert.match(page, /Recent exports/);
+  assert.match(page, /snapshot\.idempotencyKey/);
+  assert.match(page, /Resume export/);
+  assert.match(page, /Retry export/);
   assert.match(page, /contentSha256/);
   assert.match(page, /GOOGLE_CONTACT_EXPORT_SPREADSHEET_ID/);
   assert.doesNotMatch(page, /syncContactsFromSheet|listTabs|Sync from Sheet/);

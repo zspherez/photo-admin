@@ -180,7 +180,6 @@ async function saveContact(formData: FormData) {
         role,
         customPrice,
         notes,
-        source: "manual",
         state: "active",
         ...(clearsAgentProvenance
           ? CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE

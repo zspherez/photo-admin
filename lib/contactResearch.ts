@@ -1378,7 +1378,7 @@ async function applyApprovedDirectOutreach(
   if (existingIdentity) {
     await tx.contact.update({
       where: { id: existingIdentity.id },
-      data: { ...provenance, source: "agent", state: "active" },
+      data: { ...provenance, state: "active" },
     });
     return existingIdentity;
   }
@@ -1407,7 +1407,7 @@ async function applyApprovedDirectOutreach(
   if (matchingContact) {
     await tx.contact.update({
       where: { id: matchingContact.id },
-      data: { ...provenance, source: "agent" },
+      data: provenance,
     });
     return matchingContact;
   }
@@ -2426,7 +2426,6 @@ export async function submitContactResearchResult(
             state: "active",
             name: existing.name ?? candidate.input.name,
             role: "management",
-            source: "agent",
           },
         });
       } else {
@@ -2760,7 +2759,6 @@ export async function approveContactResearchCandidates(
               state: "active",
               name: existing.name ?? candidate.name,
               role: "management",
-              source: "agent",
             },
           });
         } else {

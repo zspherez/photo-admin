@@ -381,14 +381,20 @@ test("human approval preserves existing contact fields and atomically records pr
     }),
   );
   assert.deepEqual(result, { ok: true, contactId: "contact-1" });
-  for (const preserved of ["email", "phone", "name", "notes", "sourceKey"]) {
+  for (const preserved of [
+    "email",
+    "phone",
+    "name",
+    "notes",
+    "source",
+    "sourceKey",
+  ]) {
     assert.equal(preserved in contactUpdates[0].data, false);
   }
   assert.equal(
     contactUpdates[0].data.directOutreachRuleText,
     canonicalRule,
   );
-  assert.equal(contactUpdates[0].data.source, "agent");
   assert.deepEqual(proposalUpdates[0].data, {
     status: "approved",
     contactId: "contact-1",
@@ -550,7 +556,6 @@ test("migration and cross-feature paths preserve complete provenance invariants"
     "utf8",
   );
   const audit = readFileSync(new URL("./contactAudit.ts", import.meta.url), "utf8");
-  const sheets = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
   const editor = readFileSync(
     new URL("../app/dashboard/contact/[contactId]/page.tsx", import.meta.url),
     "utf8",
@@ -562,7 +567,7 @@ test("migration and cross-feature paths preserve complete provenance invariants"
     /REFERENCES "Contact"\("id"\)\s+ON DELETE CASCADE/,
   );
   assert.match(migration, /cardinality\("sourceUrls"\) = cardinality\("evidenceQuotes"\)/);
-  for (const source of [audit, sheets, editor]) {
+  for (const source of [audit, editor]) {
     assert.match(source, /CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/);
   }
   assert.match(

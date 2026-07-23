@@ -66,6 +66,7 @@ export default async function ContactsSettingsPage({
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         select: {
           id: true,
+          idempotencyKey: true,
           status: true,
           contactCount: true,
           contentSha256: true,
@@ -230,6 +231,23 @@ export default async function ContactsSettingsPage({
                     >
                       Open snapshot ↗
                     </a>
+                  )}
+                  {(snapshot.status === "failed" ||
+                    snapshot.status === "writing") && (
+                    <SyncForm
+                      action={exportContactSnapshotAction}
+                      label={
+                        snapshot.status === "writing"
+                          ? "Resume export"
+                          : "Retry export"
+                      }
+                      pendingLabel="Retrying…"
+                      hiddenFields={{
+                        idempotencyKey: snapshot.idempotencyKey,
+                        confirmation: "EXPORT",
+                      }}
+                      className="mt-3"
+                    />
                   )}
                 </li>
               ))}
