@@ -8,7 +8,9 @@ import {
   type ContactSnapshotSourceRow,
 } from "./contactSnapshot";
 import {
+  CONTACT_EXPORT_SPREADSHEET_SETTING_KEY,
   contactSnapshotTabName,
+  resolveGoogleContactExportSpreadsheetId,
   writeContactSnapshotToGoogleSheet,
 } from "./googleSheetContactExport";
 
@@ -37,6 +39,26 @@ function contact(index: number): ContactSnapshotSourceRow {
     },
   };
 }
+
+test("export destination falls back to the migrated database setting", async () => {
+  const spreadsheetId = await resolveGoogleContactExportSpreadsheetId(
+    "invalid legacy placeholder",
+    {
+      setting: {
+        findUnique: async ({
+          where,
+        }: {
+          where: { key: string };
+          select: { value: true };
+        }) => {
+          assert.equal(where.key, CONTACT_EXPORT_SPREADSHEET_SETTING_KEY);
+          return { value: "database-spreadsheet-id" };
+        },
+      },
+    },
+  );
+  assert.equal(spreadsheetId, "database-spreadsheet-id");
+});
 
 test("Google export creates one tab, writes bounded RAW batches, and verifies", async () => {
   const snapshot = buildContactSnapshot(

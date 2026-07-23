@@ -28,6 +28,8 @@ const EXPORT_LEASE_WAIT_MS = 2_000;
 const MAX_ERROR_LENGTH = 1_000;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{16,128}$/;
 const SPREADSHEET_ID_PATTERN = /^[A-Za-z0-9_-]{1,200}$/;
+export const CONTACT_EXPORT_SPREADSHEET_SETTING_KEY =
+  "google_contact_export_spreadsheet_id";
 
 type ContactExportStatus = "pending" | "writing" | "complete" | "failed";
 
@@ -99,8 +101,7 @@ function assertIdempotencyKey(value: string): string {
 }
 
 export function googleContactExportSpreadsheetId(
-  value: string | undefined = process.env
-    .GOOGLE_CONTACT_EXPORT_SPREADSHEET_ID,
+  value: string | undefined,
 ): string {
   const normalized = value?.trim() ?? "";
   if (!SPREADSHEET_ID_PATTERN.test(normalized)) {
@@ -111,10 +112,34 @@ export function googleContactExportSpreadsheetId(
   return normalized;
 }
 
-export function hasGoogleContactExportConfiguration(): boolean {
+export interface ContactExportSettingStore {
+  setting: {
+    findUnique(args: {
+      where: { key: string };
+      select: { value: true };
+    }): Promise<{ value: string } | null>;
+  };
+}
+
+export async function resolveGoogleContactExportSpreadsheetId(
+  value: string | undefined = process.env
+    .GOOGLE_CONTACT_EXPORT_SPREADSHEET_ID,
+  store: ContactExportSettingStore = db,
+): Promise<string> {
+  if (SPREADSHEET_ID_PATTERN.test(value?.trim() ?? "")) {
+    return value!.trim();
+  }
+  const setting = await store.setting.findUnique({
+    where: { key: CONTACT_EXPORT_SPREADSHEET_SETTING_KEY },
+    select: { value: true },
+  });
+  return googleContactExportSpreadsheetId(setting?.value);
+}
+
+export async function hasGoogleContactExportConfiguration(): Promise<boolean> {
   const hasCredentials = hasGoogleSheetsCredentials();
   try {
-    googleContactExportSpreadsheetId();
+    await resolveGoogleContactExportSpreadsheetId();
     return hasCredentials;
   } catch {
     return false;
@@ -221,9 +246,11 @@ async function prepareContactExportSnapshot(
         if (existing.status === "complete") {
           return { record: existing, snapshot: null };
         }
-        const spreadsheetId = googleContactExportSpreadsheetId(
-          spreadsheetIdValue,
-        );
+        const spreadsheetId =
+          await resolveGoogleContactExportSpreadsheetId(
+            spreadsheetIdValue,
+            tx,
+          );
         if (
           existing.provider !== EXPORT_PROVIDER ||
           existing.requestedByRole !== requestedByRole ||
@@ -239,9 +266,11 @@ async function prepareContactExportSnapshot(
         };
       }
 
-      const spreadsheetId = googleContactExportSpreadsheetId(
-        spreadsheetIdValue,
-      );
+      const spreadsheetId =
+        await resolveGoogleContactExportSpreadsheetId(
+          spreadsheetIdValue,
+          tx,
+        );
       const contacts = await readCanonicalContactRows(tx);
       const snapshot = buildContactSnapshot(contacts, {
         id: snapshotId,
