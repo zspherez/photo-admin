@@ -2,7 +2,9 @@ name: Research artist managers
 
 on:
   schedule:
-    # Refresh the full upcoming-show queue hourly. Active runs self-drain.
+    # Poll existing queued work every 10 minutes without refreshing discovery.
+    - cron: "*/10 * * * *"
+    # Refresh artist/show eligibility hourly, then drain resulting work.
     - cron: "23 * * * *"
   workflow_dispatch: {}
 
@@ -12,7 +14,12 @@ permissions:
   id-token: write
 
 concurrency:
-  group: photo-admin-contact-research
+  group: >-
+    ${{
+      (github.event_name == 'workflow_dispatch' || github.event.schedule == '23 * * * *')
+        && 'photo-admin-contact-research-refresh'
+        || 'photo-admin-contact-research-poll'
+    }}
   cancel-in-progress: false
 
 jobs:
@@ -27,6 +34,7 @@ jobs:
         shell: bash
         env:
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          REFRESH_QUEUE: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '23 * * * *' }}
         run: |
           set -euo pipefail
 
@@ -46,7 +54,9 @@ jobs:
               --silent \
               --show-error \
               --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              --header "Content-Type: application/json" \
               --header "Accept: application/json" \
+              --data "$(jq -cn --argjson refreshQueue "${REFRESH_QUEUE}" '{refreshQueue: $refreshQueue}')" \
               "${oidc_url}${separator}audience=photo-admin-contact-research" |
               jq -er '.value | select(type == "string" and length > 0)'
           )"

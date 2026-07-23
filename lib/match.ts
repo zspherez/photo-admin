@@ -816,3 +816,57 @@ export async function getDashboardData(
     totalSignals,
   };
 }
+
+export async function getReadOnlyDashboardData(
+  query: DashboardQuery,
+  now: Date = new Date(),
+): Promise<DashboardData> {
+  const [
+    showRows,
+    matchedCount,
+    allNycCount,
+    unknownCount,
+    interestedCount,
+    dismissedCount,
+    totalUpcoming,
+    totalSignals,
+  ] = await Promise.all([
+    db.show.findMany({
+      where: dashboardShowWhere(query.mode, query.filters, now),
+      orderBy: [{ date: "asc" }, { id: "asc" }],
+      select: dashboardShowSelect(now),
+    }),
+    countDashboardMode("matched", query, now),
+    countDashboardMode("all-nyc", query, now),
+    countDashboardMode("unknown", query, now),
+    countDashboardMode("interested", query, now),
+    countDashboardMode("dismissed", query, now),
+    db.show.count({
+      where: {
+        date: { gte: easternTodayStoredDate(now) },
+        isFestival: false,
+        syncStatus: "active",
+      },
+    }),
+    db.listenSignal.count({ where: activeListenSignalWhere(now) }),
+  ]);
+  const shows = await hydrateDashboardShowRows(showRows, query, now);
+  const modeCounts: Record<DashboardMode, number> = {
+    matched: matchedCount,
+    "all-nyc": allNycCount,
+    unknown: unknownCount,
+    interested: interestedCount,
+    dismissed: dismissedCount,
+  };
+  modeCounts[query.mode] = shows.length;
+  return {
+    shows,
+    modeCounts,
+    resultCount: shows.length,
+    nextCursor: null,
+    snapshotId: "read-only",
+    snapshotAt: now,
+    totalUpcoming,
+    totalSignals,
+  };
+}

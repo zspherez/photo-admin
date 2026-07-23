@@ -15,8 +15,28 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  let refreshQueue = false;
   try {
-    return NextResponse.json(await prepareContactResearchQueue());
+    const value = await request.json();
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return NextResponse.json({ error: "invalid request body" }, { status: 400 });
+    }
+    const requested = Reflect.get(value, "refreshQueue");
+    if (typeof requested !== "boolean") {
+      return NextResponse.json(
+        { error: "refreshQueue must be a boolean" },
+        { status: 400 },
+      );
+    }
+    refreshQueue = requested;
+  } catch {
+    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+
+  try {
+    return NextResponse.json(
+      await prepareContactResearchQueue(new Date(), { refreshQueue }),
+    );
   } catch (error) {
     console.error(
       JSON.stringify({

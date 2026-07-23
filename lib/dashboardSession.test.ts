@@ -3,8 +3,14 @@ import test from "node:test";
 import { dashboardSessionIdentity } from "./dashboardSession";
 
 test("dashboard persistence is scoped to the authenticated session", () => {
-  const first = dashboardSessionIdentity("session-a", { mode: "protected" });
-  const second = dashboardSessionIdentity("session-b", { mode: "protected" });
+  const first = dashboardSessionIdentity("session-a", {
+    mode: "protected",
+    readOnlyEnabled: true,
+  });
+  const second = dashboardSessionIdentity("session-b", {
+    mode: "protected",
+    readOnlyEnabled: true,
+  });
   assert.match(first.ownerKey, /^[0-9a-f]{64}$/);
   assert.match(first.persistenceScope, /^[0-9a-f]{64}$/);
   assert.notEqual(first.ownerKey, first.persistenceScope);

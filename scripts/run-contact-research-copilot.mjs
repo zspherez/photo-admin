@@ -40,6 +40,10 @@ const child = spawn(
   [
     "--agent",
     agentName,
+    "--model",
+    "gpt-5.6-sol",
+    "--reasoning-effort",
+    "max",
     "--available-tools=bash",
     allowTool,
     "--secret-env-vars=GITHUB_TOKEN,ACTIONS_ID_TOKEN_REQUEST_URL,ACTIONS_ID_TOKEN_REQUEST_TOKEN,CONTACT_RESEARCH_AGENT_TOKEN,CONTACT_AUDIT_AGENT_TOKEN",

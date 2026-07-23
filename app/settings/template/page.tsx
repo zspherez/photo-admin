@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import {
@@ -17,6 +18,8 @@ import {
   extractVars,
   malformedTemplateVariableTokens,
   normalizeTemplateContent,
+  readTemplateForPurpose,
+  readOnlyTemplateForPurpose,
   supportedTemplateVars,
   unsupportedTemplateVars,
 } from "@/lib/template";
@@ -30,7 +33,11 @@ import { easternTodayStoredDate } from "@/lib/calendarDate";
 import { pickEmailContact } from "@/lib/contactSelection";
 import { activeListenSignalWhere } from "@/lib/listenSignal";
 import { festivalLeadTimeWhere } from "@/lib/festivalEligibility";
-import { requireServerActionAuth } from "@/lib/auth";
+import {
+  SESSION_COOKIE,
+  getSessionAccess,
+  requireServerActionAuth,
+} from "@/lib/auth";
 import {
   firstSearchParam,
   type SearchParamValue,
@@ -67,6 +74,10 @@ async function ensureTemplate(kind: TemplateKind) {
   if (kind === "festival") return ensureFestivalTemplate();
   if (kind === "follow_up") return ensureFollowUpTemplate();
   return ensureDefaultTemplate();
+}
+
+function readTemplate(kind: TemplateKind) {
+  return readTemplateForPurpose(kind);
 }
 
 function templateLabel(kind: TemplateKind): string {
@@ -146,8 +157,13 @@ export default async function TemplateSettingsPage({
 }) {
   const kind = parseTemplateKind((await searchParams).kind);
   const now = new Date();
+  const access = await getSessionAccess(
+    (await cookies()).get(SESSION_COOKIE)?.value,
+  );
   const [template, sample, utmSettings] = await Promise.all([
-    ensureTemplate(kind),
+    access === "read_only"
+      ? Promise.resolve(readOnlyTemplateForPurpose(kind))
+      : readTemplate(kind),
     db.show.findFirst({
       where: {
         date: { gte: easternTodayStoredDate(now) },

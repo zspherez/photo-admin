@@ -83,12 +83,12 @@ test("Customize uses the festival template and still personalizes each selected 
   );
   const pageBody = page.slice(page.indexOf("export default async function"));
 
-  assert.match(page, /ensureOriginalTemplateForShow\(show\)/);
+  assert.match(page, /readOriginalTemplateForShow\(show\)/);
   assert.match(pageBody, /captureTrajectoryAction\(\s*safeReturnTo/);
   assert.match(pageBody, /runAfterActionableTrajectoryValidation\(/);
   assert.ok(
     pageBody.indexOf("runAfterActionableTrajectoryValidation") <
-      pageBody.indexOf("ensureOriginalTemplateForShow(show)"),
+      pageBody.indexOf("readOriginalTemplateForShow(show)"),
   );
   assert.ok(
     pageBody.indexOf("redirect(capturedTemplate.errorHref)") <
@@ -126,13 +126,13 @@ test("trajectory-aware original, follow-up, and customize paths validate before 
   for (const [pathName, preparation, provision] of [
     ["original", original, "ensureOriginalTemplateForShow"],
     ["follow-up", followUp, "ensureFollowUpTemplate"],
-    ["customize", customize, "ensureOriginalTemplateForShow"],
+    ["customize", customize, "readOriginalTemplateForShow"],
   ] as const) {
     assert.match(preparation, /runAfterActionableTrajectoryValidation\(/);
     assert.ok(
       preparation.indexOf("runAfterActionableTrajectoryValidation") <
         preparation.indexOf(provision),
-      `${pathName} validates before template provisioning`,
+      `${pathName} validates before template selection`,
     );
   }
 

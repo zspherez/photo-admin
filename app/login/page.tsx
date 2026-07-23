@@ -20,7 +20,7 @@ export const metadata: Metadata = { title: "Sign in" };
 async function login(formData: FormData) {
   "use server";
   const submittedPassword = formData.get("password");
-  const password = typeof submittedPassword === "string" ? submittedPassword.trim() : "";
+  const password = typeof submittedPassword === "string" ? submittedPassword : "";
   const next = sanitizeNextPath(formData.get("next"));
   const configuration = getAuthConfiguration();
   if (configuration.mode === "open") redirect(next);
@@ -28,12 +28,30 @@ async function login(formData: FormData) {
     redirect(`/login?error=config&next=${encodeURIComponent(next)}`);
   }
 
-  const expected = process.env.ADMIN_PASSWORD!;
-  if (!(await constantTimeEqual(password, expected))) {
+  const adminPassword = process.env.ADMIN_PASSWORD!;
+  const readOnlyPassword = process.env.READ_ONLY_PASSWORD;
+  const [adminMatch, readOnlyMatch] = await Promise.all([
+    constantTimeEqual(password, adminPassword),
+    constantTimeEqual(
+      password,
+      readOnlyPassword ?? "photo-admin-disabled-read-only-password",
+    ),
+  ]);
+  const access = adminMatch
+    ? "admin"
+    : readOnlyPassword && readOnlyMatch
+      ? "read_only"
+      : null;
+  if (!access) {
     redirect(`/login?error=invalid${next ? `&next=${encodeURIComponent(next)}` : ""}`);
   }
 
-  const sessionToken = await createSessionToken();
+  const sessionToken = await createSessionToken(
+    process.env.ADMIN_SESSION_SECRET,
+    access === "admin" ? adminPassword : readOnlyPassword,
+    Date.now(),
+    access,
+  );
   if (!sessionToken) {
     redirect(`/login?error=config&next=${encodeURIComponent(next)}`);
   }
@@ -73,7 +91,9 @@ export default async function LoginPage({
           <h2 className="text-sm font-medium">Sign in</h2>
           <p className="mt-1 text-xs text-zinc-500">
             {configuration.mode === "protected"
-              ? "Enter the admin password to continue."
+              ? configuration.readOnlyEnabled
+                ? "Enter the admin or read-only password to continue."
+                : "Enter the admin password to continue."
               : "Authentication status for this environment."}
           </p>
 

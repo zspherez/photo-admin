@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import {
   SESSION_COOKIE,
+  getSessionAccess,
   getAuthConfiguration,
   isAuthenticated,
 } from "@/lib/auth";
@@ -174,6 +175,16 @@ export async function handleDashboardShowsRequest(
 
 export async function GET(request: NextRequest): Promise<Response> {
   try {
+    if (
+      (await getSessionAccess(
+        request.cookies.get(SESSION_COOKIE)?.value,
+      )) === "read_only"
+    ) {
+      return Response.json(
+        { error: "Read-only dashboard pagination is not available" },
+        { status: 403 },
+      );
+    }
     return await handleDashboardShowsRequest(request);
   } catch (error) {
     console.error("Dashboard show batch failed", error);

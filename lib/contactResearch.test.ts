@@ -3940,6 +3940,10 @@ test("claims require current eligibility and unexpired ownership", () => {
     /submitContactResearchResult[\s\S]*await runTransaction\(async \(tx\) => \{[\s\S]*claimExpiresAt: \{ gt: now \}/
   );
   assert.match(source, /prepareContactResearchQueue/);
+  assert.match(
+    source,
+    /options\.refreshQueue === false[\s\S]*countClaimableContactResearchJobs\(now\)/,
+  );
   assert.match(source, /claimable/);
   assert.match(source, /readGlobalAgentRulesInTransaction\(tx\)/);
   assert.match(source, /claimedAgentRules: globalAgentRules\.instructions/);
