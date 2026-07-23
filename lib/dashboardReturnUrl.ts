@@ -168,13 +168,6 @@ function recommendationsReturnPath(url: URL): string {
   return `${recommendationUrl.pathname}${recommendationUrl.search}`;
 }
 
-function recommendationOutcomesReturnPath(url: URL): string {
-  const page = positiveIntegerSearchParam(url.searchParams.get("page"));
-  return page > 1
-    ? `/recommendations/outcomes?page=${page}`
-    : "/recommendations/outcomes";
-}
-
 function nestedWorkflowReturnPath(value: unknown): string {
   const nested = parsedLocalUrl(value);
   if (
@@ -194,9 +187,6 @@ export function workflowReturnPath(value: unknown): string {
   if (url.pathname === "/contacts") return contactsReturnPath(url);
   if (url.pathname === "/recommendations") {
     return recommendationsReturnPath(url);
-  }
-  if (url.pathname === "/recommendations/outcomes") {
-    return recommendationOutcomesReturnPath(url);
   }
   if (url.pathname === "/outreach") return outreachReturnPath(url);
   if (url.pathname === "/festivals") {

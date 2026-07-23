@@ -74,26 +74,35 @@ test("header always states provisional status and never presents a forecast fiel
   const client = source("app/recommendations/recommendations-client.tsx");
   assert.match(page, /PROVISIONAL_TRAJECTORY_DISCLAIMER/);
   assert.match(page, /Model status:/);
-  assert.match(client, /descriptive, not probability/);
   assert.doesNotMatch(`${page}\n${client}`, /breakout chance|likelihood|probability:/i);
 });
 
-test("cards show canonical workflow evidence, analog context, details, and same-night roles", () => {
+test("cards stay focused on ranked shows, workflow state, and same-night roles", () => {
+  const page = source("app/recommendations/page.tsx");
   const client = source("app/recommendations/recommendations-client.tsx");
   for (const marker of [
     "Billing",
     "First billed",
-    "Why it is here",
-    "Nearest historical analogs",
-    "Historical pool base rate \\(descriptive\\)",
-    "Access not recorded",
     "Primary option",
     "Backup option",
     "Same-night alternatives",
-    "<details",
   ]) {
     assert.match(client, new RegExp(marker));
   }
+  for (const removed of [
+    "Decision & show outcome",
+    "Attendance, access & photo outcome",
+    "Why it is here",
+    "Nearest historical analogs",
+    "Coverage state",
+    "Momentum band",
+    "Completed bookings",
+    "Career age",
+    "Access not recorded",
+  ]) {
+    assert.doesNotMatch(client, new RegExp(removed.replace("&", "&amp;")));
+  }
+  assert.doesNotMatch(page, /Post-show outcomes|\/recommendations\/outcomes/);
 });
 
 test("recommendation batches have accessible infinite loading and duplicate guards", () => {
@@ -122,34 +131,6 @@ test("artist workflow links preserve the active recommendation filters", () => {
     client,
     /workflow: "all"[\s\S]*dateBand: "all"/,
   );
-});
-
-test("authenticated cards record decisions, structured outcomes, and correction history", () => {
-  const client = source("app/recommendations/recommendations-client.tsx");
-  const actions = source("app/recommendations/actions.ts");
-  for (const marker of [
-    "Decision & show outcome",
-    "recordTrajectoryFeedbackAction",
-    "recordTrajectoryOutcomeAction",
-    "manual_override",
-    "Decision correction history",
-    "Outcome correction history",
-    "keeperCount",
-    "relationshipValue",
-    "publicationValue",
-    "shootability",
-    "venueAccessibility",
-    "Notes stay in photo-admin",
-    "outcomeRecordable",
-  ]) {
-    assert.match(client, new RegExp(marker));
-  }
-  assert.match(
-    source("lib/trajectoryRecommendations.ts"),
-    /Outcome entry opens on/,
-  );
-  assert.match(actions, /requireServerActionAuth\(formData\.get\("returnTo"\)/);
-  assert.match(actions, /redirect\(appendWorkflowResult/);
 });
 
 test("navigation and loading state expose the recommendations route", () => {
