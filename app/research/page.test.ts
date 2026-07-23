@@ -144,11 +144,15 @@ test("research jobs are ranked by the best upcoming venue tier", () => {
 test("status filtering happens before ordering and limiting while counts stay global", () => {
   assert.match(
     source,
-    /groupBy\(\{[\s\S]*where: \{ status: \{ in: \[\.\.\.RESEARCH_JOB_STATUSES\] \} \}[\s\S]*_count/
+    /groupBy\(\{[\s\S]*status: \{ in: \[\.\.\.RESEARCH_JOB_STATUSES\] \}[\s\S]*status: \{ not: "claimed" \}[\s\S]*claimExpiresAt: \{ gt: now \}[\s\S]*_count/
   );
   assert.match(
     source,
     /job\."status" IN \(\$\{Prisma\.join\([\s\S]*activeFilterDefinition\.statuses[\s\S]*\)\}\)/
+  );
+  assert.match(
+    source,
+    /job\."status" <> 'claimed'[\s\S]*job\."claimExpiresAt" > \$\{now\}/,
   );
   assert.match(
     source,

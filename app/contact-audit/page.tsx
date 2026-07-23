@@ -218,7 +218,6 @@ export default async function ContactAuditPage({
   }>;
 }) {
   const raw = await searchParams;
-  const requestedRunId = firstSearchParam(raw.run)?.slice(0, 100) ?? null;
   const requestedPage = positiveIntegerSearchParam(raw.page);
   const rawResolved = firstSearchParam(raw.resolved);
   const resolved = CONTACT_AUDIT_ARTIST_ACTIONS.includes(
@@ -229,9 +228,8 @@ export default async function ContactAuditPage({
   const actionError = firstSearchParam(raw.error);
   const requestResult = firstSearchParam(raw.request);
   const requestError = firstSearchParam(raw.requestError);
-  const runs = await db.contactAuditRun.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 10,
+  const selectedRun = await db.contactAuditRun.findFirst({
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     include: { _count: { select: { jobs: true } } },
   });
   const latestRequest = await db.contactAuditRequest.findFirst({
@@ -254,17 +252,6 @@ export default async function ContactAuditPage({
   const diagnosticWorkflowUrl = latestRequest?.lastWorkflowRunId
     ? `https://github.com/zspherez/photo-admin/actions/runs/${latestRequest.lastWorkflowRunId}`
     : WORKFLOW_URL;
-  const selectedRun =
-    (requestedRunId
-      ? runs.find((run) => run.id === requestedRunId) ??
-        (await db.contactAuditRun.findUnique({
-          where: { id: requestedRunId },
-          include: { _count: { select: { jobs: true } } },
-        }))
-      : null) ??
-    runs[0] ??
-    null;
-
   const [allJobs, incompleteJobs, statusCounts, decisions] = selectedRun
     ? await Promise.all([
         db.contactAuditJob.findMany({
@@ -497,22 +484,6 @@ export default async function ContactAuditPage({
             )}
           </CardBody>
         </Card>
-      )}
-
-      {runs.length > 0 && (
-        <div className="mt-5 flex flex-wrap gap-2" aria-label="Audit runs">
-          {runs.map((run, index) => (
-            <LinkButton
-              key={run.id}
-              href={auditHref(run.id)}
-              variant={run.id === selectedRun?.id ? "primary" : "secondary"}
-              size="sm"
-            >
-              {index === 0 ? "Latest · " : ""}
-              {formatTimestamp(run.createdAt)}
-            </LinkButton>
-          ))}
-        </div>
       )}
 
       {!selectedRun ? (

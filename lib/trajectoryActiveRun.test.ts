@@ -12,7 +12,7 @@ import {
 
 const now = new Date("2026-07-21T20:00:00.000Z");
 
-test("stale, expired, and ambiguous trajectory runs are never actionable", async () => {
+test("ready runs remain actionable through validUntil", async () => {
   const base = {
     id: "run-1",
     generatedAt: new Date("2026-07-21T18:00:00.000Z"),
@@ -28,7 +28,7 @@ test("stale, expired, and ambiguous trajectory runs are never actionable", async
         findLatestRun: async () => null,
       })
     ).availability,
-    "stale",
+    "ready",
   );
   assert.equal(
     (

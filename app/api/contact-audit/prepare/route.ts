@@ -6,6 +6,7 @@ import {
   noteContactAuditPrepareFailure,
   prepareContactAudit,
   requestMonthlyContactAudit,
+  requestRollingMonthlyContactAudit,
 } from "@/lib/contactAudit";
 
 export const maxDuration = 60;
@@ -20,7 +21,11 @@ export async function POST(request: NextRequest) {
 
   let workflowRunId: unknown;
   let requestFullAudit = false;
-  let requestSource: "manual" | "monthly" | "poll" = "poll";
+  let requestSource:
+    | "manual"
+    | "monthly"
+    | "rolling_monthly"
+    | "poll" = "poll";
   try {
     const value = await request.json();
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -40,10 +45,14 @@ export async function POST(request: NextRequest) {
       source !== undefined &&
       source !== "manual" &&
       source !== "monthly" &&
+      source !== "rolling_monthly" &&
       source !== "poll"
     ) {
       return NextResponse.json(
-        { error: "requestSource must be manual, monthly, or poll" },
+        {
+          error:
+            "requestSource must be manual, monthly, rolling_monthly, or poll",
+        },
         { status: 400 },
       );
     }
@@ -60,7 +69,9 @@ export async function POST(request: NextRequest) {
       requestFullAudit &&
       !(
         (requestSource === "manual" && oidcEvent === "workflow_dispatch") ||
-        (requestSource === "monthly" && oidcEvent === "schedule")
+        ((requestSource === "monthly" ||
+          requestSource === "rolling_monthly") &&
+          oidcEvent === "schedule")
       )
     ) {
       return NextResponse.json(
@@ -79,6 +90,19 @@ export async function POST(request: NextRequest) {
         created: monthlyRequest.created,
         requestId: monthlyRequest.id,
         runId: monthlyRequest.runId,
+        resumed: false,
+        contactCount: 0,
+        claimable: 0,
+      });
+    }
+    if (requestSource === "rolling_monthly") {
+      const rollingRequest = await requestRollingMonthlyContactAudit();
+      return NextResponse.json({
+        requested: true,
+        queued: true,
+        created: rollingRequest.created,
+        requestId: rollingRequest.id,
+        runId: rollingRequest.runId,
         resumed: false,
         contactCount: 0,
         claimable: 0,

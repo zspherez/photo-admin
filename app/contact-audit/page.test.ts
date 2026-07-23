@@ -5,6 +5,11 @@ import test from "node:test";
 const source = readFileSync(new URL("./page.tsx", import.meta.url), "utf8");
 
 test("contact audit UI groups unresolved findings once per artist", () => {
+  assert.match(
+    source,
+    /contactAuditRun\.findFirst\(\{[\s\S]*createdAt: "desc"/,
+  );
+  assert.doesNotMatch(source, /aria-label="Audit runs"/);
   assert.match(source, /status: "complete"/);
   assert.match(source, /finding: \{ in: \[\.\.\.FLAGGED_FINDINGS\] \}/);
   assert.match(source, /resolution: null/);

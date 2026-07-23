@@ -28,7 +28,6 @@ import {
 } from "@/lib/trajectoryContract";
 import {
   resolveTrajectoryRun,
-  trajectoryFreshnessCutoff,
   type TrajectoryRunAvailability,
 } from "@/lib/trajectoryActiveRun";
 import {
@@ -175,7 +174,6 @@ export interface RecommendationReadRequest {
   producer: typeof TRAJECTORY_PRODUCER;
   status: "ready";
   validAfter: Date;
-  generatedAfter: Date;
   showStart: Date;
   showEndExclusive: Date;
   tab: RecommendationQuery["tab"];
@@ -230,7 +228,6 @@ const DEFAULT_STORE: TrajectoryRecommendationStore = {
             producer: request.producer,
             status: request.status,
             validUntil: { gt: request.validAfter },
-            generatedAt: { gt: request.generatedAfter },
           },
         },
         ...(request.tab === "suggested"
@@ -430,10 +427,7 @@ function runView(run: RunRecord, now: Date): RecommendationRun {
     status: run.status,
     failureCode: run.failureCode,
     failureMessage: run.failureMessage,
-    freshness:
-      run.generatedAt.getTime() > trajectoryFreshnessCutoff(now).getTime()
-        ? "fresh"
-        : "stale",
+    freshness: run.validUntil.getTime() > now.getTime() ? "fresh" : "stale",
   };
 }
 
@@ -706,7 +700,6 @@ export async function getTrajectoryRecommendationPage(
     producer: TRAJECTORY_PRODUCER,
     status: "ready",
     validAfter: now,
-    generatedAfter: trajectoryFreshnessCutoff(now),
     showStart: dateRange.start,
     showEndExclusive: dateRange.endExclusive,
     tab: query.tab,

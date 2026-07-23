@@ -1,9 +1,6 @@
 import type { Prisma, TrajectoryRunStatus } from "@prisma/client";
 import { db } from "@/lib/db";
-import {
-  TRAJECTORY_PRODUCER,
-  TRAJECTORY_STALE_AFTER_HOURS,
-} from "@/lib/trajectoryContract";
+import { TRAJECTORY_PRODUCER } from "@/lib/trajectoryContract";
 
 export interface TrajectoryRunRecord {
   id: string;
@@ -133,12 +130,6 @@ function transactionActionStore(
   };
 }
 
-export function trajectoryFreshnessCutoff(now: Date): Date {
-  return new Date(
-    now.getTime() - TRAJECTORY_STALE_AFTER_HOURS * 60 * 60 * 1_000,
-  );
-}
-
 export async function resolveTrajectoryRun<Run extends TrajectoryRunRecord>(
   now: Date,
   store: TrajectoryRunStore<Run>,
@@ -154,9 +145,6 @@ export async function resolveTrajectoryRun<Run extends TrajectoryRunRecord>(
     const run = readyRuns[0];
     if (run.validUntil.getTime() <= now.getTime()) {
       return { availability: "expired", run };
-    }
-    if (run.generatedAt.getTime() <= trajectoryFreshnessCutoff(now).getTime()) {
-      return { availability: "stale", run };
     }
     return { availability: "ready", run };
   }
