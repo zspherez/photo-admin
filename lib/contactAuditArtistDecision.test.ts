@@ -166,6 +166,7 @@ test("artist audit can append a new contact without mutating the roster", async 
   const state = await runDecision("append", []);
   assert.equal(state.result.ok, true);
   assert.equal(state.createdContacts.length, 1);
+  assert.equal(state.createdContacts[0].source, "agent");
   assert.equal(state.mutations.length, 0);
   assert.equal(state.contacts.get("contact-1")?.state, "active");
   assert.equal(state.decisions[0].action, "append");

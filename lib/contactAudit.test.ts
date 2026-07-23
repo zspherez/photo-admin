@@ -483,7 +483,7 @@ test("resolution snapshot matching rejects every mutable target-field change and
   );
 });
 
-test("resolution refuses notes, full-team, and Sheet-sync changes without mutating the target", async () => {
+test("resolution refuses snapshotted database changes without mutating the target", async () => {
   const mutableDb = db as unknown as {
     $transaction: (
       work: (tx: Record<string, unknown>) => Promise<unknown>,
@@ -500,7 +500,6 @@ test("resolution refuses notes, full-team, and Sheet-sync changes without mutati
       { name: "Changed by Sheet sync", source: "sheet" },
     ]) {
     let contactUpdates = 0;
-    let sheetUpdates = 0;
     const contact = {
       id: "contact-1",
       artistId: "artist-1",
@@ -564,19 +563,11 @@ test("resolution refuses notes, full-team, and Sheet-sync changes without mutati
       job.id,
       "approved",
       null,
-      now,
-      {
-        update: async () => {
-          sheetUpdates += 1;
-          throw new Error("Sheet update must not run");
-        },
-        rollback: async () => {},
-      }
+      now
     );
     assert.equal(result.ok, false);
     assert.match(result.error ?? "", /contact changed after this audit/);
     assert.equal(contactUpdates, 0);
-      assert.equal(sheetUpdates, 0);
     }
   } finally {
     mutableDb.$transaction = originalTransaction;
@@ -953,23 +944,22 @@ test("only a verified manual audit workflow token can request a full audit", asy
   );
 });
 
-test("contact audit resolution reserves before Sheet work and rolls back failed persistence", () => {
+test("contact audit resolution reserves before database finalization and releases failed claims", () => {
   const source = readFileSync(new URL("./contactAudit.ts", import.meta.url), "utf8");
-  const reserve = source.indexOf("reserveContactAuditResolution(");
-  const sheetUpdate = source.indexOf(
-    "sheetUpdate = await sheetMutations.update(",
-    reserve
+  const resolution = source.slice(
+    source.indexOf("export async function resolveContactAuditJob"),
   );
-  const finalize = source.indexOf("finalizeContactAuditResolution(", sheetUpdate);
-  const rollback = source.indexOf(
-    "await sheetMutations.rollback(sheetUpdate.rollback)",
+  const reserve = resolution.indexOf("reserveContactAuditResolution(");
+  const finalize = resolution.indexOf("finalizeContactAuditResolution(", reserve);
+  const release = resolution.indexOf(
+    "releaseContactAuditResolutionClaim(",
     finalize
   );
 
   assert.ok(reserve >= 0);
-  assert.ok(sheetUpdate > reserve);
-  assert.ok(finalize > sheetUpdate);
-  assert.ok(rollback > finalize);
+  assert.ok(finalize > reserve);
+  assert.ok(release > finalize);
+  assert.doesNotMatch(resolution, /sheet/i);
   assert.match(source, /resolutionClaimToken: reservation\.claimToken/);
   assert.match(
     source,
@@ -989,30 +979,7 @@ test("contact audit resolution reserves before Sheet work and rolls back failed 
   );
   assert.match(source, /isolationLevel: Prisma\.TransactionIsolationLevel\.Serializable/);
   assert.match(source, /outreach history will not be merged automatically/);
-  assert.match(source, /Google Sheet update failed; the database and decision were not changed/);
-  assert.match(source, /The Sheet change was rolled back/);
-  const auditSheetUpdate = source.slice(
-    sheetUpdate,
-    source.indexOf("} catch (error)", sheetUpdate)
-  );
-  assert.doesNotMatch(auditSheetUpdate, /customPrice|notes/);
-  const postWriteRecovery = source.slice(
-    source.indexOf(
-      "if (error instanceof AuditedContactSheetPostWriteError)"
-    ),
-    source.indexOf(
-      "await releaseContactAuditResolutionClaim(",
-      source.indexOf(
-        "if (error instanceof AuditedContactSheetPostWriteError)"
-      )
-    ) + "await releaseContactAuditResolutionClaim(".length
-  );
-  assert.match(
-    postWriteRecovery,
-    /recoverAuditedContactSheetPostWriteError/
-  );
-  assert.match(source, /Original error: \$\{originalDetail\}/);
-  assert.match(source, /Rollback error: \$\{recovery\.rollbackError/);
+  assert.match(source, /The database decision could not be saved/);
 });
 
 test("reject resolution does not mutate the contact", () => {
@@ -1050,6 +1017,7 @@ test("changed and ambiguous replacement atomically clears agent direct-outreach 
     replacement,
     /\.\.\.CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/,
   );
+  assert.doesNotMatch(replacement, /source:/);
 });
 
 test("approved stale and changed decisions mutate only the audited target", () => {

@@ -3,7 +3,6 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { cache } from "react";
 import { db } from "@/lib/db";
-import { appendContactToSheet, updateContactInSheet } from "@/lib/sheets";
 import { Card, CardBody } from "@/components/ui/card";
 import { LinkButton } from "@/components/ui/button";
 import { Field, TextArea } from "@/components/ui/field";
@@ -103,145 +102,66 @@ async function createContacts(formData: FormData) {
 
   let createdCount = 0;
   let updatedCount = 0;
-  const sheetErrors: string[] = [];
-
-  if (emails.length === 0) {
-    // Direct/phone contacts stay manual unless they originated in the Sheet.
-    await db.contact.create({
-      data: {
-        artistId,
-        phone,
-        directOutreachNote,
-        name,
-        role,
-        customPrice,
-        notes,
-        source: "manual",
-      },
-    });
-    createdCount++;
-  } else {
-    for (const email of emails) {
-      const existing = await db.contact.findUnique({
-        where: { artistId_email: { artistId, email } },
-        include: { artist: true },
-      });
-
-      if (existing?.source === "sheet") {
-        let sheetUpdate: Awaited<
-          ReturnType<typeof updateContactInSheet>
-        > | null = null;
-        try {
-          sheetUpdate = await updateContactInSheet({
-            artistName: existing.artist.name,
-            oldEmail: existing.email ?? email,
-            newEmail: email,
-            oldDirectOutreachNote: existing.directOutreachNote,
-            newDirectOutreachNote: null,
-            sourceKey: existing.sourceKey,
-            managerName: name,
+  try {
+    ({ createdCount, updatedCount } = await db.$transaction(async (tx) => {
+      let created = 0;
+      let updated = 0;
+      if (emails.length === 0) {
+        await tx.contact.create({
+          data: {
+            artistId,
+            phone,
+            directOutreachNote,
+            name,
             role,
             customPrice,
             notes,
-          });
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          sheetErrors.push(`${email}: ${message.slice(0, 80)}`);
-          continue;
-        }
-
-        try {
-          await db.contact.update({
-            where: { id: existing.id },
-            data: {
-              phone,
-              name,
-              role,
-              customPrice,
-              notes,
-              sourceKey: sheetUpdate.sourceKey,
-              sourceSyncedAt: new Date(),
-              state: "active",
-            },
-          });
-          updatedCount++;
-        } catch (error) {
-          let rollbackError: string | null = null;
-          try {
-            await updateContactInSheet({
-              artistName: existing.artist.name,
-              oldEmail: email,
-              newEmail: existing.email ?? email,
-              oldDirectOutreachNote: null,
-              newDirectOutreachNote: existing.directOutreachNote,
-              sourceKey: sheetUpdate.sourceKey,
-              managerName: existing.name,
-              role: existing.role,
-              customPrice: existing.customPrice,
-              notes: existing.notes,
-            });
-          } catch (rollback) {
-            rollbackError =
-              rollback instanceof Error ? rollback.message : String(rollback);
-          }
-          const databaseError =
-            error instanceof Error ? error.message : String(error);
-          console.error(
-            JSON.stringify({
-              event: "contact_sheet_database_divergence",
-              contactId: existing.id,
-              databaseError,
-              rollbackError,
-            })
-          );
-          sheetErrors.push(
-            `${email}: ${
-              rollbackError
-                ? `database update and Sheet rollback failed: ${rollbackError}`
-                : `database update failed; Sheet rolled back: ${databaseError}`
-            }`.slice(0, 160)
-          );
-        }
-        continue;
+            source: "manual",
+          },
+        });
+        return { createdCount: 1, updatedCount: 0 };
       }
 
-      const contact = await db.contact.upsert({
-        where: { artistId_email: { artistId, email } },
-        create: { artistId, email, phone, name, role, customPrice, notes, source: "manual" },
-        update: { phone, name, role, customPrice, notes, state: "active" },
-        include: { artist: true },
-      });
-
-      if (existing) {
-        updatedCount++;
-      } else {
-        createdCount++;
-        try {
-          const appended = await appendContactToSheet({
-            artistName: contact.artist.name,
+      for (const email of emails) {
+        const existing = await tx.contact.findUnique({
+          where: { artistId_email: { artistId, email } },
+          select: { id: true },
+        });
+        await tx.contact.upsert({
+          where: { artistId_email: { artistId, email } },
+          create: {
+            artistId,
             email,
-            managerName: name,
+            phone,
+            name,
             role,
             customPrice,
             notes,
-          });
-          await db.contact.update({
-            where: { id: contact.id },
-            data: {
-              source: "sheet",
-              sourceKey: appended.sourceKey,
-              sourceSyncedAt: new Date(),
-              state: "active",
-            },
-          });
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          console.error("[sheet append] failed", e);
-          sheetErrors.push(`${email}: ${msg.slice(0, 80)}`);
-        }
+            source: "manual",
+          },
+          update: {
+            phone,
+            directOutreachNote: null,
+            name,
+            role,
+            customPrice,
+            notes,
+            state: "active",
+          },
+        });
+        if (existing) updated++;
+        else created++;
       }
-    }
+      return { createdCount: created, updatedCount: updated };
+    }));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    redirect(
+      `${withWorkflowReturnTo(
+        `/dashboard/add-contact/${encodeURIComponent(artistId)}`,
+        returnTo
+      )}&error=database_save&detail=${encodeURIComponent(detail.slice(0, 180))}`
+    );
   }
 
   refreshWorkflowViews(returnTo, ["/settings/contacts", "/"]);
@@ -250,9 +170,6 @@ async function createContacts(formData: FormData) {
     added: String(createdCount),
   };
   if (updatedCount > 0) results.updated = String(updatedCount);
-  if (sheetErrors.length) {
-    results.sheet_errors = sheetErrors.slice(0, 2).join(" | ");
-  }
   redirect(appendWorkflowResult(returnTo, results));
 }
 
@@ -263,12 +180,14 @@ export default async function AddContactPage({
   params: Promise<{ artistId: string }>;
   searchParams: Promise<{
     error?: SearchParamValue;
+    detail?: SearchParamValue;
     returnTo?: SearchParamValue;
   }>;
 }) {
   const { artistId } = await params;
   const search = await searchParams;
   const error = firstSearchParam(search.error);
+  const detail = firstSearchParam(search.detail);
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
   const artist = await getArtistForContact(artistId);
   if (!artist) return notFound();
@@ -330,6 +249,8 @@ export default async function AddContactPage({
             ? "Add at least one email, a phone number, or direct outreach details."
             : error === "conflicting_targets"
             ? "Use either emails or direct outreach details, not both."
+            : error === "database_save"
+            ? `The contacts could not be saved to the database. ${detail ?? ""}`
             : error}
         </div>
       )}

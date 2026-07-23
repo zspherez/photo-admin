@@ -359,7 +359,7 @@ export async function resolveContactAuditArtist(
             email: alternative.normalizedEmail,
             name: alternative.name,
             role: "management",
-            source: "audit",
+            source: "agent",
             state: "active",
           },
           select: { id: true },

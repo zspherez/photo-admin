@@ -745,9 +745,46 @@ test("each claimed target receives the same complete artist roster with exactly 
       });
     }
     return work({
+      agentRuleSet: {
+        findUnique: async () => ({
+          instructions: "Auto-add safe coexisting management contacts.",
+          directOutreachRules: [
+            {
+              action: "auto_append_additional_contact",
+              enabled: true,
+            },
+          ],
+          version: 3,
+          updatedAt: now,
+        }),
+      },
       $queryRaw: async () => [{ id: "job-1" }, { id: "job-2" }],
       contactAuditJob: {
-        update: async () => ({}),
+        update: async ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: Record<string, unknown>;
+        }) => {
+          const job = jobs.find((row) => row.id === where.id)!;
+          Reflect.set(
+            job,
+            "claimedAgentRules",
+            data.claimedAgentRules,
+          );
+          Reflect.set(
+            job,
+            "claimedAgentRulesVersion",
+            data.claimedAgentRulesVersion,
+          );
+          Reflect.set(
+            job,
+            "claimedAutoAppendAdditionalContact",
+            data.claimedAutoAppendAdditionalContact,
+          );
+          return {};
+        },
         findMany: async () => jobs,
       },
     });
@@ -767,6 +804,12 @@ test("each claimed target receives the same complete artist roster with exactly 
           .length,
         1
       );
+      assert.deepEqual(job.auditAgentRules, {
+        scope: "contact_audit",
+        version: 3,
+        instructions: "Auto-add safe coexisting management contacts.",
+        autoAppendAdditionalContact: true,
+      });
     }
     assert.equal(
       claimed[1].contactRoster.contacts[1].directOutreachNote,
@@ -843,7 +886,11 @@ test("completion marks an adopted request completed without replacing its run", 
       },
       now
     );
-    assert.deepEqual(result, { accepted: true, runComplete: true });
+    assert.deepEqual(result, {
+      accepted: true,
+      runComplete: true,
+      autoResolved: false,
+    });
     assert.equal(completedRunId, "legacy-run");
     assert.equal(request.runId, "legacy-run");
     assert.equal(request.status, "completed");

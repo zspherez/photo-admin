@@ -21,7 +21,7 @@ const migration = readFileSync(
 test("result route returns atomic official-source auto-approval results", () => {
   assert.doesNotMatch(route, /approveContactResearchCandidates/);
   assert.match(route, /result\.autoApproved/);
-  assert.match(route, /result\.sheetErrors/);
+  assert.doesNotMatch(route, /sheet/i);
   assert.match(research, /isOfficialManagementAutoApprovalEligible/);
   assert.match(research, /candidate\.needsApproval === false/);
   assert.match(research, /officialSourceEvidence !== null/);

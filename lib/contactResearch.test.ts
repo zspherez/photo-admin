@@ -127,6 +127,7 @@ function createCandidateResolutionHarness(
       name: string | null;
       role: string | null;
       customPrice: string | null;
+      source?: string;
       state: string;
     }
   >();
@@ -325,6 +326,7 @@ function createCandidateResolutionHarness(
           data: Partial<{
             name: string | null;
             role: string | null;
+            source: string;
             state: string;
           }>;
         };
@@ -340,6 +342,7 @@ function createCandidateResolutionHarness(
             email: string;
             name: string | null;
             role: string;
+            source: string;
             state: string;
           };
         };
@@ -349,6 +352,7 @@ function createCandidateResolutionHarness(
           name: input.data.name,
           role: input.data.role,
           customPrice: null,
+          source: input.data.source,
           state: input.data.state,
         };
         contacts.set(contact.email, contact);
@@ -1140,7 +1144,7 @@ test("an exhausted job with superseded approval history reopens", async () => {
   assert.equal(state.jobStatus, "pending");
 });
 
-test("approving one candidate leaves every other proposal pending", async () => {
+test("approving one candidate writes only to the database and leaves every other proposal pending", async () => {
   const now = new Date("2026-07-21T12:00:00.000Z");
   const harness = createCandidateResolutionHarness([
     { id: "candidate-1", email: "one@example.com" },
@@ -1150,12 +1154,11 @@ test("approving one candidate leaves every other proposal pending", async () => 
   const result = await approveContactResearchCandidate(
     "candidate-1",
     now,
-    harness.serialRunner,
-    async () => ["one@example.com: Sheet unavailable"]
+    harness.serialRunner
   );
 
   assert.equal(result.ok, true);
-  assert.match(result.sheetError ?? "", /Sheet unavailable/);
+  assert.equal(harness.contacts.get("one@example.com")?.source, "agent");
   assert.equal(harness.candidates.get("candidate-1")?.status, "approved");
   assert.equal(harness.candidates.get("candidate-2")?.status, "pending");
   assert.equal(harness.job.status, "review");
@@ -1168,15 +1171,12 @@ test("approving both candidates sequentially completes the job", async () => {
     { id: "candidate-1", email: "one@example.com" },
     { id: "candidate-2", email: "two@example.com" },
   ]);
-  const writeSheet = async () => [] as string[];
-
   assert.equal(
     (
       await approveContactResearchCandidate(
         "candidate-1",
         now,
-        harness.serialRunner,
-        writeSheet
+        harness.serialRunner
       )
     ).ok,
     true
@@ -1187,8 +1187,7 @@ test("approving both candidates sequentially completes the job", async () => {
       await approveContactResearchCandidate(
         "candidate-2",
         now,
-        harness.serialRunner,
-        writeSheet
+        harness.serialRunner
       )
     ).ok,
     true
@@ -1207,8 +1206,7 @@ test("rejecting the final candidate after an approval completes", async () => {
   await approveContactResearchCandidate(
     "candidate-1",
     now,
-    harness.serialRunner,
-    async () => []
+    harness.serialRunner
   );
   const rejected = await rejectContactResearchCandidate(
     "candidate-2",
@@ -1231,8 +1229,7 @@ test("job resolution ignores an approval whose contact was quarantined", async (
   await approveContactResearchCandidate(
     "candidate-1",
     now,
-    harness.serialRunner,
-    async () => []
+    harness.serialRunner
   );
   harness.contacts.get("one@example.com")!.state = "quarantined";
   const rejected = await rejectContactResearchCandidate(
@@ -1284,8 +1281,7 @@ test("concurrent approval and rejection resolve from final candidate state", asy
     approveContactResearchCandidate(
       "candidate-1",
       now,
-      harness.serialRunner,
-      async () => []
+      harness.serialRunner
     ),
     rejectContactResearchCandidate(
       "candidate-2",
@@ -1312,8 +1308,7 @@ test("batch approval resolves only the selected subset", async () => {
   const result = await approveContactResearchCandidates(
     ["candidate-1", "candidate-2"],
     now,
-    harness.serialRunner,
-    async () => []
+    harness.serialRunner
   );
 
   assert.equal(result.ok, true);
@@ -1329,32 +1324,21 @@ test("stale candidate actions fail without changing resolved state", async () =>
   const harness = createCandidateResolutionHarness([
     { id: "candidate-1", email: "one@example.com" },
   ]);
-  let sheetWrites = 0;
-
   await approveContactResearchCandidate(
     "candidate-1",
     now,
-    harness.serialRunner,
-    async () => {
-      sheetWrites += 1;
-      return [];
-    }
+    harness.serialRunner
   );
   const stale = await approveContactResearchCandidate(
     "candidate-1",
     now,
-    harness.serialRunner,
-    async () => {
-      sheetWrites += 1;
-      return [];
-    }
+    harness.serialRunner
   );
 
   assert.deepEqual(stale, {
     ok: false,
     error: "Candidate is no longer reviewable",
   });
-  assert.equal(sheetWrites, 1);
   assert.equal(harness.job.status, "complete");
 });
 
@@ -1388,8 +1372,7 @@ test("rediscovered obsolete approval returns to manual review", async () => {
       candidates: [manualCandidate("manager@example.com")],
     },
     now,
-    harness.serialRunner,
-    async () => []
+    harness.serialRunner
   );
 
   assert.equal(result.status, "review");
@@ -1432,8 +1415,7 @@ test("rediscovered official approval reactivates and auto-approves", async () =>
       candidates: [officialCandidate("manager@example.com")],
     },
     now,
-    harness.serialRunner,
-    async () => []
+    harness.serialRunner
   );
 
   assert.equal(result.status, "complete");
@@ -1477,8 +1459,7 @@ test("submission preserves only an effective existing approval", async () => {
       candidates: [officialCandidate("manager@example.com")],
     },
     now,
-    harness.serialRunner,
-    async () => []
+    harness.serialRunner
   );
 
   assert.equal(result.status, "complete");
@@ -1493,7 +1474,6 @@ test("submission preserves only an effective existing approval", async () => {
 test("auto-approval leaves manual candidates awaiting review", async () => {
   const now = new Date("2026-07-21T12:00:00.000Z");
   const harness = createCandidateResolutionHarness([], "claimed");
-  let appended = 0;
 
   const result = await submitContactResearchResult(
     "job-1",
@@ -1516,16 +1496,12 @@ test("auto-approval leaves manual candidates awaiting review", async () => {
       ],
     },
     now,
-    harness.serialRunner,
-    async (approvals) => {
-      appended = approvals.length;
-      return [];
-    }
+    harness.serialRunner
   );
 
   assert.equal(result.status, "review");
   assert.equal(result.autoApproved, 1);
-  assert.equal(appended, 1);
+  assert.equal(harness.contacts.get("official@example.com")?.source, "agent");
   assert.equal(harness.job.status, "review");
   assert.deepEqual(
     [...harness.candidates.values()].map((candidate) => candidate.status).sort(),
@@ -1549,8 +1525,7 @@ test("all directly published candidates auto-approve together", async () => {
       ],
     },
     now,
-    harness.serialRunner,
-    async () => []
+    harness.serialRunner
   );
 
   assert.equal(result.status, "complete");
@@ -3669,7 +3644,6 @@ test("agent-rule skip is atomic, creates no contact, and rejects stale claims", 
     accepted: true,
     status: "skipped",
     autoApproved: 0,
-    sheetErrors: [],
   });
   assert.deepEqual(skipCreates, [
     {
@@ -3722,7 +3696,6 @@ test("agent-rule skip is atomic, creates no contact, and rejects stale claims", 
     accepted: false,
     status: "conflict",
     autoApproved: 0,
-    sheetErrors: [],
   });
   assert.equal(wroteStaleResult, false);
 });
@@ -3763,7 +3736,6 @@ test("agent skip rejects provenance outside the claim snapshot without writes", 
     accepted: false,
     status: "invalid_rule_provenance",
     autoApproved: 0,
-    sheetErrors: [],
   });
   assert.equal(wroteResult, false);
 });

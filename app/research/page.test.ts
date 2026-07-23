@@ -46,7 +46,7 @@ test("research actions preserve filters and bulk exhausted reports a result", ()
   );
 
   assert.match(approve, /if \(!result\.ok\)[\s\S]*redirect/);
-  assert.match(approve, /if \(result\.sheetError\)[\s\S]*redirect/);
+  assert.doesNotMatch(approve, /sheet/i);
   assert.doesNotMatch(approve, /approved: "1"/);
   assert.match(reject, /if \(!result\.ok\) \{[\s\S]*redirect/);
   assert.match(reject, /detail: result\.error/);

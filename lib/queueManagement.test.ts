@@ -168,7 +168,7 @@ test("bulk audit rejection reclaims only stale claims and reports freshness skip
   assert.doesNotMatch(combined, /UPDATE "ContactAuditAlternative"/);
 });
 
-test("bulk rejection preserves an in-flight approval claim through Sheet rollback", async () => {
+test("bulk rejection preserves an in-flight approval claim through database finalization", async () => {
   const mutableDb = db as unknown as {
     $transaction: (
       work: (tx: Record<string, unknown>) => Promise<unknown>,
@@ -184,16 +184,16 @@ test("bulk rejection preserves an in-flight approval claim through Sheet rollbac
   let contact = auditTarget().contact as Record<string, unknown>;
   let resolutionClaimToken: string | null = null;
   let resolutionClaimedAt: Date | null = null;
-  let sheetStarted!: () => void;
-  let releaseSheet!: () => void;
-  const sheetStartedPromise = new Promise<void>((resolve) => {
-    sheetStarted = resolve;
+  let finalizationStarted!: () => void;
+  let releaseFinalization!: () => void;
+  const finalizationStartedPromise = new Promise<void>((resolve) => {
+    finalizationStarted = resolve;
   });
-  const releaseSheetPromise = new Promise<void>((resolve) => {
-    releaseSheet = resolve;
+  const releaseFinalizationPromise = new Promise<void>((resolve) => {
+    releaseFinalization = resolve;
   });
-  let rollbackCount = 0;
   let releaseCount = 0;
+  let transactionCount = 0;
   const alternative = {
     id: "alternative-1",
     jobId: "job-1",
@@ -240,7 +240,14 @@ test("bulk rejection preserves an in-flight approval claim through Sheet rollbac
       },
     },
   };
-  mutableDb.$transaction = async (work) => work(tx);
+  mutableDb.$transaction = async (work) => {
+    transactionCount += 1;
+    if (transactionCount === 2) {
+      finalizationStarted();
+      await releaseFinalizationPromise;
+    }
+    return work(tx);
+  };
   mutableDb.contactAuditJob.updateMany = async () => {
     releaseCount += 1;
     resolutionClaimToken = null;
@@ -254,27 +261,8 @@ test("bulk rejection preserves an in-flight approval claim through Sheet rollbac
       "approved",
       alternative.id,
       now,
-      {
-        update: async () => {
-          sheetStarted();
-          await releaseSheetPromise;
-          return {
-            updated: true,
-            rowIndex: 2,
-            sourceKey: "sheet/tab/row/slot",
-            rollback: {
-              sourceKey: "sheet/tab/row/slot",
-              rowId: "row-1",
-              cells: [],
-            },
-          };
-        },
-        rollback: async () => {
-          rollbackCount += 1;
-        },
-      },
     );
-    await sheetStartedPromise;
+    await finalizationStartedPromise;
     assert.ok(resolutionClaimToken, "approval must own a resolution claim");
 
     let bulkUpdateRan = false;
@@ -303,12 +291,11 @@ test("bulk rejection preserves an in-flight approval claim through Sheet rollbac
       "bulk rejection must not clear the in-flight owner's token",
     );
 
-    contact = { ...contact, notes: "Changed during Sheet work" };
-    releaseSheet();
+    contact = { ...contact, notes: "Changed during database finalization" };
+    releaseFinalization();
     const approvalResult = await approval;
     assert.equal(approvalResult.ok, false);
-    assert.match(approvalResult.error ?? "", /Sheet change was rolled back/);
-    assert.equal(rollbackCount, 1);
+    assert.match(approvalResult.error ?? "", /changed while the decision was being applied/);
     assert.equal(releaseCount, 1);
     assert.equal(resolutionClaimToken, null);
   } finally {

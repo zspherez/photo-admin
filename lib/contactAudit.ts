@@ -17,12 +17,6 @@ import {
   normalizeResearchSourceUrl,
 } from "@/lib/contactResearch";
 import {
-  AuditedContactSheetPostWriteError,
-  recoverAuditedContactSheetPostWriteError,
-  rollbackAuditedContactInSheet,
-  updateAuditedContactInSheet,
-} from "@/lib/sheets";
-import {
   contactAuditResolutionEligibility,
   contactAuditResolutionClaimStaleBefore,
   contactStillMatchesAuditSnapshot,
@@ -33,6 +27,11 @@ import {
   easternDateOnly,
   parseDateOnly,
 } from "@/lib/calendarDate";
+import {
+  contactAuditAutoAppendAlternativeId,
+  readContactAuditAgentRulesInTransaction,
+} from "@/lib/contactAuditAgentRules";
+import { resolveContactAuditArtist } from "@/lib/contactAuditArtistDecision";
 
 export { contactStillMatchesAuditSnapshot } from "@/lib/contactAuditResolutionPolicy";
 
@@ -1125,6 +1124,8 @@ export async function claimContactAuditJobs(
   await ensureLegacyContactAuditRequest();
   return db.$transaction(
     async (tx) => {
+      const auditAgentRules =
+        await readContactAuditAgentRulesInTransaction(tx);
       const selected = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT job."id"
         FROM "ContactAuditJob" job
@@ -1159,6 +1160,10 @@ export async function claimContactAuditJobs(
             claimedAt: now,
             claimExpiresAt,
             attemptCount: { increment: 1 },
+            claimedAgentRules: auditAgentRules.instructions,
+            claimedAgentRulesVersion: auditAgentRules.version,
+            claimedAutoAppendAdditionalContact:
+              auditAgentRules.autoAppendAdditionalContact,
           },
         });
       }
@@ -1171,6 +1176,9 @@ export async function claimContactAuditJobs(
           contactId: true,
           artistId: true,
           attemptCount: true,
+          claimedAgentRules: true,
+          claimedAgentRulesVersion: true,
+          claimedAutoAppendAdditionalContact: true,
           targetRosterEntryId: true,
           snapshotArtistName: true,
           snapshotEmail: true,
@@ -1217,6 +1225,13 @@ export async function claimContactAuditJobs(
             claimToken: tokenById.get(job.id)!,
             claimExpiresAt,
             attemptCount: job.attemptCount,
+            auditAgentRules: {
+              scope: "contact_audit" as const,
+              version: job.claimedAgentRulesVersion ?? 0,
+              instructions: job.claimedAgentRules ?? "",
+              autoAppendAdditionalContact:
+                job.claimedAutoAppendAdditionalContact ?? false,
+            },
             contact: {
               artistName: job.snapshotArtistName,
               email: job.snapshotEmail,
@@ -1243,9 +1258,13 @@ export async function submitContactAuditResult(
   jobId: string,
   value: unknown,
   now: Date = new Date()
-): Promise<{ accepted: boolean; runComplete: boolean }> {
+): Promise<{
+  accepted: boolean;
+  runComplete: boolean;
+  autoResolved: boolean;
+}> {
   await ensureLegacyContactAuditRequest();
-  return withSerializableRetry(async (tx) => {
+  const stored = await withSerializableRetry(async (tx) => {
     const job = await tx.contactAuditJob.findFirst({
       where: {
         id: jobId,
@@ -1270,7 +1289,13 @@ export async function submitContactAuditResult(
         },
       },
     });
-    if (!job) return { accepted: false, runComplete: false };
+    if (!job) {
+      return {
+        accepted: false,
+        runComplete: false,
+        autoAppend: null,
+      };
+    }
     let submission: ContactAuditSubmission;
     try {
       submission = parseContactAuditSubmission(
@@ -1284,7 +1309,11 @@ export async function submitContactAuditResult(
       );
     }
     if (submission.claimToken !== job.claimToken) {
-      return { accepted: false, runComplete: false };
+      return {
+        accepted: false,
+        runComplete: false,
+        autoAppend: null,
+      };
     }
     const currentContacts = job.artistId
       ? await tx.contact.findMany({
@@ -1332,6 +1361,27 @@ export async function submitContactAuditResult(
         claimExpiresAt: null,
       },
     });
+    const artistJobs = job.artistId
+      ? await tx.contactAuditJob.findMany({
+          where: { runId: job.runId, artistId: job.artistId },
+          select: {
+            status: true,
+            finding: true,
+            confidence: true,
+            claimedAutoAppendAdditionalContact: true,
+            rosterReview: true,
+            alternatives: {
+              select: {
+                id: true,
+                normalizedEmail: true,
+                confidence: true,
+              },
+            },
+          },
+        })
+      : [];
+    const autoAppendAlternativeId =
+      contactAuditAutoAppendAlternativeId(artistJobs);
     const remaining = await tx.contactAuditJob.count({
       where: { runId: job.runId, status: { not: "complete" } },
     });
@@ -1353,8 +1403,48 @@ export async function submitContactAuditResult(
         },
       });
     }
-    return { accepted: true, runComplete };
+    return {
+      accepted: true,
+      runComplete,
+      autoAppend:
+        job.artistId && autoAppendAlternativeId
+          ? {
+              runId: job.runId,
+              artistId: job.artistId,
+              alternativeId: autoAppendAlternativeId,
+            }
+          : null,
+    };
   });
+  if (!stored.accepted || !stored.autoAppend) {
+    return {
+      accepted: stored.accepted,
+      runComplete: stored.runComplete,
+      autoResolved: false,
+    };
+  }
+  const resolution = await resolveContactAuditArtist(
+    {
+      ...stored.autoAppend,
+      action: "append",
+    },
+    now,
+  );
+  if (!resolution.ok) {
+    console.error(
+      JSON.stringify({
+        event: "contact_audit_auto_append_failed",
+        runId: stored.autoAppend.runId,
+        artistId: stored.autoAppend.artistId,
+        error: resolution.error,
+      }),
+    );
+  }
+  return {
+    accepted: true,
+    runComplete: stored.runComplete,
+    autoResolved: resolution.ok,
+  };
 }
 
 export async function markContactAuditReviewed(
@@ -1387,7 +1477,6 @@ type ResolutionContact = {
   source: string | null;
   notes: string | null;
   isFullTeam: boolean;
-  sourceKey: string | null;
   state: "active" | "quarantined";
   updatedAt: Date;
   artist: { name: string };
@@ -1410,16 +1499,6 @@ type ResolutionReservation = {
   alternative: ResolutionAlternative | null;
 };
 
-interface ContactAuditSheetMutations {
-  update: typeof updateAuditedContactInSheet;
-  rollback: typeof rollbackAuditedContactInSheet;
-}
-
-const CONTACT_AUDIT_SHEET_MUTATIONS: ContactAuditSheetMutations = {
-  update: updateAuditedContactInSheet,
-  rollback: rollbackAuditedContactInSheet,
-};
-
 function isSameResolution(
   existing: {
     resolution: string | null;
@@ -1440,7 +1519,7 @@ function resolutionError(error: unknown): string {
   ) {
     return "That artist already has the proposed email address. No contact or outreach history was merged.";
   }
-  return "The decision could not be saved. The contact was not changed; refresh and try again.";
+  return "The database decision could not be saved. The contact was not changed; refresh and try again.";
 }
 
 async function contactAuditAlternativeAlreadyStored(
@@ -1700,8 +1779,7 @@ async function reserveContactAuditResolution(
 async function finalizeContactAuditResolution(
   reservation: ResolutionReservation,
   decision: ResolutionDecision,
-  now: Date,
-  sheetSourceKey: string | null
+  now: Date
 ): Promise<ContactAuditResolutionResult> {
   return withSerializableRetry(async (tx) => {
     const job = await tx.contactAuditJob.findUnique({
@@ -1807,12 +1885,6 @@ async function finalizeContactAuditResolution(
           name: alternative.name,
           role: "management",
           state: "active",
-          ...(job.contact.source === "sheet"
-            ? {
-                sourceKey: sheetSourceKey ?? job.contact.sourceKey,
-                sourceSyncedAt: now,
-              }
-            : {}),
         },
         include: { artist: { select: { name: true } } },
       })) as ResolutionContact;
@@ -1859,8 +1931,7 @@ export async function resolveContactAuditJob(
   jobId: string,
   resolution: ContactAuditResolution,
   alternativeId: string | null,
-  now: Date = new Date(),
-  sheetMutations: ContactAuditSheetMutations = CONTACT_AUDIT_SHEET_MUTATIONS
+  now: Date = new Date()
 ): Promise<ContactAuditResolutionResult> {
   const normalizedJobId = jobId.trim();
   const normalizedAlternativeId = alternativeId?.trim() || null;
@@ -1879,132 +1950,21 @@ export async function resolveContactAuditJob(
   if (!reserved.ok) return reserved.result;
 
   const { reservation } = reserved;
-  let sheetUpdate: Awaited<
-    ReturnType<typeof updateAuditedContactInSheet>
-  > | null = null;
-  if (
-    decision.resolution === "approved" &&
-    reservation.alternative &&
-    reservation.contact.source === "sheet" &&
-    !reservation.contact.sourceKey
-  ) {
-    await releaseContactAuditResolutionClaim(
-      reservation.jobId,
-      reservation.claimToken
-    );
-    return {
-      ok: false,
-      error:
-        "This Sheet-owned contact has no stable row identity. Run a complete Sheet sync before approving the replacement.",
-    };
-  }
-  if (
-    decision.resolution === "approved" &&
-    reservation.alternative &&
-    reservation.contact.source === "sheet" &&
-    reservation.contact.sourceKey
-  ) {
-    try {
-      sheetUpdate = await sheetMutations.update({
-        artistName: reservation.contact.artist.name,
-        oldEmail: reservation.contact.email,
-        newEmail: reservation.alternative.normalizedEmail,
-        oldDirectOutreachNote: reservation.contact.directOutreachNote,
-        newDirectOutreachNote: null,
-        sourceKey: reservation.contact.sourceKey,
-        managerName: reservation.alternative.name,
-        role: "management",
-      });
-    } catch (error) {
-      if (error instanceof AuditedContactSheetPostWriteError) {
-        const recovery = await recoverAuditedContactSheetPostWriteError(
-          error,
-          sheetMutations.rollback
-        );
-        await releaseContactAuditResolutionClaim(
-          reservation.jobId,
-          reservation.claimToken
-        );
-        const originalDetail = error.message.slice(0, 180);
-        if (!recovery.rolledBack) {
-          console.error(
-            JSON.stringify({
-              event: "contact_audit_sheet_post_write_rollback_failed",
-              jobId: reservation.jobId,
-              contactId: reservation.contact.id,
-              sheetError: error.message,
-              rollbackError: recovery.rollbackError,
-            })
-          );
-          return {
-            ok: false,
-            error: `Google Sheet update verification failed after the write, and rollback failed. Reconcile the Sheet before retrying. Original error: ${originalDetail}. Rollback error: ${recovery.rollbackError.slice(0, 180)}`,
-          };
-        }
-        return {
-          ok: false,
-          error: `Google Sheet update verification failed after the write; the exact Sheet changes were rolled back and the database decision was not saved. ${originalDetail}`,
-        };
-      }
-      await releaseContactAuditResolutionClaim(
-        reservation.jobId,
-        reservation.claimToken
-      );
-      const detail = error instanceof Error ? error.message : String(error);
-      return {
-        ok: false,
-        error: `Google Sheet update failed; the database and decision were not changed. ${detail.slice(0, 180)}`,
-      };
-    }
-  }
-
   let result: ContactAuditResolutionResult;
   try {
     result = await finalizeContactAuditResolution(
       reservation,
       decision,
-      now,
-      sheetUpdate?.sourceKey ?? null
+      now
     );
   } catch (error) {
     result = { ok: false, error: resolutionError(error) };
   }
-  if (result.ok || !sheetUpdate || !reservation.alternative) {
-    if (!result.ok) {
-      await releaseContactAuditResolutionClaim(
-        reservation.jobId,
-        reservation.claimToken
-      );
-    }
-    return result;
-  }
-
-  let rollbackError: string | null = null;
-  try {
-    await sheetMutations.rollback(sheetUpdate.rollback);
-  } catch (error) {
-    rollbackError = error instanceof Error ? error.message : String(error);
-  }
-  await releaseContactAuditResolutionClaim(
-    reservation.jobId,
-    reservation.claimToken
-  );
-  if (rollbackError) {
-    console.error(
-      JSON.stringify({
-        event: "contact_audit_sheet_database_divergence",
-        jobId: reservation.jobId,
-        contactId: reservation.contact.id,
-        rollbackError,
-      })
+  if (!result.ok) {
+    await releaseContactAuditResolutionClaim(
+      reservation.jobId,
+      reservation.claimToken
     );
-    return {
-      ok: false,
-      error: `The Sheet changed, but the database decision failed and the Sheet rollback also failed. Reconcile the Sheet before retrying. ${rollbackError.slice(0, 180)}`,
-    };
   }
-  return {
-    ok: false,
-    error: `${result.error ?? "The database decision failed."} The Sheet change was rolled back.`,
-  };
+  return result;
 }

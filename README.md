@@ -86,17 +86,19 @@ See [.env.example](.env.example) for every variable.
 | Core | Database URLs, `APP_BASE_URL`, admin password/session secret, optional `READ_ONLY_PASSWORD` |
 | Email | Resend API key, sender, webhook secret, optional test override |
 | Shows/listening | EDMTrain key, Spotify client credentials, stats.fm token |
-| Google Sheets | Google credentials, spreadsheet IDs, tab |
+| Google Sheets export | Optional Google credentials and `GOOGLE_CONTACT_EXPORT_SPREADSHEET_ID` |
 | Automation | `CRON_SECRET`; local-only contact agent tokens |
 | Trajectory | Ingest auth mode, GitHub repository/workflow ref, receipt secret, fallback HMAC secret |
 
-Sheet sync requires Editor access; back up the Sheet before its first write.
+Postgres is the only contact source of truth. Optional Google Sheets exports
+create new immutable snapshot tabs and are never imported back into the app.
+The service account needs Editor access only to the destination spreadsheet.
 
 ## Production release safety
 
 The release workflow accepts an exact full SHA reachable from `main` plus
 `confirmation=RELEASE`. It validates code, runtime, and database bindings,
-runs migrations and Sheet adoption, promotes, and verifies compatibility.
+runs migrations, promotes, and verifies compatibility.
 
 Production pauses only after the revision is proven. Recovery is main-only and
 limited to proven targets. Use durable project-scoped Vercel CI tokens.

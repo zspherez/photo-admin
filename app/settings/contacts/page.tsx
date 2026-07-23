@@ -1,124 +1,92 @@
+import { randomUUID } from "node:crypto";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import {
-  getConfiguredSheetTarget,
-  listTabs,
-  syncContactsFromSheet,
-} from "@/lib/sheets";
-import { Card, CardBody } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { SyncForm } from "@/components/sync-form";
-import { SyncBanner } from "@/components/sync-banner";
-import { requireServerActionAuth } from "@/lib/auth";
+  hasGoogleContactExportConfiguration,
+  resolveGoogleContactExportSpreadsheetId,
+} from "@/lib/googleSheetContactExport";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
-import {
-  contactDisplayValue,
-  directOutreachNoteValue,
-  hasDirectOutreachNote,
-  isDirectOutreachOnly,
-} from "@/lib/contactDisplay";
+import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { Card, CardBody } from "@/components/ui/card";
+import { SyncBanner } from "@/components/sync-banner";
+import { SyncForm } from "@/components/sync-form";
+import { exportContactSnapshotAction } from "./actions";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Contact sync" };
+export const metadata: Metadata = { title: "Contact snapshots" };
 
-async function syncContacts(formData: FormData) {
-  "use server";
-  await requireServerActionAuth("/settings/contacts");
-  const rawTab = formData.get("tab");
-  const tab = typeof rawTab === "string" ? rawTab.trim() : "";
-  let redirectTo: string;
-  try {
-    if (!tab) throw new Error("Google Sheet tab is required");
-    const result = await syncContactsFromSheet(tab);
-    await db.setting.upsert({
-      where: { key: "sheets_last_result" },
-      create: { key: "sheets_last_result", value: JSON.stringify(result) },
-      update: { value: JSON.stringify(result) },
-    });
-    const params = new URLSearchParams({
-      synced: "ok",
-      read: String(result.read),
-      upserted: String(result.contactsUpserted),
-      artists: String(result.artistsCreated),
-      skipped: String(result.skipped),
-    });
-    redirectTo = `/settings/contacts?${params.toString()}`;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    redirectTo = `/settings/contacts?synced=error&detail=${encodeURIComponent(msg.slice(0, 200))}`;
-  }
-  revalidatePath("/settings/contacts");
-  revalidatePath("/");
-  redirect(redirectTo);
+function exportStatusTone(status: string): BadgeTone {
+  if (status === "complete") return "success";
+  if (status === "failed") return "danger";
+  if (status === "writing") return "info";
+  return "warning";
 }
 
 export default async function ContactsSettingsPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    synced?: SearchParamValue;
-    read?: SearchParamValue;
-    upserted?: SearchParamValue;
-    artists?: SearchParamValue;
-    skipped?: SearchParamValue;
+    export?: SearchParamValue;
+    snapshot?: SearchParamValue;
+    count?: SearchParamValue;
     detail?: SearchParamValue;
+    retryKey?: SearchParamValue;
   }>;
 }) {
   const rawSearchParams = await searchParams;
-  const sp = {
-    synced: firstSearchParam(rawSearchParams.synced),
-    read: firstSearchParam(rawSearchParams.read),
-    upserted: firstSearchParam(rawSearchParams.upserted),
-    artists: firstSearchParam(rawSearchParams.artists),
-    skipped: firstSearchParam(rawSearchParams.skipped),
-    detail: firstSearchParam(rawSearchParams.detail),
-  };
-  const hasCreds =
-    !!process.env.GOOGLE_CREDENTIALS_JSON ||
-    !!process.env.GOOGLE_CREDENTIALS_PATH;
-  let configuredTarget: Awaited<
-    ReturnType<typeof getConfiguredSheetTarget>
-  > = null;
-  let targetError: string | null = null;
+  const result = firstSearchParam(rawSearchParams.export);
+  const snapshotId = firstSearchParam(rawSearchParams.snapshot);
+  const exportedCount = firstSearchParam(rawSearchParams.count);
+  const detail = firstSearchParam(rawSearchParams.detail);
+  const requestedRetryKey = firstSearchParam(rawSearchParams.retryKey);
+  const retrying = Boolean(
+    requestedRetryKey &&
+      /^[A-Za-z0-9._:-]{16,128}$/.test(requestedRetryKey),
+  );
+  const idempotencyKey =
+    retrying && requestedRetryKey ? requestedRetryKey : randomUUID();
+  const exportConfigured = await hasGoogleContactExportConfiguration();
+  let destinationId: string | null = null;
   try {
-    configuredTarget = await getConfiguredSheetTarget();
-  } catch (error) {
-    targetError = error instanceof Error ? error.message : String(error);
-  }
-  const sheetId =
-    configuredTarget?.spreadsheetId ?? process.env.SPREADSHEET_ID?.trim();
-  const hasConfig = hasCreds && !!sheetId && !targetError;
-
-  let tabs: string[] = [];
-  let tabError: string | null = null;
-  if (hasConfig) {
-    try {
-      tabs = await listTabs(sheetId!);
-    } catch (e) {
-      tabError = e instanceof Error ? e.message : String(e);
-    }
+    destinationId = await resolveGoogleContactExportSpreadsheetId();
+  } catch {
+    destinationId = null;
   }
 
-  const [contactCount, lastSync, lastResult, recentContacts] = await Promise.all([
-    db.contact.count({ where: { state: "active" } }),
-    db.setting.findUnique({ where: { key: "sheets_last_sync" } }),
-    db.setting.findUnique({ where: { key: "sheets_last_result" } }),
-    db.contact.findMany({
-      where: { state: "active" },
-      take: 25,
-      orderBy: { updatedAt: "desc" },
-      include: { artist: true },
-    }),
-  ]);
-
-  const result = lastResult ? JSON.parse(lastResult.value) : null;
+  const [totalContacts, activeContacts, quarantinedContacts, recentExports] =
+    await Promise.all([
+      db.contact.count({
+        where: { state: { in: ["active", "quarantined"] } },
+      }),
+      db.contact.count({ where: { state: "active" } }),
+      db.contact.count({ where: { state: "quarantined" } }),
+      db.contactExportSnapshot.findMany({
+        take: 10,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        select: {
+          id: true,
+          idempotencyKey: true,
+          status: true,
+          contactCount: true,
+          contentSha256: true,
+          sheetTabName: true,
+          sheetUrl: true,
+          error: true,
+          startedAt: true,
+          completedAt: true,
+        },
+      }),
+    ]);
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
-      <Link href="/settings" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Settings</Link>
+    <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
+      <Link
+        href="/settings"
+        className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+      >
+        ← Settings
+      </Link>
       <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">Contacts</h1>
         <Link
@@ -129,110 +97,164 @@ export default async function ContactsSettingsPage({
         </Link>
       </div>
       <p className="mt-1 text-sm text-zinc-500">
-        Sync writes stable <code>photo_admin_id</code> values to the Sheet, so
-        the service account needs Editor access.
+        Postgres is canonical. Google Sheets exports are one-way, immutable
+        point-in-time snapshots and are never imported.
       </p>
 
-      {sp.synced === "ok" && (
+      {result === "ok" && (
         <SyncBanner
           tone="success"
-          title="Sync complete."
-          detail={`${sp.read ?? "?"} rows read · ${sp.upserted ?? "?"} contacts upserted · ${sp.artists ?? "?"} new artists · ${sp.skipped ?? "?"} skipped`}
+          title="Snapshot export complete."
+          detail={`${exportedCount ?? "?"} contacts · ${snapshotId ?? "unknown snapshot"}`}
         />
       )}
-      {sp.synced === "error" && (
-        <SyncBanner tone="error" title="Sync failed." detail={sp.detail ?? "unknown error"} />
+      {result === "error" && (
+        <SyncBanner
+          tone="error"
+          title="Snapshot export failed."
+          detail={detail ?? "Retry with the same idempotency key."}
+        />
       )}
 
-      {!hasConfig && (
+      {!exportConfigured && (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          Google Sheets needs a configured spreadsheet plus one of <code>GOOGLE_CREDENTIALS_JSON</code> (Vercel) or <code>GOOGLE_CREDENTIALS_PATH</code> (local).
+          Export is disabled until{" "}
+          <code>GOOGLE_CONTACT_EXPORT_SPREADSHEET_ID</code> and Google service
+          account credentials are configured.
         </div>
       )}
-      {targetError && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          Sheets target error: {targetError}
-        </div>
-      )}
-      {tabError && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          Sheets API error: {tabError}
-        </div>
-      )}
+
+      <div className="mt-6 grid gap-3 sm:grid-cols-3">
+        {[
+          ["All contacts", totalContacts],
+          ["Active", activeContacts],
+          ["Quarantined", quarantinedContacts],
+        ].map(([label, count]) => (
+          <Card key={String(label)}>
+            <CardBody>
+              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                {label}
+              </p>
+              <p className="mt-2 text-2xl font-semibold">
+                {Number(count).toLocaleString()}
+              </p>
+            </CardBody>
+          </Card>
+        ))}
+      </div>
 
       <Card className="mt-6">
         <CardBody>
-          <div className="flex items-baseline justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Sync</h2>
-            <span className="text-xs text-zinc-500">
-              {contactCount.toLocaleString()} contacts
-              {lastSync && <> · {new Date(lastSync.value).toLocaleString()}</>}
-            </span>
-          </div>
-          {tabs.length > 0 && (
-            <p className="mt-2 text-xs text-zinc-500">Tabs: {tabs.join(", ")}</p>
-          )}
-          {configuredTarget && (
-            <p className="mt-2 text-xs text-zinc-500">
-              Configured tab: {configuredTarget.tabName}
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            Export snapshot
+          </h2>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            Creates a new tab containing active and quarantined contacts,
+            sorted deterministically. Existing tabs are never selected as a
+            contact source.
+          </p>
+          {destinationId && (
+            <p className="mt-2 break-all text-xs text-zinc-500">
+              Destination spreadsheet: <code>{destinationId}</code>
             </p>
           )}
-          <SyncForm action={syncContacts} label="Sync from Sheet" pendingLabel="Syncing…" disabled={!hasConfig} className="mt-3 flex items-center gap-2">
-            <input
-              name="tab"
-              defaultValue={configuredTarget?.tabName ?? ""}
-              placeholder="Tab name"
-              className="h-9 flex-1 rounded-md border border-zinc-200 bg-white px-3 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950"
-            />
+          <SyncForm
+            action={exportContactSnapshotAction}
+            label={
+              retrying ? "Retry snapshot export" : "Export new snapshot"
+            }
+            pendingLabel={retrying ? "Retrying…" : "Exporting…"}
+            hiddenFields={{ idempotencyKey }}
+            disabled={!exportConfigured}
+            className="mt-4 space-y-3"
+          >
+            <label className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+              <input
+                type="checkbox"
+                name="confirmation"
+                value="EXPORT"
+                required
+                className="mt-0.5"
+              />
+              <span>
+                I understand this writes a new immutable Google Sheet tab and
+                does not change Postgres contacts.
+              </span>
+            </label>
           </SyncForm>
-          {result && (
-            <p className="mt-3 text-xs text-zinc-500">
-              Last result: {result.read} rows read · {result.contactsUpserted} contacts upserted · {result.artistsCreated} new artists · {result.skipped} skipped
-            </p>
-          )}
         </CardBody>
       </Card>
 
-      {recentContacts.length > 0 && (
-        <section className="mt-8">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Recent contacts</h2>
-          <Card className="mt-3">
+      <section className="mt-8">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+          Recent exports
+        </h2>
+        <Card className="mt-3">
+          {recentExports.length === 0 ? (
+            <CardBody>
+              <p className="text-sm text-zinc-500">
+                No contact snapshots have been exported.
+              </p>
+            </CardBody>
+          ) : (
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
-              {recentContacts.map((c: {
-                id: string;
-                email: string | null;
-                phone: string | null;
-                directOutreachNote: string | null;
-                name: string | null;
-                role: string | null;
-                customPrice: string | null;
-                artist: { name: string };
-              }) => (
-                <li key={c.id} className="px-4 py-3 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{c.artist.name}</p>
-                      <p className="truncate text-xs text-zinc-500">
-                        {c.name ? `${c.name} · ` : ""}
-                        {contactDisplayValue(c, "—")}
-                        {hasDirectOutreachNote(c) &&
-                        !isDirectOutreachOnly(c)
-                          ? ` · ${directOutreachNoteValue(c)}`
-                          : ""}
-                        {hasDirectOutreachNote(c) ? " · direct outreach" : ""}
-                        {c.role ? ` · ${c.role}` : ""}
+              {recentExports.map((snapshot) => (
+                <li key={snapshot.id} className="px-4 py-4 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="font-medium">{snapshot.sheetTabName}</p>
+                      <p className="mt-0.5 text-xs text-zinc-500">
+                        {snapshot.contactCount.toLocaleString()} contacts ·{" "}
+                        {(
+                          snapshot.completedAt ?? snapshot.startedAt
+                        ).toLocaleString()}
                       </p>
                     </div>
-                    {c.customPrice && (
-                      <Badge tone="default">{c.customPrice}</Badge>
-                    )}
+                    <Badge tone={exportStatusTone(snapshot.status)} size="xs">
+                      {snapshot.status}
+                    </Badge>
                   </div>
+                  <p className="mt-2 break-all font-mono text-[11px] text-zinc-500">
+                    SHA-256 {snapshot.contentSha256}
+                  </p>
+                  {snapshot.error && (
+                    <p className="mt-2 text-xs text-red-700 dark:text-red-300">
+                      {snapshot.error}
+                    </p>
+                  )}
+                  {snapshot.sheetUrl && (
+                    <a
+                      href={snapshot.sheetUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 inline-block text-xs text-blue-700 hover:underline dark:text-blue-300"
+                    >
+                      Open snapshot ↗
+                    </a>
+                  )}
+                  {(snapshot.status === "failed" ||
+                    snapshot.status === "writing") && (
+                    <SyncForm
+                      action={exportContactSnapshotAction}
+                      label={
+                        snapshot.status === "writing"
+                          ? "Resume export"
+                          : "Retry export"
+                      }
+                      pendingLabel="Retrying…"
+                      hiddenFields={{
+                        idempotencyKey: snapshot.idempotencyKey,
+                        confirmation: "EXPORT",
+                      }}
+                      className="mt-3"
+                    />
+                  )}
                 </li>
               ))}
             </ul>
-          </Card>
-        </section>
-      )}
+          )}
+        </Card>
+      </section>
     </main>
   );
 }

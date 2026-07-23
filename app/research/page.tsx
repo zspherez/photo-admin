@@ -106,11 +106,6 @@ async function approveCandidateAction(formData: FormData) {
       })
     );
   }
-  if (result.sheetError) {
-    redirect(
-      researchStatusHref(filter, { sheet_error: result.sheetError })
-    );
-  }
 }
 
 async function rejectCandidateAction(formData: FormData) {
@@ -367,7 +362,6 @@ export default async function ContactResearchPage({
     notes_saved?: SearchParamValue;
     error?: SearchParamValue;
     detail?: SearchParamValue;
-    sheet_error?: SearchParamValue;
     requeue_exhausted?: SearchParamValue;
     requeued?: SearchParamValue;
     skipped?: SearchParamValue;
@@ -399,7 +393,6 @@ export default async function ContactResearchPage({
     notesSaved: firstSearchParam(raw.notes_saved),
     error: firstSearchParam(raw.error),
     detail: firstSearchParam(raw.detail),
-    sheetError: firstSearchParam(raw.sheet_error),
     requeueExhausted: firstSearchParam(raw.requeue_exhausted),
     requeued: firstSearchParam(raw.requeued),
     skipped: firstSearchParam(raw.skipped),
@@ -742,13 +735,6 @@ export default async function ContactResearchPage({
         <AutoDismissStatus>
           <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
             Research instructions saved.
-          </div>
-        </AutoDismissStatus>
-      )}
-      {status.sheetError && (
-        <AutoDismissStatus>
-          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-            {status.sheetError}
           </div>
         </AutoDismissStatus>
       )}
