@@ -433,6 +433,16 @@ jobs:
           umask 077
           vercel pull --yes --environment=production --token "${VERCEL_TOKEN}"
 
+      - name: Resolve recorded monthly audit migration failure
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: >-
+          npm --silent run db:resolve-failed-migration --
+          20260723030000_monthly_contact_audit_requests
+          82b672fcedb0916eaa6c5c0951477479d13bcd681f5914ba09513f936e329f1e
+
       - name: Bind requested SHA to production migration history and verify database connections
         id: database-targets
         shell: bash
