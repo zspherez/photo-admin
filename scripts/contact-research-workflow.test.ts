@@ -18,6 +18,18 @@ test("contact research automation is scheduled, bounded, and preflighted", () =>
   assert.match(source, /photo-admin-contact-research-poll/);
   assert.match(source, /REFRESH_QUEUE:/);
   assert.match(source, /refreshQueue: \$refreshQueue/);
+  const oidcRequest = source.slice(
+    source.indexOf('oidc_token="$('),
+    source.indexOf('echo "::add-mask::${oidc_token}"'),
+  );
+  const appRequest = source.slice(
+    source.indexOf('claimable="$('),
+    source.indexOf('lane_count="${claimable}"'),
+  );
+  assert.doesNotMatch(oidcRequest, /refreshQueue|--data|Content-Type/);
+  assert.match(appRequest, /Content-Type: application\/json/);
+  assert.match(appRequest, /--data[\s\S]*refreshQueue/);
+  assert.match(appRequest, /\/api\/contact-research\/prepare/);
   assert.match(source, /workflow_dispatch/);
   assert.doesNotMatch(source, /pull_request:/);
   assert.doesNotMatch(source, /CONTACT_RESEARCH_AUTOMATION_ENABLED/);
