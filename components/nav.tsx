@@ -13,7 +13,7 @@ const ITEMS: { href: string; label: string; match: (p: string) => boolean }[] = 
   { href: "/contacts", label: "Contacts", match: (p) => p === "/contacts" },
   { href: "/contact-audit", label: "Audit", match: (p) => p === "/contact-audit" },
   {
-    href: "/emails",
+    href: "/outreach",
     label: "Emails",
     match: (p) =>
       p === "/emails" ||
@@ -29,7 +29,7 @@ const MOBILE_ITEMS = [
   { href: "/dashboard", label: "Shows", icon: "shows" },
   { href: "/research", label: "Research", icon: "research" },
   { href: "/contact-audit", label: "Audit", icon: "audit" },
-  { href: "/emails", label: "Emails", icon: "emails" },
+  { href: "/outreach", label: "Emails", icon: "emails" },
 ] as const;
 
 function NavIcon({

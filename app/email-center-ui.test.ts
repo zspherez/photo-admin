@@ -20,6 +20,12 @@ test("outreach and custom history share one Emails section header", () => {
   assert.match(custom, /<EmailCenterHeader active="custom" \/>/);
 });
 
+test("Emails navigation defaults to outreach history", () => {
+  const nav = source("components/nav.tsx");
+  assert.match(nav, /href: "\/outreach",\s+label: "Emails"/);
+  assert.doesNotMatch(nav, /href: "\/emails",\s+label: "Emails"/);
+});
+
 test("existing outreach URLs and filter forms remain stable", () => {
   const outreach = source("app/outreach/page.tsx");
 

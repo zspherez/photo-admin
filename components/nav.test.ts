@@ -22,7 +22,7 @@ test("primary navigation does not expose the legacy New tab", () => {
 
 test("primary navigation combines outreach and custom messages under Emails", () => {
   assert.doesNotMatch(source, /label: "Sent"/);
-  assert.match(source, /href: "\/emails",\s+label: "Emails"/);
+  assert.match(source, /href: "\/outreach",\s+label: "Emails"/);
   assert.match(source, /p === "\/outreach"/);
   assert.match(source, /p\.startsWith\("\/outreach\/"\)/);
 });
@@ -33,6 +33,7 @@ test("mobile navigation exposes core workflows and an accessible overflow menu",
   assert.match(source, /label: "Research"/);
   assert.match(source, /label: "Audit"/);
   assert.match(source, /label: "Emails"/);
+  assert.match(source, /\{ href: "\/outreach", label: "Emails", icon: "emails" \}/);
   assert.match(source, /<summary/);
   assert.match(source, /All sections/);
 });
