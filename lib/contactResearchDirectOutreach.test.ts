@@ -388,6 +388,7 @@ test("human approval preserves existing contact fields and atomically records pr
     contactUpdates[0].data.directOutreachRuleText,
     canonicalRule,
   );
+  assert.equal(contactUpdates[0].data.source, "agent");
   assert.deepEqual(proposalUpdates[0].data, {
     status: "approved",
     contactId: "contact-1",
@@ -396,7 +397,7 @@ test("human approval preserves existing contact fields and atomically records pr
   assert.deepEqual(jobStatuses, ["review"]);
 });
 
-test("human approval creates one null-email research contact when no manager contact exists", async () => {
+test("human approval creates one null-email agent contact when no manager contact exists", async () => {
   const creates: Array<Record<string, unknown>> = [];
   const result = await approveContactResearchDirectOutreach(
     "proposal-1",
@@ -434,7 +435,7 @@ test("human approval creates one null-email research contact when no manager con
   assert.equal(creates.length, 1);
   assert.equal(creates[0].email, null);
   assert.equal(creates[0].phone, null);
-  assert.equal(creates[0].source, "research");
+  assert.equal(creates[0].source, "agent");
   assert.equal(creates[0].role, "management");
 });
 

@@ -56,20 +56,10 @@ export async function POST(
         { status: 409 }
       );
     }
-    if (result.sheetErrors.length > 0) {
-      console.error(
-        JSON.stringify({
-          event: "contact_research_auto_approval_sheet_errors",
-          jobId,
-          errors: result.sheetErrors,
-        })
-      );
-    }
     return NextResponse.json({
       ok: true,
       status: result.status,
       autoApproved: result.autoApproved,
-      sheetErrors: result.sheetErrors,
     });
   } catch (error) {
     console.error(
@@ -80,7 +70,7 @@ export async function POST(
       })
     );
     return NextResponse.json(
-      { error: "unable to save contact research result" },
+      { error: "unable to save contact research result to the database" },
       { status: 500 }
     );
   }

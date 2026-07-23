@@ -1,31 +1,10 @@
 import "dotenv/config";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import {
-  assertReleaseCompatibility,
-  ReleaseCompatibilityError,
-} from "@/lib/releaseCompatibility";
-import {
-  SHEETS_SPREADSHEET_ID_SETTING,
-  SHEETS_TAB_SETTING,
-} from "@/lib/sheets";
-
-function parseArguments(): { requireSheetAdoption: boolean } {
-  const args = new Set(process.argv.slice(2));
-  const requireSheetAdoption = args.delete("--require-sheet-adoption");
-  if (args.size > 0) {
-    throw new ReleaseCompatibilityError(
-      `Unknown argument(s): ${Array.from(args).join(", ")}`
-    );
-  }
-  return { requireSheetAdoption };
-}
+import { assertReleaseCompatibility } from "@/lib/releaseCompatibility";
 
 async function main(): Promise<void> {
-  const { requireSheetAdoption } = parseArguments();
   const [
-    settings,
-    activeUnownedSheetContacts,
     contactProbe,
     directOutreachNoteProbe,
     directOutreachProvenanceProbe,
@@ -68,19 +47,6 @@ async function main(): Promise<void> {
     trajectoryFeedbackTriggerProbe,
     trajectoryFeedbackIndexProbe,
   ] = await Promise.all([
-    db.setting.findMany({
-      where: {
-        key: { in: [SHEETS_SPREADSHEET_ID_SETTING, SHEETS_TAB_SETTING] },
-      },
-      select: { key: true, value: true },
-    }),
-    db.contact.count({
-      where: {
-        source: "sheet",
-        sourceKey: null,
-        state: "active",
-      },
-    }),
     db.contact.count({ where: { state: "active" }, take: 1 }),
     db.contact.count({
       where: { directOutreachNote: { not: null } },
@@ -697,8 +663,6 @@ async function main(): Promise<void> {
         )
     `),
   ]);
-  const values = new Map(settings.map((setting) => [setting.key, setting.value]));
-
   assertReleaseCompatibility(
     {
       databaseProbeSucceeded: [
@@ -786,17 +750,11 @@ async function main(): Promise<void> {
           (trigger) => trigger.enabled === "O",
         ) &&
         trajectoryFeedbackIndexProbe.length === 9,
-      configuredSpreadsheetId:
-        values.get(SHEETS_SPREADSHEET_ID_SETTING) ?? null,
-      configuredSheetTab: values.get(SHEETS_TAB_SETTING) ?? null,
-      activeUnownedSheetContacts,
-    },
-    requireSheetAdoption
+    }
   );
   console.log(
     JSON.stringify({
       event: "release_compatibility_verified",
-      sheetAdoptionRequired: requireSheetAdoption,
       addedRuntimeRoleProbes: [
         "ArtistResearchSkip",
         "ContactResearchCandidate_status_check",

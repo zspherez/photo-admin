@@ -3,7 +3,6 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { cache } from "react";
 import { db } from "@/lib/db";
-import { updateContactInSheet } from "@/lib/sheets";
 import { Card, CardBody } from "@/components/ui/card";
 import { LinkButton } from "@/components/ui/button";
 import { Field, TextArea } from "@/components/ui/field";
@@ -146,27 +145,6 @@ async function saveContact(formData: FormData) {
       })
     );
   }
-  if (prior.source === "sheet" && email && directOutreachNote) {
-    redirect(
-      contactPageHref(contactId, returnTo, {
-        error: "sheet_conflicting_targets",
-        historyPage,
-      })
-    );
-  }
-
-  if (
-    prior.source === "sheet" &&
-    ((!email && !directOutreachNote) ||
-      (!prior.email && !prior.directOutreachNote))
-  ) {
-    redirect(
-      contactPageHref(contactId, returnTo, {
-        error: "sheet_target_required",
-        historyPage,
-      })
-    );
-  }
   if (email) {
     const duplicate = await db.contact.findFirst({
       where: {
@@ -186,39 +164,7 @@ async function saveContact(formData: FormData) {
     }
   }
 
-  let sheetUpdate: Awaited<ReturnType<typeof updateContactInSheet>> | null =
-    null;
-  let sheetError: string | null = null;
-  if (prior.source === "sheet") {
-    try {
-      sheetUpdate = await updateContactInSheet({
-        artistName: prior.artist.name,
-        oldEmail: prior.email,
-        newEmail: email,
-        oldDirectOutreachNote: prior.directOutreachNote,
-        newDirectOutreachNote: directOutreachNote,
-        sourceKey: prior.sourceKey,
-        managerName: name,
-        role,
-        customPrice,
-        notes,
-      });
-    } catch (error) {
-      sheetError = error instanceof Error ? error.message : String(error);
-    }
-  }
-  if (sheetError) {
-    redirect(
-      contactPageHref(contactId, returnTo, {
-        error: "sheet_sync",
-        detail: sheetError.slice(0, 180),
-        historyPage,
-      })
-    );
-  }
-
   let databaseError: string | null = null;
-  let rollbackError: string | null = null;
   try {
     const clearsAgentProvenance =
       prior.directOutreachIdentity !== null &&
@@ -234,57 +180,28 @@ async function saveContact(formData: FormData) {
         role,
         customPrice,
         notes,
+        source: "manual",
+        state: "active",
         ...(clearsAgentProvenance
           ? CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE
-          : {}),
-        ...(prior.source === "sheet"
-          ? {
-              sourceKey: sheetUpdate?.sourceKey ?? prior.sourceKey,
-              sourceSyncedAt: new Date(),
-              state: "active",
-            }
           : {}),
       },
     });
   } catch (error) {
     databaseError = error instanceof Error ? error.message : String(error);
-    if (sheetUpdate && prior.source === "sheet") {
-      try {
-        await updateContactInSheet({
-          artistName: prior.artist.name,
-          oldEmail: email,
-          newEmail: prior.email,
-          oldDirectOutreachNote: directOutreachNote,
-          newDirectOutreachNote: prior.directOutreachNote,
-          sourceKey: sheetUpdate.sourceKey,
-          managerName: prior.name,
-          role: prior.role,
-          customPrice: prior.customPrice,
-          notes: prior.notes,
-        });
-      } catch (rollback) {
-        rollbackError =
-          rollback instanceof Error ? rollback.message : String(rollback);
-      }
-    }
   }
   if (databaseError) {
     console.error(
       JSON.stringify({
-        event: "contact_sheet_database_divergence",
+        event: "contact_database_update_failed",
         contactId,
         databaseError,
-        rollbackError,
       })
     );
-    const error = rollbackError ? "sheet_db_diverged" : "database_update";
-    const detail = rollbackError
-      ? `Database update failed and Sheet rollback failed: ${rollbackError}`
-      : databaseError;
     redirect(
       contactPageHref(contactId, returnTo, {
-        error,
-        detail: detail.slice(0, 180),
+        error: "database_update",
+        detail: databaseError.slice(0, 180),
         historyPage,
       })
     );
@@ -300,19 +217,18 @@ async function deleteContact(formData: FormData) {
   const contactId = formData.get("contactId") as string;
   const returnTo = workflowReturnPath(formData.get("returnTo"));
   const historyPage = parseHistoryPage(formData.get("historyPage") ?? undefined);
-  const contact = await db.contact.findUnique({
-    where: { id: contactId },
-    select: { source: true },
-  });
-  if (contact?.source === "sheet") {
+  try {
+    await db.contact.delete({ where: { id: contactId } });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
     redirect(
       contactPageHref(contactId, returnTo, {
-        error: "delete_from_sheet",
+        error: "database_delete",
+        detail: detail.slice(0, 180),
         historyPage,
       })
     );
   }
-  await db.contact.delete({ where: { id: contactId } });
   refreshWorkflowViews(returnTo, ["/settings/contacts"]);
   redirect(appendWorkflowResult(returnTo, { deleted: "1" }));
 }
@@ -411,20 +327,12 @@ export default async function ContactEditPage({
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
           {error === "missing_fields"
             ? "Provide an email, phone number, or direct outreach details."
-            : error === "sheet_conflicting_targets"
-              ? "A Sheet-owned contact cannot combine email and direct outreach details."
-            : error === "sheet_target_required"
-              ? "Sheet-owned contacts must keep an email or direct outreach details."
-              : error === "duplicate_email"
+            : error === "duplicate_email"
                 ? "That artist already has this email address."
-                : error === "sheet_sync"
-                  ? `Sheet update failed; the database was not changed. ${detail ?? ""}`
-                  : error === "sheet_db_diverged"
-                    ? `The Sheet changed but the database update and rollback failed. Reconcile from the Sheet before continuing. ${detail ?? ""}`
-                    : error === "database_update"
-                      ? `Database update failed; the Sheet change was rolled back. ${detail ?? ""}`
-                      : error === "delete_from_sheet"
-                        ? "Delete Sheet-owned contacts in Google Sheets, then run a complete contact sync."
+                : error === "database_update"
+                  ? `The contact could not be updated in the database. ${detail ?? ""}`
+                  : error === "database_delete"
+                    ? `The contact could not be deleted from the database. ${detail ?? ""}`
                         : error}
         </div>
       )}
@@ -470,7 +378,7 @@ export default async function ContactEditPage({
               defaultValue={contact.directOutreachNote ?? ""}
             />
             <p className="text-xs text-zinc-500">
-              Provide an email, phone, or direct outreach details. Non-Sheet contacts may combine an email with direct outreach context.
+              Provide an email, phone, or direct outreach details.
             </p>
             <Field name="name" label="Manager name" defaultValue={contact.name ?? ""} />
             <Field name="customPrice" label="Custom rate" defaultValue={contact.customPrice ?? ""} placeholder="$400" />

@@ -711,7 +711,7 @@ test("direct outreach migration is nullable and leaves existing contacts untouch
   assert.doesNotMatch(migration, /NOT NULL|DEFAULT|UPDATE "Contact"/);
 });
 
-test("Sheet-owned add and edit flows update the Sheet before the database", () => {
+test("manual add and edit flows use only the database", () => {
   const addSource = readFileSync(
     new URL(
       "../app/dashboard/add-contact/[artistId]/page.tsx",
@@ -719,20 +719,10 @@ test("Sheet-owned add and edit flows update the Sheet before the database", () =
     ),
     "utf8"
   );
-  const addBranch = addSource.indexOf(
-    'if (existing?.source === "sheet")'
-  );
-  const addSheetUpdate = addSource.indexOf(
-    "sheetUpdate = await updateContactInSheet",
-    addBranch
-  );
-  const addDatabaseUpdate = addSource.indexOf(
-    "await db.contact.update",
-    addSheetUpdate
-  );
-  assert.ok(addBranch >= 0);
-  assert.ok(addSheetUpdate > addBranch);
-  assert.ok(addDatabaseUpdate > addSheetUpdate);
+  assert.doesNotMatch(addSource, /@\/lib\/sheets|Sheet|sheet/);
+  assert.match(addSource, /db\.\$transaction/);
+  assert.match(addSource, /source: "manual"/);
+  assert.match(addSource, /error=database_save/);
 
   const editSource = readFileSync(
     new URL(
@@ -741,17 +731,10 @@ test("Sheet-owned add and edit flows update the Sheet before the database", () =
     ),
     "utf8"
   );
-  const editSheetUpdate = editSource.indexOf(
-    "sheetUpdate = await updateContactInSheet"
-  );
-  const editDatabaseUpdate = editSource.indexOf(
-    "await db.contact.update",
-    editSheetUpdate
-  );
-  assert.ok(editSheetUpdate >= 0);
-  assert.ok(editDatabaseUpdate > editSheetUpdate);
-  assert.match(editSource, /error: "sheet_sync"/);
-  assert.match(editSource, /newDirectOutreachNote: directOutreachNote/);
+  assert.doesNotMatch(editSource, /@\/lib\/sheets|Sheet|sheet/);
+  assert.match(editSource, /await db\.contact\.update/);
+  assert.match(editSource, /source: "manual"/);
+  assert.match(editSource, /error: "database_update"/);
 });
 
 test("stale cleanup scopes ownership to one spreadsheet and tab", () => {
@@ -1117,23 +1100,6 @@ test("Sheet target switches commit only after verified reconciliation", () => {
   );
 });
 
-test("release adoption script fails closed around configured reconciliation", () => {
-  const source = readFileSync(
-    new URL("../scripts/adopt-sheet-contacts.ts", import.meta.url),
-    "utf8"
-  );
-
-  assert.match(source, /adoptConfiguredSheetContacts/);
-  assert.match(source, /SHEETS_SPREADSHEET_ID/);
-  assert.match(source, /SHEETS_TAB/);
-  assert.match(source, /SHEETS_TARGET_CHANGE_CONFIRMATION/);
-  assert.match(source, /--validate-target-only/);
-  assert.match(source, /targetReadable: true/);
-  assert.match(source, /headerValidated: true/);
-  assert.match(source, /process\.exitCode = 1/);
-  assert.doesNotMatch(source, /sendOutreach|outreach/);
-});
-
 test("Sheet release preflight authenticates and validates spreadsheet structure", () => {
   const source = readFileSync(new URL("./sheets.ts", import.meta.url), "utf8");
   const preflight = source.slice(
@@ -1155,10 +1121,10 @@ test("protected release stages and verifies the exact target before pausing", ()
     ),
     "utf8"
   );
-  assert.match(source, /vars\.SHEETS_SPREADSHEET_ID/);
-  assert.match(source, /secrets\.SHEETS_SPREADSHEET_ID/);
-  assert.match(source, /inputs\.sheet_target_change_confirmation/);
-  assert.match(source, /--validate-target-only/);
+  assert.doesNotMatch(
+    source,
+    /GOOGLE_CREDENTIALS_JSON|SHEETS_SPREADSHEET_ID|SHEETS_TAB|sheet_target_change_confirmation|db:adopt-sheet-contacts|--require-sheet-adoption/
+  );
   assert.match(source, /--require-all-migrations/);
 
   const invariantSteps = [
@@ -1170,7 +1136,6 @@ test("protected release stages and verifies the exact target before pausing", ()
     "Verify trusted release checkout",
     "Validate protected environment and recovery target binding",
     "Bind requested SHA to production migration history and verify database connections",
-    "Validate Sheet cutover target before staging",
     "Build exact production revision before pausing",
     "Deploy exact target as an unpromoted production artifact",
     "Verify staged exact revision before pausing",
@@ -1183,8 +1148,6 @@ test("protected release stages and verifies the exact target before pausing", ()
     "Verify requested migration set and exact-target compatibility",
     "Promote exact deployment",
     "Verify promoted exact deployment",
-    "Adopt and verify configured Sheet contacts with new code",
-    "Verify new-code ownership and database compatibility",
     "Unpause verified exact target",
   ];
   invariantSteps.reduce((previous, step) => {
@@ -1203,7 +1166,7 @@ test("protected release stages and verifies the exact target before pausing", ()
   assert.match(source, /revision must be an exact commit reachable from trusted main/);
   assert.match(source, /--meta "releaseCommit=\$\{RELEASE_SHA\}"/);
   assert.match(source, /steps\.deploy\.outputs\.url/);
-  assert.ok((source.match(/db:verify-targets/g) ?? []).length >= 3);
+  assert.equal((source.match(/db:verify-targets/g) ?? []).length, 2);
   assert.match(
     source,
     /bash scripts\/verify-staged-runtime\.sh "\$\{TARGET_URL\}" "\$\{RELEASE_SHA\}"/
@@ -1253,7 +1216,7 @@ test("protected release stages and verifies the exact target before pausing", ()
   );
 });
 
-test("release requires explicit protected Google credentials for Sheet preflight and adoption", () => {
+test("release does not require Google or Sheet ownership configuration", () => {
   const source = readFileSync(
     new URL(
       "../.github/workflows/release-production.yml",
@@ -1261,39 +1224,10 @@ test("release requires explicit protected Google credentials for Sheet preflight
     ),
     "utf8"
   );
-  const step = (name: string) => {
-    const start = source.indexOf(`      - name: ${name}`);
-    assert.ok(start >= 0, `missing step ${name}`);
-    const end = source.indexOf("\n      - name:", start + 1);
-    return source.slice(start, end < 0 ? source.length : end);
-  };
-
-  const validation = step(
-    "Validate protected environment and recovery target binding"
+  assert.doesNotMatch(
+    source,
+    /GOOGLE_CREDENTIALS_JSON|SHEETS_SPREADSHEET_ID|SHEETS_TAB|db:adopt-sheet-contacts|--require-sheet-adoption/
   );
-  const preflight = step("Validate Sheet cutover target before staging");
-  const adoption = step(
-    "Adopt and verify configured Sheet contacts with new code"
-  );
-
-  assert.match(
-    validation,
-    /GOOGLE_CREDENTIALS_JSON: \$\{\{ secrets\.GOOGLE_CREDENTIALS_JSON \}\}/
-  );
-  assert.match(validation, /GOOGLE_CREDENTIALS_JSON is required/);
-  assert.match(
-    validation,
-    /JSON\.parse\(process\.env\.GOOGLE_CREDENTIALS_JSON\)/
-  );
-  for (const sheetStep of [preflight, adoption]) {
-    assert.match(
-      sheetStep,
-      /GOOGLE_CREDENTIALS_JSON: \$\{\{ secrets\.GOOGLE_CREDENTIALS_JSON \}\}/
-    );
-    assert.match(sheetStep, /-u GOOGLE_CREDENTIALS_PATH/);
-    assert.doesNotMatch(sheetStep, /-u GOOGLE_CREDENTIALS_JSON/);
-    assert.doesNotMatch(sheetStep, /--env-file/);
-  }
 });
 
 test("release uses one reviewed job and a main-only recovery environment", () => {
@@ -1326,8 +1260,7 @@ test("release uses one reviewed job and a main-only recovery environment", () =>
     /environment:\s*\n\s+name: production-recovery/
   );
   assert.match(recoverySource, /RECOVERY_VERCEL_TOKEN/);
-  assert.match(recoverySource, /ownership_ready == 'true'/);
-  assert.match(recoverySource, /RELEASE_OWNERSHIP_READY/);
+  assert.doesNotMatch(recoverySource, /ownership_ready|RELEASE_OWNERSHIP_READY/);
   assert.match(recoverySource, /verify_deployment\(\)/);
   assert.match(recoverySource, /unpause_project\(\)/);
   assert.doesNotMatch(
@@ -1351,8 +1284,7 @@ test("release uses one reviewed job and a main-only recovery environment", () =>
   );
   assert.match(releaseSource, /schema_ready/);
   assert.match(releaseSource, /RELEASE_SCHEMA_READY/);
-  assert.match(releaseSource, /ownership_ready/);
-  assert.match(releaseSource, /RELEASE_OWNERSHIP_READY/);
+  assert.doesNotMatch(releaseSource, /ownership_ready|RELEASE_OWNERSHIP_READY/);
   assert.match(releaseSource, /recover-production-release\.sh/);
   assert.doesNotMatch(releaseSource, /secrets\.RECOVERY_VERCEL_/);
 });
