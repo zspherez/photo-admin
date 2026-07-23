@@ -50,7 +50,10 @@ test("exits zero for the basic profile once required core configuration is valid
 test("hardened profile requires CRON_SECRET beyond core configuration", () => {
   const missing = run(["--profile=hardened"], VALID_CORE_ENV);
   assert.equal(missing.status, 1, missing.stderr);
-  assert.match(missing.stdout, /MISSING.*Release runtime verification shared secret/s);
+  assert.match(
+    missing.stdout,
+    /MISSING[\s\S]*Release runtime verification shared secret/,
+  );
 
   const present = run(["--profile=hardened"], {
     ...VALID_CORE_ENV,
