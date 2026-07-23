@@ -2524,11 +2524,15 @@ async function withSerializableRetry<T>(
         timeout: options.timeout ?? 5_000,
       });
     } catch (error) {
-      const code =
-        error instanceof Prisma.PrismaClientKnownRequestError
-          ? error.code
-          : null;
-      if ((code === "P2002" || code === "P2034") && attempt < 3) continue;
+      const retryable =
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === "P2002" ||
+          error.code === "P2034" ||
+          (error.code === "P2010" &&
+            error.meta !== null &&
+            typeof error.meta === "object" &&
+            Reflect.get(error.meta, "code") === "40001"));
+      if (retryable && attempt < 3) continue;
       throw error;
     }
   }

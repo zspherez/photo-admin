@@ -3931,6 +3931,10 @@ test("claims require current eligibility and unexpired ownership", () => {
   );
   assert.match(source, /job\."requestedShowId" = show\."id"/);
   assert.match(source, /showArtist\.artistId === row\.artistId/);
+  assert.match(
+    source,
+    /error\.code === "P2010"[\s\S]*Reflect\.get\(error\.meta, "code"\) === "40001"/,
+  );
   assert.doesNotMatch(
     source,
     /COALESCE\(contact\."role"/
