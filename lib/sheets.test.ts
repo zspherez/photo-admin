@@ -863,6 +863,44 @@ test("approved stale Sheet identities stay quarantined until the Sheet target ch
     ),
     true
   );
+  assert.equal(
+    shouldKeepApprovedStaleSheetContactQuarantined(
+      {
+        auditJobs: [],
+        auditDecisionMutations: [
+          {
+            action: "quarantined",
+            snapshotEmail: "sheet.manager@example.com",
+            snapshotDirectOutreachNote: null,
+          },
+        ],
+      },
+      {
+        email: "sheet.manager@example.com",
+        directOutreachNote: null,
+      },
+    ),
+    true,
+  );
+  assert.equal(
+    shouldKeepApprovedStaleSheetContactQuarantined(
+      {
+        auditJobs: [],
+        auditDecisionMutations: [
+          {
+            action: "quarantined",
+            snapshotEmail: "old.manager@example.com",
+            snapshotDirectOutreachNote: null,
+          },
+        ],
+      },
+      {
+        email: "new.manager@example.com",
+        directOutreachNote: null,
+      },
+    ),
+    false,
+  );
 });
 
 test("audit Sheet updates and rollback capture never touch price or notes", () => {
@@ -981,7 +1019,19 @@ test("Sheet reconciliation honors approved stale audit decisions", () => {
     /state: shouldKeepApprovedStaleSheetContactQuarantined/
   );
   assert.match(source, /preserveAuditHistory:/);
-  assert.match(source, /contact\._count\.auditJobs > 0/);
+  assert.match(
+    source,
+    /contact\._count\.auditJobs > 0[\s\S]*contact\._count\.auditDecisionMutations > 0/,
+  );
+  assert.match(source, /auditDecisionMutations:/);
+  assert.match(
+    source,
+    /releasesAuditedIdentity[\s\S]*releasedAuditContactIds\.add/,
+  );
+  assert.match(
+    source,
+    /releasedAuditContactIds\.size > 0[\s\S]*data: \{ sourceKey: null \}/,
+  );
   assert.match(
     source,
     /!contact\.preserveAuditHistory[\s\S]*staleOwnedSheetContactIds/

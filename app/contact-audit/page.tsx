@@ -5,11 +5,12 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireServerActionAuth } from "@/lib/auth";
+import { requestContactAudit } from "@/lib/contactAudit";
 import {
-  requestContactAudit,
-  resolveContactAuditJob,
-  type ContactAuditResolution,
-} from "@/lib/contactAudit";
+  CONTACT_AUDIT_ARTIST_ACTIONS,
+  resolveContactAuditArtist,
+  type ContactAuditArtistAction,
+} from "@/lib/contactAuditArtistDecision";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 import { positiveIntegerSearchParam } from "@/lib/searchParams";
 import { getPagination } from "@/lib/match";
@@ -21,7 +22,7 @@ import { PendingSubmitButton } from "@/components/pending-submit-button";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact audit" };
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 30;
 const WORKFLOW_URL =
   "https://github.com/zspherez/photo-admin/actions/workflows/contact-audit.yml";
 const FLAGGED_FINDINGS = ["changed", "stale", "ambiguous"] as const;
@@ -63,7 +64,7 @@ function rosterReviews(value: Prisma.JsonValue | null): Map<string, RosterReview
       }
       const review = item as RosterReview;
       return [[review.rosterEntryId, review] as const];
-    })
+    }),
   );
 }
 
@@ -88,6 +89,7 @@ function rosterContactChanged(
     snapshotName: string | null;
     snapshotRole: string | null;
     snapshotSource: string | null;
+    snapshotNotes: string | null;
     snapshotIsFullTeam: boolean;
   },
   current: {
@@ -97,8 +99,9 @@ function rosterContactChanged(
     name: string | null;
     role: string | null;
     source: string | null;
+    notes: string | null;
     isFullTeam: boolean;
-  }
+  },
 ): boolean {
   return (
     snapshot.snapshotEmail !== current.email ||
@@ -107,6 +110,7 @@ function rosterContactChanged(
     snapshot.snapshotName !== current.name ||
     snapshot.snapshotRole !== current.role ||
     snapshot.snapshotSource !== current.source ||
+    snapshot.snapshotNotes !== current.notes ||
     snapshot.snapshotIsFullTeam !== current.isFullTeam
   );
 }
@@ -115,13 +119,13 @@ function auditHref(
   runId: string,
   page = 1,
   result?: {
-    resolution?: ContactAuditResolution;
+    action?: ContactAuditArtistAction;
     error?: string;
-  }
+  },
 ): string {
   const params = new URLSearchParams({ run: runId });
   if (page > 1) params.set("page", String(page));
-  if (result?.resolution) params.set("resolved", result.resolution);
+  if (result?.action) params.set("resolved", result.action);
   if (result?.error) params.set("error", result.error.slice(0, 300));
   return `/contact-audit?${params.toString()}`;
 }
@@ -133,7 +137,7 @@ function actionContext(formData: FormData): {
   return {
     runId: String(formData.get("runId") ?? "").trim().slice(0, 100),
     page: positiveIntegerSearchParam(
-      String(formData.get("page") ?? "").trim()
+      String(formData.get("page") ?? "").trim(),
     ),
   };
 }
@@ -152,7 +156,7 @@ async function queueContactAuditAction() {
       JSON.stringify({
         event: "contact_audit_request_failed",
         error: caught instanceof Error ? caught.message : String(caught),
-      })
+      }),
     );
     error = "Unable to queue the contact audit. Please try again.";
   }
@@ -163,39 +167,41 @@ async function queueContactAuditAction() {
   redirect(`/contact-audit?${params.toString()}`);
 }
 
-async function approveContactAuditAction(formData: FormData) {
+async function saveArtistAuditDecisionAction(formData: FormData) {
   "use server";
   await requireServerActionAuth("/contact-audit");
   const context = actionContext(formData);
-  const jobId = String(formData.get("jobId") ?? "").trim().slice(0, 100);
+  const artistId = String(formData.get("artistId") ?? "")
+    .trim()
+    .slice(0, 100);
+  const rawAction = String(formData.get("decisionAction") ?? "").trim();
+  const action = CONTACT_AUDIT_ARTIST_ACTIONS.includes(
+    rawAction as ContactAuditArtistAction,
+  )
+    ? (rawAction as ContactAuditArtistAction)
+    : null;
   const alternativeId =
     String(formData.get("alternativeId") ?? "").trim().slice(0, 100) || null;
-  const result = await resolveContactAuditJob(
-    jobId,
-    "approved",
-    alternativeId
-  );
+  const selectedContactIds = formData
+    .getAll("selectedContactId")
+    .flatMap((value) =>
+      typeof value === "string" ? [value.trim().slice(0, 100)] : [],
+    );
+  const result = action
+    ? await resolveContactAuditArtist({
+        runId: context.runId,
+        artistId,
+        action,
+        alternativeId,
+        selectedContactIds,
+      })
+    : { ok: false as const, error: "Invalid artist audit action." };
   revalidatePath("/contact-audit");
   redirect(
     auditHref(context.runId, context.page, {
-      ...(result.ok ? { resolution: "approved" as const } : {}),
-      ...(!result.ok ? { error: result.error ?? "Approval failed." } : {}),
-    })
-  );
-}
-
-async function rejectContactAuditAction(formData: FormData) {
-  "use server";
-  await requireServerActionAuth("/contact-audit");
-  const context = actionContext(formData);
-  const jobId = String(formData.get("jobId") ?? "").trim().slice(0, 100);
-  const result = await resolveContactAuditJob(jobId, "rejected", null);
-  revalidatePath("/contact-audit");
-  redirect(
-    auditHref(context.runId, context.page, {
-      ...(result.ok ? { resolution: "rejected" as const } : {}),
-      ...(!result.ok ? { error: result.error ?? "Rejection failed." } : {}),
-    })
+      ...(result.ok ? { action: result.action } : {}),
+      ...(!result.ok ? { error: result.error } : {}),
+    }),
   );
 }
 
@@ -215,10 +221,11 @@ export default async function ContactAuditPage({
   const requestedRunId = firstSearchParam(raw.run)?.slice(0, 100) ?? null;
   const requestedPage = positiveIntegerSearchParam(raw.page);
   const rawResolved = firstSearchParam(raw.resolved);
-  const resolved =
-    rawResolved === "approved" || rawResolved === "rejected"
-      ? rawResolved
-      : null;
+  const resolved = CONTACT_AUDIT_ARTIST_ACTIONS.includes(
+    rawResolved as ContactAuditArtistAction,
+  )
+    ? (rawResolved as ContactAuditArtistAction)
+    : null;
   const actionError = firstSearchParam(raw.error);
   const requestResult = firstSearchParam(raw.request);
   const requestError = firstSearchParam(raw.requestError);
@@ -258,98 +265,131 @@ export default async function ContactAuditPage({
     runs[0] ??
     null;
 
-  const where: Prisma.ContactAuditJobWhereInput = selectedRun
-    ? {
-        runId: selectedRun.id,
-        status: "complete",
-        finding: { in: [...FLAGGED_FINDINGS] },
-        resolution: null,
-      }
-    : { id: "__no_contact_audit_run__" };
-  const [total, statusCounts] = selectedRun
+  const [allJobs, incompleteJobs, statusCounts, decisions] = selectedRun
     ? await Promise.all([
-        db.contactAuditJob.count({ where }),
+        db.contactAuditJob.findMany({
+          where: {
+            runId: selectedRun.id,
+            status: "complete",
+            finding: { in: [...FLAGGED_FINDINGS] },
+            resolution: null,
+            artistId: { not: null },
+          },
+          orderBy: [{ verifiedAt: "desc" }, { createdAt: "asc" }],
+          include: {
+            alternatives: { orderBy: { createdAt: "asc" } },
+            rosterSnapshot: {
+              include: {
+                entries: {
+                  orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+                },
+              },
+            },
+            artist: { select: { id: true } },
+          },
+        }),
+        db.contactAuditJob.findMany({
+          where: {
+            runId: selectedRun.id,
+            status: { not: "complete" },
+            artistId: { not: null },
+          },
+          select: { artistId: true },
+        }),
         db.contactAuditJob.groupBy({
           by: ["status"],
           where: { runId: selectedRun.id },
           _count: { _all: true },
         }),
+        db.contactAuditArtistDecision.findMany({
+          where: { runId: selectedRun.id },
+          select: { artistId: true },
+        }),
       ])
-    : [0, []];
-  const pagination = getPagination(total, requestedPage, PAGE_SIZE);
-  const jobs = selectedRun
-    ? await db.contactAuditJob.findMany({
-        where,
-        orderBy: [{ verifiedAt: "desc" }, { createdAt: "asc" }],
-        skip: (pagination.page - 1) * PAGE_SIZE,
-        take: PAGE_SIZE,
-        include: {
-          alternatives: { orderBy: { createdAt: "asc" } },
-          rosterSnapshot: {
-            include: {
-              entries: {
-                orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-              },
-            },
+    : [[], [], [], []];
+  const decidedArtistIds = new Set(decisions.map((decision) => decision.artistId));
+  const incompleteArtistIds = new Set(
+    incompleteJobs.flatMap((job) => (job.artistId ? [job.artistId] : [])),
+  );
+  const groupsByArtist = new Map<string, typeof allJobs>();
+  for (const job of allJobs) {
+    if (
+      !job.artistId ||
+      decidedArtistIds.has(job.artistId) ||
+      incompleteArtistIds.has(job.artistId)
+    ) {
+      continue;
+    }
+    const group = groupsByArtist.get(job.artistId) ?? [];
+    group.push(job);
+    groupsByArtist.set(job.artistId, group);
+  }
+  const artistGroups = [...groupsByArtist.entries()]
+    .map(([artistId, jobs]) => ({
+      artistId,
+      jobs,
+      verifiedAt: jobs.reduce<Date | null>(
+        (latest, job) =>
+          !latest || (job.verifiedAt && job.verifiedAt > latest)
+            ? job.verifiedAt
+            : latest,
+        null,
+      ),
+    }))
+    .sort(
+      (left, right) =>
+        (right.verifiedAt?.getTime() ?? 0) -
+        (left.verifiedAt?.getTime() ?? 0),
+    );
+  const pagination = getPagination(
+    artistGroups.length,
+    requestedPage,
+    PAGE_SIZE,
+  );
+  const pagedGroups = artistGroups.slice(
+    (pagination.page - 1) * PAGE_SIZE,
+    pagination.page * PAGE_SIZE,
+  );
+  const rosterContactIds = pagedGroups.flatMap(({ jobs }) =>
+    jobs[0]?.rosterSnapshot?.entries.map(
+      (entry) => entry.snapshotContactId,
+    ) ?? [],
+  );
+  const currentRosterContacts =
+    rosterContactIds.length > 0
+      ? await db.contact.findMany({
+          where: { id: { in: rosterContactIds } },
+          select: {
+            id: true,
+            email: true,
+            phone: true,
+            directOutreachNote: true,
+            name: true,
+            role: true,
+            source: true,
+            notes: true,
+            state: true,
+            isFullTeam: true,
           },
-          contact: {
-            select: {
-              id: true,
-              email: true,
-              phone: true,
-              directOutreachNote: true,
-              name: true,
-              role: true,
-              source: true,
-              state: true,
-            },
-          },
-          artist: { select: { id: true } },
-        },
-      })
-    : [];
-  const currentRosterContacts = jobs.length
-    ? await db.contact.findMany({
-        where: {
-          id: {
-            in: jobs.flatMap(
-              (job) =>
-                job.rosterSnapshot?.entries.map(
-                  (entry) => entry.snapshotContactId
-                ) ?? []
-            ),
-          },
-        },
-        select: {
-          id: true,
-          email: true,
-          phone: true,
-          directOutreachNote: true,
-          name: true,
-          role: true,
-          source: true,
-          state: true,
-          isFullTeam: true,
-        },
-      })
-    : [];
+        })
+      : [];
   const currentRosterContactById = new Map(
-    currentRosterContacts.map((contact) => [contact.id, contact])
+    currentRosterContacts.map((contact) => [contact.id, contact]),
   );
   const countByStatus = new Map(
-    statusCounts.map((row) => [row.status, row._count._all])
+    statusCounts.map((row) => [row.status, row._count._all]),
   );
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6 sm:py-10">
+    <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
             Contact audit decisions
           </h1>
-          <p className="mt-1 max-w-2xl text-sm text-zinc-500">
-            Review only contacts flagged for a change, then approve the saved
-            replacement or reject the finding here.
+          <p className="mt-1 max-w-3xl text-sm text-zinc-500">
+            Each artist appears once with the complete stored roster, all audit
+            findings, and every proposed management contact.
           </p>
         </div>
         <div className="mobile-action-grid flex flex-wrap items-center gap-2 sm:w-auto">
@@ -399,8 +439,7 @@ export default async function ContactAuditPage({
           className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
           role="status"
         >
-          Decision saved. The finding was {resolved} and removed from this
-          queue.
+          Artist decision saved: {resolved.replaceAll("_", " ")}.
         </div>
       )}
       {actionError && (
@@ -452,14 +491,8 @@ export default async function ContactAuditPage({
               }`}
             </p>
             {latestRequest.lastError && (
-              <p
-                className="mt-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-800 dark:bg-red-950/40 dark:text-red-200"
-                role="alert"
-              >
-                Last attempt: {latestRequest.lastError}.{" "}
-                {requestActive
-                  ? "The request remains queued for retry."
-                  : "Queue another full audit when the issue is resolved."}
+              <p className="mt-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-800 dark:bg-red-950/40 dark:text-red-200">
+                Last attempt: {latestRequest.lastError}.
               </p>
             )}
           </CardBody>
@@ -485,18 +518,17 @@ export default async function ContactAuditPage({
       {!selectedRun ? (
         <Card className="mt-6">
           <CardBody className="py-12 text-center text-sm text-zinc-500">
-            No audit has been run yet. Queue a full audit above; the next
-            scheduled poll will snapshot and verify every active contact.
+            No audit has been run yet.
           </CardBody>
         </Card>
       ) : (
         <>
           <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {[
-              ["Decisions needed", total],
-              ["Queued", countByStatus.get("pending") ?? 0],
-              ["Researching", countByStatus.get("claimed") ?? 0],
-              ["Completed", countByStatus.get("complete") ?? 0],
+              ["Artists needing decisions", artistGroups.length],
+              ["Queued contacts", countByStatus.get("pending") ?? 0],
+              ["Researching contacts", countByStatus.get("claimed") ?? 0],
+              ["Completed contacts", countByStatus.get("complete") ?? 0],
             ].map(([label, value]) => (
               <Card key={label}>
                 <CardBody className="p-4">
@@ -507,269 +539,215 @@ export default async function ContactAuditPage({
             ))}
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm font-medium">
-              Unresolved changed, stale, and ambiguous findings
-            </p>
-            <p className="text-xs text-zinc-500">
-              Run {selectedRun.status} · started{" "}
-              {formatTimestamp(selectedRun.createdAt)}
-              {selectedRun.completedAt
-                ? ` · completed ${formatTimestamp(selectedRun.completedAt)}`
-                : ""}
-            </p>
-          </div>
-
-          {jobs.length === 0 ? (
-            <Card className="mt-3">
+          {pagedGroups.length === 0 ? (
+            <Card className="mt-5">
               <CardBody className="py-10 text-center text-sm text-zinc-500">
-                No unresolved contact decisions remain for this run.
+                No unresolved artist decisions remain for this run.
               </CardBody>
             </Card>
           ) : (
-            <div className="mt-3 space-y-3">
-              {jobs.map((job) => (
-                <Card key={job.id}>
-                  <CardBody>
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        {job.artist ? (
+            <div className="mt-5 space-y-4">
+              {pagedGroups.map(({ artistId, jobs }) => {
+                const primary = jobs[0];
+                const roster = primary.rosterSnapshot;
+                const jobByTargetEntry = new Map(
+                  jobs.flatMap((job) =>
+                    job.targetRosterEntryId
+                      ? [[job.targetRosterEntryId, job] as const]
+                      : [],
+                  ),
+                );
+                const alternativeByEmail = new Map<
+                  string,
+                  (typeof jobs)[number]["alternatives"][number]
+                >();
+                for (const alternative of jobs.flatMap(
+                  (job) => job.alternatives,
+                )) {
+                  if (!alternativeByEmail.has(alternative.normalizedEmail)) {
+                    alternativeByEmail.set(
+                      alternative.normalizedEmail,
+                      alternative,
+                    );
+                  }
+                }
+                const alternatives = [...alternativeByEmail.values()];
+                const findings = Array.from(
+                  new Set(jobs.map((job) => job.finding).filter(Boolean)),
+                );
+                const activeEntries =
+                  roster?.entries.filter(
+                    (entry) =>
+                      currentRosterContactById.get(entry.snapshotContactId)
+                        ?.state === "active",
+                  ) ?? [];
+                const staleEntries = activeEntries.filter(
+                  (entry) =>
+                  jobByTargetEntry.get(entry.id)?.finding === "stale",
+                );
+                return (
+                  <Card key={artistId}>
+                    <CardBody>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        {primary.artist ? (
                           <Link
-                            href={`/artists/${job.artist.id}`}
-                            className="font-medium hover:underline"
+                            href={`/artists/${primary.artist.id}`}
+                            className="text-lg font-medium hover:underline"
                           >
-                            {job.snapshotArtistName}
+                            {primary.snapshotArtistName}
                           </Link>
                         ) : (
-                          <p className="font-medium">
-                            {job.snapshotArtistName}
+                          <p className="text-lg font-medium">
+                            {primary.snapshotArtistName}
                           </p>
                         )}
+                        <div className="flex flex-wrap gap-2">
+                          {findings.map((finding) => (
+                            <Badge key={finding} tone={findingTone(finding)}>
+                              {finding}
+                            </Badge>
+                          ))}
+                        </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge tone={findingTone(job.finding)}>
-                          {job.finding}
-                        </Badge>
-                        {job.confidence && (
-                          <Badge tone="muted">{job.confidence}</Badge>
-                        )}
-                      </div>
-                    </div>
 
-                    <div className="mt-3 rounded-lg border-2 border-amber-300 bg-amber-50/60 p-3 dark:border-amber-800 dark:bg-amber-950/20">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                        Exact contact under review
-                      </p>
-                      <p className="mt-1 break-all text-sm font-medium">
-                        {job.snapshotName ? `${job.snapshotName} · ` : ""}
-                        {contactLabel({
-                          email: job.snapshotEmail,
-                          phone: job.snapshotPhone,
-                          directOutreachNote:
-                            job.snapshotDirectOutreachNote,
-                        })}
-                      </p>
-                      <p className="mt-1 text-xs text-zinc-500">
-                        Snapshot role: {job.snapshotRole ?? "not recorded"}
-                        {job.snapshotSource
-                          ? ` · source: ${job.snapshotSource}`
-                          : ""}
-                        {job.contact ? ` · now ${job.contact.state}` : ""}
-                      </p>
-                      {!job.contact && (
-                        <p className="mt-1 text-sm text-red-700 dark:text-red-300">
-                          This contact no longer exists. Run a new audit before
-                          resolving this finding.
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="mt-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                          {job.rosterSnapshot
-                            ? "Complete snapshotted artist roster"
-                            : "Legacy/incomplete contact context"}
-                        </p>
-                        <Badge tone={job.rosterSnapshot ? "info" : "warning"}>
-                          {job.rosterSnapshot
-                            ? `${job.rosterSnapshot.entries.length} stored`
-                            : "target only"}
-                        </Badge>
-                      </div>
-                      {!job.rosterSnapshot && (
-                        <p className="mt-2 text-xs text-amber-800 dark:text-amber-300">
-                          This run predates complete roster snapshots. Its
-                          single-contact context was preserved and was not
-                          resnapshotted.
-                        </p>
-                      )}
-                      <div className="mt-2 space-y-2">
-                        {(job.rosterSnapshot?.entries ?? []).map((entry) => {
-                          const current = currentRosterContactById.get(
-                            entry.snapshotContactId
-                          );
-                          const review = rosterReviews(job.rosterReview).get(
-                            entry.id
-                          );
-                          const isTarget =
-                            entry.id === job.targetRosterEntryId;
-                          return (
-                            <div
-                              key={entry.id}
-                              className={`rounded-md border p-2 ${
-                                isTarget
-                                  ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"
-                                  : "border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900"
-                              }`}
-                            >
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="break-all text-sm font-medium">
-                                  {entry.snapshotName
-                                    ? `${entry.snapshotName} · `
-                                    : ""}
-                                  {contactLabel({
-                                    email: entry.snapshotEmail,
-                                    phone: entry.snapshotPhone,
-                                    directOutreachNote:
-                                      entry.snapshotDirectOutreachNote,
-                                  })}
-                                </span>
-                                <Badge tone={isTarget ? "warning" : "muted"}>
-                                  {isTarget
-                                    ? "Audited target"
-                                    : "Already stored contact"}
-                                </Badge>
-                                {entry.snapshotIsFullTeam && (
-                                  <Badge tone="info">Full team</Badge>
-                                )}
-                                {review && (
-                                  <Badge tone="muted">
-                                    Agent: {review.assessment}
-                                  </Badge>
-                                )}
-                              </div>
-                              <p className="mt-1 text-xs text-zinc-500">
-                                {entry.snapshotEmail
-                                  ? `Email: ${entry.snapshotEmail}`
-                                  : ""}
-                                {entry.snapshotPhone
-                                  ? `${
-                                      entry.snapshotEmail ? " · " : ""
-                                    }Phone: ${entry.snapshotPhone}`
-                                  : ""}
-                                {entry.snapshotDirectOutreachNote
-                                  ? `${
-                                      entry.snapshotEmail ||
-                                      entry.snapshotPhone
-                                        ? " · "
-                                        : ""
-                                    }Direct outreach: ${entry.snapshotDirectOutreachNote}`
-                                  : ""}
-                              </p>
-                              <p className="mt-1 text-xs text-zinc-500">
-                                Snapshot role:{" "}
-                                {entry.snapshotRole ?? "not recorded"}
-                                {entry.snapshotSource
-                                  ? ` · source: ${entry.snapshotSource}`
-                                  : ""}
-                                {current
-                                  ? ` · current status: ${current.state}${
-                                      rosterContactChanged(entry, current)
-                                        ? " (changed since snapshot)"
-                                        : ""
-                                    }`
-                                  : " · current status: deleted"}
-                              </p>
-                              {review && (
-                                <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-                                  {review.notes}
-                                </p>
-                              )}
-                            </div>
-                          );
-                        })}
-                        {!job.rosterSnapshot && (
-                          <div className="rounded-md border border-amber-200 bg-amber-50 p-2 dark:border-amber-900 dark:bg-amber-950/20">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="break-all text-sm font-medium">
-                                {job.snapshotName
-                                  ? `${job.snapshotName} · `
-                                  : ""}
-                                {contactLabel({
-                                  email: job.snapshotEmail,
-                                  phone: job.snapshotPhone,
-                                  directOutreachNote:
-                                    job.snapshotDirectOutreachNote,
-                                })}
-                              </span>
-                              <Badge tone="warning">Audited target</Badge>
-                            </div>
+                      <div className="mt-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            Complete artist contact roster
+                          </h2>
+                          <Badge tone="info">
+                            {roster?.entries.length ?? 0} stored
+                          </Badge>
+                        </div>
+                        {!roster ? (
+                          <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                            This legacy audit has no complete artist snapshot.
+                            Queue a new audit before deciding it.
+                          </p>
+                        ) : (
+                          <div className="mt-2 space-y-2">
+                            {roster.entries.map((entry) => {
+                              const current = currentRosterContactById.get(
+                                entry.snapshotContactId,
+                              );
+                              const targetJob = jobByTargetEntry.get(entry.id);
+                              const review = targetJob
+                                ? rosterReviews(targetJob.rosterReview).get(
+                                    entry.id,
+                                  )
+                                : null;
+                              return (
+                                <div
+                                  key={entry.id}
+                                  className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900"
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="break-all text-sm font-medium">
+                                      {entry.snapshotName
+                                        ? `${entry.snapshotName} · `
+                                        : ""}
+                                      {contactLabel({
+                                        email: entry.snapshotEmail,
+                                        phone: entry.snapshotPhone,
+                                        directOutreachNote:
+                                          entry.snapshotDirectOutreachNote,
+                                      })}
+                                    </span>
+                                    {targetJob?.finding && (
+                                      <Badge
+                                        tone={findingTone(targetJob.finding)}
+                                      >
+                                        {targetJob.finding}
+                                      </Badge>
+                                    )}
+                                    {review && (
+                                      <Badge tone="muted">
+                                        Agent: {review.assessment}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <p className="mt-1 text-xs text-zinc-500">
+                                    Role: {entry.snapshotRole ?? "not recorded"}
+                                    {entry.snapshotSource
+                                      ? ` · source: ${entry.snapshotSource}`
+                                      : ""}
+                                    {current
+                                      ? ` · current status: ${current.state}${
+                                          rosterContactChanged(entry, current)
+                                            ? " (changed since snapshot)"
+                                            : ""
+                                        }`
+                                      : " · current status: deleted"}
+                                  </p>
+                                  {review && (
+                                    <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                                      {review.notes}
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
-                    </div>
 
-                    {job.evidence && (
-                      <div className="mt-3">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                          Saved evidence
-                        </p>
-                        <p className="mt-1 text-sm">{job.evidence}</p>
-                      </div>
-                    )}
-                    {job.sourceUrls.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-                        {job.sourceUrls.map((url, index) => (
-                          <a
-                            key={url}
-                            href={url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="break-all text-xs text-blue-700 hover:underline dark:text-blue-300"
-                          >
-                            Verification source {index + 1} ↗
-                          </a>
-                        ))}
-                      </div>
-                    )}
-                    {job.verifiedAt && (
-                      <p className="mt-2 text-xs text-zinc-500">
-                        Verified {formatTimestamp(job.verifiedAt)}
-                      </p>
-                    )}
-                    {job.agentNotes && (
-                      <p className="mt-2 rounded-md bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-                        {job.agentNotes}
-                      </p>
-                    )}
+                      <details className="mt-4 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                        <summary className="cursor-pointer text-sm font-medium">
+                          Audit evidence for {jobs.length} contact
+                          {jobs.length === 1 ? "" : "s"}
+                        </summary>
+                        <div className="mt-3 space-y-3">
+                          {jobs.map((job) => (
+                            <div key={job.id}>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-sm font-medium">
+                                  {contactLabel({
+                                    email: job.snapshotEmail,
+                                    phone: job.snapshotPhone,
+                                    directOutreachNote:
+                                      job.snapshotDirectOutreachNote,
+                                  })}
+                                </span>
+                                <Badge tone={findingTone(job.finding)}>
+                                  {job.finding}
+                                </Badge>
+                                {job.confidence && (
+                                  <Badge tone="muted">{job.confidence}</Badge>
+                                )}
+                              </div>
+                              {job.evidence && (
+                                <p className="mt-1 text-sm">{job.evidence}</p>
+                              )}
+                              <div className="mt-1 flex flex-wrap gap-3">
+                                {job.sourceUrls.map((url, index) => (
+                                  <a
+                                    key={url}
+                                    href={url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-blue-700 hover:underline dark:text-blue-300"
+                                  >
+                                    Source {index + 1} ↗
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
 
-                    {(job.finding === "changed" ||
-                      job.finding === "ambiguous") && (
-                      <div className="mt-4">
-                        <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                          New proposed manager contacts
-                        </h2>
-                        <p className="mt-1 text-xs text-zinc-500">
-                          These are new evidence-backed addresses, not contacts
-                          already stored in the roster above.
-                        </p>
-                        {job.finding === "ambiguous" &&
-                          job.alternatives.length === 0 && (
-                            <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-                              No new alternative was proposed. This ambiguity is
-                              among already stored roster contacts and can only
-                              be rejected here.
-                            </p>
-                          )}
-                        <div className="mt-2 space-y-2">
-                          {job.alternatives.map((alternative) => (
+                      {alternatives.length > 0 && roster && (
+                        <div className="mt-4 space-y-3">
+                          <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            Proposed manager contacts
+                          </h2>
+                          {alternatives.map((alternative) => (
                             <div
                               key={alternative.id}
-                              className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800"
+                              className="rounded-lg border border-emerald-200 p-3 dark:border-emerald-900"
                             >
                               <div className="flex flex-wrap items-center gap-2">
-                                <span className="break-all text-sm font-medium">
+                                <span className="break-all font-medium">
                                   {alternative.email}
                                 </span>
                                 <Badge tone="muted">
@@ -784,33 +762,11 @@ export default async function ContactAuditPage({
                               <p className="mt-2 text-sm">
                                 {alternative.evidence}
                               </p>
-                              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-                                {alternative.sourceUrls.map((url, index) => (
-                                  <a
-                                    key={url}
-                                    href={url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="break-all text-xs text-blue-700 hover:underline dark:text-blue-300"
-                                  >
-                                    Alternative source {index + 1} ↗
-                                  </a>
-                                ))}
-                              </div>
+
                               <form
-                                action={approveContactAuditAction}
+                                action={saveArtistAuditDecisionAction}
                                 className="mt-3"
                               >
-                                <input
-                                  type="hidden"
-                                  name="jobId"
-                                  value={job.id}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="alternativeId"
-                                  value={alternative.id}
-                                />
                                 <input
                                   type="hidden"
                                   name="runId"
@@ -821,27 +777,171 @@ export default async function ContactAuditPage({
                                   name="page"
                                   value={pagination.page}
                                 />
+                                <input
+                                  type="hidden"
+                                  name="artistId"
+                                  value={artistId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="alternativeId"
+                                  value={alternative.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="decisionAction"
+                                  value="append"
+                                />
                                 <PendingSubmitButton
                                   size="sm"
-                                  pendingLabel="Applying contact…"
+                                  pendingLabel="Adding contact…"
                                   className="w-full sm:w-auto"
-                                  disabled={!job.contact}
                                 >
-                                  Approve and apply this contact
+                                  Add contact and keep all existing
+                                </PendingSubmitButton>
+                              </form>
+
+                              <form
+                                action={saveArtistAuditDecisionAction}
+                                className="mt-3 rounded-md bg-zinc-50 p-3 dark:bg-zinc-900"
+                              >
+                                <input
+                                  type="hidden"
+                                  name="runId"
+                                  value={selectedRun.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="page"
+                                  value={pagination.page}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="artistId"
+                                  value={artistId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="alternativeId"
+                                  value={alternative.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="decisionAction"
+                                  value="replace_selected"
+                                />
+                                <p className="text-xs font-medium">
+                                  Replace selected contacts
+                                </p>
+                                <div className="mt-2 space-y-2">
+                                  {activeEntries.map((entry) => (
+                                    <label
+                                      key={entry.id}
+                                      className="flex min-h-10 items-center gap-2 text-sm"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        name="selectedContactId"
+                                        value={entry.snapshotContactId}
+                                        defaultChecked={
+                                          jobByTargetEntry.get(entry.id)
+                                            ?.finding === "stale"
+                                        }
+                                        className="h-4 w-4"
+                                      />
+                                      <span className="break-all">
+                                        {contactLabel({
+                                          email: entry.snapshotEmail,
+                                          phone: entry.snapshotPhone,
+                                          directOutreachNote:
+                                            entry.snapshotDirectOutreachNote,
+                                        })}
+                                      </span>
+                                    </label>
+                                  ))}
+                                </div>
+                                <PendingSubmitButton
+                                  size="sm"
+                                  variant="danger"
+                                  pendingLabel="Replacing contacts…"
+                                  className="mt-3 w-full sm:w-auto"
+                                >
+                                  Add new and deactivate selected
                                 </PendingSubmitButton>
                               </form>
                             </div>
                           ))}
                         </div>
-                      </div>
-                    )}
+                      )}
 
-                    {job.finding === "stale" && (
+                      {roster && staleEntries.length > 0 && (
+                          <form
+                            action={saveArtistAuditDecisionAction}
+                            className="mt-4 rounded-lg border border-red-200 p-3 dark:border-red-900"
+                          >
+                            <input
+                              type="hidden"
+                              name="runId"
+                              value={selectedRun.id}
+                            />
+                            <input
+                              type="hidden"
+                              name="page"
+                              value={pagination.page}
+                            />
+                            <input
+                              type="hidden"
+                              name="artistId"
+                              value={artistId}
+                            />
+                            <input
+                              type="hidden"
+                              name="decisionAction"
+                              value="deactivate_selected"
+                            />
+                            <p className="text-xs font-medium">
+                              Deactivate selected stale contacts
+                            </p>
+                            <div className="mt-2 space-y-2">
+                              {staleEntries.map((entry) => (
+                                <label
+                                  key={entry.id}
+                                  className="flex min-h-10 items-center gap-2 text-sm"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    name="selectedContactId"
+                                    value={entry.snapshotContactId}
+                                    defaultChecked={
+                                      jobByTargetEntry.get(entry.id)?.finding ===
+                                      "stale"
+                                    }
+                                    className="h-4 w-4"
+                                  />
+                                  {contactLabel({
+                                    email: entry.snapshotEmail,
+                                    phone: entry.snapshotPhone,
+                                    directOutreachNote:
+                                      entry.snapshotDirectOutreachNote,
+                                  })}
+                                </label>
+                              ))}
+                            </div>
+                            <PendingSubmitButton
+                              variant="danger"
+                              size="sm"
+                              pendingLabel="Deactivating contacts…"
+                              className="mt-3 w-full sm:w-auto"
+                            >
+                              Deactivate selected
+                            </PendingSubmitButton>
+                          </form>
+                        )}
+
                       <form
-                        action={approveContactAuditAction}
+                        action={saveArtistAuditDecisionAction}
                         className="mt-4"
                       >
-                        <input type="hidden" name="jobId" value={job.id} />
                         <input
                           type="hidden"
                           name="runId"
@@ -852,61 +952,41 @@ export default async function ContactAuditPage({
                           name="page"
                           value={pagination.page}
                         />
+                        <input
+                          type="hidden"
+                          name="artistId"
+                          value={artistId}
+                        />
+                        <input
+                          type="hidden"
+                          name="decisionAction"
+                          value="rejected"
+                        />
                         <PendingSubmitButton
-                          variant="danger"
+                          variant="secondary"
                           size="sm"
-                          pendingLabel="Marking inactive…"
+                          pendingLabel="Rejecting change…"
                           className="w-full sm:w-auto"
-                          disabled={!job.contact}
                         >
-                          Approve stale — mark contact inactive
+                          Reject proposed change — keep all contacts
                         </PendingSubmitButton>
                       </form>
-                    )}
-
-                    <form
-                      action={rejectContactAuditAction}
-                      className="mt-3"
-                    >
-                      <input type="hidden" name="jobId" value={job.id} />
-                      <input
-                        type="hidden"
-                        name="runId"
-                        value={selectedRun.id}
-                      />
-                      <input
-                        type="hidden"
-                        name="page"
-                        value={pagination.page}
-                      />
-                      <PendingSubmitButton
-                        variant="secondary"
-                        size="sm"
-                        pendingLabel="Rejecting finding…"
-                        className="w-full sm:w-auto"
-                        disabled={!job.contact}
-                      >
-                        Reject finding — keep current contact active
-                      </PendingSubmitButton>
-                    </form>
-                  </CardBody>
-                </Card>
-              ))}
+                    </CardBody>
+                  </Card>
+                );
+              })}
             </div>
           )}
 
           {pagination.pageCount > 1 && (
             <nav
-              aria-label="Contact audit decision pages"
-              className="mt-5 flex items-center justify-between gap-3"
+              aria-label="Contact audit pages"
+              className="mt-6 flex items-center justify-between gap-3"
             >
               {pagination.hasPrevious ? (
-                <LinkButton
-                  href={auditHref(selectedRun.id, pagination.page - 1)}
-                  variant="secondary"
-                >
-                  Previous
-                </LinkButton>
+                <Link href={auditHref(selectedRun.id, pagination.page - 1)}>
+                  ← Previous
+                </Link>
               ) : (
                 <span />
               )}
@@ -914,12 +994,9 @@ export default async function ContactAuditPage({
                 Page {pagination.page} of {pagination.pageCount}
               </span>
               {pagination.hasNext ? (
-                <LinkButton
-                  href={auditHref(selectedRun.id, pagination.page + 1)}
-                  variant="secondary"
-                >
-                  Next
-                </LinkButton>
+                <Link href={auditHref(selectedRun.id, pagination.page + 1)}>
+                  Next →
+                </Link>
               ) : (
                 <span />
               )}

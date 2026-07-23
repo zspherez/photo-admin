@@ -60,6 +60,7 @@ const claimJobSchema = z
   .object({
     id: z.string().min(1),
     runId: z.string().min(1),
+    artistId: z.string().min(1),
     claimToken: z.string().min(1),
     claimExpiresAt: z.string().datetime(),
     attemptCount: z.number().int().min(1),
@@ -313,6 +314,7 @@ function publicClaimResponse(value, state) {
   state.claim = {
     jobId: parsedJob.id,
     claimToken: parsedJob.claimToken,
+    artistId: parsedJob.artistId,
     rosterEntryIds: parsedJob.contactRoster.contacts.map(
       (contact) => contact.rosterEntryId
     ),
@@ -341,6 +343,21 @@ function requireSessionClaim(state, input) {
       "submission must use the top-level jobId and claimToken from this session"
     );
   }
+}
+
+function addAuditedArtistContext(value, state) {
+  const auditedArtistId = state.claim.artistId;
+  const matches = Array.isArray(value?.matches) ? value.matches : [];
+  return {
+    ...value,
+    auditedArtistId,
+    matches: matches.map((match) => ({
+      ...match,
+      storedForAuditedArtist:
+        Array.isArray(match?.artistIds) &&
+        match.artistIds.includes(auditedArtistId),
+    })),
+  };
 }
 
 function validateClaimRosterReview(state, input) {
@@ -418,9 +435,12 @@ async function runTool(name, input, sessionId) {
         );
       }
       state.knownContactLookups += 1;
-      return photoAdminRequest(
-        "/api/contact-audit/known-contacts",
-        input
+      return addAuditedArtistContext(
+        await photoAdminRequest(
+          "/api/contact-audit/known-contacts",
+          input
+        ),
+        state
       );
     case "validate-result":
       requireSessionClaim(state, input);

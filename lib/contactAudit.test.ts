@@ -544,6 +544,9 @@ test("resolution refuses notes, full-team, and Sheet-sync changes without mutati
       contact,
     };
     const tx = {
+      contactAuditArtistDecision: {
+        findUnique: async () => null,
+      },
       contactAuditJob: {
         findUnique: async () => job,
         updateMany: async () => ({ count: 0 }),
@@ -634,6 +637,9 @@ test("resolution succeeds when every snapshotted target field is unchanged", asy
     contact,
   };
   const tx = {
+    contactAuditArtistDecision: {
+      findUnique: async () => null,
+    },
     contactAuditJob: {
       findUnique: async () => ({
         ...job,
@@ -737,6 +743,9 @@ test("finalization rejects a target change that occurs after reservation", async
     resolutionClaimedAt: null,
   };
   const tx = {
+    contactAuditArtistDecision: {
+      findUnique: async () => null,
+    },
     contactAuditJob: {
       findUnique: async () => ({
         ...job,
@@ -1059,4 +1068,19 @@ test("approved stale and changed decisions mutate only the audited target", () =
   );
   assert.match(finalizer, /contactAuditAlternativeAlreadyStored/);
   assert.doesNotMatch(finalizer, /contact\.updateMany/);
+});
+
+test("legacy per-contact resolution cannot race an artist-level decision", () => {
+  const source = readFileSync(
+    new URL("./contactAudit.ts", import.meta.url),
+    "utf8",
+  );
+  assert.ok(
+    (source.match(/contactAuditArtistDecision\.findUnique/g) ?? []).length >=
+      2,
+  );
+  assert.match(
+    source,
+    /This artist audit was already resolved as one artist-level decision/,
+  );
 });
