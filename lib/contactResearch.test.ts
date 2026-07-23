@@ -2356,26 +2356,26 @@ test("parses and deduplicates evidence-backed candidate submissions", () => {
   assert.equal(submission.directOutreach, null);
 });
 
-test("approval flag requires direct official-source evidence", () => {
-  assert.throws(
-    () =>
-      parseContactResearchSubmission({
-        outcome: "candidates",
-        claimToken: "claim-1",
-        candidates: [
-          {
-            email: "manager@example.com",
-            role: "management",
-            sourceUrls: ["https://www.billboard.com/music/music-news/"],
-            evidence: "A press article inferred this address.",
-            confidence: "medium",
-            needsApproval: false,
-            officialSource: null,
-          },
-        ],
-      }),
-    /needsApproval may be false only/
-  );
+test("invalid auto-approval flags are safely downgraded to review", () => {
+  const submission = parseContactResearchSubmission({
+    outcome: "candidates",
+    claimToken: "claim-1",
+    candidates: [
+      {
+        email: "manager@example.com",
+        role: "management",
+        sourceUrls: ["https://www.billboard.com/music/music-news/"],
+        evidence:
+          "A third-party press article inferred manager@example.com without direct official publication.",
+        confidence: "medium",
+        needsApproval: false,
+        officialSource: null,
+      },
+    ],
+  });
+
+  assert.equal(submission.candidates[0]?.needsApproval, true);
+  assert.equal(submission.candidates[0]?.officialSourceType, null);
 });
 
 test("requires evidence and bounded claim limits", () => {

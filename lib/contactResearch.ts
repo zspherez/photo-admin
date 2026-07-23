@@ -1196,15 +1196,11 @@ export function parseContactResearchSubmission(
     ) {
       throw new Error("needsApproval must be a boolean");
     }
-    const needsApproval = candidate.needsApproval ?? true;
-    if (
-      needsApproval === false &&
-      officialSource.officialSourceType === null
-    ) {
-      throw new Error(
-        "needsApproval may be false only for a directly published MGMT/management email"
-      );
-    }
+    const needsApproval =
+      candidate.needsApproval === false &&
+      officialSource.officialSourceType !== null
+        ? false
+        : true;
     candidatesByEmail.set(normalizedEmail, {
       email: normalizedEmail,
       normalizedEmail,
