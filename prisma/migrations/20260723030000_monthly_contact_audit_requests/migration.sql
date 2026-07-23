@@ -6,10 +6,6 @@ ALTER TABLE "ContactAuditRequest"
   ADD CONSTRAINT "ContactAuditRequest_source_check"
     CHECK ("source" IN ('manual', 'monthly', 'legacy'));
 
-UPDATE "ContactAuditRequest"
-SET "source" = 'legacy'
-WHERE "id" LIKE 'legacy-%';
-
 DROP INDEX "ContactAuditRequest_one_active_key";
 
 CREATE UNIQUE INDEX "ContactAuditRequest_requestKey_key"
