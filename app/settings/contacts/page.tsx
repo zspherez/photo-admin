@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import {
-  googleContactExportSpreadsheetId,
   hasGoogleContactExportConfiguration,
+  resolveGoogleContactExportSpreadsheetId,
 } from "@/lib/googleSheetContactExport";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
@@ -46,10 +46,10 @@ export default async function ContactsSettingsPage({
   );
   const idempotencyKey =
     retrying && requestedRetryKey ? requestedRetryKey : randomUUID();
-  const exportConfigured = hasGoogleContactExportConfiguration();
+  const exportConfigured = await hasGoogleContactExportConfiguration();
   let destinationId: string | null = null;
   try {
-    destinationId = googleContactExportSpreadsheetId();
+    destinationId = await resolveGoogleContactExportSpreadsheetId();
   } catch {
     destinationId = null;
   }

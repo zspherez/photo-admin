@@ -9,6 +9,13 @@ const migration = readFileSync(
   ),
   "utf8",
 );
+const destinationMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260723200000_contact_export_destination/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("contact export snapshot migration is transactional and constrained", () => {
   assert.match(migration, /^BEGIN;/);
@@ -38,4 +45,15 @@ test("completed export metadata and canonical content are immutable", () => {
     migration,
     /ContactExportSnapshot_guard_delete[\s\S]*BEFORE DELETE/,
   );
+});
+
+test("legacy production Sheet destination is adopted for one-way exports", () => {
+  assert.match(destinationMigration, /^BEGIN;/);
+  assert.match(
+    destinationMigration,
+    /google_contact_export_spreadsheet_id/,
+  );
+  assert.match(destinationMigration, /legacy\."key" = 'sheets_spreadsheet_id'/);
+  assert.match(destinationMigration, /ON CONFLICT \("key"\) DO NOTHING/);
+  assert.match(destinationMigration, /COMMIT;\s*$/);
 });
