@@ -94,6 +94,12 @@ test("audit broker isolates credentials and submits only audit results", async (
                     claimToken: "claim-1",
                     claimExpiresAt: "2026-07-21T18:00:00.000Z",
                     attemptCount: 1,
+                    auditAgentRules: {
+                      scope: "contact_audit",
+                      version: 2,
+                      instructions: "Auto-add safe coexisting contacts.",
+                      autoAppendAdditionalContact: true,
+                    },
                     contact: {
                       artistName: "Example Artist",
                       email: "old@example.com",
@@ -200,6 +206,12 @@ test("audit broker isolates credentials and submits only audit results", async (
         claimToken: "claim-1",
         claimExpiresAt: "2026-07-21T18:00:00.000Z",
         attemptCount: 1,
+        auditAgentRules: {
+          scope: "contact_audit",
+          version: 2,
+          instructions: "Auto-add safe coexisting contacts.",
+          autoAppendAdditionalContact: true,
+        },
         contact: {
           artistName: "Example Artist",
           email: "old@example.com",

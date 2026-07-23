@@ -12,7 +12,7 @@ export default async function SettingsIndex() {
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     select: { id: true },
   });
-  const [spotify, statsfm, contactCount, researchReviewCount, researchQueueCount, auditReviewCount, template, showCount, settings, agentRules] = await Promise.all([
+  const [spotify, statsfm, contactCount, researchReviewCount, researchQueueCount, auditReviewCount, template, showCount, settings, agentRules, auditAgentRules] = await Promise.all([
     db.integrationCredential.findUnique({ where: { provider: "spotify" } }),
     db.integrationCredential.findUnique({ where: { provider: "statsfm" } }),
     db.contact.count({ where: { state: "active" } }),
@@ -37,6 +37,7 @@ export default async function SettingsIndex() {
     }),
     db.setting.findMany({ where: { key: "portfolio_url" } }),
     db.agentRuleSet.findUnique({ where: { scope: "global" } }),
+    db.agentRuleSet.findUnique({ where: { scope: "contact_audit" } }),
   ]);
   const settingMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
 
@@ -54,6 +55,16 @@ export default async function SettingsIndex() {
       status: agentRules ? `Version ${agentRules.version}` : "Not configured",
       ok: Boolean(agentRules?.instructions),
       description: "Trusted global instructions for research and other agents.",
+    },
+    {
+      title: "Audit agent rules",
+      href: "/settings/agents/audit",
+      status: auditAgentRules
+        ? `Version ${auditAgentRules.version}`
+        : "Not configured",
+      ok: Boolean(auditAgentRules),
+      description:
+        "Audit instructions and safe auto-append policy for new manager contacts.",
     },
     {
       title: "Spotify",

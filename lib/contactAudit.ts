@@ -27,6 +27,11 @@ import {
   easternDateOnly,
   parseDateOnly,
 } from "@/lib/calendarDate";
+import {
+  contactAuditAutoAppendAlternativeId,
+  readContactAuditAgentRulesInTransaction,
+} from "@/lib/contactAuditAgentRules";
+import { resolveContactAuditArtist } from "@/lib/contactAuditArtistDecision";
 
 export { contactStillMatchesAuditSnapshot } from "@/lib/contactAuditResolutionPolicy";
 
@@ -1119,6 +1124,8 @@ export async function claimContactAuditJobs(
   await ensureLegacyContactAuditRequest();
   return db.$transaction(
     async (tx) => {
+      const auditAgentRules =
+        await readContactAuditAgentRulesInTransaction(tx);
       const selected = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT job."id"
         FROM "ContactAuditJob" job
@@ -1153,6 +1160,10 @@ export async function claimContactAuditJobs(
             claimedAt: now,
             claimExpiresAt,
             attemptCount: { increment: 1 },
+            claimedAgentRules: auditAgentRules.instructions,
+            claimedAgentRulesVersion: auditAgentRules.version,
+            claimedAutoAppendAdditionalContact:
+              auditAgentRules.autoAppendAdditionalContact,
           },
         });
       }
@@ -1165,6 +1176,9 @@ export async function claimContactAuditJobs(
           contactId: true,
           artistId: true,
           attemptCount: true,
+          claimedAgentRules: true,
+          claimedAgentRulesVersion: true,
+          claimedAutoAppendAdditionalContact: true,
           targetRosterEntryId: true,
           snapshotArtistName: true,
           snapshotEmail: true,
@@ -1211,6 +1225,13 @@ export async function claimContactAuditJobs(
             claimToken: tokenById.get(job.id)!,
             claimExpiresAt,
             attemptCount: job.attemptCount,
+            auditAgentRules: {
+              scope: "contact_audit" as const,
+              version: job.claimedAgentRulesVersion ?? 0,
+              instructions: job.claimedAgentRules ?? "",
+              autoAppendAdditionalContact:
+                job.claimedAutoAppendAdditionalContact ?? false,
+            },
             contact: {
               artistName: job.snapshotArtistName,
               email: job.snapshotEmail,
@@ -1237,9 +1258,13 @@ export async function submitContactAuditResult(
   jobId: string,
   value: unknown,
   now: Date = new Date()
-): Promise<{ accepted: boolean; runComplete: boolean }> {
+): Promise<{
+  accepted: boolean;
+  runComplete: boolean;
+  autoResolved: boolean;
+}> {
   await ensureLegacyContactAuditRequest();
-  return withSerializableRetry(async (tx) => {
+  const stored = await withSerializableRetry(async (tx) => {
     const job = await tx.contactAuditJob.findFirst({
       where: {
         id: jobId,
@@ -1264,7 +1289,13 @@ export async function submitContactAuditResult(
         },
       },
     });
-    if (!job) return { accepted: false, runComplete: false };
+    if (!job) {
+      return {
+        accepted: false,
+        runComplete: false,
+        autoAppend: null,
+      };
+    }
     let submission: ContactAuditSubmission;
     try {
       submission = parseContactAuditSubmission(
@@ -1278,7 +1309,11 @@ export async function submitContactAuditResult(
       );
     }
     if (submission.claimToken !== job.claimToken) {
-      return { accepted: false, runComplete: false };
+      return {
+        accepted: false,
+        runComplete: false,
+        autoAppend: null,
+      };
     }
     const currentContacts = job.artistId
       ? await tx.contact.findMany({
@@ -1326,6 +1361,26 @@ export async function submitContactAuditResult(
         claimExpiresAt: null,
       },
     });
+    const artistJobs = job.artistId
+      ? await tx.contactAuditJob.findMany({
+          where: { runId: job.runId, artistId: job.artistId },
+          select: {
+            status: true,
+            finding: true,
+            claimedAutoAppendAdditionalContact: true,
+            rosterReview: true,
+            alternatives: {
+              select: {
+                id: true,
+                normalizedEmail: true,
+                confidence: true,
+              },
+            },
+          },
+        })
+      : [];
+    const autoAppendAlternativeId =
+      contactAuditAutoAppendAlternativeId(artistJobs);
     const remaining = await tx.contactAuditJob.count({
       where: { runId: job.runId, status: { not: "complete" } },
     });
@@ -1347,8 +1402,48 @@ export async function submitContactAuditResult(
         },
       });
     }
-    return { accepted: true, runComplete };
+    return {
+      accepted: true,
+      runComplete,
+      autoAppend:
+        job.artistId && autoAppendAlternativeId
+          ? {
+              runId: job.runId,
+              artistId: job.artistId,
+              alternativeId: autoAppendAlternativeId,
+            }
+          : null,
+    };
   });
+  if (!stored.accepted || !stored.autoAppend) {
+    return {
+      accepted: stored.accepted,
+      runComplete: stored.runComplete,
+      autoResolved: false,
+    };
+  }
+  const resolution = await resolveContactAuditArtist(
+    {
+      ...stored.autoAppend,
+      action: "append",
+    },
+    now,
+  );
+  if (!resolution.ok) {
+    console.error(
+      JSON.stringify({
+        event: "contact_audit_auto_append_failed",
+        runId: stored.autoAppend.runId,
+        artistId: stored.autoAppend.artistId,
+        error: resolution.error,
+      }),
+    );
+  }
+  return {
+    accepted: true,
+    runComplete: stored.runComplete,
+    autoResolved: resolution.ok,
+  };
 }
 
 export async function markContactAuditReviewed(

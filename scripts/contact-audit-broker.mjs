@@ -64,6 +64,14 @@ const claimJobSchema = z
     claimToken: z.string().min(1),
     claimExpiresAt: z.string().datetime(),
     attemptCount: z.number().int().min(1),
+    auditAgentRules: z
+      .object({
+        scope: z.literal("contact_audit"),
+        version: z.number().int().min(0),
+        instructions: z.string().max(8_000),
+        autoAppendAdditionalContact: z.boolean(),
+      })
+      .strict(),
     contact: z
       .object({
         artistName: z.string().min(1),
