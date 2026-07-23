@@ -404,6 +404,8 @@ model ContactAuditRosterEntry {
 
 model ContactAuditRequest {
   id                String           @id @default(cuid())
+  requestKey        String?          @unique
+  source            String           @default("manual")
   status            String           @default("pending")
   requestedAt       DateTime         @default(now())
   startedAt         DateTime?

@@ -4,6 +4,8 @@ on:
   schedule:
     # Poll every 10 minutes; the app only starts work for an explicit request.
     - cron: "*/10 * * * *"
+    # Automatically request one complete re-audit on the first day of each month.
+    - cron: "17 15 1 * *"
   workflow_dispatch: {}
 
 permissions:
@@ -12,11 +14,69 @@ permissions:
   id-token: write
 
 concurrency:
-  group: photo-admin-contact-audit
+  group: >-
+    ${{
+      github.event.schedule == '17 15 1 * *'
+        && 'photo-admin-contact-audit-monthly-request'
+        || 'photo-admin-contact-audit'
+    }}
   cancel-in-progress: false
 
 jobs:
+  enqueue_monthly:
+    if: ${{ github.event_name == 'schedule' && github.event.schedule == '17 15 1 * *' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enqueue monthly full contact audit
+        shell: bash
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APP_BASE_URL}" ]]; then
+            echo "::error::APP_BASE_URL repository secret is required"
+            exit 1
+          fi
+          oidc_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="?"
+          if [[ "${oidc_url}" == *"?"* ]]; then
+            separator="&"
+          fi
+          oidc_token="$(
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              --header "Accept: application/json" \
+              "${oidc_url}${separator}audience=photo-admin-contact-audit" |
+              jq -er '.value | select(type == "string" and length > 0)'
+          )"
+          echo "::add-mask::${oidc_token}"
+          curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --connect-timeout 15 \
+            --max-time 120 \
+            --request POST \
+            --header "Authorization: Bear""er ${oidc_token}" \
+            --header "Content-Type: application/json" \
+            --header "Accept: application/json" \
+            --data "$(
+              jq -cn \
+                --arg workflowRunId "${GITHUB_RUN_ID}" \
+                '{
+                  workflowRunId: $workflowRunId,
+                  requestFullAudit: true,
+                  requestSource: "monthly"
+                }'
+            )" \
+            "${APP_BASE_URL%/}/api/contact-audit/prepare" |
+            jq -e '.requested == true and .queued == true'
+
   prepare:
+    if: ${{ github.event.schedule != '17 15 1 * *' }}
     runs-on: ubuntu-latest
     outputs:
       requested: ${{ steps.queue.outputs.requested }}
@@ -30,6 +90,7 @@ jobs:
         env:
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
           REQUEST_FULL_AUDIT: ${{ github.event_name == 'workflow_dispatch' }}
+          AUDIT_REQUEST_SOURCE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'poll' }}
         run: |
           set -euo pipefail
 
@@ -70,7 +131,8 @@ jobs:
                 jq -cn \
                   --arg workflowRunId "${GITHUB_RUN_ID}" \
                   --argjson requestFullAudit "${REQUEST_FULL_AUDIT}" \
-                  '{workflowRunId: $workflowRunId, requestFullAudit: $requestFullAudit}'
+                  --arg requestSource "${AUDIT_REQUEST_SOURCE}" \
+                  '{workflowRunId: $workflowRunId, requestFullAudit: $requestFullAudit, requestSource: $requestSource}'
               )" \
               "${APP_BASE_URL%/}/api/contact-audit/prepare"
           )"
