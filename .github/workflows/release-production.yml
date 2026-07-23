@@ -23,6 +23,15 @@ concurrency:
 
 env:
   VERCEL_CLI_VERSION: "56.2.1"
+  # The exact `owner/name` trusted to run this hardened release/recovery
+  # profile. Defaults to this deployment's own repository so production
+  # behavior here is unchanged. A fork enables this hardened profile for
+  # itself only by setting the `HARDENED_RELEASE_REPOSITORY` repository
+  # variable to its own `owner/name` — until it does, every check below
+  # fails closed for the fork (github.repository can never equal the
+  # upstream default), and it does not affect basic-profile deployments,
+  # which never dispatch this workflow. See docs/deployment.md.
+  HARDENED_RELEASE_REPOSITORY: ${{ vars.HARDENED_RELEASE_REPOSITORY || 'zspherez/photo-admin' }}
 
 jobs:
   trust:
@@ -39,17 +48,18 @@ jobs:
           EVENT_REPOSITORY: ${{ github.event.repository.full_name }}
           EVENT_REPOSITORY_FORK: ${{ github.event.repository.fork }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
+          HARDENED_RELEASE_REPOSITORY: ${{ env.HARDENED_RELEASE_REPOSITORY }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" \
-            || "${GITHUB_REPOSITORY}" != "zspherez/photo-admin" \
-            || "${EVENT_REPOSITORY}" != "zspherez/photo-admin" \
+            || "${GITHUB_REPOSITORY}" != "${HARDENED_RELEASE_REPOSITORY}" \
+            || "${EVENT_REPOSITORY}" != "${HARDENED_RELEASE_REPOSITORY}" \
             || "${EVENT_REPOSITORY_FORK}" != "false" \
             || "${GITHUB_REF}" != "refs/heads/main" \
             || "${GITHUB_REF_TYPE}" != "branch" \
             || "${GITHUB_REF_NAME}" != "main" \
-            || "${WORKFLOW_REF}" != "zspherez/photo-admin/.github/workflows/release-production.yml@refs/heads/main" ]]; then
-            echo "::error::Production releases must be dispatched from refs/heads/main in zspherez/photo-admin using the trusted main workflow."
+            || "${WORKFLOW_REF}" != "${HARDENED_RELEASE_REPOSITORY}/.github/workflows/release-production.yml@refs/heads/main" ]]; then
+            echo "::error::Production releases must be dispatched from refs/heads/main in ${HARDENED_RELEASE_REPOSITORY} using the trusted main workflow."
             exit 1
           fi
 
@@ -110,10 +120,10 @@ jobs:
         needs.trust.result == 'success' &&
         github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/main' &&
-        github.repository == 'zspherez/photo-admin' &&
-        github.event.repository.full_name == 'zspherez/photo-admin' &&
+        github.repository == env.HARDENED_RELEASE_REPOSITORY &&
+        github.event.repository.full_name == env.HARDENED_RELEASE_REPOSITORY &&
         github.event.repository.fork == false &&
-        github.workflow_ref == 'zspherez/photo-admin/.github/workflows/release-production.yml@refs/heads/main'
+        github.workflow_ref == format('{0}/.github/workflows/release-production.yml@refs/heads/main', env.HARDENED_RELEASE_REPOSITORY)
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -199,10 +209,10 @@ jobs:
         needs.recovery_preflight.result == 'success' &&
         github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/main' &&
-        github.repository == 'zspherez/photo-admin' &&
-        github.event.repository.full_name == 'zspherez/photo-admin' &&
+        github.repository == env.HARDENED_RELEASE_REPOSITORY &&
+        github.event.repository.full_name == env.HARDENED_RELEASE_REPOSITORY &&
         github.event.repository.fork == false &&
-        github.workflow_ref == 'zspherez/photo-admin/.github/workflows/release-production.yml@refs/heads/main'
+        github.workflow_ref == format('{0}/.github/workflows/release-production.yml@refs/heads/main', env.HARDENED_RELEASE_REPOSITORY)
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 210
@@ -615,10 +625,10 @@ jobs:
         needs.recovery_preflight.result == 'success' &&
         github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/main' &&
-        github.repository == 'zspherez/photo-admin' &&
-        github.event.repository.full_name == 'zspherez/photo-admin' &&
+        github.repository == env.HARDENED_RELEASE_REPOSITORY &&
+        github.event.repository.full_name == env.HARDENED_RELEASE_REPOSITORY &&
         github.event.repository.fork == false &&
-        github.workflow_ref == 'zspherez/photo-admin/.github/workflows/release-production.yml@refs/heads/main'
+        github.workflow_ref == format('{0}/.github/workflows/release-production.yml@refs/heads/main', env.HARDENED_RELEASE_REPOSITORY)
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -635,17 +645,18 @@ jobs:
           WORKFLOW_REF: ${{ github.workflow_ref }}
           TRUSTED_RELEASE_SHA: ${{ needs.trust.outputs.release_sha }}
           REPORTED_RELEASE_SHA: ${{ needs.release.outputs.release_sha }}
+          HARDENED_RELEASE_REPOSITORY: ${{ env.HARDENED_RELEASE_REPOSITORY }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" \
-            || "${GITHUB_REPOSITORY}" != "zspherez/photo-admin" \
-            || "${EVENT_REPOSITORY}" != "zspherez/photo-admin" \
+            || "${GITHUB_REPOSITORY}" != "${HARDENED_RELEASE_REPOSITORY}" \
+            || "${EVENT_REPOSITORY}" != "${HARDENED_RELEASE_REPOSITORY}" \
             || "${EVENT_REPOSITORY_FORK}" != "false" \
             || "${GITHUB_REF}" != "refs/heads/main" \
             || "${GITHUB_REF_TYPE}" != "branch" \
             || "${GITHUB_REF_NAME}" != "main" \
-            || "${WORKFLOW_REF}" != "zspherez/photo-admin/.github/workflows/release-production.yml@refs/heads/main" ]]; then
-            echo "::error::Recovery is permitted only for the trusted main workflow in zspherez/photo-admin."
+            || "${WORKFLOW_REF}" != "${HARDENED_RELEASE_REPOSITORY}/.github/workflows/release-production.yml@refs/heads/main" ]]; then
+            echo "::error::Recovery is permitted only for the trusted main workflow in ${HARDENED_RELEASE_REPOSITORY}."
             exit 1
           fi
           if [[ ! "${TRUSTED_RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then

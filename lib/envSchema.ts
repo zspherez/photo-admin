@@ -17,6 +17,7 @@ export type EnvVarGroup =
   | "database"
   | "app"
   | "fork-identity"
+  | "deployment"
   | "contact-agents"
   | "trajectory"
   | "spotify"
@@ -40,6 +41,10 @@ export const ENV_VAR_GROUPS: Record<EnvVarGroup, EnvVarGroupInfo> = {
   app: { heading: "App", kind: "core" },
   "fork-identity": {
     heading: "Fork identity (optional overrides)",
+    kind: "optional",
+  },
+  deployment: {
+    heading: "Deployment profile (local readiness check only)",
     kind: "optional",
   },
   "contact-agents": { heading: "Contact research agent", kind: "optional" },
@@ -182,6 +187,20 @@ export const ENV_SCHEMA: readonly EnvVarDefinition[] = [
       "Optional. Defaults to `<REPOSITORY_SLUG>/.github/workflows/contact-audit.yml@refs/heads/main`.",
       "Must reference a `.yml`/`.yaml` file under that repository's `.github/workflows/`",
       "on `refs/heads/main`; malformed values are rejected (fail closed).",
+    ],
+    defaultValue: "",
+  },
+  {
+    key: "DEPLOYMENT_PROFILE",
+    group: "deployment",
+    secret: false,
+    summary: "Selects which profile `npm run deployment:readiness` checks: basic (default) or hardened.",
+    notes: [
+      "Optional. Read only by `npm run deployment:readiness` (or its `--profile` flag, which wins).",
+      "Never read by the running app or by any GitHub Actions workflow, so it cannot bypass or",
+      "weaken the hardened release workflow. \"basic\" (default) is the native Vercel Git deployment",
+      "path; \"hardened\" additionally requires CRON_SECRET for release runtime verification. See",
+      "docs/deployment.md.",
     ],
     defaultValue: "",
   },
@@ -371,6 +390,7 @@ export const ENV_VAR_GROUP_ORDER: readonly EnvVarGroup[] = [
   "database",
   "app",
   "fork-identity",
+  "deployment",
   "contact-agents",
   "trajectory",
   "spotify",

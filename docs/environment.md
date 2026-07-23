@@ -38,6 +38,14 @@ _Optional integration._
 | `CONTACT_RESEARCH_WORKFLOW_REF` | no | Overrides the exact workflow_ref trusted to run contact research via OIDC. |
 | `CONTACT_AUDIT_WORKFLOW_REF` | no | Overrides the exact workflow_ref trusted to run contact audits via OIDC. |
 
+## Deployment profile (local readiness check only)
+
+_Optional integration._
+
+| Variable | Secret | Description |
+|---|---|---|
+| `DEPLOYMENT_PROFILE` | no | Selects which profile `npm run deployment:readiness` checks: basic (default) or hardened. |
+
 ## Contact research agent
 
 _Optional integration._

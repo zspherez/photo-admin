@@ -219,7 +219,10 @@ test("recovery credentials are main-only environment secrets and execute no chec
   const recoverySource = workflow.slice(recoveryStart);
 
   assert.match(trustSource, /GITHUB_REF}" != "refs\/heads\/main"/);
-  assert.match(trustSource, /GITHUB_REPOSITORY}" != "zspherez\/photo-admin"/);
+  assert.match(
+    trustSource,
+    /GITHUB_REPOSITORY}" != "\$\{HARDENED_RELEASE_REPOSITORY\}"/
+  );
   assert.match(
     trustSource,
     /git merge-base --is-ancestor "\$\{release_sha\}" "\$\{main_sha\}"/
@@ -258,7 +261,10 @@ test("recovery credentials are main-only environment secrets and execute no chec
     /environment:\s*\n\s+name: production-recovery/
   );
   assert.match(recoverySource, /github\.ref == 'refs\/heads\/main'/);
-  assert.match(recoverySource, /github\.repository == 'zspherez\/photo-admin'/);
+  assert.match(
+    recoverySource,
+    /github\.repository == env\.HARDENED_RELEASE_REPOSITORY/
+  );
   assert.match(
     recoverySource,
     /REPORTED_RELEASE_SHA[\s\S]*TRUSTED_RELEASE_SHA/
@@ -268,6 +274,54 @@ test("recovery credentials are main-only environment secrets and execute no chec
     recoverySource,
     /actions\/checkout|recover-production-release\.sh|scripts\/|inputs\./
   );
+});
+
+test("hardened repository trust is configurable but fails closed to this deployment by default", () => {
+  const workflow = readFileSync(releaseWorkflow, "utf8");
+
+  // Exactly one literal default value: the workflow-level fallback. Every
+  // authorization check must reference the resolved env/context value
+  // instead of re-hardcoding the literal, so a fork can retarget every
+  // check by setting a single repository variable.
+  assert.equal(
+    (workflow.match(/zspherez\/photo-admin/g) ?? []).length,
+    1,
+    "the literal repository slug must appear exactly once, as the default fallback"
+  );
+  assert.match(
+    workflow,
+    /HARDENED_RELEASE_REPOSITORY: \$\{\{ vars\.HARDENED_RELEASE_REPOSITORY \|\| 'zspherez\/photo-admin' \}\}/
+  );
+
+  // An empty (unset) `vars.HARDENED_RELEASE_REPOSITORY` is falsy in GitHub
+  // Actions expressions, so the default applies automatically for this
+  // repository and every check still fails closed for any other repository
+  // (including a fork) until it sets its own variable.
+  const jobIfBlocks = [...workflow.matchAll(/if: >-\n\s+\$\{\{\n([\s\S]*?)\n\s+\}\}/g)].map(
+    (match) => match[1]
+  );
+  assert.ok(jobIfBlocks.length >= 3, "expected at least 3 gated job if: blocks");
+  for (const block of jobIfBlocks) {
+    assert.match(
+      block,
+      /github\.repository == env\.HARDENED_RELEASE_REPOSITORY/
+    );
+    assert.match(
+      block,
+      /github\.workflow_ref == format\('\{0\}\/\.github\/workflows\/release-production\.yml@refs\/heads\/main', env\.HARDENED_RELEASE_REPOSITORY\)/
+    );
+    assert.doesNotMatch(block, /'zspherez\/photo-admin'/);
+  }
+
+  // Both shell-level gates (trust job + recovery watchdog reassertion)
+  // compare against the shared env value rather than a hardcoded literal.
+  const trustGate = workflowStep(workflow, "Reject untrusted repository or ref");
+  const watchdogGate = workflowStep(workflow, "Reassert trusted watchdog context");
+  for (const gate of [trustGate, watchdogGate]) {
+    assert.match(gate, /HARDENED_RELEASE_REPOSITORY: \$\{\{ env\.HARDENED_RELEASE_REPOSITORY \}\}/);
+    assert.match(gate, /"\$\{GITHUB_REPOSITORY\}" != "\$\{HARDENED_RELEASE_REPOSITORY\}"/);
+    assert.doesNotMatch(gate, /"zspherez\/photo-admin"/);
+  }
 });
 
 test("recovery environment setup documents the non-review main-only boundary", () => {
