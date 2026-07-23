@@ -27,6 +27,13 @@ import {
   easternDateOnly,
   parseDateOnly,
 } from "@/lib/calendarDate";
+import {
+  appConfig,
+  buildWorkflowRef,
+  CONTACT_AUDIT_WORKFLOW_FILE,
+  resolveContactAuditTrustConfig,
+  type WorkflowTrustConfig,
+} from "@/lib/appConfig";
 
 export { contactStillMatchesAuditSnapshot } from "@/lib/contactAuditResolutionPolicy";
 
@@ -36,8 +43,19 @@ export const CONTACT_AUDIT_CLAIM_TTL_MS = 60 * 60 * 1_000;
 export const CONTACT_AUDIT_OIDC_AUDIENCE = "photo-admin-contact-audit";
 export const CONTACT_AUDIT_OIDC_ISSUER =
   "https://token.actions.githubusercontent.com";
+/**
+ * Repository/workflow identity trusted to mutate contact audit state via
+ * GitHub Actions OIDC. Defaults to this deployment's workflow; override with
+ * REPOSITORY_SLUG / CONTACT_AUDIT_WORKFLOW_REF env vars to fork safely.
+ * Resolves to `null` when an override is malformed so
+ * `isTrustedContactAuditOidcClaims` fails closed instead of trusting an
+ * invalid value.
+ */
+export const CONTACT_AUDIT_TRUST_CONFIG: WorkflowTrustConfig | null =
+  resolveContactAuditTrustConfig();
 export const CONTACT_AUDIT_WORKFLOW_REF =
-  "zspherez/photo-admin/.github/workflows/contact-audit.yml@refs/heads/main";
+  CONTACT_AUDIT_TRUST_CONFIG?.workflowRef ??
+  buildWorkflowRef(appConfig.repository, CONTACT_AUDIT_WORKFLOW_FILE);
 export const CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES = [
   "pending",
   "running",
@@ -495,14 +513,16 @@ export async function isValidContactAuditAuthorization(
 }
 
 export function isTrustedContactAuditOidcClaims(
-  payload: JWTPayload
+  payload: JWTPayload,
+  configuration: WorkflowTrustConfig | null = CONTACT_AUDIT_TRUST_CONFIG
 ): boolean {
+  if (!configuration) return false;
   return (
     payload.aud === CONTACT_AUDIT_OIDC_AUDIENCE &&
-    payload.repository === "zspherez/photo-admin" &&
-    payload.repository_owner === "zspherez" &&
+    payload.repository === configuration.repository &&
+    payload.repository_owner === configuration.owner &&
     payload.ref === "refs/heads/main" &&
-    payload.workflow_ref === CONTACT_AUDIT_WORKFLOW_REF &&
+    payload.workflow_ref === configuration.workflowRef &&
     (payload.event_name === "workflow_dispatch" ||
       payload.event_name === "schedule")
   );

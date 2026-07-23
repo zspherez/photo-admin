@@ -43,9 +43,10 @@ import {
   acquireShowArtistMembershipLock,
   staleReadyTrajectoryRunsWithMissingMembership,
 } from "@/lib/showArtistMembershipInvariant";
+import { appConfig } from "@/lib/appConfig";
 
 const EDMTRAIN_BASE = "https://edmtrain.com/api/events";
-const NYC_LOCATION_ID = 38;
+const NYC_LOCATION_ID = appConfig.edmtrain.locationIds[0] ?? 38;
 const EDMTRAIN_CHUNK_DAYS = 30;
 const EDMTRAIN_MAX_ATTEMPTS = 4;
 const EDMTRAIN_DEFAULT_OPERATION_MS = 5 * 60 * 1_000;

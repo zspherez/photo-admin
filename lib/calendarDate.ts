@@ -1,4 +1,6 @@
-export const EASTERN_TIME_ZONE = "America/New_York";
+import { appConfig } from "@/lib/appConfig";
+
+export const EASTERN_TIME_ZONE = appConfig.timeZone;
 
 const easternDateFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: EASTERN_TIME_ZONE,

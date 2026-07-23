@@ -4,12 +4,15 @@
  */
 
 import { EASTERN_TIME_ZONE } from "@/lib/calendarDate";
+import { appConfig } from "@/lib/appConfig";
 
 export const OUTREACH_TIME_ZONE = EASTERN_TIME_ZONE;
-export const OUTREACH_MORNING_DISPATCH_HOUR = 9;
-export const OUTREACH_MORNING_DISPATCH_MINUTE = 0;
-export const OUTREACH_MORNING_DISPATCH_LABEL = "9:00 AM ET";
-export const OUTREACH_MORNING_UTC_CANDIDATE_HOURS = [13, 14] as const;
+export const OUTREACH_MORNING_DISPATCH_HOUR = appConfig.outreachDispatch.hour;
+export const OUTREACH_MORNING_DISPATCH_MINUTE =
+  appConfig.outreachDispatch.minute;
+export const OUTREACH_MORNING_DISPATCH_LABEL = appConfig.outreachDispatch.label;
+export const OUTREACH_MORNING_UTC_CANDIDATE_HOURS =
+  appConfig.outreachDispatch.candidateUtcHours;
 export const OUTREACH_RECOVERY_OVERDUE_MS = 2 * 60 * 60 * 1000;
 export const OUTREACH_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
 export const OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS = 30 * 1000;

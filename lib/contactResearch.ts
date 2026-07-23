@@ -38,6 +38,13 @@ import {
   assertPublicHttpsSourceUrl,
   validateResearchSubmissionPayload,
 } from "@/lib/contactAgentPayloadValidation.mjs";
+import {
+  appConfig,
+  buildWorkflowRef,
+  CONTACT_RESEARCH_WORKFLOW_FILE,
+  resolveContactResearchTrustConfig,
+  type WorkflowTrustConfig,
+} from "@/lib/appConfig";
 
 export const CONTACT_RESEARCH_WINDOW_DAYS = 90;
 export const CONTACT_RESEARCH_DEFAULT_CLAIM_LIMIT = 3;
@@ -47,8 +54,19 @@ export const CONTACT_RESEARCH_OIDC_AUDIENCE =
   "photo-admin-contact-research";
 export const CONTACT_RESEARCH_OIDC_ISSUER =
   "https://token.actions.githubusercontent.com";
+/**
+ * Repository/workflow identity trusted to mutate contact research state via
+ * GitHub Actions OIDC. Defaults to this deployment's workflow; override with
+ * REPOSITORY_SLUG / CONTACT_RESEARCH_WORKFLOW_REF env vars to fork safely.
+ * Resolves to `null` when an override is malformed so
+ * `isTrustedContactResearchOidcClaims` fails closed instead of trusting an
+ * invalid value.
+ */
+export const CONTACT_RESEARCH_TRUST_CONFIG: WorkflowTrustConfig | null =
+  resolveContactResearchTrustConfig();
 export const CONTACT_RESEARCH_WORKFLOW_REF =
-  "zspherez/photo-admin/.github/workflows/contact-research.yml@refs/heads/main";
+  CONTACT_RESEARCH_TRUST_CONFIG?.workflowRef ??
+  buildWorkflowRef(appConfig.repository, CONTACT_RESEARCH_WORKFLOW_FILE);
 
 const EMAIL_PATTERN = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
 const CONFIDENCE_VALUES = new Set(["high", "medium", "low"]);
@@ -1468,14 +1486,16 @@ export async function isValidContactResearchAuthorization(
 }
 
 export function isTrustedContactResearchOidcClaims(
-  payload: JWTPayload
+  payload: JWTPayload,
+  configuration: WorkflowTrustConfig | null = CONTACT_RESEARCH_TRUST_CONFIG
 ): boolean {
+  if (!configuration) return false;
   return (
     payload.aud === CONTACT_RESEARCH_OIDC_AUDIENCE &&
-    payload.repository === "zspherez/photo-admin" &&
-    payload.repository_owner === "zspherez" &&
+    payload.repository === configuration.repository &&
+    payload.repository_owner === configuration.owner &&
     payload.ref === "refs/heads/main" &&
-    payload.workflow_ref === CONTACT_RESEARCH_WORKFLOW_REF &&
+    payload.workflow_ref === configuration.workflowRef &&
     (payload.event_name === "schedule" ||
       payload.event_name === "workflow_dispatch")
   );

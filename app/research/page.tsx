@@ -17,7 +17,9 @@ import {
   skipContactResearchArtist,
   unskipContactResearchArtist,
   updateContactResearchJobUserNotes,
+  CONTACT_RESEARCH_WORKFLOW_REF,
 } from "@/lib/contactResearch";
+import { workflowActionsUrl } from "@/lib/appConfig";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 import { parseContactResearchView } from "@/lib/contactResearchView";
@@ -48,8 +50,7 @@ import { directOutreachInstructionExcerptFromCanonical } from "@/lib/directOutre
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact research" };
-const WORKFLOW_URL =
-  "https://github.com/zspherez/photo-admin/actions/workflows/contact-research.yml";
+const WORKFLOW_URL = workflowActionsUrl(CONTACT_RESEARCH_WORKFLOW_REF);
 
 function actionResearchFilter(formData: FormData) {
   return parseResearchStatusFilter(formData.get("status"));

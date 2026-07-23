@@ -69,6 +69,7 @@ cp .env.example .env
 # Set DATABASE_URL and DIRECT_URL.
 npm install
 npm run db:setup
+npm run setup:check
 npm run dev
 ```
 
@@ -77,13 +78,33 @@ Open <http://127.0.0.1:3000>.
 Protected mode requires `ADMIN_PASSWORD` and `ADMIN_SESSION_SECRET`. Local-only
 open mode uses a blank password plus `ALLOW_INSECURE_OPEN_MODE=true`.
 
+`npm run setup:check` separates required core configuration (database,
+`APP_BASE_URL`, authentication) from optional integrations, exits nonzero only
+when required setup is missing or invalid, and never prints secret values.
+
+## Forking
+
+Branding, repository identity, market, time zone, outreach dispatch time,
+EDMTrain location scope, and the GitHub Actions workflows trusted for contact
+research/audit OIDC all live in one typed module: [`lib/appConfig.ts`](lib/appConfig.ts).
+Edit its constants directly to rebrand a fork; every default there reproduces
+this deployment's current behavior exactly. Repository identity and the two
+workflow trust refs can also be overridden per-deployment via
+`REPOSITORY_SLUG`, `CONTACT_RESEARCH_WORKFLOW_REF`, and
+`CONTACT_AUDIT_WORKFLOW_REF` — malformed overrides are rejected so trust fails
+closed rather than silently defaulting to something unexpected.
+
 ## Essential environment groups
 
-See [.env.example](.env.example) for every variable.
+`.env.example` and [`docs/environment.md`](docs/environment.md) are generated
+from the single schema in [`lib/envSchema.ts`](lib/envSchema.ts). Run
+`npm run env:generate` after editing the schema, or `npm run env:check` to
+verify neither generated file has drifted.
 
 | Group | Essentials |
 |---|---|
 | Core | Database URLs, `APP_BASE_URL`, admin password/session secret, optional `READ_ONLY_PASSWORD` |
+| Fork identity | Optional `REPOSITORY_SLUG` and workflow trust ref overrides — see [Forking](#forking) |
 | Email | Resend API key, sender, webhook secret, optional test override |
 | Shows/listening | EDMTrain key, Spotify client credentials, stats.fm token |
 | Google Sheets export | Optional Google credentials and `GOOGLE_CONTACT_EXPORT_SPREADSHEET_ID` |
@@ -127,6 +148,8 @@ npm test
 npm run typecheck
 npm run lint
 npm run build
+npm run setup:check
+npm run env:check
 npm run db:setup
 npm run db:verify-targets
 npm run db:verify-release-compatibility

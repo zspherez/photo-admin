@@ -28,6 +28,9 @@
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint",
     "rotate:statsfm-token": "tsx scripts/rotate-statsfm-token.ts",
+    "setup:check": "tsx scripts/setup-check.ts",
+    "env:generate": "tsx scripts/generate-env-docs.ts",
+    "env:check": "tsx scripts/generate-env-docs.ts --check",
     "postinstall": "npm run db:generate"
   },
   "dependencies": {

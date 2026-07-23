@@ -14,6 +14,7 @@ import {
   parseDateOnly,
 } from "@/lib/calendarDate";
 import { formatShowDate } from "@/lib/formatDate";
+import { appConfig } from "@/lib/appConfig";
 
 export const dynamic = "force-dynamic";
 
@@ -130,7 +131,7 @@ export default async function TestPage() {
         <div className="flex items-center gap-3">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.svg" alt="" className="h-8 w-auto dark:brightness-200" />
-          <h1 className="text-2xl font-semibold tracking-tight">Rehders Photos Admin — demo</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{appConfig.appName} — demo</h1>
           <Badge tone="muted" size="xs">read-only</Badge>
         </div>
         <p className="mt-2 text-sm text-zinc-500">
@@ -229,8 +230,8 @@ export default async function TestPage() {
       )}
 
       <p className="mt-10 text-center text-xs text-zinc-400">
-        <Link href="https://github.com/zspherez/photo-admin" className="hover:underline">
-          github.com/zspherez/photo-admin
+        <Link href={appConfig.repository.url} className="hover:underline">
+          github.com/{appConfig.repository.slug}
         </Link>
       </p>
     </main>
