@@ -57,6 +57,15 @@ artist when the run was prepared. It has stable `rosterEntryId` values and
 exactly one `isTarget: true` entry. A `legacy_single_contact` roster is
 explicitly incomplete; do not infer that it was the artist's whole team.
 
+The job also includes `auditAgentRules`, a trusted versioned snapshot of
+operator instructions configured in photo-admin. Follow those instructions
+when present while preserving every canonical safety, evidence, roster, and
+review-only requirement in this file. When
+`auditAgentRules.autoAppendAdditionalContact` is true, clearly distinguish a
+new coexisting manager email from evidence that an existing contact is stale;
+the server may auto-append only a high-confidence additional contact after the
+complete roster is confirmed current or coexisting.
+
 The result endpoint writes persistent production state. Never submit dummy,
 test, example, placeholder, probe, or simplified factual payloads. Use
 `validate-result` to dry-check the complete final JSON without saving it. If a

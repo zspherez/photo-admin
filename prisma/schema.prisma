@@ -472,6 +472,9 @@ model ContactAuditJob {
   claimedAt                  DateTime?
   claimExpiresAt             DateTime?
   claimToken                 String?                     @unique
+  claimedAgentRules          String?
+  claimedAgentRulesVersion   Int?
+  claimedAutoAppendAdditionalContact Boolean?
   finding                    String?
   sourceUrls                 String[]                    @default([])
   evidence                   String?
