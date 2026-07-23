@@ -59,11 +59,18 @@ async function withSerializableRetry<T>(
 export async function readQueueManagementCounts(): Promise<QueueManagementCounts> {
   const [auditDecisionRows, researchReviews, queueStatuses] = await Promise.all([
     db.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+      WITH latest_run AS (
+        SELECT run."id"
+        FROM "ContactAuditRun" run
+        ORDER BY run."createdAt" DESC, run."id" DESC
+        LIMIT 1
+      )
       SELECT COUNT(*)::integer AS "count"
       FROM (
         SELECT job."runId", job."artistId"
         FROM "ContactAuditJob" job
         WHERE job."status" = 'complete'
+          AND job."runId" = (SELECT "id" FROM latest_run)
           AND job."verifiedAt" IS NOT NULL
           AND job."finding" IN (${Prisma.join([
             ...CONTACT_AUDIT_FLAGGED_FINDINGS,
@@ -83,6 +90,7 @@ export async function readQueueManagementCounts(): Promise<QueueManagementCounts
         SELECT job."id", NULL
         FROM "ContactAuditJob" job
         WHERE job."status" = 'complete'
+          AND job."runId" = (SELECT "id" FROM latest_run)
           AND job."verifiedAt" IS NOT NULL
           AND job."finding" IN (${Prisma.join([
             ...CONTACT_AUDIT_FLAGGED_FINDINGS,
@@ -115,9 +123,16 @@ export async function rejectUnresolvedFlaggedAuditDecisions(
 ): Promise<AuditRejectionResult> {
   return runTransaction(async (tx) => {
     const targetRows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      WITH latest_run AS (
+        SELECT run."id"
+        FROM "ContactAuditRun" run
+        ORDER BY run."createdAt" DESC, run."id" DESC
+        LIMIT 1
+      )
       SELECT job."id"
       FROM "ContactAuditJob" job
       WHERE job."status" = 'complete'
+        AND job."runId" = (SELECT "id" FROM latest_run)
         AND job."verifiedAt" IS NOT NULL
         AND job."finding" IN (${Prisma.join([
           ...CONTACT_AUDIT_FLAGGED_FINDINGS,

@@ -450,6 +450,10 @@ export default async function ContactResearchPage({
           job."status" IN (${Prisma.join([
             ...activeFilterDefinition.statuses,
           ])})
+          AND (
+            job."status" <> 'claimed'
+            OR job."claimExpiresAt" > ${now}
+          )
           AND NOT EXISTS (
             SELECT 1
             FROM "ArtistResearchSkip" research_skip
@@ -466,7 +470,13 @@ export default async function ContactResearchPage({
   ] = await Promise.all([
     db.contactResearchJob.groupBy({
       by: ["status"],
-      where: { status: { in: [...RESEARCH_JOB_STATUSES] } },
+      where: {
+        status: { in: [...RESEARCH_JOB_STATUSES] },
+        OR: [
+          { status: { not: "claimed" } },
+          { claimExpiresAt: { gt: now } },
+        ],
+      },
       _count: { _all: true },
     }),
     db.artistResearchSkip.count({

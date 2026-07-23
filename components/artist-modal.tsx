@@ -4,6 +4,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useId, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { LinkButton } from "@/components/ui/button";
+import { SendButton } from "@/components/send-button";
+import { QueueOutreachButton } from "@/components/queue-outreach-button";
+import { FollowUpButton } from "@/components/follow-up-button";
 import { cn } from "@/lib/cn";
 import { withWorkflowReturnTo } from "@/lib/workflowLinks";
 import { formatShowDate } from "@/lib/formatDate";
@@ -15,6 +19,14 @@ import {
   hasDirectOutreachNote,
   isDirectOutreachOnly,
 } from "@/lib/contactDisplay";
+import { emailContactsRequireSelection } from "@/lib/contactSelection";
+import type { FollowUpEligibility } from "@/lib/sendOutreach";
+import {
+  cancelScheduledAction,
+  queueForNextDispatchAction,
+  sendFollowUpAction,
+  sendNowAction,
+} from "@/app/dashboard/actions";
 
 interface ArtistData {
   id: string;
@@ -36,7 +48,17 @@ interface ArtistData {
     role: string | null;
     customPrice: string | null;
     isFullTeam: boolean;
+    state: "active";
   }[];
+  actionContacts: {
+    email: { id: string; name: string | null } | null;
+    phone: { phone: string | null; name: string | null } | null;
+  };
+  nextDispatchBoundary: {
+    renderedAtMs: number;
+    dispatchAtMs: number;
+  };
+  isWeekend: boolean;
   upcomingShows: {
     id: string;
     date: string;
@@ -45,6 +67,22 @@ interface ArtistData {
     city: string;
     eventName: string | null;
     isFestival: boolean;
+    alreadySent: boolean;
+    scheduledInfo: {
+      outreachId: string;
+      scheduledLabel: string;
+    } | null;
+    sendability: {
+      sendable: boolean;
+      mode: "new" | "retry" | null;
+      reason: string | null;
+      blockingStatus: string | null;
+    } | null;
+    followUpEligibility:
+      | (Omit<FollowUpEligibility, "nextAttemptAt"> & {
+          nextAttemptAt: string | null;
+        })
+      | null;
   }[];
 }
 
@@ -135,6 +173,11 @@ function ArtistModal({
   }, [onClose]);
 
   const externalLinks = data ? buildExternalLinks(data) : [];
+  const actionReturnTo =
+    returnTo ??
+    (typeof window !== "undefined"
+      ? `${window.location.pathname}${window.location.search}`
+      : "/dashboard");
 
   return (
     <dialog
@@ -313,21 +356,128 @@ function ArtistModal({
                   Upcoming ({data.upcomingShows.length})
                 </h3>
                 <ul className="mt-2 divide-y divide-zinc-100 rounded-md border border-zinc-100 dark:divide-zinc-900 dark:border-zinc-900">
-                  {data.upcomingShows.map((s) => (
-                    <li key={s.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
-                      <p className="min-w-0 truncate">
-                        <span className="font-medium">{s.eventName || s.venueName}</span>
-                        <span className="ml-2 text-xs text-zinc-500">
-                          {formatShowDate(s.date, {
-                            month: "short",
-                            day: "numeric",
-                          })}
-                          {" · "}{s.venueName}{s.state ? `, ${s.state}` : ""}
-                        </span>
-                      </p>
-                      {s.isFestival && <Badge tone="accent" size="xs">Festival</Badge>}
-                    </li>
-                  ))}
+                  {data.upcomingShows.map((s) => {
+                    const emailContact = data.actionContacts.email;
+                    const phoneContact = data.actionContacts.phone;
+                    const emailDisabledLabel =
+                      !s.sendability ||
+                      s.sendability.sendable ||
+                      s.scheduledInfo
+                        ? undefined
+                        : s.sendability.blockingStatus === "queued"
+                          ? "In progress"
+                          : s.sendability.blockingStatus === "manual_review"
+                            ? "Review"
+                            : s.sendability.blockingStatus ===
+                                "retry_scheduled"
+                              ? "Retry scheduled"
+                              : "Unavailable";
+                    const queueEligible =
+                      !!emailContact &&
+                      s.sendability?.sendable === true &&
+                      s.sendability.mode === "new";
+                    const queueCustomizeHref =
+                      queueEligible &&
+                      emailContactsRequireSelection(data.contacts)
+                        ? withWorkflowReturnTo(
+                            `/dashboard/customize/${s.id}/${emailContact.id}?intent=queue`,
+                            actionReturnTo,
+                          )
+                        : null;
+                    const customizeHref =
+                      emailContact && s.sendability?.mode !== "retry"
+                        ? withWorkflowReturnTo(
+                            `/dashboard/customize/${s.id}/${emailContact.id}`,
+                            actionReturnTo,
+                          )
+                        : null;
+                    const followUpEligibility = s.followUpEligibility
+                      ? {
+                          ...s.followUpEligibility,
+                          nextAttemptAt: s.followUpEligibility.nextAttemptAt
+                            ? new Date(s.followUpEligibility.nextAttemptAt)
+                            : undefined,
+                        }
+                      : null;
+                    return (
+                      <li key={s.id} className="px-3 py-2 text-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="min-w-0 truncate">
+                            <span className="font-medium">
+                              {s.eventName || s.venueName}
+                            </span>
+                            <span className="ml-2 text-xs text-zinc-500">
+                              {formatShowDate(s.date, {
+                                month: "short",
+                                day: "numeric",
+                              })}
+                              {" · "}
+                              {s.venueName}
+                              {s.state ? `, ${s.state}` : ""}
+                            </span>
+                          </p>
+                          {s.isFestival && (
+                            <Badge tone="accent" size="xs">
+                              Festival
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          {(emailContact || phoneContact) && (
+                            <SendButton
+                              showId={s.id}
+                              contactId={emailContact?.id ?? null}
+                              contactName={emailContact?.name ?? null}
+                              phone={phoneContact?.phone ?? null}
+                              phoneContactName={phoneContact?.name ?? null}
+                              alreadySent={s.alreadySent}
+                              emailDisabledLabel={emailDisabledLabel}
+                              emailDisabledReason={
+                                s.sendability?.reason ?? undefined
+                              }
+                              isRetry={s.sendability?.mode === "retry"}
+                              isWeekend={data.isWeekend}
+                              scheduledInfo={s.scheduledInfo}
+                              returnTo={actionReturnTo}
+                              action={sendNowAction}
+                              cancelAction={cancelScheduledAction}
+                            />
+                          )}
+                          {queueEligible && emailContact && (
+                            <QueueOutreachButton
+                              showId={s.id}
+                              contactId={emailContact.id}
+                              returnTo={actionReturnTo}
+                              nextDispatchBoundary={
+                                data.nextDispatchBoundary
+                              }
+                              customizeHref={queueCustomizeHref}
+                              action={queueForNextDispatchAction}
+                            />
+                          )}
+                          {customizeHref && (
+                            <LinkButton
+                              href={customizeHref}
+                              variant="secondary"
+                              size="sm"
+                            >
+                              Customize
+                            </LinkButton>
+                          )}
+                          {emailContact && followUpEligibility && (
+                            <FollowUpButton
+                              eligibility={followUpEligibility}
+                              returnTo={actionReturnTo}
+                              isWeekend={data.isWeekend}
+                              action={sendFollowUpAction}
+                              cancelAction={cancelScheduledAction}
+                              showId={s.id}
+                            />
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             )}

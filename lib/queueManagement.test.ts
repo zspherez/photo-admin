@@ -146,6 +146,10 @@ test("bulk audit rejection reclaims only stale claims and reports freshness skip
   });
   const combined = queries.join("\n");
   assert.match(combined, /job\."verifiedAt" IS NOT NULL/);
+  assert.match(
+    combined,
+    /WITH latest_run AS[\s\S]*ORDER BY run\."createdAt" DESC[\s\S]*job\."runId" = \(SELECT "id" FROM latest_run\)/,
+  );
   assert.match(combined, /FOR UPDATE/);
   assert.match(combined, /FOR SHARE/);
   assert.match(combined, /job\."resolution" IS NULL/);

@@ -56,20 +56,33 @@ const monthlyRequestMigration = readFileSync(
   ),
   "utf8",
 );
+const rollingMonthlyMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260723040000_rolling_monthly_contact_audits/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("contact audit workflow polls explicitly requested work and is OIDC-authenticated", () => {
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /schedule:/);
   assert.match(workflow, /cron: "\*\/10 \* \* \* \*"/);
   assert.match(workflow, /cron: "17 15 1 \* \*"/);
+  assert.match(workflow, /cron: "29 15 15 \* \*"/);
   assert.match(workflow, /enqueue_monthly:/);
+  assert.match(workflow, /enqueue_rolling_monthly:/);
   assert.match(
     workflow,
     /photo-admin-contact-audit-monthly-request/,
   );
   assert.match(
     workflow,
-    /prepare:[\s\S]*if: \$\{\{ github\.event\.schedule != '17 15 1 \* \*' \}\}/,
+    /photo-admin-contact-audit-rolling-monthly-request/,
+  );
+  assert.match(
+    workflow,
+    /prepare:[\s\S]*if: \$\{\{ github\.event\.schedule != '17 15 1 \* \*' && github\.event\.schedule != '29 15 15 \* \*' \}\}/,
   );
   assert.doesNotMatch(workflow, /pull_request:/);
   assert.match(workflow, /copilot-requests: write/);
@@ -89,16 +102,18 @@ test("contact audit workflow polls explicitly requested work and is OIDC-authent
     workflow,
     /requestSource: "monthly"/,
   );
+  assert.match(workflow, /requestSource: "rolling_monthly"/);
   assert.match(prepareRoute, /requestFullAudit must be a boolean/);
   assert.match(
     prepareRoute,
-    /requestSource must be manual, monthly, or poll/,
+    /requestSource must be manual, monthly, rolling_monthly, or poll/,
   );
   assert.match(
     prepareRoute,
-    /requestSource === "manual" && oidcEvent === "workflow_dispatch"[\s\S]*requestSource === "monthly" && oidcEvent === "schedule"/,
+    /requestSource === "manual" && oidcEvent === "workflow_dispatch"[\s\S]*requestSource === "monthly"[\s\S]*requestSource === "rolling_monthly"[\s\S]*oidcEvent === "schedule"/,
   );
   assert.match(prepareRoute, /requestMonthlyContactAudit\(\)/);
+  assert.match(prepareRoute, /requestRollingMonthlyContactAudit\(\)/);
   assert.match(prepareRoute, /queued: true/);
   assert.match(
     prepareRoute,
@@ -360,4 +375,10 @@ test("monthly audit requests are durable, queued, and idempotent", () => {
     /Contact audit request identity is immutable/,
   );
   assert.match(monthlyRequestMigration, /COMMIT;\s*$/);
+  assert.match(rollingMonthlyMigration, /^BEGIN;/);
+  assert.match(
+    rollingMonthlyMigration,
+    /CHECK \("source" IN \('manual', 'monthly', 'rolling_monthly', 'legacy'\)\)/,
+  );
+  assert.match(rollingMonthlyMigration, /COMMIT;\s*$/);
 });

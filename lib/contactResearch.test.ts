@@ -3942,6 +3942,14 @@ test("claims require current eligibility and unexpired ownership", () => {
   assert.match(source, /prepareContactResearchQueue/);
   assert.match(
     source,
+    /prepareContactResearchQueue[\s\S]*reclaimExpiredContactResearchClaims\(now\)/,
+  );
+  assert.match(
+    source,
+    /reclaimExpiredContactResearchClaims[\s\S]*status: "claimed"[\s\S]*claimExpiresAt: \{ lte: now \}[\s\S]*status: "pending"/,
+  );
+  assert.match(
+    source,
     /options\.refreshQueue === false[\s\S]*countClaimableContactResearchJobs\(now\)/,
   );
   assert.match(source, /claimable/);

@@ -8,6 +8,10 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Settings" };
 
 export default async function SettingsIndex() {
+  const latestAuditRun = await db.contactAuditRun.findFirst({
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { id: true },
+  });
   const [spotify, statsfm, contactCount, researchReviewCount, researchQueueCount, auditReviewCount, template, showCount, settings, agentRules] = await Promise.all([
     db.integrationCredential.findUnique({ where: { provider: "spotify" } }),
     db.integrationCredential.findUnique({ where: { provider: "statsfm" } }),
@@ -18,6 +22,7 @@ export default async function SettingsIndex() {
     }),
     db.contactAuditJob.count({
       where: {
+        runId: latestAuditRun?.id ?? "__no_contact_audit_run__",
         finding: { in: ["changed", "stale", "ambiguous"] },
         reviewedAt: null,
       },

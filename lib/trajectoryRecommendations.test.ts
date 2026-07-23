@@ -159,7 +159,7 @@ const sendable = async (
     fullTeamSend: false,
   }));
 
-test("no run, failed, stale, expired, and multiple-ready states never load recommendations", async () => {
+test("no run, failed, expired, and multiple-ready states never load recommendations", async () => {
   const cases = [
     {
       expected: "none",
@@ -170,12 +170,6 @@ test("no run, failed, stale, expired, and multiple-ready states never load recom
       value: store({
         ready: [],
         latest: run({ status: "failed", failureMessage: "validation failed" }),
-      }),
-    },
-    {
-      expected: "stale",
-      value: store({
-        ready: [run({ generatedAt: new Date("2026-07-15T00:00:00.000Z") })],
       }),
     },
     {
@@ -235,10 +229,7 @@ test("every actionable read is scoped to the exact fresh ready run and current v
   assert.equal(captured.value.producer, "artist_trajectory");
   assert.equal(captured.value.status, "ready");
   assert.equal(captured.value.validAfter.toISOString(), NOW.toISOString());
-  assert.equal(
-    captured.value.generatedAfter.toISOString(),
-    "2026-07-18T16:00:00.000Z",
-  );
+  assert.equal("generatedAfter" in captured.value, false);
   assert.equal(
     captured.value.showStart.toISOString(),
     "2026-07-26T00:00:00.000Z",

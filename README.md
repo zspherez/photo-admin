@@ -39,7 +39,8 @@ decisions remain available. Shared addresses are valid when new for the artist.
 
 Contact research and audit queues poll every 10 minutes and no-op cheaply when
 idle. Research discovery runs hourly. A durable, idempotent full audit is
-enqueued monthly and waits behind any active audit.
+enqueued monthly; a mid-month rolling audit covers artists with active shows
+30–60 days out. Both wait behind any active audit.
 
 Both agents are pinned to `gpt-5.6-sol` with maximum reasoning effort. They use
 public professional management sources, never bypass access controls, and

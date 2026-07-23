@@ -1934,6 +1934,7 @@ export async function prepareContactResearchQueue(
   now: Date = new Date(),
   options: { refreshQueue?: boolean } = {},
 ): Promise<ContactResearchPreparationResult> {
+  await reclaimExpiredContactResearchClaims(now);
   const refreshed =
     options.refreshQueue === false
       ? {
@@ -1946,6 +1947,27 @@ export async function prepareContactResearchQueue(
       : await refreshContactResearchQueue(now);
   const claimable = await countClaimableContactResearchJobs(now);
   return { ...refreshed, claimable };
+}
+
+export async function reclaimExpiredContactResearchClaims(
+  now: Date = new Date(),
+): Promise<number> {
+  const reclaimed = await db.contactResearchJob.updateMany({
+    where: {
+      status: "claimed",
+      OR: [
+        { claimExpiresAt: null },
+        { claimExpiresAt: { lte: now } },
+      ],
+    },
+    data: {
+      status: "pending",
+      claimToken: null,
+      claimedAt: null,
+      claimExpiresAt: null,
+    },
+  });
+  return reclaimed.count;
 }
 
 export function countClaimableContactResearchJobs(

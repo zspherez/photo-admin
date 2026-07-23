@@ -28,6 +28,11 @@ import {
   contactStillMatchesAuditSnapshot,
 } from "@/lib/contactAuditResolutionPolicy";
 import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
+import {
+  addDateOnlyDays,
+  easternDateOnly,
+  parseDateOnly,
+} from "@/lib/calendarDate";
 
 export { contactStillMatchesAuditSnapshot } from "@/lib/contactAuditResolutionPolicy";
 
@@ -42,6 +47,11 @@ export const CONTACT_AUDIT_WORKFLOW_REF =
 export const CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES = [
   "pending",
   "running",
+] as const;
+const CONTACT_AUDIT_FULL_REQUEST_SOURCES = [
+  "manual",
+  "monthly",
+  "legacy",
 ] as const;
 
 const CONFIDENCE_VALUES = new Set(["high", "medium", "low"]);
@@ -638,7 +648,10 @@ export async function requestContactAudit(
 ): Promise<ContactAuditRequestResult> {
   return withSerializableRetry(async (tx) => {
     const existing = await tx.contactAuditRequest.findFirst({
-      where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
+      where: {
+        status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] },
+        source: { in: [...CONTACT_AUDIT_FULL_REQUEST_SOURCES] },
+      },
       orderBy: { requestedAt: "asc" },
       select: contactAuditRequestSelect(),
     });
@@ -672,6 +685,12 @@ export function contactAuditMonthlyRequestKey(now: Date): string {
   ).padStart(2, "0")}`;
 }
 
+export function contactAuditRollingMonthlyRequestKey(now: Date): string {
+  return `rolling-monthly:${now.getUTCFullYear()}-${String(
+    now.getUTCMonth() + 1,
+  ).padStart(2, "0")}`;
+}
+
 export async function requestMonthlyContactAudit(
   now: Date = new Date(),
 ): Promise<ContactAuditRequestResult> {
@@ -687,6 +706,30 @@ export async function requestMonthlyContactAudit(
         id: randomUUID(),
         requestKey,
         source: "monthly",
+        status: "pending",
+        requestedAt: now,
+      },
+      select: contactAuditRequestSelect(),
+    });
+    return { ...created, created: true };
+  });
+}
+
+export async function requestRollingMonthlyContactAudit(
+  now: Date = new Date(),
+): Promise<ContactAuditRequestResult> {
+  const requestKey = contactAuditRollingMonthlyRequestKey(now);
+  return withSerializableRetry(async (tx) => {
+    const existing = await tx.contactAuditRequest.findUnique({
+      where: { requestKey },
+      select: contactAuditRequestSelect(),
+    });
+    if (existing) return { ...existing, created: false };
+    const created = await tx.contactAuditRequest.create({
+      data: {
+        id: randomUUID(),
+        requestKey,
+        source: "rolling_monthly",
         status: "pending",
         requestedAt: now,
       },
@@ -715,6 +758,7 @@ export async function prepareContactAudit(
       orderBy: [{ status: "desc" }, { requestedAt: "asc" }],
       select: {
         id: true,
+        source: true,
         startedAt: true,
         runId: true,
         run: {
@@ -738,6 +782,7 @@ export async function prepareContactAudit(
         orderBy: [{ status: "desc" }, { requestedAt: "asc" }],
         select: {
           id: true,
+          source: true,
           startedAt: true,
           runId: true,
           run: {
@@ -756,21 +801,31 @@ export async function prepareContactAudit(
         },
       });
     }
-    if (!request && options.requestIfMissing) {
-      const created = await tx.contactAuditRequest.create({
-        data: {
-          id: randomUUID(),
-          source: "manual",
-          status: "pending",
-          requestedAt: now,
+    if (options.requestIfMissing) {
+      const activeFullRequest = await tx.contactAuditRequest.findFirst({
+        where: {
+          status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] },
+          source: { in: [...CONTACT_AUDIT_FULL_REQUEST_SOURCES] },
         },
-        select: {
-          id: true,
-          startedAt: true,
-          runId: true,
-        },
+        select: { id: true },
       });
-      request = { ...created, run: null };
+      if (!activeFullRequest) {
+        const created = await tx.contactAuditRequest.create({
+          data: {
+            id: randomUUID(),
+            source: "manual",
+            status: "pending",
+            requestedAt: now,
+          },
+          select: {
+            id: true,
+            source: true,
+            startedAt: true,
+            runId: true,
+          },
+        });
+        if (!request) request = { ...created, run: null };
+      }
     }
     if (!request) {
       return {
@@ -842,8 +897,28 @@ export async function prepareContactAudit(
       };
     }
 
+    const rollingToday = easternDateOnly(now);
+    const rollingStart = parseDateOnly(addDateOnlyDays(rollingToday, 30));
+    const rollingEnd = parseDateOnly(addDateOnlyDays(rollingToday, 60));
     const contacts = await tx.contact.findMany({
-      where: { state: "active" },
+      where: {
+        state: "active",
+        ...(request.source === "rolling_monthly"
+          ? {
+              artist: {
+                shows: {
+                  some: {
+                    show: {
+                      date: { gte: rollingStart, lte: rollingEnd },
+                      syncStatus: "active",
+                      dismissedAt: null,
+                    },
+                  },
+                },
+              },
+            }
+          : {}),
+      },
       orderBy: [{ artistId: "asc" }, { id: "asc" }],
       select: {
         id: true,

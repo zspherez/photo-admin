@@ -5,10 +5,12 @@ import { db } from "./db";
 import {
   claimContactAuditJobs,
   contactAuditMonthlyRequestKey,
+  contactAuditRollingMonthlyRequestKey,
   prepareContactAudit,
   recordContactAuditWorkflowFailure,
   requestContactAudit,
   requestMonthlyContactAudit,
+  requestRollingMonthlyContactAudit,
   submitContactAuditResult,
 } from "./contactAudit";
 
@@ -194,6 +196,10 @@ test("monthly requests are unique per month and wait behind a running audit", as
   try {
     const july = new Date("2026-07-01T15:17:00.000Z");
     assert.equal(contactAuditMonthlyRequestKey(july), "monthly:2026-07");
+    assert.equal(
+      contactAuditRollingMonthlyRequestKey(july),
+      "rolling-monthly:2026-07",
+    );
     const first = await requestMonthlyContactAudit(july);
     const duplicate = await requestMonthlyContactAudit(
       new Date("2026-07-20T00:00:00.000Z"),
@@ -201,13 +207,96 @@ test("monthly requests are unique per month and wait behind a running audit", as
     const august = await requestMonthlyContactAudit(
       new Date("2026-08-01T15:17:00.000Z"),
     );
+    const rolling = await requestRollingMonthlyContactAudit(july);
+    const rollingDuplicate = await requestRollingMonthlyContactAudit(
+      new Date("2026-07-31T00:00:00.000Z"),
+    );
     assert.equal(first.created, true);
     assert.equal(first.status, "pending");
     assert.equal(duplicate.created, false);
     assert.equal(duplicate.id, first.id);
     assert.equal(august.created, true);
+    assert.equal(rolling.created, true);
+    assert.equal(rolling.source, "rolling_monthly");
+    assert.equal(rollingDuplicate.created, false);
+    assert.equal(rollingDuplicate.id, rolling.id);
     assert.equal(rows.filter((row) => row.status === "running").length, 1);
-    assert.equal(rows.filter((row) => row.status === "pending").length, 2);
+    assert.equal(rows.filter((row) => row.status === "pending").length, 3);
+  } finally {
+    mutableDb.$transaction = originalTransaction;
+  }
+});
+
+test("a rolling audit never absorbs a requested full audit", async () => {
+  const mutableDb = db as unknown as MutableDb;
+  const originalTransaction = mutableDb.$transaction;
+  const now = new Date("2026-07-15T15:30:00.000Z");
+  const rows: RequestRow[] = [
+    {
+      id: "rolling-request",
+      requestKey: "rolling-monthly:2026-07",
+      source: "rolling_monthly",
+      status: "pending",
+      requestedAt: new Date("2026-07-15T15:29:00.000Z"),
+      startedAt: null,
+      completedAt: null,
+      runId: null,
+      attemptCount: 0,
+      lastAttemptAt: null,
+      lastWorkflowRunId: null,
+      lastError: null,
+    },
+  ];
+  const tx = {
+    contactAuditRequest: {
+      findFirst: async ({
+        where,
+      }: {
+        where: { source?: { in: readonly string[] } };
+      }) =>
+        rows.find(
+          (row) =>
+            !where.source ||
+            (row.source !== undefined && where.source.in.includes(row.source)),
+        ) ?? null,
+      create: async ({
+        data,
+      }: {
+        data: {
+          id: string;
+          source: string;
+          status: string;
+          requestedAt: Date;
+        };
+      }) => {
+        const row: RequestRow = {
+          ...data,
+          requestKey: null,
+          startedAt: null,
+          completedAt: null,
+          runId: null,
+          attemptCount: 0,
+          lastAttemptAt: null,
+          lastWorkflowRunId: null,
+          lastError: null,
+        };
+        rows.push(row);
+        return row;
+      },
+    },
+    contactAuditRun: {
+      findFirst: async () => null,
+    },
+  };
+  mutableDb.$transaction = serialTransaction(tx);
+
+  try {
+    const result = await requestContactAudit(now);
+    assert.equal(result.created, true);
+    assert.equal(result.source, "manual");
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]?.source, "rolling_monthly");
+    assert.equal(rows[1]?.source, "manual");
   } finally {
     mutableDb.$transaction = originalTransaction;
   }
@@ -846,4 +935,12 @@ test("completion links the request and the audit queue is independent from manag
   );
   assert.doesNotMatch(migration, /ContactResearchJob/);
   assert.doesNotMatch(completion, /contactResearchJob/);
+  assert.match(
+    source,
+    /request\.source === "rolling_monthly"[\s\S]*date: \{ gte: rollingStart, lte: rollingEnd \}[\s\S]*syncStatus: "active"[\s\S]*dismissedAt: null/,
+  );
+  assert.match(
+    source,
+    /options\.requestIfMissing[\s\S]*CONTACT_AUDIT_FULL_REQUEST_SOURCES[\s\S]*source: "manual"/,
+  );
 });
