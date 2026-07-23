@@ -64,33 +64,9 @@ test("lease conflicts remain structured and return HTTP conflict", () => {
   );
 });
 
-test("Sheet deadline deferrals are promoted to cron failures", () => {
-  const monitored = monitorRequiredSyncResult({
-    ok: true,
-    durationMs: 5,
-    data: {
-      ok: false as const,
-      status: "deferred" as const,
-      reason: "operation_deadline_exceeded" as const,
-      details: {
-        phase: "initial_sheet_read",
-        destructiveWorkStarted: false,
-      },
-    },
-  });
-
-  assert.equal(syncListensHttpStatus([monitored]), 500);
-  assert.equal(
-    !monitored.ok && "data" in monitored ? monitored.data.status : null,
-    "deferred"
-  );
-});
-
-test("cron propagates the configured Sheet target instead of defaulting a tab", () => {
+test("listen cron does not read or synchronize contact Sheets", () => {
   const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
 
-  assert.match(source, /getConfiguredSheetTarget/);
-  assert.match(source, /syncConfiguredContactsFromSheet\(deadline\)/);
-  assert.match(source, /monitorRequiredSyncResult\(sheetsExecution\)/);
-  assert.doesNotMatch(source, /syncContactsFromSheet\("Artists"\)/);
+  assert.doesNotMatch(source, /sheet/i);
+  assert.match(source, /const results = \{ spotify, statsfm \}/);
 });

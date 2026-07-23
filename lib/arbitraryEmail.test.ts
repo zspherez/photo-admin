@@ -532,12 +532,16 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
       migrationNames.indexOf(monthlyContactAuditMigrationName),
   );
   assert.equal(
-    migrationNames.at(-2),
+    migrationNames.at(-3),
     monthlyContactAuditMigrationName,
   );
   assert.equal(
-    migrationNames.at(-1),
+    migrationNames.at(-2),
     "20260723040000_rolling_monthly_contact_audits",
+  );
+  assert.equal(
+    migrationNames.at(-1),
+    "20260723180000_contact_export_snapshots",
   );
 
   const migration = readFileSync(

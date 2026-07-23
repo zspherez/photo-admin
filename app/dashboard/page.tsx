@@ -66,7 +66,6 @@ export default async function DashboardPage({
   const added = firstSearchParam(params.added);
   const updated = firstSearchParam(params.updated);
   const deleted = firstSearchParam(params.deleted);
-  const sheetErrors = firstSearchParam(params.sheet_errors);
   const marked = firstSearchParam(params.marked);
   const unmarked = firstSearchParam(params.unmarked);
   const queued = firstSearchParam(params.queued);
@@ -143,11 +142,6 @@ export default async function DashboardPage({
           </Banner>
         )}
         {deleted && <Banner tone="success">Contact deleted.</Banner>}
-        {sheetErrors && (
-          <Banner tone="warning">
-            DB updated; sheet sync had errors: {sheetErrors}
-          </Banner>
-        )}
         {error && <Banner tone="danger">Action failed: {error}</Banner>}
       </div>
 

@@ -315,7 +315,6 @@ ${recoveryRun}
     MOCK_VERCEL_BIN: mockVercel,
     EXPECTED_PROJECT_FINGERPRINT: projectFingerprint,
     RECOVERY_ENVIRONMENT_GUARD: "production-recovery-main-only-v1",
-    RELEASE_OWNERSHIP_READY: "false",
     RELEASE_PAUSE_REQUESTED: "true",
     RELEASE_SCHEMA_READY: "false",
     RELEASE_SCHEMA_STARTED: "false",
@@ -349,7 +348,6 @@ ${recoveryRun}
     encoding: "utf8",
     env: {
       ...watchdogEnvironment,
-      RELEASE_OWNERSHIP_READY: "true",
       RELEASE_SCHEMA_READY: "true",
       RELEASE_SCHEMA_STARTED: "true",
       RELEASE_STAGED_VERIFIED: "true",
@@ -388,7 +386,6 @@ ${recoveryRun}
       encoding: "utf8",
       env: {
         ...watchdogEnvironment,
-        RELEASE_OWNERSHIP_READY: "true",
         RELEASE_SCHEMA_READY: "true",
         RELEASE_SCHEMA_STARTED: "true",
         RELEASE_STAGED_VERIFIED: "true",
@@ -513,27 +510,6 @@ test("uncertain schema cutover remains paused and fails visibly", () => {
   assert.doesNotMatch(result.stdout, /unpause request succeeded/);
 });
 
-test("verified schema without Sheet ownership remains paused", () => {
-  const result = spawnSync("bash", [recoveryScript], {
-    encoding: "utf8",
-    env: {
-      ...baseEnvironment(),
-      RELEASE_PAUSE_REQUESTED: "true",
-      RELEASE_SCHEMA_STARTED: "true",
-      RELEASE_SCHEMA_READY: "true",
-      RELEASE_SHA: releaseSha,
-      RELEASE_STAGED_VERIFIED: "true",
-      RELEASE_TARGET_PROMOTED: "true",
-      RELEASE_TARGET_URL: "https://target.example.vercel.app",
-      VERCEL_BIN: mockVercel,
-    },
-  });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /Sheet adoption/);
-  assert.doesNotMatch(result.stdout, /mock-vercel promote/);
-  assert.doesNotMatch(result.stdout, /unpause request succeeded/);
-});
-
 test("verified cutover recovery promotes the exact staged target before resume", () => {
   const result = spawnSync("bash", [recoveryScript], {
     encoding: "utf8",
@@ -542,7 +518,6 @@ test("verified cutover recovery promotes the exact staged target before resume",
       RELEASE_PAUSE_REQUESTED: "true",
       RELEASE_SCHEMA_STARTED: "true",
       RELEASE_SCHEMA_READY: "true",
-      RELEASE_OWNERSHIP_READY: "true",
       RELEASE_SHA: releaseSha,
       RELEASE_STAGED_VERIFIED: "true",
       RELEASE_TARGET_PROMOTED: "false",

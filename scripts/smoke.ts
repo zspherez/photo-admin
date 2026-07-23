@@ -2,7 +2,6 @@ import "dotenv/config";
 import { db } from "@/lib/db";
 import { assertSafeDatabaseTestWrite } from "@/lib/databaseWriteSafety";
 import { syncEdmtrainShows } from "@/lib/edmtrain";
-import { listTabs, syncContactsFromSheet } from "@/lib/sheets";
 import { getMe, saveStatsfmCredential, syncStatsfmTopArtists } from "@/lib/statsfm";
 
 async function main() {
@@ -23,18 +22,6 @@ async function main() {
   console.log("\n=== Stats.fm lifetime top 100 ===");
   const sfm = await syncStatsfmTopArtists(me.id, "lifetime", 100);
   console.log(sfm);
-
-  console.log("\n=== Sheets tabs ===");
-  const tabs = await listTabs();
-  console.log(tabs);
-
-  console.log("\n=== Sheets sync (Artists) ===");
-  try {
-    const sheets = await syncContactsFromSheet("Artists");
-    console.log(sheets);
-  } catch (e) {
-    console.log("Sheets sync failed:", e instanceof Error ? e.message : e);
-  }
 
   console.log("\n=== Totals ===");
   const [shows, artists, contacts, signals] = await Promise.all([

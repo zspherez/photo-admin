@@ -17,12 +17,6 @@ import {
   normalizeResearchSourceUrl,
 } from "@/lib/contactResearch";
 import {
-  AuditedContactSheetPostWriteError,
-  recoverAuditedContactSheetPostWriteError,
-  rollbackAuditedContactInSheet,
-  updateAuditedContactInSheet,
-} from "@/lib/sheets";
-import {
   contactAuditResolutionEligibility,
   contactAuditResolutionClaimStaleBefore,
   contactStillMatchesAuditSnapshot,
@@ -1387,7 +1381,6 @@ type ResolutionContact = {
   source: string | null;
   notes: string | null;
   isFullTeam: boolean;
-  sourceKey: string | null;
   state: "active" | "quarantined";
   updatedAt: Date;
   artist: { name: string };
@@ -1410,16 +1403,6 @@ type ResolutionReservation = {
   alternative: ResolutionAlternative | null;
 };
 
-interface ContactAuditSheetMutations {
-  update: typeof updateAuditedContactInSheet;
-  rollback: typeof rollbackAuditedContactInSheet;
-}
-
-const CONTACT_AUDIT_SHEET_MUTATIONS: ContactAuditSheetMutations = {
-  update: updateAuditedContactInSheet,
-  rollback: rollbackAuditedContactInSheet,
-};
-
 function isSameResolution(
   existing: {
     resolution: string | null;
@@ -1440,7 +1423,7 @@ function resolutionError(error: unknown): string {
   ) {
     return "That artist already has the proposed email address. No contact or outreach history was merged.";
   }
-  return "The decision could not be saved. The contact was not changed; refresh and try again.";
+  return "The database decision could not be saved. The contact was not changed; refresh and try again.";
 }
 
 async function contactAuditAlternativeAlreadyStored(
@@ -1700,8 +1683,7 @@ async function reserveContactAuditResolution(
 async function finalizeContactAuditResolution(
   reservation: ResolutionReservation,
   decision: ResolutionDecision,
-  now: Date,
-  sheetSourceKey: string | null
+  now: Date
 ): Promise<ContactAuditResolutionResult> {
   return withSerializableRetry(async (tx) => {
     const job = await tx.contactAuditJob.findUnique({
@@ -1807,12 +1789,6 @@ async function finalizeContactAuditResolution(
           name: alternative.name,
           role: "management",
           state: "active",
-          ...(job.contact.source === "sheet"
-            ? {
-                sourceKey: sheetSourceKey ?? job.contact.sourceKey,
-                sourceSyncedAt: now,
-              }
-            : {}),
         },
         include: { artist: { select: { name: true } } },
       })) as ResolutionContact;
@@ -1859,8 +1835,7 @@ export async function resolveContactAuditJob(
   jobId: string,
   resolution: ContactAuditResolution,
   alternativeId: string | null,
-  now: Date = new Date(),
-  sheetMutations: ContactAuditSheetMutations = CONTACT_AUDIT_SHEET_MUTATIONS
+  now: Date = new Date()
 ): Promise<ContactAuditResolutionResult> {
   const normalizedJobId = jobId.trim();
   const normalizedAlternativeId = alternativeId?.trim() || null;
@@ -1879,132 +1854,21 @@ export async function resolveContactAuditJob(
   if (!reserved.ok) return reserved.result;
 
   const { reservation } = reserved;
-  let sheetUpdate: Awaited<
-    ReturnType<typeof updateAuditedContactInSheet>
-  > | null = null;
-  if (
-    decision.resolution === "approved" &&
-    reservation.alternative &&
-    reservation.contact.source === "sheet" &&
-    !reservation.contact.sourceKey
-  ) {
-    await releaseContactAuditResolutionClaim(
-      reservation.jobId,
-      reservation.claimToken
-    );
-    return {
-      ok: false,
-      error:
-        "This Sheet-owned contact has no stable row identity. Run a complete Sheet sync before approving the replacement.",
-    };
-  }
-  if (
-    decision.resolution === "approved" &&
-    reservation.alternative &&
-    reservation.contact.source === "sheet" &&
-    reservation.contact.sourceKey
-  ) {
-    try {
-      sheetUpdate = await sheetMutations.update({
-        artistName: reservation.contact.artist.name,
-        oldEmail: reservation.contact.email,
-        newEmail: reservation.alternative.normalizedEmail,
-        oldDirectOutreachNote: reservation.contact.directOutreachNote,
-        newDirectOutreachNote: null,
-        sourceKey: reservation.contact.sourceKey,
-        managerName: reservation.alternative.name,
-        role: "management",
-      });
-    } catch (error) {
-      if (error instanceof AuditedContactSheetPostWriteError) {
-        const recovery = await recoverAuditedContactSheetPostWriteError(
-          error,
-          sheetMutations.rollback
-        );
-        await releaseContactAuditResolutionClaim(
-          reservation.jobId,
-          reservation.claimToken
-        );
-        const originalDetail = error.message.slice(0, 180);
-        if (!recovery.rolledBack) {
-          console.error(
-            JSON.stringify({
-              event: "contact_audit_sheet_post_write_rollback_failed",
-              jobId: reservation.jobId,
-              contactId: reservation.contact.id,
-              sheetError: error.message,
-              rollbackError: recovery.rollbackError,
-            })
-          );
-          return {
-            ok: false,
-            error: `Google Sheet update verification failed after the write, and rollback failed. Reconcile the Sheet before retrying. Original error: ${originalDetail}. Rollback error: ${recovery.rollbackError.slice(0, 180)}`,
-          };
-        }
-        return {
-          ok: false,
-          error: `Google Sheet update verification failed after the write; the exact Sheet changes were rolled back and the database decision was not saved. ${originalDetail}`,
-        };
-      }
-      await releaseContactAuditResolutionClaim(
-        reservation.jobId,
-        reservation.claimToken
-      );
-      const detail = error instanceof Error ? error.message : String(error);
-      return {
-        ok: false,
-        error: `Google Sheet update failed; the database and decision were not changed. ${detail.slice(0, 180)}`,
-      };
-    }
-  }
-
   let result: ContactAuditResolutionResult;
   try {
     result = await finalizeContactAuditResolution(
       reservation,
       decision,
-      now,
-      sheetUpdate?.sourceKey ?? null
+      now
     );
   } catch (error) {
     result = { ok: false, error: resolutionError(error) };
   }
-  if (result.ok || !sheetUpdate || !reservation.alternative) {
-    if (!result.ok) {
-      await releaseContactAuditResolutionClaim(
-        reservation.jobId,
-        reservation.claimToken
-      );
-    }
-    return result;
-  }
-
-  let rollbackError: string | null = null;
-  try {
-    await sheetMutations.rollback(sheetUpdate.rollback);
-  } catch (error) {
-    rollbackError = error instanceof Error ? error.message : String(error);
-  }
-  await releaseContactAuditResolutionClaim(
-    reservation.jobId,
-    reservation.claimToken
-  );
-  if (rollbackError) {
-    console.error(
-      JSON.stringify({
-        event: "contact_audit_sheet_database_divergence",
-        jobId: reservation.jobId,
-        contactId: reservation.contact.id,
-        rollbackError,
-      })
+  if (!result.ok) {
+    await releaseContactAuditResolutionClaim(
+      reservation.jobId,
+      reservation.claimToken
     );
-    return {
-      ok: false,
-      error: `The Sheet changed, but the database decision failed and the Sheet rollback also failed. Reconcile the Sheet before retrying. ${rollbackError.slice(0, 180)}`,
-    };
   }
-  return {
-    ok: false,
-    error: `${result.error ?? "The database decision failed."} The Sheet change was rolled back.`,
-  };
+  return result;
 }

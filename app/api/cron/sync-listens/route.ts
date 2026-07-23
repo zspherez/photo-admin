@@ -2,10 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { syncStatsfmTopArtistRanges } from "@/lib/statsfm";
 import { syncSpotifyListens } from "@/lib/spotify";
-import {
-  getConfiguredSheetTarget,
-  syncConfiguredContactsFromSheet,
-} from "@/lib/sheets";
 import { isValidCronAuthorization } from "@/lib/cron-auth";
 import {
   runCronSource,
@@ -115,28 +111,9 @@ export async function GET(request: NextRequest) {
       { range: "weeks", limit: 200 },
     ], deadline);
   });
-  const sheetsExecution = await runCronSource("sync-listens", "sheets", async () => {
-    assertOperationTimeRemaining(
-      deadline,
-      PROVIDER_REQUEST_MIN_REMAINING_MS,
-      "Sheets contact sync"
-    );
-    const credentialsConfigured =
-      Boolean(process.env.GOOGLE_CREDENTIALS_JSON) ||
-      Boolean(process.env.GOOGLE_CREDENTIALS_PATH);
-    if (!credentialsConfigured) {
-      return { skippedReason: "Google Sheets credentials not configured" };
-    }
-    if (!(await getConfiguredSheetTarget())) {
-      return { skippedReason: "Google Sheets target not configured" };
-    }
-    return syncConfiguredContactsFromSheet(deadline);
-  });
-
   const spotify = monitorRequiredSyncResult(spotifyExecution);
   const statsfm = monitorRequiredSyncResult(statsfmExecution);
-  const sheets = monitorRequiredSyncResult(sheetsExecution);
-  const results = { spotify, statsfm, sheets };
+  const results = { spotify, statsfm };
   const status = syncListensHttpStatus(Object.values(results));
   return NextResponse.json(
     { ok: status === 200, results },

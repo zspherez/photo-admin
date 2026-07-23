@@ -4,7 +4,6 @@ set -euo pipefail
 : "${RELEASE_PAUSE_REQUESTED:=false}"
 : "${RELEASE_SCHEMA_STARTED:=false}"
 : "${RELEASE_SCHEMA_READY:=false}"
-: "${RELEASE_OWNERSHIP_READY:=false}"
 : "${RELEASE_STAGED_VERIFIED:=false}"
 : "${RELEASE_TARGET_PROMOTED:=false}"
 
@@ -12,7 +11,6 @@ for value in \
   "${RELEASE_PAUSE_REQUESTED}" \
   "${RELEASE_SCHEMA_STARTED}" \
   "${RELEASE_SCHEMA_READY}" \
-  "${RELEASE_OWNERSHIP_READY}" \
   "${RELEASE_STAGED_VERIFIED}" \
   "${RELEASE_TARGET_PROMOTED}"; do
   if [[ "${value}" != "true" && "${value}" != "false" ]]; then
@@ -101,10 +99,6 @@ if [[ "${RELEASE_SCHEMA_READY}" != "true" ]]; then
 fi
 if [[ "${RELEASE_STAGED_VERIFIED}" != "true" ]]; then
   echo "::error::The exact target artifact was not verified before cutover. Production remains paused." >&2
-  exit 1
-fi
-if [[ "${RELEASE_OWNERSHIP_READY}" != "true" ]]; then
-  echo "::error::Configured Sheet adoption and spreadsheet-scoped ownership were not verified. Production remains paused." >&2
   exit 1
 fi
 if [[ ! "${RELEASE_TARGET_URL:-}" =~ ^https://[A-Za-z0-9.-]+/?$ ]] \

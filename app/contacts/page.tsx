@@ -116,7 +116,7 @@ export default async function ContactsPage({
             Audit contacts
           </LinkButton>
           <LinkButton href="/settings/contacts" variant="secondary">
-            Sheet sync
+            Contact snapshots
           </LinkButton>
         </div>
       </div>

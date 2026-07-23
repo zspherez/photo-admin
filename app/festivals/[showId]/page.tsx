@@ -443,7 +443,6 @@ export default async function FestivalDetailPage({
     added?: SearchParamValue;
     updated?: SearchParamValue;
     deleted?: SearchParamValue;
-    sheet_errors?: SearchParamValue;
     cancelled?: SearchParamValue;
     bulk?: SearchParamValue;
     manager_research?: SearchParamValue;
@@ -476,7 +475,6 @@ export default async function FestivalDetailPage({
     added: firstSearchParam(sp.added),
     updated: firstSearchParam(sp.updated),
     deleted: firstSearchParam(sp.deleted),
-    sheetErrors: firstSearchParam(sp.sheet_errors),
     cancelled: firstSearchParam(sp.cancelled),
     bulk: firstSearchParam(sp.bulk),
     marked: firstSearchParam(sp.marked),
@@ -855,11 +853,6 @@ export default async function FestivalDetailPage({
                     ? `, ${notices.updated} updated`
                     : ""
                 }.`}
-          </div>
-        )}
-        {notices.sheetErrors && (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-            Contact saved; Sheet sync had errors: {notices.sheetErrors}
           </div>
         )}
         {notices.cancelled && (

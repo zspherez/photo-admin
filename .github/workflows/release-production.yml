@@ -13,11 +13,6 @@ on:
         description: Type RELEASE to confirm the maintenance window
         required: true
         type: string
-      sheet_target_change_confirmation:
-        description: Type CONFIRM only when intentionally replacing the stored Sheet target
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: read
@@ -71,7 +66,6 @@ jobs:
         env:
           REQUESTED_REVISION: ${{ inputs.revision }}
           RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
-          SHEET_TARGET_CHANGE_CONFIRMATION: ${{ inputs.sheet_target_change_confirmation }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
@@ -82,11 +76,6 @@ jobs:
           fi
           if [[ "${RELEASE_CONFIRMATION}" != "RELEASE" ]]; then
             echo "::error::confirmation must be exactly RELEASE"
-            exit 1
-          fi
-          if [[ -n "${SHEET_TARGET_CHANGE_CONFIRMATION}" \
-            && "${SHEET_TARGET_CHANGE_CONFIRMATION}" != "CONFIRM" ]]; then
-            echo "::error::sheet_target_change_confirmation must be blank or exactly CONFIRM"
             exit 1
           fi
           if [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -226,7 +215,6 @@ jobs:
       pause_requested: ${{ steps.arm-pause.outputs.pause_requested || steps.initial-state.outputs.pause_requested }}
       schema_started: ${{ steps.arm-schema.outputs.schema_started || steps.initial-state.outputs.schema_started }}
       schema_ready: ${{ steps.schema-ready.outputs.schema_ready || steps.initial-state.outputs.schema_ready }}
-      ownership_ready: ${{ steps.ownership-ready.outputs.ownership_ready || steps.initial-state.outputs.ownership_ready }}
       target_promoted: ${{ steps.promote.outputs.promoted || steps.initial-state.outputs.target_promoted }}
       resumed: ${{ steps.resume.outputs.resumed || steps.recover-in-job.outputs.resumed || steps.initial-state.outputs.resumed }}
     steps:
@@ -239,7 +227,6 @@ jobs:
             echo "pause_requested=false"
             echo "schema_started=false"
             echo "schema_ready=false"
-            echo "ownership_ready=false"
             echo "target_promoted=false"
             echo "resumed=false"
           } >> "${GITHUB_OUTPUT}"
@@ -304,13 +291,6 @@ jobs:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-          SHEETS_SPREADSHEET_ID: ${{ vars.SHEETS_SPREADSHEET_ID || secrets.SHEETS_SPREADSHEET_ID }}
-          SHEETS_TAB: ${{ vars.SHEETS_TAB || secrets.SHEETS_TAB }}
-          SHEETS_SPREADSHEET_ID_VARIABLE: ${{ vars.SHEETS_SPREADSHEET_ID }}
-          SHEETS_SPREADSHEET_ID_SECRET: ${{ secrets.SHEETS_SPREADSHEET_ID }}
-          SHEETS_TAB_VARIABLE: ${{ vars.SHEETS_TAB }}
-          SHEETS_TAB_SECRET: ${{ secrets.SHEETS_TAB }}
         run: |
           set -euo pipefail
           if [[ -z "${VERCEL_TOKEN}" || -z "${VERCEL_ORG_ID}" || -z "${VERCEL_PROJECT_ID}" ]]; then
@@ -338,10 +318,6 @@ jobs:
           fi
           if [[ -z "${APP_BASE_URL}" || -z "${CRON_SECRET}" ]]; then
             echo "::error::APP_BASE_URL and CRON_SECRET production environment secrets are required"
-            exit 1
-          fi
-          if [[ -z "${GOOGLE_CREDENTIALS_JSON}" ]]; then
-            echo "::error::GOOGLE_CREDENTIALS_JSON is required as a production environment secret"
             exit 1
           fi
           if [[ ! "${APP_BASE_URL}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]; then
@@ -385,42 +361,7 @@ jobs:
             throw new Error("CRON_SECRET must be a header-safe bearer secret");
           }
 
-          let credentials;
-          try {
-            credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-          } catch {
-            throw new Error("GOOGLE_CREDENTIALS_JSON must be valid JSON");
-          }
-          if (
-            !credentials ||
-            typeof credentials !== "object" ||
-            typeof credentials.client_email !== "string" ||
-            !credentials.client_email ||
-            typeof credentials.private_key !== "string" ||
-            !credentials.private_key
-          ) {
-            throw new Error(
-              "GOOGLE_CREDENTIALS_JSON must contain nonempty client_email and private_key fields",
-            );
-          }
           NODE
-          if [[ -n "${SHEETS_SPREADSHEET_ID_VARIABLE}" \
-            && -n "${SHEETS_SPREADSHEET_ID_SECRET}" \
-            && "${SHEETS_SPREADSHEET_ID_VARIABLE}" != "${SHEETS_SPREADSHEET_ID_SECRET}" ]]; then
-            echo "::error::SHEETS_SPREADSHEET_ID production variable and secret disagree"
-            exit 1
-          fi
-          if [[ -n "${SHEETS_TAB_VARIABLE}" \
-            && -n "${SHEETS_TAB_SECRET}" \
-            && "${SHEETS_TAB_VARIABLE}" != "${SHEETS_TAB_SECRET}" ]]; then
-            echo "::error::SHEETS_TAB production variable and secret disagree"
-            exit 1
-          fi
-          if [[ -n "${SHEETS_SPREADSHEET_ID}" && -z "${SHEETS_TAB}" ]] \
-            || [[ -z "${SHEETS_SPREADSHEET_ID}" && -n "${SHEETS_TAB}" ]]; then
-            echo "::error::SHEETS_SPREADSHEET_ID and SHEETS_TAB must be configured together"
-            exit 1
-          fi
 
       - name: Pull exact production project settings
         shell: bash
@@ -469,22 +410,6 @@ jobs:
             echo "schema_change_required=false" >> "${GITHUB_OUTPUT}"
           fi
           echo "pending_migrations=${pending_migrations}" >> "${GITHUB_OUTPUT}"
-
-      - name: Validate Sheet cutover target before staging
-        shell: bash
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
-          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-          SHEETS_SPREADSHEET_ID: ${{ vars.SHEETS_SPREADSHEET_ID || secrets.SHEETS_SPREADSHEET_ID }}
-          SHEETS_TAB: ${{ vars.SHEETS_TAB || secrets.SHEETS_TAB }}
-          SHEETS_TARGET_CHANGE_CONFIRMATION: ${{ inputs.sheet_target_change_confirmation }}
-        run: |
-          set -euo pipefail
-          env -u GOOGLE_CREDENTIALS_PATH \
-            -u SPREADSHEET_ID \
-            npm --silent run db:adopt-sheet-contacts -- \
-            --validate-target-only
 
       - name: Build exact production revision before pausing
         env:
@@ -583,9 +508,7 @@ jobs:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
         run: |
           set -euo pipefail
-          env -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
-            -u SPREADSHEET_ID \
-            npm --silent run db:migrate:deploy
+          npm --silent run db:migrate:deploy
 
       - name: Backfill Unicode-normalized artist names
         if: steps.database-targets.outputs.schema_change_required == 'true'
@@ -595,9 +518,7 @@ jobs:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
         run: |
           set -euo pipefail
-          env -u GOOGLE_CREDENTIALS_JSON -u GOOGLE_CREDENTIALS_PATH \
-            -u SPREADSHEET_ID \
-            npm --silent run db:backfill:normalized-artists
+          npm --silent run db:backfill:normalized-artists
 
       - name: Verify requested migration set and exact-target compatibility
         shell: bash
@@ -642,35 +563,6 @@ jobs:
           TARGET_URL: ${{ steps.deploy.outputs.url }}
         run: bash scripts/verify-vercel-deployment.sh "${TARGET_URL}" "${RELEASE_SHA}"
 
-      - name: Adopt and verify configured Sheet contacts with new code
-        shell: bash
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
-          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-          SHEETS_SPREADSHEET_ID: ${{ vars.SHEETS_SPREADSHEET_ID || secrets.SHEETS_SPREADSHEET_ID }}
-          SHEETS_TAB: ${{ vars.SHEETS_TAB || secrets.SHEETS_TAB }}
-          SHEETS_TARGET_CHANGE_CONFIRMATION: ${{ inputs.sheet_target_change_confirmation }}
-        run: |
-          set -euo pipefail
-          env -u GOOGLE_CREDENTIALS_PATH \
-            -u SPREADSHEET_ID \
-            npm --silent run db:adopt-sheet-contacts
-
-      - name: Verify new-code ownership and database compatibility
-        id: ownership-ready
-        shell: bash
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
-        run: |
-          set -euo pipefail
-          npm --silent run db:verify-release-compatibility -- \
-            --require-sheet-adoption
-          npm --silent run db:verify-targets -- \
-            --require-all-migrations
-          echo "ownership_ready=true" >> "${GITHUB_OUTPUT}"
-
       - name: Unpause verified exact target
         if: steps.database-targets.outputs.schema_change_required == 'true'
         id: resume
@@ -696,7 +588,6 @@ jobs:
           RELEASE_PAUSE_REQUESTED: ${{ steps.arm-pause.outputs.pause_requested || 'false' }}
           RELEASE_SCHEMA_STARTED: ${{ steps.arm-schema.outputs.schema_started || 'false' }}
           RELEASE_SCHEMA_READY: ${{ steps.schema-ready.outputs.schema_ready || 'false' }}
-          RELEASE_OWNERSHIP_READY: ${{ steps.ownership-ready.outputs.ownership_ready || 'false' }}
           RELEASE_STAGED_VERIFIED: ${{ steps.verify-staged.outputs.verified || 'false' }}
           RELEASE_TARGET_PROMOTED: ${{ steps.promote.outputs.promoted || 'false' }}
           RELEASE_TARGET_URL: ${{ steps.deploy.outputs.url }}
@@ -826,7 +717,7 @@ jobs:
           fi
 
       - name: Install pinned Vercel CLI for recovery promotion
-        if: ${{ always() && steps.context_gate.outcome == 'success' && needs.release.outputs.pause_requested == 'true' && needs.release.outputs.resumed != 'true' && needs.release.outputs.schema_started == 'true' && needs.release.outputs.schema_ready == 'true' && needs.release.outputs.ownership_ready == 'true' && needs.release.outputs.staged_verified == 'true' }}
+        if: ${{ always() && steps.context_gate.outcome == 'success' && needs.release.outputs.pause_requested == 'true' && needs.release.outputs.resumed != 'true' && needs.release.outputs.schema_started == 'true' && needs.release.outputs.schema_ready == 'true' && needs.release.outputs.staged_verified == 'true' }}
         timeout-minutes: 10
         run: npm install --global "vercel@${VERCEL_CLI_VERSION}"
 
@@ -846,7 +737,6 @@ jobs:
           RELEASE_PAUSE_REQUESTED: ${{ needs.release.outputs.pause_requested || 'false' }}
           RELEASE_SCHEMA_STARTED: ${{ needs.release.outputs.schema_started || 'false' }}
           RELEASE_SCHEMA_READY: ${{ needs.release.outputs.schema_ready || 'false' }}
-          RELEASE_OWNERSHIP_READY: ${{ needs.release.outputs.ownership_ready || 'false' }}
           RELEASE_STAGED_VERIFIED: ${{ needs.release.outputs.staged_verified || 'false' }}
           RELEASE_TARGET_PROMOTED: ${{ needs.release.outputs.target_promoted || 'false' }}
           RELEASE_TARGET_URL: ${{ needs.release.outputs.staged_url }}
@@ -875,7 +765,6 @@ jobs:
             "${RELEASE_PAUSE_REQUESTED}" \
             "${RELEASE_SCHEMA_STARTED}" \
             "${RELEASE_SCHEMA_READY}" \
-            "${RELEASE_OWNERSHIP_READY}" \
             "${RELEASE_STAGED_VERIFIED}" \
             "${RELEASE_TARGET_PROMOTED}"; do
             if [[ "${value}" != "true" && "${value}" != "false" ]]; then
@@ -1144,10 +1033,6 @@ jobs:
           fi
           if [[ "${RELEASE_STAGED_VERIFIED}" != "true" ]]; then
             echo "::error::The exact target artifact was not verified before cutover. Production remains paused."
-            exit 1
-          fi
-          if [[ "${RELEASE_OWNERSHIP_READY}" != "true" ]]; then
-            echo "::error::Configured Sheet adoption and spreadsheet-scoped ownership were not verified. Production remains paused."
             exit 1
           fi
           if [[ ! "${RELEASE_TARGET_URL}" =~ ^https://[A-Za-z0-9-]+\.vercel\.app/?$ ]]; then

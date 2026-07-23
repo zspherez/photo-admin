@@ -30,7 +30,6 @@ test("every contact detail surface carries direct outreach context", () => {
     "components/artist-modal.tsx",
     "app/artists/[id]/page.tsx",
     "app/festivals/[showId]/page.tsx",
-    "app/settings/contacts/page.tsx",
     "app/dashboard/contact/[contactId]/page.tsx",
     "app/dashboard/add-contact/[artistId]/page.tsx",
     "app/outreach/page.tsx",

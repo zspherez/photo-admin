@@ -438,24 +438,6 @@ test("manual and Sheet identity adoption lock before reading candidates", () => 
   assert.ok(festivalLock > festivalStart);
   assert.ok(festivalLock < festivalCandidates);
 
-  const sheetsSource = readFileSync(
-    new URL("./sheets.ts", import.meta.url),
-    "utf8"
-  );
-  const sheetsStart = sheetsSource.indexOf(
-    "export async function syncContactsFromSheet"
-  );
-  const sheetsLock = sheetsSource.indexOf(
-    "await acquireArtistIdentityLock(tx)",
-    sheetsStart
-  );
-  const ownershipRead = sheetsSource.indexOf(
-    "const ownershipContacts = await tx.contact.findMany",
-    sheetsStart
-  );
-  assert.ok(sheetsLock > sheetsStart);
-  assert.ok(sheetsLock < ownershipRead);
-
   const backfillSource = readFileSync(
     new URL("../scripts/backfill-normalized-artists.ts", import.meta.url),
     "utf8"

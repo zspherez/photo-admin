@@ -13,7 +13,6 @@ import {
   parseDateOnly,
 } from "@/lib/calendarDate";
 import { activeListenSignalWhere } from "@/lib/listenSignal";
-import { appendContactToSheet, parseSheetEmails } from "@/lib/sheets";
 import {
   directOutreachInstructionsStorage,
   readGlobalAgentRulesInTransaction,
@@ -312,13 +311,7 @@ function requiredString(
 export function normalizeResearchEmail(value: unknown): string {
   const raw = requiredString(value, 320, "email");
   const email = raw.toLowerCase();
-  const parsed = parseSheetEmails(raw);
-  if (
-    parsed.isFullTeam ||
-    parsed.emails.length !== 1 ||
-    parsed.emails[0] !== email ||
-    !EMAIL_PATTERN.test(email)
-  ) {
+  if (!EMAIL_PATTERN.test(email)) {
     throw new Error("email is invalid");
   }
   return email;
@@ -1396,8 +1389,6 @@ async function applyApprovedDirectOutreach(
       state: "active",
       directOutreachIdentity: null,
       directOutreachNote: null,
-      sourceKey: null,
-      OR: [{ source: null }, { source: { not: "sheet" } }],
     },
     select: {
       id: true,
@@ -1428,7 +1419,7 @@ async function applyApprovedDirectOutreach(
       phone: null,
       name: proposal.managerName,
       role: "management",
-      source: "research",
+      source: "agent",
       state: "active",
       ...provenance,
     },
@@ -2213,11 +2204,7 @@ export async function submitContactResearchResult(
   value: unknown,
   now: Date = new Date(),
   runTransaction: ContactResearchTransactionRunner = (work) =>
-    withSerializableRetry(work),
-  appendApprovals: (
-    approvals: readonly ApprovedResearchContact[],
-    approvedAt: Date
-  ) => Promise<string[]> = appendApprovedResearchContactsToSheet
+    withSerializableRetry(work)
 ): Promise<{
   accepted: boolean;
   status:
@@ -2228,7 +2215,6 @@ export async function submitContactResearchResult(
     | "conflict"
     | "invalid_rule_provenance";
   autoApproved: number;
-  sheetErrors: string[];
 }> {
   const submission = parseContactResearchSubmission(value);
   const stored = await runTransaction(async (tx) => {
@@ -2242,7 +2228,6 @@ export async function submitContactResearchResult(
       select: {
         id: true,
         artistId: true,
-        artist: { select: { name: true } },
         claimedAgentRules: true,
         claimedAgentRulesVersion: true,
         claimedDirectOutreachRules: true,
@@ -2252,7 +2237,7 @@ export async function submitContactResearchResult(
       return {
         accepted: false,
         status: "conflict" as const,
-        autoApprovals: [] as ApprovedResearchContact[],
+        autoApproved: 0,
       };
     }
 
@@ -2273,7 +2258,7 @@ export async function submitContactResearchResult(
       return {
         accepted: false,
         status: "invalid_rule_provenance" as const,
-        autoApprovals: [] as ApprovedResearchContact[],
+        autoApproved: 0,
       };
     }
 
@@ -2289,7 +2274,7 @@ export async function submitContactResearchResult(
         return {
           accepted: false,
           status: "invalid_rule_provenance" as const,
-          autoApprovals: [] as ApprovedResearchContact[],
+          autoApproved: 0,
         };
       }
       await tx.artistResearchSkip.create({
@@ -2317,7 +2302,7 @@ export async function submitContactResearchResult(
       return {
         accepted: true,
         status: "skipped" as const,
-        autoApprovals: [] as ApprovedResearchContact[],
+        autoApproved: 0,
       };
     }
 
@@ -2335,7 +2320,7 @@ export async function submitContactResearchResult(
       return {
         accepted: true,
         status: "exhausted" as const,
-        autoApprovals: [] as ApprovedResearchContact[],
+        autoApproved: 0,
       };
     }
 
@@ -2356,9 +2341,6 @@ export async function submitContactResearchResult(
     const autoApproveCandidates: Array<{
       id: string;
       input: ContactResearchCandidateInput;
-      stored: {
-        sourceUrls: string[];
-      };
     }> = [];
     for (const candidate of submission.candidates) {
       const existingCandidate =
@@ -2425,11 +2407,9 @@ export async function submitContactResearchResult(
         autoApproveCandidates.push({
           id: storedCandidate.id,
           input: candidate,
-          stored: storedCandidate,
         });
       }
     }
-    const approvals: ApprovedResearchContact[] = [];
     for (const candidate of autoApproveCandidates) {
       const existing = await tx.contact.findUnique({
         where: {
@@ -2439,31 +2419,27 @@ export async function submitContactResearchResult(
           },
         },
       });
-      const contact = existing
-        ? await tx.contact.update({
-            where: { id: existing.id },
-            data: {
-              state: "active",
-              name: existing.name ?? candidate.input.name,
-              role: "management",
-            },
-          })
-        : await tx.contact.create({
-            data: {
-              artistId: job.artistId,
-              email: candidate.input.normalizedEmail,
-              name: candidate.input.name,
-              role: "management",
-              source: "research",
-              state: "active",
-            },
-          });
-      approvals.push({
-        contact,
-        artistName: job.artist.name,
-        candidate: candidate.stored,
-        shouldAppendToSheet: !existing,
-      });
+      if (existing) {
+        await tx.contact.update({
+          where: { id: existing.id },
+          data: {
+            state: "active",
+            name: existing.name ?? candidate.input.name,
+            role: "management",
+          },
+        });
+      } else {
+        await tx.contact.create({
+          data: {
+            artistId: job.artistId,
+            email: candidate.input.normalizedEmail,
+            name: candidate.input.name,
+            role: "management",
+            source: "agent",
+            state: "active",
+          },
+        });
+      }
     }
     if (autoApproveCandidates.length > 0) {
       const approvedIds = autoApproveCandidates.map(
@@ -2490,7 +2466,7 @@ export async function submitContactResearchResult(
     return {
       accepted: true,
       status,
-      autoApprovals: approvals,
+      autoApproved: autoApproveCandidates.length,
     };
   });
   if (!stored.accepted) {
@@ -2498,18 +2474,12 @@ export async function submitContactResearchResult(
       accepted: false,
       status: stored.status,
       autoApproved: 0,
-      sheetErrors: [],
     };
   }
-  const sheetErrors = await appendApprovals(
-    stored.autoApprovals,
-    now
-  );
   return {
     accepted: true,
     status: stored.status,
-    autoApproved: stored.autoApprovals.length,
-    sheetErrors,
+    autoApproved: stored.autoApproved,
   };
 }
 
@@ -2537,21 +2507,6 @@ async function withSerializableRetry<T>(
     }
   }
   throw new Error("Unable to complete serializable transaction");
-}
-
-interface ApprovedResearchContact {
-  contact: {
-    id: string;
-    email: string | null;
-    name: string | null;
-    role: string | null;
-    customPrice: string | null;
-  };
-  candidate: {
-    sourceUrls: string[];
-  };
-  artistName: string;
-  shouldAppendToSheet: boolean;
 }
 
 class ContactResearchCandidateConflictError extends Error {}
@@ -2724,77 +2679,15 @@ export async function rejectContactResearchDirectOutreach(
   });
 }
 
-async function appendApprovedResearchContactsToSheet(
-  approvals: readonly ApprovedResearchContact[],
-  now: Date
-): Promise<string[]> {
-  const sheetErrors: string[] = [];
-  for (const approval of approvals) {
-    if (!approval.shouldAppendToSheet) continue;
-    try {
-      const source = approval.candidate.sourceUrls.join(" ");
-      const notes = `Research source: ${source}`.slice(0, 1_000);
-      const appended = await appendContactToSheet({
-        artistName: approval.artistName,
-        email: approval.contact.email!,
-        managerName: approval.contact.name,
-        role: approval.contact.role,
-        customPrice: approval.contact.customPrice,
-        notes,
-      });
-      const updated = await db.contact.updateMany({
-        where: {
-          id: approval.contact.id,
-          source: "research",
-        },
-        data: {
-          source: "sheet",
-          sourceKey: appended.sourceKey,
-          sourceSyncedAt: now,
-        },
-      });
-      if (updated.count === 1) continue;
-      console.error(
-        JSON.stringify({
-          event: "contact_research_sheet_ownership_pending",
-          contactId: approval.contact.id,
-          sourceKey: appended.sourceKey,
-        })
-      );
-      sheetErrors.push(
-        `${approval.contact.email}: Sheet ownership needs reconciliation.`
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(
-        JSON.stringify({
-          event: "contact_research_sheet_append_failed",
-          contactId: approval.contact.id,
-          error: message,
-        })
-      );
-      sheetErrors.push(
-        `${approval.contact.email}: ${message.slice(0, 160)}`
-      );
-    }
-  }
-  return sheetErrors;
-}
-
 export async function approveContactResearchCandidates(
   candidateIds: readonly string[],
   now: Date = new Date(),
   runTransaction: ContactResearchTransactionRunner = (work) =>
-    withSerializableRetry(work),
-  appendApprovals: (
-    approvals: readonly ApprovedResearchContact[],
-    approvedAt: Date
-  ) => Promise<string[]> = appendApprovedResearchContactsToSheet
+    withSerializableRetry(work)
 ): Promise<{
   ok: boolean;
   approvedCount?: number;
   error?: string;
-  sheetErrors?: string[];
 }> {
   const uniqueCandidateIds = Array.from(new Set(candidateIds));
   if (uniqueCandidateIds.length === 0) {
@@ -2803,7 +2696,7 @@ export async function approveContactResearchCandidates(
   let approved:
     | {
         ok: true;
-        approvals: ApprovedResearchContact[];
+        approvedCount: number;
       }
     | { ok: false; error: string };
   try {
@@ -2812,9 +2705,7 @@ export async function approveContactResearchCandidates(
         where: { id: { in: uniqueCandidateIds } },
         include: {
           job: {
-            include: {
-              artist: { select: { id: true, name: true } },
-            },
+            select: { id: true, artistId: true, status: true },
           },
         },
       });
@@ -2851,7 +2742,6 @@ export async function approveContactResearchCandidates(
       const candidateById = new Map(
         candidates.map((candidate) => [candidate.id, candidate])
       );
-      const approvals: ApprovedResearchContact[] = [];
       for (const candidateId of uniqueCandidateIds) {
         const candidate = candidateById.get(candidateId)!;
         const existing = await tx.contact.findUnique({
@@ -2862,31 +2752,27 @@ export async function approveContactResearchCandidates(
             },
           },
         });
-        const contact = existing
-          ? await tx.contact.update({
-              where: { id: existing.id },
-              data: {
-                state: "active",
-                name: existing.name ?? candidate.name,
-                role: "management",
-              },
-            })
-          : await tx.contact.create({
+        if (existing) {
+          await tx.contact.update({
+            where: { id: existing.id },
+            data: {
+              state: "active",
+              name: existing.name ?? candidate.name,
+              role: "management",
+            },
+          });
+        } else {
+          await tx.contact.create({
             data: {
               artistId: candidate.job.artistId,
               email: candidate.normalizedEmail,
               name: candidate.name,
               role: "management",
-              source: "research",
+              source: "agent",
               state: "active",
             },
           });
-        approvals.push({
-          contact,
-          artistName: candidate.job.artist.name,
-          candidate,
-          shouldAppendToSheet: !existing,
-        });
+        }
       }
 
       await resolveContactResearchJob(
@@ -2898,7 +2784,7 @@ export async function approveContactResearchCandidates(
 
       return {
         ok: true as const,
-        approvals,
+        approvedCount: uniqueCandidateIds.length,
       };
     });
   } catch (error) {
@@ -2909,14 +2795,9 @@ export async function approveContactResearchCandidates(
   }
   if (!approved.ok) return approved;
 
-  const sheetErrors = await appendApprovals(
-    approved.approvals,
-    now
-  );
   return {
     ok: true,
-    approvedCount: approved.approvals.length,
-    ...(sheetErrors.length > 0 ? { sheetErrors } : {}),
+    approvedCount: approved.approvedCount,
   };
 }
 
@@ -2924,24 +2805,16 @@ export async function approveContactResearchCandidate(
   candidateId: string,
   now: Date = new Date(),
   runTransaction: ContactResearchTransactionRunner = (work) =>
-    withSerializableRetry(work),
-  appendApprovals: (
-    approvals: readonly ApprovedResearchContact[],
-    approvedAt: Date
-  ) => Promise<string[]> = appendApprovedResearchContactsToSheet
-): Promise<{ ok: boolean; error?: string; sheetError?: string }> {
+    withSerializableRetry(work)
+): Promise<{ ok: boolean; error?: string }> {
   const result = await approveContactResearchCandidates(
     [candidateId],
     now,
-    runTransaction,
-    appendApprovals
+    runTransaction
   );
   return {
     ok: result.ok,
     ...(result.error ? { error: result.error } : {}),
-    ...(result.sheetErrors?.length
-      ? { sheetError: result.sheetErrors.join(" ") }
-      : {}),
   };
 }
 
