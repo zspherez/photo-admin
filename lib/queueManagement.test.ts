@@ -149,6 +149,10 @@ test("bulk audit rejection reclaims only stale claims and reports freshness skip
   assert.match(combined, /FOR UPDATE/);
   assert.match(combined, /FOR SHARE/);
   assert.match(combined, /job\."resolution" IS NULL/);
+  assert.match(
+    combined,
+    /NOT EXISTS \([\s\S]*FROM "ContactAuditArtistDecision" decision[\s\S]*decision\."runId" = job\."runId"[\s\S]*decision\."artistId" = job\."artistId"/,
+  );
   assert.match(combined, /"resolution" = 'rejected'/);
   assert.match(combined, /"resolvedEmail" = job\."snapshotEmail"/);
   assert.match(
@@ -204,6 +208,9 @@ test("bulk rejection preserves an in-flight approval claim through Sheet rollbac
     alternatives: [alternative],
   });
   const tx = {
+    contactAuditArtistDecision: {
+      findUnique: async () => null,
+    },
     contactAuditJob: {
       findUnique: async () => currentJob(),
       updateMany: async ({

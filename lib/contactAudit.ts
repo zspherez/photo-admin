@@ -1020,6 +1020,7 @@ export async function claimContactAuditJobs(
         JOIN "ContactAuditRequest" request ON request."runId" = run."id"
         WHERE run."status" = 'running'
           AND request."status" = 'running'
+          AND job."artistId" IS NOT NULL
           AND (
             job."status" = 'pending'
             OR (
@@ -1056,6 +1057,7 @@ export async function claimContactAuditJobs(
           id: true,
           runId: true,
           contactId: true,
+          artistId: true,
           attemptCount: true,
           targetRosterEntryId: true,
           snapshotArtistName: true,
@@ -1099,6 +1101,7 @@ export async function claimContactAuditJobs(
           {
             id: job.id,
             runId: job.runId,
+            artistId: job.artistId,
             claimToken: tokenById.get(job.id)!,
             claimExpiresAt,
             attemptCount: job.attemptCount,
@@ -1408,6 +1411,26 @@ async function reserveContactAuditResolution(
         result: { ok: false, error: "This audit finding no longer exists." },
       };
     }
+    if (
+      job.artistId &&
+      (await tx.contactAuditArtistDecision.findUnique({
+        where: {
+          runId_artistId: {
+            runId: job.runId,
+            artistId: job.artistId,
+          },
+        },
+        select: { id: true },
+      }))
+    ) {
+      return {
+        ok: false as const,
+        result: {
+          ok: false,
+          error: "This artist audit was already resolved as one artist-level decision.",
+        },
+      };
+    }
     if (job.resolution) {
       if (isSameResolution(job, decision)) {
         return {
@@ -1605,6 +1628,23 @@ async function finalizeContactAuditResolution(
         ok: false,
         error:
           "The audit finding or contact changed while the decision was being applied. No database change was saved.",
+      };
+    }
+    if (
+      job.artistId &&
+      (await tx.contactAuditArtistDecision.findUnique({
+        where: {
+          runId_artistId: {
+            runId: job.runId,
+            artistId: job.artistId,
+          },
+        },
+        select: { id: true },
+      }))
+    ) {
+      return {
+        ok: false,
+        error: "This artist audit was already resolved as one artist-level decision.",
       };
     }
     const alternative =

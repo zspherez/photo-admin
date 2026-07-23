@@ -777,6 +777,7 @@ export interface KnownContactLookupRow {
   evidence: string | null;
   source: "active_contact" | "research_candidate";
   status: "active" | "pending" | "approved";
+  artistIds: string[];
   artists: string[];
   sourceUrls: string[];
 }
@@ -887,6 +888,9 @@ export function rankKnownContactEmails(
       );
       existing.artists = Array.from(
         new Set([...existing.artists, ...row.artists])
+      );
+      existing.artistIds = Array.from(
+        new Set([...existing.artistIds, ...row.artistIds])
       );
       existing.sourceUrls = Array.from(
         new Set([...existing.sourceUrls, ...row.sourceUrls])
@@ -1005,14 +1009,13 @@ export async function findKnownContactEmails(value: unknown) {
           ? { OR: contactFilters }
           : {}),
       },
-      distinct: ["email"],
       orderBy: [{ updatedAt: "desc" }],
       take: 100,
       select: {
         email: true,
         name: true,
         notes: true,
-        artist: { select: { name: true } },
+        artist: { select: { id: true, name: true } },
       },
     }),
     db.contactResearchCandidate.findMany({
@@ -1020,7 +1023,6 @@ export async function findKnownContactEmails(value: unknown) {
         status: { in: ["pending", "approved"] },
         OR: candidateFilters,
       },
-      distinct: ["normalizedEmail"],
       orderBy: [{ updatedAt: "desc" }],
       take: 100,
       select: {
@@ -1029,7 +1031,7 @@ export async function findKnownContactEmails(value: unknown) {
         evidence: true,
         status: true,
         sourceUrls: true,
-        job: { select: { artist: { select: { name: true } } } },
+        job: { select: { artist: { select: { id: true, name: true } } } },
       },
     }),
   ]);
@@ -1044,6 +1046,7 @@ export async function findKnownContactEmails(value: unknown) {
               evidence: contact.notes,
               source: "active_contact" as const,
               status: "active" as const,
+              artistIds: [contact.artist.id],
               artists: [contact.artist.name],
               sourceUrls: [],
             },
@@ -1056,6 +1059,7 @@ export async function findKnownContactEmails(value: unknown) {
       evidence: candidate.evidence,
       source: "research_candidate" as const,
       status: candidate.status as "pending" | "approved",
+      artistIds: [candidate.job.artist.id],
       artists: [candidate.job.artist.name],
       sourceUrls: candidate.sourceUrls,
     })),

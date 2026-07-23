@@ -90,6 +90,7 @@ test("audit broker isolates credentials and submits only audit results", async (
                   {
                     id: "job-1",
                     runId: "run-1",
+                    artistId: "artist-1",
                     claimToken: "claim-1",
                     claimExpiresAt: "2026-07-21T18:00:00.000Z",
                     attemptCount: 1,
@@ -141,7 +142,21 @@ test("audit broker isolates credentials and submits only audit results", async (
                 ],
               }
             : apiRequest.url === "/api/contact-audit/known-contacts"
-              ? { query: body, matches: [] }
+              ? {
+                  query: body,
+                  matches: [
+                    {
+                      email: "shared@example.com",
+                      artistIds: ["artist-other"],
+                      artists: ["Other Artist"],
+                    },
+                    {
+                      email: "current@example.com",
+                      artistIds: ["artist-1"],
+                      artists: ["Example Artist"],
+                    },
+                  ],
+                }
               : { ok: true, runComplete: true }
         )
       );
@@ -181,6 +196,7 @@ test("audit broker isolates credentials and submits only audit results", async (
       {
         jobId: "job-1",
         runId: "run-1",
+        artistId: "artist-1",
         claimToken: "claim-1",
         claimExpiresAt: "2026-07-21T18:00:00.000Z",
         attemptCount: 1,
@@ -237,6 +253,28 @@ test("audit broker isolates credentials and submits only audit results", async (
     domain: "example.com",
   });
   assert.equal(lookup.status, 200);
+  assert.deepEqual(lookup.value, {
+    query: {
+      managerName: "New Manager",
+      company: "Example Management",
+      domain: "example.com",
+    },
+    auditedArtistId: "artist-1",
+    matches: [
+      {
+        email: "shared@example.com",
+        artistIds: ["artist-other"],
+        artists: ["Other Artist"],
+        storedForAuditedArtist: false,
+      },
+      {
+        email: "current@example.com",
+        artistIds: ["artist-1"],
+        artists: ["Example Artist"],
+        storedForAuditedArtist: true,
+      },
+    ],
+  });
   const invalidRoster = await brokerRequest(socketPath, "/validate-result", {
     jobId: "job-1",
     claimToken: "claim-1",

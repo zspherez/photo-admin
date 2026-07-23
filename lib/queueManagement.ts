@@ -57,15 +57,40 @@ async function withSerializableRetry<T>(
 }
 
 export async function readQueueManagementCounts(): Promise<QueueManagementCounts> {
-  const [auditDecisions, researchReviews, queueStatuses] = await Promise.all([
-    db.contactAuditJob.count({
-      where: {
-        status: "complete",
-        verifiedAt: { not: null },
-        finding: { in: [...CONTACT_AUDIT_FLAGGED_FINDINGS] },
-        resolution: null,
-      },
-    }),
+  const [auditDecisionRows, researchReviews, queueStatuses] = await Promise.all([
+    db.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+      SELECT COUNT(*)::integer AS "count"
+      FROM (
+        SELECT job."runId", job."artistId"
+        FROM "ContactAuditJob" job
+        WHERE job."status" = 'complete'
+          AND job."verifiedAt" IS NOT NULL
+          AND job."finding" IN (${Prisma.join([
+            ...CONTACT_AUDIT_FLAGGED_FINDINGS,
+          ])})
+          AND job."resolution" IS NULL
+          AND job."artistId" IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "ContactAuditArtistDecision" decision
+            WHERE decision."runId" = job."runId"
+              AND decision."artistId" = job."artistId"
+          )
+        GROUP BY job."runId", job."artistId"
+
+        UNION ALL
+
+        SELECT job."id", NULL
+        FROM "ContactAuditJob" job
+        WHERE job."status" = 'complete'
+          AND job."verifiedAt" IS NOT NULL
+          AND job."finding" IN (${Prisma.join([
+            ...CONTACT_AUDIT_FLAGGED_FINDINGS,
+          ])})
+          AND job."resolution" IS NULL
+          AND job."artistId" IS NULL
+      ) unresolved_artist_audits
+    `),
     db.contactResearchJob.count({ where: { status: "review" } }),
     db.contactResearchJob.groupBy({
       by: ["status"],
@@ -77,7 +102,7 @@ export async function readQueueManagementCounts(): Promise<QueueManagementCounts
     queueStatuses.map((row) => [row.status, row._count._all]),
   );
   return {
-    auditDecisions,
+    auditDecisions: auditDecisionRows[0]?.count ?? 0,
     researchReviews,
     pendingResearchJobs: counts.get("pending") ?? 0,
     claimedResearchJobs: counts.get("claimed") ?? 0,
@@ -98,6 +123,15 @@ export async function rejectUnresolvedFlaggedAuditDecisions(
           ...CONTACT_AUDIT_FLAGGED_FINDINGS,
         ])})
         AND job."resolution" IS NULL
+        AND (
+          job."artistId" IS NULL
+          OR NOT EXISTS (
+            SELECT 1
+            FROM "ContactAuditArtistDecision" decision
+            WHERE decision."runId" = job."runId"
+              AND decision."artistId" = job."artistId"
+          )
+        )
       ORDER BY job."id"
       FOR UPDATE
     `);

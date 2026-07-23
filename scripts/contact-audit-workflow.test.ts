@@ -118,6 +118,18 @@ test("audit agent and broker preserve review-only manager policy", () => {
   assert.match(agent, /Any active email in the roster is management context/);
   assert.match(
     agent,
+    /Keep submitted evidence, notes, roster-review notes,[\s\S]*succinct and non-repetitive/,
+  );
+  assert.match(
+    agent,
+    /storedForAuditedArtist[\s\S]*stored only for another artist[\s\S]*eligible as a new alternative/,
+  );
+  assert.match(
+    agent,
+    /“Genuinely new” means new to this artist, not globally unique/,
+  );
+  assert.match(
+    agent,
     /Every tool invocation must begin directly with `contact-audit-agent-tool`/,
   );
   assert.match(

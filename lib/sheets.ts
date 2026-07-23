@@ -1192,6 +1192,11 @@ export function shouldKeepApprovedStaleSheetContactQuarantined(
       resolvedEmail: string | null;
       resolvedDirectOutreachNote: string | null;
     }[];
+    auditDecisionMutations?: readonly {
+      action: string;
+      snapshotEmail: string | null;
+      snapshotDirectOutreachNote: string | null;
+    }[];
   },
   incoming: {
     email: string | null;
@@ -1201,6 +1206,22 @@ export function shouldKeepApprovedStaleSheetContactQuarantined(
   const incomingEmail = normalizeEmail(incoming.email ?? "");
   const incomingDirectOutreachNote =
     incoming.directOutreachNote?.trim() || null;
+  const auditDecisionMutation = contact.auditDecisionMutations?.find(
+    (mutation) => mutation.action === "quarantined",
+  );
+  if (auditDecisionMutation) {
+    const snapshotEmail = normalizeEmail(
+      auditDecisionMutation.snapshotEmail ?? "",
+    );
+    const snapshotDirectOutreachNote =
+      auditDecisionMutation.snapshotDirectOutreachNote?.trim() || null;
+    return incomingEmail
+      ? snapshotEmail === incomingEmail
+      : Boolean(
+          incomingDirectOutreachNote &&
+            snapshotDirectOutreachNote === incomingDirectOutreachNote,
+        );
+  }
   return contact.auditJobs.some((job) => {
     if (job.resolution !== "approved" || job.finding !== "stale") {
       return false;
@@ -1704,7 +1725,12 @@ async function syncContactsAtTarget(
           ],
         },
         include: {
-          _count: { select: { auditJobs: true } },
+          _count: {
+            select: {
+              auditJobs: true,
+              auditDecisionMutations: true,
+            },
+          },
           auditJobs: {
             where: {
               OR: [
@@ -1729,6 +1755,13 @@ async function syncContactsAtTarget(
               resolvedEmail: true,
               resolvedDirectOutreachNote: true,
               resolutionClaimToken: true,
+            },
+          },
+          auditDecisionMutations: {
+            select: {
+              action: true,
+              snapshotEmail: true,
+              snapshotDirectOutreachNote: true,
             },
           },
         },
@@ -1791,6 +1824,7 @@ async function syncContactsAtTarget(
       }> = [];
       const seenSourceKeys = new Set<string>();
       const claimedContactIds = new Set<string>();
+      const releasedAuditContactIds = new Set<string>();
       const plannedArtistEmails = new Set<string>();
       for (const row of parsed.rows) {
         const artist = artistByRow.get(row.rowId);
@@ -1831,6 +1865,21 @@ async function syncContactsAtTarget(
           const sourceContact = bySourceKey.get(
             assignment.priorSourceKey ?? assignment.sourceKey
           );
+          const releasesAuditedIdentity =
+            sourceContact?.auditDecisionMutations.some(
+              (mutation) =>
+                mutation.action === "quarantined" &&
+                !shouldKeepApprovedStaleSheetContactQuarantined(
+                  sourceContact,
+                  assignment,
+                ),
+            ) ?? false;
+          const effectiveSourceContact = releasesAuditedIdentity
+            ? null
+            : sourceContact;
+          if (releasesAuditedIdentity && sourceContact) {
+            releasedAuditContactIds.add(sourceContact.id);
+          }
           const exactContact = artistEmail
             ? byArtistEmail.get(artistEmail)
             : undefined;
@@ -1843,23 +1892,27 @@ async function syncContactsAtTarget(
               `Legacy Sheet contact ${assignment.email} cannot be assigned to this row unambiguously`
             );
           }
-          if (sourceContact && sourceContact.artistId !== artist.id) {
+          if (
+            effectiveSourceContact &&
+            effectiveSourceContact.artistId !== artist.id
+          ) {
             throw new Error(
               `Sheet row ${row.rowId} changed artists; clear its ${SHEET_SOURCE_ID_HEADER} cell to create a new source identity`
             );
           }
           if (
-            sourceContact &&
+            effectiveSourceContact &&
             exactContact &&
-            sourceContact.id !== exactContact.id
+            effectiveSourceContact.id !== exactContact.id
           ) {
             throw new Error(
-              `Cannot replace ${sourceContact.email ?? "contact"} with ${
+              `Cannot replace ${effectiveSourceContact.email ?? "contact"} with ${
                 assignment.email
               }; that address already exists`
             );
           }
-          const existingContact = sourceContact ?? exactContact ?? null;
+          const existingContact =
+            effectiveSourceContact ?? exactContact ?? null;
           if (existingContact?.sourceKey) {
             const migratesCurrentOwnership =
               existingContact.sourceKey === assignment.sourceKey ||
@@ -1900,11 +1953,18 @@ async function syncContactsAtTarget(
           sourceKey: contact.sourceKey,
           preserveAuditHistory:
             contact.state === "quarantined" &&
-            contact._count.auditJobs > 0,
+            (contact._count.auditJobs > 0 ||
+              contact._count.auditDecisionMutations > 0),
         })),
         claimedContactIds,
         seenSourceKeys
       );
+      if (releasedAuditContactIds.size > 0) {
+        await tx.contact.updateMany({
+          where: { id: { in: [...releasedAuditContactIds] } },
+          data: { sourceKey: null },
+        });
+      }
       const deleted =
         staleIds.length > 0
           ? await tx.contact.deleteMany({ where: { id: { in: staleIds } } })
