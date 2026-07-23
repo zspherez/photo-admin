@@ -245,6 +245,8 @@ async function main(): Promise<void> {
       take: 1,
       select: {
         id: true,
+        requestKey: true,
+        source: true,
         status: true,
         requestedAt: true,
         startedAt: true,

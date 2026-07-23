@@ -4,14 +4,18 @@ import test from "node:test";
 import { db } from "./db";
 import {
   claimContactAuditJobs,
+  contactAuditMonthlyRequestKey,
   prepareContactAudit,
   recordContactAuditWorkflowFailure,
   requestContactAudit,
+  requestMonthlyContactAudit,
   submitContactAuditResult,
 } from "./contactAudit";
 
 type RequestRow = {
   id: string;
+  requestKey?: string | null;
+  source?: string;
   status: string;
   requestedAt: Date;
   startedAt: Date | null;
@@ -127,6 +131,83 @@ test("first, duplicate, running, completed, and concurrent requests preserve one
     );
     assert.equal(afterCompletionA.id, afterCompletionB.id);
     assert.notEqual(afterCompletionA.id, first.id);
+  } finally {
+    mutableDb.$transaction = originalTransaction;
+  }
+});
+
+test("monthly requests are unique per month and wait behind a running audit", async () => {
+  const mutableDb = db as unknown as MutableDb;
+  const originalTransaction = mutableDb.$transaction;
+  const rows: RequestRow[] = [
+    {
+      id: "running-request",
+      requestKey: null,
+      source: "manual",
+      status: "running",
+      requestedAt: new Date("2026-07-01T12:00:00.000Z"),
+      startedAt: new Date("2026-07-01T12:00:00.000Z"),
+      completedAt: null,
+      runId: "run-1",
+      attemptCount: 1,
+      lastAttemptAt: new Date("2026-07-01T12:00:00.000Z"),
+      lastWorkflowRunId: "1000",
+      lastError: null,
+    },
+  ];
+  const tx = {
+    contactAuditRequest: {
+      findUnique: async ({
+        where,
+      }: {
+        where: { requestKey: string };
+      }) =>
+        rows.find((row) => row.requestKey === where.requestKey) ?? null,
+      create: async ({
+        data,
+      }: {
+        data: {
+          id: string;
+          requestKey: string;
+          source: string;
+          status: string;
+          requestedAt: Date;
+        };
+      }) => {
+        const row: RequestRow = {
+          ...data,
+          startedAt: null,
+          completedAt: null,
+          runId: null,
+          attemptCount: 0,
+          lastAttemptAt: null,
+          lastWorkflowRunId: null,
+          lastError: null,
+        };
+        rows.push(row);
+        return row;
+      },
+    },
+  };
+  mutableDb.$transaction = serialTransaction(tx);
+
+  try {
+    const july = new Date("2026-07-01T15:17:00.000Z");
+    assert.equal(contactAuditMonthlyRequestKey(july), "monthly:2026-07");
+    const first = await requestMonthlyContactAudit(july);
+    const duplicate = await requestMonthlyContactAudit(
+      new Date("2026-07-20T00:00:00.000Z"),
+    );
+    const august = await requestMonthlyContactAudit(
+      new Date("2026-08-01T15:17:00.000Z"),
+    );
+    assert.equal(first.created, true);
+    assert.equal(first.status, "pending");
+    assert.equal(duplicate.created, false);
+    assert.equal(duplicate.id, first.id);
+    assert.equal(august.created, true);
+    assert.equal(rows.filter((row) => row.status === "running").length, 1);
+    assert.equal(rows.filter((row) => row.status === "pending").length, 2);
   } finally {
     mutableDb.$transaction = originalTransaction;
   }

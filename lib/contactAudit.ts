@@ -74,6 +74,8 @@ export interface ContactAuditResolutionResult {
 
 export interface ContactAuditRequestResult {
   id: string;
+  requestKey: string | null;
+  source: string;
   status: string;
   requestedAt: Date;
   startedAt: Date | null;
@@ -579,6 +581,8 @@ function normalizeWorkflowRunId(value: unknown): string {
 function contactAuditRequestSelect() {
   return {
     id: true,
+    requestKey: true,
+    source: true,
     status: true,
     requestedAt: true,
     startedAt: true,
@@ -609,6 +613,7 @@ async function adoptLegacyContactAuditRun(
   await tx.contactAuditRequest.create({
     data: {
       id: randomUUID(),
+      source: "legacy",
       status: "running",
       requestedAt: legacyRun.createdAt,
       startedAt: legacyRun.createdAt,
@@ -651,6 +656,37 @@ export async function requestContactAudit(
     const created = await tx.contactAuditRequest.create({
       data: {
         id: randomUUID(),
+        source: "manual",
+        status: "pending",
+        requestedAt: now,
+      },
+      select: contactAuditRequestSelect(),
+    });
+    return { ...created, created: true };
+  });
+}
+
+export function contactAuditMonthlyRequestKey(now: Date): string {
+  return `monthly:${now.getUTCFullYear()}-${String(
+    now.getUTCMonth() + 1,
+  ).padStart(2, "0")}`;
+}
+
+export async function requestMonthlyContactAudit(
+  now: Date = new Date(),
+): Promise<ContactAuditRequestResult> {
+  const requestKey = contactAuditMonthlyRequestKey(now);
+  return withSerializableRetry(async (tx) => {
+    const existing = await tx.contactAuditRequest.findUnique({
+      where: { requestKey },
+      select: contactAuditRequestSelect(),
+    });
+    if (existing) return { ...existing, created: false };
+    const created = await tx.contactAuditRequest.create({
+      data: {
+        id: randomUUID(),
+        requestKey,
+        source: "monthly",
         status: "pending",
         requestedAt: now,
       },
@@ -676,7 +712,7 @@ export async function prepareContactAudit(
   return withSerializableRetry(async (tx) => {
     let request = await tx.contactAuditRequest.findFirst({
       where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
-      orderBy: { requestedAt: "asc" },
+      orderBy: [{ status: "desc" }, { requestedAt: "asc" }],
       select: {
         id: true,
         startedAt: true,
@@ -699,7 +735,7 @@ export async function prepareContactAudit(
     if (!request && (await adoptLegacyContactAuditRun(tx))) {
       request = await tx.contactAuditRequest.findFirst({
         where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
-        orderBy: { requestedAt: "asc" },
+        orderBy: [{ status: "desc" }, { requestedAt: "asc" }],
         select: {
           id: true,
           startedAt: true,
@@ -724,6 +760,7 @@ export async function prepareContactAudit(
       const created = await tx.contactAuditRequest.create({
         data: {
           id: randomUUID(),
+          source: "manual",
           status: "pending",
           requestedAt: now,
         },
@@ -939,7 +976,7 @@ export async function noteContactAuditPrepareFailure(
   return withSerializableRetry(async (tx) => {
     const request = await tx.contactAuditRequest.findFirst({
       where: { status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] } },
-      orderBy: { requestedAt: "asc" },
+      orderBy: [{ status: "desc" }, { requestedAt: "asc" }],
       select: { id: true },
     });
     if (!request) return false;

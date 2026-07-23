@@ -5,6 +5,7 @@ import {
   isValidContactAuditAuthorization,
   noteContactAuditPrepareFailure,
   prepareContactAudit,
+  requestMonthlyContactAudit,
 } from "@/lib/contactAudit";
 
 export const maxDuration = 60;
@@ -19,6 +20,7 @@ export async function POST(request: NextRequest) {
 
   let workflowRunId: unknown;
   let requestFullAudit = false;
+  let requestSource: "manual" | "monthly" | "poll" = "poll";
   try {
     const value = await request.json();
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -33,20 +35,54 @@ export async function POST(request: NextRequest) {
       );
     }
     requestFullAudit = requested ?? false;
+    const source = Reflect.get(value, "requestSource");
+    if (
+      source !== undefined &&
+      source !== "manual" &&
+      source !== "monthly" &&
+      source !== "poll"
+    ) {
+      return NextResponse.json(
+        { error: "requestSource must be manual, monthly, or poll" },
+        { status: 400 },
+      );
+    }
+    requestSource = source ?? "poll";
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
 
   try {
+    const oidcEvent = requestFullAudit
+      ? await getTrustedContactAuditOidcEvent(authorization)
+      : null;
     if (
       requestFullAudit &&
-      (await getTrustedContactAuditOidcEvent(authorization)) !==
-        "workflow_dispatch"
+      !(
+        (requestSource === "manual" && oidcEvent === "workflow_dispatch") ||
+        (requestSource === "monthly" && oidcEvent === "schedule")
+      )
     ) {
       return NextResponse.json(
-        { error: "full audit requests require a manual workflow dispatch" },
+        {
+          error:
+            "full audit requests require a manual dispatch or monthly schedule",
+        },
         { status: 403 },
       );
+    }
+    if (requestSource === "monthly") {
+      const monthlyRequest = await requestMonthlyContactAudit();
+      return NextResponse.json({
+        requested: true,
+        queued: true,
+        created: monthlyRequest.created,
+        requestId: monthlyRequest.id,
+        runId: monthlyRequest.runId,
+        resumed: false,
+        contactCount: 0,
+        claimable: 0,
+      });
     }
     return NextResponse.json(
       await prepareContactAudit(workflowRunId, new Date(), {

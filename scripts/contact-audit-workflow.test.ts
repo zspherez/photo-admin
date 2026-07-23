@@ -49,11 +49,28 @@ const rosterMigration = readFileSync(
   ),
   "utf8"
 );
+const monthlyRequestMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260723030000_monthly_contact_audit_requests/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("contact audit workflow polls explicitly requested work and is OIDC-authenticated", () => {
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /schedule:/);
   assert.match(workflow, /cron: "\*\/10 \* \* \* \*"/);
+  assert.match(workflow, /cron: "17 15 1 \* \*"/);
+  assert.match(workflow, /enqueue_monthly:/);
+  assert.match(
+    workflow,
+    /photo-admin-contact-audit-monthly-request/,
+  );
+  assert.match(
+    workflow,
+    /prepare:[\s\S]*if: \$\{\{ github\.event\.schedule != '17 15 1 \* \*' \}\}/,
+  );
   assert.doesNotMatch(workflow, /pull_request:/);
   assert.match(workflow, /copilot-requests: write/);
   assert.match(workflow, /id-token: write/);
@@ -65,12 +82,24 @@ test("contact audit workflow polls explicitly requested work and is OIDC-authent
     workflow,
     /REQUEST_FULL_AUDIT: \$\{\{ github\.event_name == 'workflow_dispatch' \}\}/,
   );
+  assert.match(workflow, /AUDIT_REQUEST_SOURCE:/);
   assert.match(workflow, /requestFullAudit: \$requestFullAudit/);
+  assert.match(workflow, /requestSource: \$requestSource/);
+  assert.match(
+    workflow,
+    /requestSource: "monthly"/,
+  );
   assert.match(prepareRoute, /requestFullAudit must be a boolean/);
   assert.match(
     prepareRoute,
-    /getTrustedContactAuditOidcEvent\(authorization\)[\s\S]*"workflow_dispatch"/,
+    /requestSource must be manual, monthly, or poll/,
   );
+  assert.match(
+    prepareRoute,
+    /requestSource === "manual" && oidcEvent === "workflow_dispatch"[\s\S]*requestSource === "monthly" && oidcEvent === "schedule"/,
+  );
+  assert.match(prepareRoute, /requestMonthlyContactAudit\(\)/);
+  assert.match(prepareRoute, /queued: true/);
   assert.match(
     prepareRoute,
     /prepareContactAudit\(workflowRunId, new Date\(\), \{[\s\S]*requestIfMissing: requestFullAudit/,
@@ -302,4 +331,33 @@ test("contact audit request migration constrains lifecycle and one active reques
   assert.match(requestMigration, /ContactAuditRequest_transition_guard/);
   assert.match(requestMigration, /run link is immutable/);
   assert.match(requestMigration, /COMMIT;\s*$/);
+});
+
+test("monthly audit requests are durable, queued, and idempotent", () => {
+  assert.match(monthlyRequestMigration, /^BEGIN;/);
+  assert.match(
+    monthlyRequestMigration,
+    /ADD COLUMN "requestKey" TEXT/,
+  );
+  assert.match(
+    monthlyRequestMigration,
+    /ADD COLUMN "source" TEXT NOT NULL DEFAULT 'manual'/,
+  );
+  assert.match(
+    monthlyRequestMigration,
+    /DROP INDEX "ContactAuditRequest_one_active_key"/,
+  );
+  assert.match(
+    monthlyRequestMigration,
+    /ContactAuditRequest_one_running_key[\s\S]*WHERE "status" = 'running'/,
+  );
+  assert.match(
+    monthlyRequestMigration,
+    /ContactAuditRequest_requestKey_key/,
+  );
+  assert.match(
+    monthlyRequestMigration,
+    /Contact audit request identity is immutable/,
+  );
+  assert.match(monthlyRequestMigration, /COMMIT;\s*$/);
 });

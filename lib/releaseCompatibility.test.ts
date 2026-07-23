@@ -201,6 +201,8 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
     selectedScalarFields(source, "contactAuditRequest"),
     [
       "id",
+      "requestKey",
+      "source",
       "status",
       "requestedAt",
       "startedAt",
