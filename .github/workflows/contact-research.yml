@@ -54,9 +54,7 @@ jobs:
               --silent \
               --show-error \
               --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              --header "Content-Type: application/json" \
               --header "Accept: application/json" \
-              --data "$(jq -cn --argjson refreshQueue "${REFRESH_QUEUE}" '{refreshQueue: $refreshQueue}')" \
               "${oidc_url}${separator}audience=photo-admin-contact-research" |
               jq -er '.value | select(type == "string" and length > 0)'
           )"
@@ -70,8 +68,10 @@ jobs:
               --connect-timeout 15 \
               --max-time 120 \
               --request POST \
+              --header "Content-Type: application/json" \
               --header "Authorization: Bearer ${oidc_token}" \
               --header "Accept: application/json" \
+              --data "$(jq -cn --argjson refreshQueue "${REFRESH_QUEUE}" '{refreshQueue: $refreshQueue}')" \
               "${APP_BASE_URL%/}/api/contact-research/prepare" |
               jq -er '
                 .claimable |
