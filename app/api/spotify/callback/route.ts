@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { exchangeCodeForToken, saveTokens } from "@/lib/spotify";
+import { SESSION_COOKIE, hasWriteAccess } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams;
@@ -17,6 +18,13 @@ export async function GET(request: NextRequest) {
     return res;
   };
 
+  if (
+    !(await hasWriteAccess(
+      request.cookies.get(SESSION_COOKIE)?.value,
+    ))
+  ) {
+    return back("error", "admin_access_required");
+  }
   if (error) return back("error", error);
   if (!code) return back("error", "missing_code");
   if (!state || !expectedState || state !== expectedState) return back("error", "state_mismatch");

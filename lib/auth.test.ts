@@ -3,17 +3,20 @@ import test from "node:test";
 import {
   SESSION_COOKIE_MAX_AGE_SECONDS,
   createSessionToken,
+  getSessionAccess,
   getAuthConfiguration,
   isAuthenticated,
   requireServerActionAuth,
   sanitizeNextPath,
   serverActionLoginPath,
+  serverActionReadOnlyPath,
   verifySessionToken,
 } from "./auth";
 import { isValidCronAuthorization } from "./cron-auth";
 
 const SESSION_SECRET = "test-session-secret-that-is-independent-from-the-password";
 const ADMIN_PASSWORD = "test-admin-password";
+const READ_ONLY_PASSWORD = "test-read-only-password";
 const NOW = 1_700_000_000_000;
 
 test("sanitizeNextPath allows only local paths with a single leading slash", () => {
@@ -50,6 +53,10 @@ test("server action login paths always contain a sanitized local return path", (
     serverActionLoginPath("https://example.com/steal"),
     "/login?next=%2F",
   );
+  assert.equal(
+    serverActionReadOnlyPath("/settings?tab=general"),
+    "/read-only?next=%2Fsettings%3Ftab%3Dgeneral",
+  );
 });
 
 test("server action auth guard redirects invalid sessions and allows valid ones", async () => {
@@ -76,6 +83,17 @@ test("server action auth guard redirects invalid sessions and allows valid ones"
     redirect,
   });
   assert.equal(redirectLocation, null);
+
+  await assert.rejects(
+    requireServerActionAuth("/settings", {
+      readSessionCookie: async () => "read-only",
+      authenticate: async () => false,
+      readAccess: async () => "read_only",
+      redirect,
+    }),
+    /redirected/,
+  );
+  assert.equal(redirectLocation, "/read-only?next=%2Fsettings");
 });
 
 test("session tokens are random, signed, and carry issued and expiry times", async () => {
@@ -90,9 +108,11 @@ test("session tokens are random, signed, and carry issued and expiry times", asy
   const payload = JSON.parse(Buffer.from(first.split(".")[1], "base64url").toString("utf8")) as {
     iat: number;
     exp: number;
+    access: string;
   };
   assert.equal(payload.iat, Math.floor(NOW / 1000));
   assert.equal(payload.exp, payload.iat + SESSION_COOKIE_MAX_AGE_SECONDS);
+  assert.equal(payload.access, "admin");
 });
 
 test("session verification rejects tampering, wrong secrets, expiry, and malformed tokens", async () => {
@@ -131,7 +151,7 @@ test("session verification rejects tampering, wrong secrets, expiry, and malform
   );
   assert.equal(
     await verifySessionToken(
-      "v2.not-base64.not-base64",
+      "v3.not-base64.not-base64",
       SESSION_SECRET,
       ADMIN_PASSWORD,
       NOW,
@@ -140,6 +160,66 @@ test("session verification rejects tampering, wrong secrets, expiry, and malform
   );
   assert.equal(
     await verifySessionToken(undefined, SESSION_SECRET, ADMIN_PASSWORD, NOW),
+    false,
+  );
+});
+
+test("read-only sessions authenticate for views but not as admin sessions", async () => {
+  const adminToken = await createSessionToken(
+    SESSION_SECRET,
+    ADMIN_PASSWORD,
+    NOW,
+    "admin",
+  );
+  const readOnlyToken = await createSessionToken(
+    SESSION_SECRET,
+    READ_ONLY_PASSWORD,
+    NOW,
+    "read_only",
+  );
+  assert.ok(adminToken);
+  assert.ok(readOnlyToken);
+  assert.equal(
+    await getSessionAccess(
+      adminToken,
+      ADMIN_PASSWORD,
+      SESSION_SECRET,
+      NOW,
+      { nodeEnv: "production" },
+      READ_ONLY_PASSWORD,
+    ),
+    "admin",
+  );
+  assert.equal(
+    await getSessionAccess(
+      readOnlyToken,
+      ADMIN_PASSWORD,
+      SESSION_SECRET,
+      NOW,
+      { nodeEnv: "production" },
+      READ_ONLY_PASSWORD,
+    ),
+    "read_only",
+  );
+  assert.equal(
+    await isAuthenticated(
+      readOnlyToken,
+      ADMIN_PASSWORD,
+      SESSION_SECRET,
+      NOW,
+      { nodeEnv: "production" },
+      READ_ONLY_PASSWORD,
+    ),
+    true,
+  );
+  assert.equal(
+    await verifySessionToken(
+      readOnlyToken,
+      SESSION_SECRET,
+      ADMIN_PASSWORD,
+      NOW,
+      "admin",
+    ),
     false,
   );
 });
@@ -209,6 +289,38 @@ test("a configured password without a session secret is a clear configuration er
   const configuration = getAuthConfiguration(ADMIN_PASSWORD, undefined, {
     nodeEnv: "development",
     allowInsecureOpenMode: "true",
+  });
+
+  test("read-only password is optional but must differ from the admin password", () => {
+    assert.deepEqual(
+      getAuthConfiguration(
+        ADMIN_PASSWORD,
+        SESSION_SECRET,
+        { nodeEnv: "production" },
+        READ_ONLY_PASSWORD,
+      ),
+      { mode: "protected", readOnlyEnabled: true },
+    );
+    assert.deepEqual(
+      getAuthConfiguration(
+        ADMIN_PASSWORD,
+        SESSION_SECRET,
+        { nodeEnv: "production" },
+        undefined,
+      ),
+      { mode: "protected", readOnlyEnabled: false },
+    );
+    const duplicate = getAuthConfiguration(
+      ADMIN_PASSWORD,
+      SESSION_SECRET,
+      { nodeEnv: "production" },
+      ADMIN_PASSWORD,
+    );
+    assert.equal(duplicate.mode, "misconfigured");
+    assert.match(
+      duplicate.mode === "misconfigured" ? duplicate.error : "",
+      /READ_ONLY_PASSWORD must differ/,
+    );
   });
   assert.equal(configuration.mode, "misconfigured");
   assert.match(

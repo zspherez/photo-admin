@@ -524,6 +524,73 @@ export async function ensureFollowUpTemplate() {
   return persistNormalizedTemplate(template, normalizeTemplateContent);
 }
 
+function fallbackTemplate(
+  purpose: EmailTemplatePurpose,
+): EmailTemplate {
+  const content =
+    purpose === "festival"
+      ? {
+          name: FESTIVAL_TEMPLATE_NAME,
+          subject: FESTIVAL_TEMPLATE_SUBJECT,
+          htmlBody: FESTIVAL_TEMPLATE_HTML,
+          isDefault: false,
+        }
+      : purpose === "follow_up"
+        ? {
+            name: FOLLOW_UP_TEMPLATE_NAME,
+            subject: FOLLOW_UP_TEMPLATE_SUBJECT,
+            htmlBody: FOLLOW_UP_TEMPLATE_HTML,
+            isDefault: false,
+          }
+        : {
+            name: DEFAULT_TEMPLATE_NAME,
+            subject: DEFAULT_TEMPLATE_SUBJECT,
+            htmlBody: DEFAULT_TEMPLATE_HTML,
+            isDefault: true,
+          };
+  const timestamp = new Date(0);
+  return {
+    id: `unpersisted-${purpose}`,
+    purpose,
+    ...content,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+export async function readTemplateForPurpose(
+  purpose: EmailTemplatePurpose,
+): Promise<EmailTemplate> {
+  const template = await db.emailTemplate.findUnique({
+    where: { purpose },
+  });
+  if (!template) return fallbackTemplate(purpose);
+  return {
+    ...template,
+    ...normalizeTemplateContent(template),
+  };
+}
+
+export function readOnlyTemplateForPurpose(
+  purpose: EmailTemplatePurpose,
+): EmailTemplate {
+  const template = fallbackTemplate(purpose);
+  return {
+    ...template,
+    id: `read-only-${purpose}`,
+    name: `read_only_${purpose}`,
+    subject: "Lorem ipsum outreach preview",
+    htmlBody:
+      "<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p><p>Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>",
+  };
+}
+
+export function readOriginalTemplateForShow(
+  show: { isFestival: boolean },
+): Promise<EmailTemplate> {
+  return readTemplateForPurpose(originalTemplatePurposeForShow(show));
+}
+
 export function originalTemplatePurposeForShow(
   show: { isFestival: boolean },
 ): EmailTemplatePurpose {

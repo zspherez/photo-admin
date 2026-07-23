@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { cache } from "react";
 import { db } from "@/lib/db";
 import { workflowReturnPath } from "@/lib/dashboardReturnUrl";
@@ -12,7 +13,9 @@ import {
 } from "@/lib/schedule";
 import {
   buildVarsForShow,
-  ensureOriginalTemplateForShow,
+  readOriginalTemplateForShow,
+  readOnlyTemplateForPurpose,
+  originalTemplatePurposeForShow,
 } from "@/lib/template";
 import { Card, CardBody } from "@/components/ui/card";
 import { formatShowDate } from "@/lib/formatDate";
@@ -39,6 +42,7 @@ import {
   type TrajectoryActionContext,
 } from "@/lib/trajectoryActiveRun";
 import { captureTrajectoryAction } from "@/lib/trajectoryActionError";
+import { SESSION_COOKIE, getSessionAccess } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -105,6 +109,9 @@ export default async function CustomizePage({
     firstSearchParam(search.intent) === "queue" ? "queue" : "send";
   const [show, contact] = await getCustomizeContext(showId, contactId);
   if (!show || !contact) return notFound();
+  const access = await getSessionAccess(
+    (await cookies()).get(SESSION_COOKIE)?.value,
+  );
   const trajectoryValues = {
     recommendationId: firstSearchParam(search.recommendationId) ?? "",
     runId: firstSearchParam(search.runId) ?? "",
@@ -130,7 +137,14 @@ export default async function CustomizePage({
       return runAfterActionableTrajectoryValidation(
         trajectoryContext,
         { showId, artistId: contact.artistId },
-        () => ensureOriginalTemplateForShow(show),
+        () =>
+          access === "read_only"
+            ? Promise.resolve(
+                readOnlyTemplateForPurpose(
+                  originalTemplatePurposeForShow(show),
+                ),
+              )
+            : readOriginalTemplateForShow(show),
       );
     },
   );
@@ -243,7 +257,9 @@ export default async function CustomizePage({
       const retrySelectable =
         sendability?.mode !== "retry" || candidate.id === contactId;
       const content =
-        sendability?.mode === "retry"
+        access === "read_only"
+          ? renderedContentByContact.get(candidate.id) ?? null
+          : sendability?.mode === "retry"
           ? validRetrySnapshot
             ? {
                 subject: validRetrySnapshot.finalSubject,

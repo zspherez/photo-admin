@@ -17,10 +17,12 @@ test("reports AIC from OpenTelemetry when JSON checkpoint is absent", () => {
     const fakeCopilot = join(directory, "copilot");
     const metricsFile = join(directory, "metrics.json");
     const usageFile = join(directory, "usage.jsonl");
+    const argsFile = join(directory, "args.json");
     writeFileSync(
       fakeCopilot,
       `#!/usr/bin/env node
 const fs = require("node:fs");
+fs.writeFileSync(process.env.COPILOT_ARGS_FILE, JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(process.env.COPILOT_OTEL_FILE_EXPORTER_PATH, JSON.stringify({
   type: "span",
   name: "invoke_agent",
@@ -55,6 +57,7 @@ console.log(JSON.stringify({ type: "result", exitCode: 0 }));
           CONTACT_RESEARCH_AGENT_SESSION: "session-1",
           CONTACT_RESEARCH_BROKER_METRICS_FILE: metricsFile,
           CONTACT_RESEARCH_USAGE_FILE: usageFile,
+          COPILOT_ARGS_FILE: argsFile,
         },
       }
     );
@@ -64,6 +67,11 @@ console.log(JSON.stringify({ type: "result", exitCode: 0 }));
     assert.equal(
       JSON.parse(readFileSync(usageFile, "utf8")).nanoAiu,
       7_250_000_000
+    );
+    const args = JSON.parse(readFileSync(argsFile, "utf8")) as string[];
+    assert.deepEqual(
+      args.slice(args.indexOf("--model"), args.indexOf("--model") + 4),
+      ["--model", "gpt-5.6-sol", "--reasoning-effort", "max"],
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });

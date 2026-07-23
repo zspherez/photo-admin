@@ -145,7 +145,8 @@ test("customize keeps normal templates, explicit send/schedule/queue, and return
   const form = source(
     "app/dashboard/customize/[showId]/[contactId]/customize-form.tsx",
   );
-  assert.match(page, /ensureOriginalTemplateForShow\(show\)/);
+  assert.match(page, /readOriginalTemplateForShow\(show\)/);
+  assert.match(page, /readOnlyTemplateForPurpose/);
   assert.match(page, /runAfterActionableTrajectoryValidation/);
   assert.match(page, /redirect\(capturedTemplate\.errorHref\)/);
   assert.match(actions, /trajectoryContext: context\.trajectoryContext/);

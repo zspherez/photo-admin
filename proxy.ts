@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   SESSION_COOKIE,
+  getSessionAccess,
   getAuthConfiguration,
-  isAuthenticated,
 } from "@/lib/auth";
 
 const PUBLIC_PATHS = new Set([
@@ -69,6 +69,22 @@ export function unauthenticatedResponse(request: NextRequest): NextResponse {
   return NextResponse.redirect(loginUrl, 303);
 }
 
+export function readOnlyMutationResponse(request: NextRequest): NextResponse {
+  const { pathname } = request.nextUrl;
+  if (!pathname.startsWith("/api/") && isServerActionRequest(request)) {
+    return NextResponse.next();
+  }
+  if (pathname.startsWith("/api/")) {
+    return NextResponse.json(
+      { error: "Read-only sessions cannot modify data" },
+      { status: 403 },
+    );
+  }
+  const url = new URL("/read-only", request.url);
+  url.searchParams.set("next", pathname + request.nextUrl.search);
+  return NextResponse.redirect(url, 303);
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const publicPath =
@@ -93,7 +109,23 @@ export async function proxy(request: NextRequest) {
   if (configuration.mode === "open") return networkOnlyResponse();
 
   const cookie = request.cookies.get(SESSION_COOKIE)?.value;
-  if (await isAuthenticated(cookie)) return networkOnlyResponse();
+  const access = await getSessionAccess(cookie);
+  if (access === "admin") return networkOnlyResponse();
+  if (access === "read_only") {
+    if (
+      request.method === "GET" ||
+      request.method === "HEAD"
+    ) {
+      if (pathname === "/api/spotify/login") {
+        return NextResponse.json(
+          { error: "Read-only sessions cannot connect integrations" },
+          { status: 403 },
+        );
+      }
+      return networkOnlyResponse();
+    }
+    return readOnlyMutationResponse(request);
+  }
 
   return unauthenticatedResponse(request);
 }

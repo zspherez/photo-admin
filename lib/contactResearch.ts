@@ -1931,10 +1931,27 @@ export async function enqueueFestivalManagerResearch(
 }
 
 export async function prepareContactResearchQueue(
-  now: Date = new Date()
+  now: Date = new Date(),
+  options: { refreshQueue?: boolean } = {},
 ): Promise<ContactResearchPreparationResult> {
-  const refreshed = await refreshContactResearchQueue(now);
-  const claimable = await db.contactResearchJob.count({
+  const refreshed =
+    options.refreshQueue === false
+      ? {
+          eligible: 0,
+          enqueued: 0,
+          reprioritized: 0,
+          completed: 0,
+          inactivated: 0,
+        }
+      : await refreshContactResearchQueue(now);
+  const claimable = await countClaimableContactResearchJobs(now);
+  return { ...refreshed, claimable };
+}
+
+export function countClaimableContactResearchJobs(
+  now: Date = new Date(),
+): Promise<number> {
+  return db.contactResearchJob.count({
     where: {
       artist: {
         researchSkips: { none: { clearedAt: null } },
@@ -1951,7 +1968,6 @@ export async function prepareContactResearchQueue(
       ],
     },
   });
-  return { ...refreshed, claimable };
 }
 
 function parseGenres(value: string | null): string[] {

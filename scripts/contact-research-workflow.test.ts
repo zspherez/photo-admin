@@ -8,7 +8,16 @@ const source = readFileSync(
 );
 
 test("contact research automation is scheduled, bounded, and preflighted", () => {
+  assert.match(source, /cron: "\*\/10 \* \* \* \*"/);
   assert.match(source, /cron: "23 \* \* \* \*"/);
+  assert.match(
+    source,
+    /Poll existing queued work every 10 minutes without refreshing discovery/,
+  );
+  assert.match(source, /photo-admin-contact-research-refresh/);
+  assert.match(source, /photo-admin-contact-research-poll/);
+  assert.match(source, /REFRESH_QUEUE:/);
+  assert.match(source, /refreshQueue: \$refreshQueue/);
   assert.match(source, /workflow_dispatch/);
   assert.doesNotMatch(source, /pull_request:/);
   assert.doesNotMatch(source, /CONTACT_RESEARCH_AUTOMATION_ENABLED/);

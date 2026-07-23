@@ -1,8 +1,11 @@
 import type { Metadata, Viewport } from "next";
+import { cookies } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Nav } from "@/components/nav";
 import { PwaRegistration } from "@/components/pwa-registration";
+import { ReadOnlyMode } from "@/components/read-only-mode";
+import { SESSION_COOKIE, getSessionAccess } from "@/lib/auth";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -44,11 +47,13 @@ export const viewport: Viewport = {
   colorScheme: "light dark",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const cookieValue = (await cookies()).get(SESSION_COOKIE)?.value;
+  const access = await getSessionAccess(cookieValue);
   return (
     <html
       lang="en"
@@ -57,6 +62,7 @@ export default function RootLayout({
     >
       <body className="min-h-full bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">
         <div aria-hidden="true" className="ios-status-bar-safe-area" />
+        {access === "read_only" && <ReadOnlyMode />}
         <PwaRegistration />
         <Nav />
         {children}

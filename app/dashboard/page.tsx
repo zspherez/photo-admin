@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { getDashboardData } from "@/lib/match";
+import {
+  getDashboardData,
+  getReadOnlyDashboardData,
+} from "@/lib/match";
 import {
   buildDashboardHref,
   dashboardHrefWithoutLegacyPage,
@@ -17,6 +20,7 @@ import { cn } from "@/lib/cn";
 import { getDashboardInteractionState } from "@/lib/dashboardInteractionState";
 import {
   SESSION_COOKIE,
+  getSessionAccess,
   getAuthConfiguration,
 } from "@/lib/auth";
 import { dashboardSessionIdentity } from "@/lib/dashboardSession";
@@ -74,13 +78,16 @@ export default async function DashboardPage({
   const nextDispatch = getNextNormalOutreachDispatch(now);
   const configuration = getAuthConfiguration();
   const cookieValue = (await cookies()).get(SESSION_COOKIE)?.value;
+  const access = await getSessionAccess(cookieValue);
   const { ownerKey, persistenceScope } = dashboardSessionIdentity(
     cookieValue,
     configuration
   );
   const [testOverride, dashboard] = await Promise.all([
     getTestOverride(),
-    getDashboardData(query, ownerKey, now),
+    access === "read_only"
+      ? getReadOnlyDashboardData(query, now)
+      : getDashboardData(query, ownerKey, now),
   ]);
 
   const interactionState = await getDashboardInteractionState(
