@@ -353,6 +353,29 @@ model Contact {
   @@index([state])
 }
 
+model ContactExportSnapshot {
+  id              String   @id
+  provider        String   @default("google_sheets")
+  status          String   @default("pending")
+  idempotencyKey  String   @unique
+  contactCount    Int
+  contentSha256   String
+  spreadsheetId   String
+  sheetTabId      Int?
+  sheetTabName    String
+  sheetUrl        String?
+  requestedByRole String
+  canonicalRows   Json
+  error           String?
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
 model ContactAuditRun {
   id              String                       @id @default(cuid())
   status          String                       @default("running")

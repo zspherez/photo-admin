@@ -263,7 +263,7 @@ export function validateGoogleSheetsCredentials(): void {
   loadGoogleCreds();
 }
 
-function getSheetsClient(): sheets_v4.Sheets {
+export function getSheetsClient(): sheets_v4.Sheets {
   const credentials = loadGoogleCreds();
   const auth = new google.auth.JWT({
     email: credentials.client_email,
