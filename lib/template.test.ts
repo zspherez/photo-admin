@@ -493,7 +493,10 @@ test("follow-up reset restores its independent built-in default", () => {
   );
   assert.match(source, /malformedTemplateVariableTokens\(content\)/);
   assert.match(source, /Malformed \$\{templateLabel\(kind\)\.toLowerCase\(\)\} variable token/);
-  assert.match(source, /searchParams: Promise<\{ kind\?: SearchParamValue \}>/);
+  assert.match(
+    source,
+    /searchParams: Promise<\{[\s\S]*kind\?: SearchParamValue;[\s\S]*saved\?: SearchParamValue;/,
+  );
   assert.match(source, /aria-label="Email template type"/);
   assert.match(source, /"Normal show outreach"/);
   assert.match(source, /"Festival outreach"/);
