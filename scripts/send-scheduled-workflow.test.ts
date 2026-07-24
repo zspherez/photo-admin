@@ -99,25 +99,17 @@ function runSequence(
   }
 }
 
-test("workflow runs exactly one DST-gated normal morning candidate", () => {
-  const active = runSequence(
-    "morning-active",
+test("workflow polls the app-configured morning window", () => {
+  const result = runSequence(
+    "morning-poll",
     [`0\t200\t${response("complete")}`],
     {
-      SCHEDULE_EXPRESSION: "0 13 * * 1-5",
-      OUTREACH_LOCAL_HOUR_OVERRIDE: "09",
+      SCHEDULE_EXPRESSION: "*/10 * * * *",
     },
   );
-  assert.equal(active.status, 0, active.stderr);
-  assert.match(active.stdout, /Normal morning outreach dispatch/);
-
-  const inactive = runSequence("morning-inactive", [], {
-    SCHEDULE_EXPRESSION: "0 14 * * 1-5",
-    OUTREACH_LOCAL_HOUR_OVERRIDE: "10",
-  });
-  assert.equal(inactive.status, 0, inactive.stderr);
-  assert.match(inactive.stdout, /Skipping inactive UTC candidate/);
-  assert.doesNotMatch(inactive.stdout, /Outreach dispatch attempt/);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Polling configured morning outreach window/);
+  assert.match(result.stdout, /Outreach dispatch attempt/);
 });
 
 test("workflow labels the four-hour schedule as exceptional recovery", () => {

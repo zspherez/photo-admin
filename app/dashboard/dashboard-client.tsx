@@ -2,6 +2,7 @@
 
 import Form from "next/form";
 import Link from "next/link";
+import { appConfig } from "@/lib/appConfig";
 import {
   useCallback,
   useEffect,
@@ -1134,7 +1135,7 @@ export function DashboardClient({
                               } · ${scheduledAt.toLocaleString(
                                 "en-US",
                                 {
-                                  timeZone: "America/New_York",
+                                  timeZone: appConfig.timeZone,
                                   weekday: "short",
                                   month: "short",
                                   day: "numeric",

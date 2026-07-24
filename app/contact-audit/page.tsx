@@ -5,7 +5,11 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireServerActionAuth } from "@/lib/auth";
-import { requestContactAudit } from "@/lib/contactAudit";
+import {
+  requestContactAudit,
+  CONTACT_AUDIT_WORKFLOW_REF,
+} from "@/lib/contactAudit";
+import { workflowActionsUrl, workflowActionsRunUrl, appConfig } from "@/lib/appConfig";
 import {
   CONTACT_AUDIT_ARTIST_ACTIONS,
   resolveContactAuditArtist,
@@ -23,8 +27,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Contact audit" };
 
 const PAGE_SIZE = 30;
-const WORKFLOW_URL =
-  "https://github.com/zspherez/photo-admin/actions/workflows/contact-audit.yml";
+const WORKFLOW_URL = workflowActionsUrl(CONTACT_AUDIT_WORKFLOW_REF);
 const FLAGGED_FINDINGS = ["changed", "stale", "ambiguous"] as const;
 
 function formatTimestamp(value: Date | null): string {
@@ -32,7 +35,7 @@ function formatTimestamp(value: Date | null): string {
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
     timeStyle: "short",
-    timeZone: "America/New_York",
+    timeZone: appConfig.timeZone,
   }).format(value);
 }
 
@@ -250,7 +253,7 @@ export default async function ContactAuditPage({
   const requestActive =
     latestRequest?.status === "pending" || latestRequest?.status === "running";
   const diagnosticWorkflowUrl = latestRequest?.lastWorkflowRunId
-    ? `https://github.com/zspherez/photo-admin/actions/runs/${latestRequest.lastWorkflowRunId}`
+    ? workflowActionsRunUrl(latestRequest.lastWorkflowRunId)
     : WORKFLOW_URL;
   const [allJobs, incompleteJobs, statusCounts, decisions] = selectedRun
     ? await Promise.all([

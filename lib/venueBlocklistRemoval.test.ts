@@ -29,7 +29,7 @@ test("EDMTrain sync has no venue-name filtering or blocklist result count", () =
   assert.doesNotMatch(showsPage, /blocklisted|skippedVenue|sp\.skipped/);
   assert.match(
     edmtrain,
-    /status: edmtrainEventStatus\(event, venue\.nycStatus, now\)/,
+    /status: edmtrainEventStatus\([\s\S]*snapshot\.scope === "nyc"[\s\S]*venue\.nycStatus[\s\S]*now/,
   );
 });
 

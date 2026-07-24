@@ -2,6 +2,7 @@ import {
   easternTodayStoredDate,
   parseDateOnly,
 } from "@/lib/calendarDate";
+import { appConfig } from "@/lib/appConfig";
 import {
   parseFestivalLineupEntries,
   type FestivalLineupEntry,
@@ -66,7 +67,7 @@ export function validateFestivalCreation(
     return {
       ok: false,
       message:
-        "Festival date cannot be before the current America/New_York calendar day.",
+        `Festival date cannot be before the current ${appConfig.timeZone} calendar day.`,
     };
   }
 

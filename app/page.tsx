@@ -5,6 +5,7 @@ import { LinkButton } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { activeFestivalWhere } from "@/lib/festivalEligibility";
+import { appConfig } from "@/lib/appConfig";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Overview" };
@@ -34,8 +35,8 @@ export default async function Home() {
     <main className="mx-auto max-w-4xl px-6 py-12">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight">photo-admin</h1>
-          <p className="mt-2 text-sm text-zinc-500">Outreach automation for NYC EDM shows.</p>
+          <h1 className="text-3xl font-semibold tracking-tight">{appConfig.repository.name}</h1>
+          <p className="mt-2 text-sm text-zinc-500">Outreach automation for {appConfig.marketName} EDM shows.</p>
         </div>
         <div className="mobile-action-grid flex gap-2 sm:w-auto">
           <LinkButton href="/dashboard" variant="primary">Open dashboard</LinkButton>
@@ -44,7 +45,7 @@ export default async function Home() {
       </div>
 
       <section className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="NYC shows" value={showCount} />
+        <Stat label={`${appConfig.marketName} shows`} value={showCount} />
         <Stat label="Festivals" value={festivalCount} />
         <Stat label="Artists" value={artistCount} />
         <Stat label="Contacts" value={contactCount} />

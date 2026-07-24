@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { cn } from "@/lib/cn";
+import { appConfig } from "@/lib/appConfig";
 
 const ITEMS: { href: string; label: string; match: (p: string) => boolean }[] = [
   { href: "/dashboard", label: "Shows", match: (p) => p === "/dashboard" || p.startsWith("/dashboard/") },
@@ -92,7 +93,7 @@ export function Nav() {
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.svg" alt="" className="h-6 w-auto dark:brightness-200" />
-            <span className="truncate">Photo Admin</span>
+            <span className="truncate">{appConfig.appShortName}</span>
           </Link>
           <span className="truncate text-xs font-medium text-zinc-500">
             {activeItem?.label ?? "Overview"}
@@ -108,7 +109,7 @@ export function Nav() {
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.svg" alt="" className="h-6 w-auto dark:brightness-200" />
-            <span className="truncate">Rehders Photos Admin</span>
+            <span className="truncate">{appConfig.appName}</span>
           </Link>
           <nav
             aria-label="Primary navigation"

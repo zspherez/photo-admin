@@ -27,6 +27,7 @@ import { RecommendationsClient } from "./recommendations-client";
 import { isWeekendET } from "@/lib/schedule";
 import { firstSearchParam } from "@/lib/searchParams";
 import { getTestOverride } from "@/lib/resend";
+import { appConfig } from "@/lib/appConfig";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Trajectory recommendations" };
@@ -35,7 +36,7 @@ function formatTimestamp(value: string): string {
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
     timeStyle: "short",
-    timeZone: "America/New_York",
+    timeZone: appConfig.timeZone,
   }).format(new Date(value));
 }
 

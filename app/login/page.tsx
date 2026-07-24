@@ -13,6 +13,7 @@ import {
 import { Card, CardBody } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
+import { appConfig } from "@/lib/appConfig";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Sign in" };
@@ -84,7 +85,7 @@ export default async function LoginPage({
     <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center px-6">
       <div className="mb-8 flex items-center gap-2">
         <span className="inline-block h-3 w-3 rounded-sm bg-zinc-900 dark:bg-zinc-100" />
-        <h1 className="text-2xl font-semibold tracking-tight">photo-admin</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{appConfig.repository.name}</h1>
       </div>
       <Card className="w-full">
         <CardBody>

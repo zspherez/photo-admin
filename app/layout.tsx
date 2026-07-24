@@ -6,6 +6,7 @@ import { Nav } from "@/components/nav";
 import { PwaRegistration } from "@/components/pwa-registration";
 import { ReadOnlyMode } from "@/components/read-only-mode";
 import { SESSION_COOKIE, getSessionAccess } from "@/lib/auth";
+import { appConfig } from "@/lib/appConfig";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,17 +19,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  applicationName: "Rehders Photos Admin",
+  applicationName: appConfig.appName,
   title: {
-    default: "Rehders Photos Admin",
-    template: "%s · Rehders Photos Admin",
+    default: appConfig.appName,
+    template: `%s · ${appConfig.appName}`,
   },
-  description: "Match upcoming shows to your listening history and pitch the photo gig.",
+  description: appConfig.appDescription,
   robots: { index: false, follow: false },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Photo Admin",
+    title: appConfig.appShortName,
   },
   formatDetection: {
     telephone: false,

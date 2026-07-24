@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { getTopTracks } from "@/lib/statsfm";
+import { appConfig } from "@/lib/appConfig";
 import {
   createPlaylist,
   getCurrentSpotifyUserId,
@@ -53,7 +54,7 @@ const LEGACY_PLAYLIST_DESCRIPTION_BASE =
   "Auto-updated every morning — my top tracks from the last 4 weeks (via stats.fm).";
 const LEGACY_PLAYLIST_DESCRIPTION_TIMESTAMP_PREFIX =
   `${LEGACY_PLAYLIST_DESCRIPTION_BASE} Last updated: `;
-const PLAYLIST_TIME_ZONE = "America/New_York";
+const PLAYLIST_TIME_ZONE = appConfig.timeZone;
 const PLAYLIST_CREATION_GRACE_MS = 10 * 60 * 1_000;
 const TOP_PLAYLIST_DEFAULT_OPERATION_MS = 3 * 60 * 1_000;
 const TOP_PLAYLIST_TRANSACTION_MAX_WAIT_MS = 15_000;

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { TrajectoryArm, TrajectoryRunStatus } from "@prisma/client";
+import { appConfig } from "@/lib/appConfig";
 import { db } from "@/lib/db";
 import {
   pickDirectOutreachContact,
@@ -654,7 +655,7 @@ function scheduledLabel(
   }
   const prefix = status === "retry_scheduled" ? "Retry" : "Scheduled";
   return `${prefix} · ${scheduledAt.toLocaleString("en-US", {
-    timeZone: "America/New_York",
+    timeZone: appConfig.timeZone,
     weekday: "short",
     month: "short",
     day: "numeric",

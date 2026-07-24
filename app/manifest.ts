@@ -1,12 +1,12 @@
 import type { MetadataRoute } from "next";
+import { appConfig } from "@/lib/appConfig";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
-    name: "Rehders Photos Admin",
-    short_name: "Photo Admin",
-    description:
-      "Private mobile admin for show research, contact review, and photo outreach.",
+    name: appConfig.appName,
+    short_name: appConfig.appShortName,
+    description: appConfig.pwaDescription,
     start_url: "/dashboard?source=pwa",
     scope: "/",
     display: "standalone",

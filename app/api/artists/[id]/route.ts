@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { appConfig } from "@/lib/appConfig";
 import { db } from "@/lib/db";
 import { easternTodayStoredDate } from "@/lib/calendarDate";
 import { activeListenSignalWhere } from "@/lib/listenSignal";
@@ -183,7 +184,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
                   } · ${sendability.blockingNextAttemptAt.toLocaleString(
                     "en-US",
                     {
-                      timeZone: "America/New_York",
+                      timeZone: appConfig.timeZone,
                       weekday: "short",
                       hour: "numeric",
                       minute: "2-digit",

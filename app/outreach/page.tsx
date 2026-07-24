@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { Prisma } from "@prisma/client";
+import { appConfig } from "@/lib/appConfig";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
@@ -412,7 +413,7 @@ export default async function OutreachLogPage({
                         <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
                           Next attempt:{" "}
                           {o.nextAttemptAt.toLocaleString("en-US", {
-                            timeZone: "America/New_York",
+                            timeZone: appConfig.timeZone,
                             weekday: "short",
                             month: "short",
                             day: "numeric",

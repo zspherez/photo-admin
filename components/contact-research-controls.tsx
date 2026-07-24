@@ -1,5 +1,6 @@
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { TextArea } from "@/components/ui/field";
+import { appConfig } from "@/lib/appConfig";
 
 type ResearchAction = (formData: FormData) => void | Promise<void>;
 
@@ -97,7 +98,7 @@ export function ContactResearchControls({
               : "Set manually"}
             {" · "}
             {activeSkip.setAt.toLocaleString("en-US", {
-              timeZone: "America/New_York",
+              timeZone: appConfig.timeZone,
             })}
           </p>
           {activeSkip.agentRuleText && (

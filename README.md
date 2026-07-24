@@ -5,7 +5,8 @@ Private operations software for concert and festival photography outreach.
 This Next.js app combines shows, recommendations, management-contact research,
 audits, templates, and email delivery for one photographer. Nothing sends
 outreach automatically. Its network-only PWA never caches private pages or
-mutations; see [docs/mobile-pwa.md](docs/mobile-pwa.md).
+mutations; see [docs/mobile-pwa.md](docs/mobile-pwa.md). For deploying a fork,
+see [docs/deployment.md](docs/deployment.md).
 
 ## Main pages
 
@@ -69,6 +70,7 @@ cp .env.example .env
 # Set DATABASE_URL and DIRECT_URL.
 npm install
 npm run db:setup
+npm run setup:check
 npm run dev
 ```
 
@@ -77,13 +79,40 @@ Open <http://127.0.0.1:3000>.
 Protected mode requires `ADMIN_PASSWORD` and `ADMIN_SESSION_SECRET`. Local-only
 open mode uses a blank password plus `ALLOW_INSECURE_OPEN_MODE=true`.
 
+`npm run setup:check` separates required core configuration (database,
+`APP_BASE_URL`, authentication) from optional integrations, exits nonzero only
+when required setup is missing or invalid, and never prints secret values.
+
+## Forking
+
+Branding, repository identity, market, time zone, outreach dispatch time,
+EDMTrain location scope, and the GitHub Actions workflows trusted for contact
+research/audit OIDC all live in one typed module: [`lib/appConfig.ts`](lib/appConfig.ts).
+Edit its constants directly to rebrand a fork; every default there reproduces
+this deployment's current behavior exactly. Repository identity and the two
+workflow trust refs can also be overridden per-deployment via
+`REPOSITORY_SLUG`, `CONTACT_RESEARCH_WORKFLOW_REF`, and
+`CONTACT_AUDIT_WORKFLOW_REF` — malformed overrides are rejected so trust fails
+closed rather than silently defaulting to something unexpected.
+
+See [docs/deployment.md](docs/deployment.md) for how a fork deploys: a basic
+profile using Vercel's native Git integration (no GitHub Actions required), or
+this repository's own hardened exact-SHA release/recovery profile, which a
+fork opts into by setting its own `HARDENED_RELEASE_REPOSITORY` repository
+variable.
+
 ## Essential environment groups
 
-See [.env.example](.env.example) for every variable.
+`.env.example` and [`docs/environment.md`](docs/environment.md) are generated
+from the single schema in [`lib/envSchema.ts`](lib/envSchema.ts). Run
+`npm run env:generate` after editing the schema, or `npm run env:check` to
+verify neither generated file has drifted.
 
 | Group | Essentials |
 |---|---|
 | Core | Database URLs, `APP_BASE_URL`, admin password/session secret, optional `READ_ONLY_PASSWORD` |
+| Fork identity | Optional `REPOSITORY_SLUG` and workflow trust ref overrides — see [Forking](#forking) |
+| Deployment profile | Optional `DEPLOYMENT_PROFILE` — read only by `npm run deployment:readiness`, see [docs/deployment.md](docs/deployment.md) |
 | Email | Resend API key, sender, webhook secret, optional test override |
 | Shows/listening | EDMTrain key, Spotify client credentials, stats.fm token |
 | Google Sheets export | Optional Google credentials and `GOOGLE_CONTACT_EXPORT_SPREADSHEET_ID` |
@@ -94,11 +123,21 @@ Postgres is the only contact source of truth. Optional Google Sheets exports
 create new immutable snapshot tabs and are never imported back into the app.
 The service account needs Editor access only to the destination spreadsheet.
 
-## Production release safety
+## Production release safety (hardened profile)
+
+This is the optional hardened deployment profile; see
+[docs/deployment.md](docs/deployment.md) for the basic profile (native Vercel
+Git deploys) most forks should start with instead. This repository's own
+production deployment uses the hardened profile described below.
 
 The release workflow accepts an exact full SHA reachable from `main` plus
 `confirmation=RELEASE`. It validates code, runtime, and database bindings,
-runs migrations, promotes, and verifies compatibility.
+runs migrations, promotes, and verifies compatibility. Every authorization
+check in `.github/workflows/release-production.yml` fails closed by default
+to this repository via the `HARDENED_RELEASE_REPOSITORY` workflow variable
+(defaults to `vars.HARDENED_RELEASE_REPOSITORY || 'zspherez/photo-admin'`); a
+fork must set its own `HARDENED_RELEASE_REPOSITORY` repository variable
+before this workflow will run for it at all.
 
 Production pauses only after the revision is proven. Recovery is main-only and
 limited to proven targets. Use durable project-scoped Vercel CI tokens.
@@ -127,6 +166,9 @@ npm test
 npm run typecheck
 npm run lint
 npm run build
+npm run setup:check
+npm run deployment:readiness
+npm run env:check
 npm run db:setup
 npm run db:verify-targets
 npm run db:verify-release-compatibility

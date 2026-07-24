@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { workflowActionsUrl } from "@/lib/appConfig";
+import { CONTACT_RESEARCH_WORKFLOW_REF } from "@/lib/contactResearch";
 
 const source = readFileSync(
   new URL("./page.tsx", import.meta.url),
@@ -118,11 +120,16 @@ test("bulk exhausted result is URL-backed and auto-dismissed", () => {
 test("research page links to the trusted queue-draining workflow", () => {
   assert.match(
     source,
-    /actions\/workflows\/contact-research\.yml/
+    /WORKFLOW_URL = workflowActionsUrl\(CONTACT_RESEARCH_WORKFLOW_REF\)/
   );
+  assert.match(source, /href=\{WORKFLOW_URL\}/);
   assert.match(source, /Open research workflow/);
   assert.match(source, /target="_blank"/);
   assert.match(source, /rel="noopener noreferrer"/);
+  assert.match(
+    workflowActionsUrl(CONTACT_RESEARCH_WORKFLOW_REF),
+    /actions\/workflows\/contact-research\.yml$/
+  );
 });
 
 test("research jobs are ranked by the best upcoming venue tier", () => {
