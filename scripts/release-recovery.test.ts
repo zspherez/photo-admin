@@ -336,13 +336,15 @@ test("hardened repository trust is configurable but fails closed to this deploym
 });
 
 test("recovery environment setup documents the non-review main-only boundary", () => {
-  const readme = readFileSync(
-    fileURLToPath(new URL("../README.md", import.meta.url)),
+  const deploymentDocs = readFileSync(
+    fileURLToPath(new URL("../docs/deployment.md", import.meta.url)),
     "utf8"
   );
-  const recoverySetup = readme.slice(
-    readme.indexOf("Configure **`production-recovery`** separately:"),
-    readme.indexOf("To release, push the revision to `main`")
+  const recoverySetup = deploymentDocs.slice(
+    deploymentDocs.indexOf(
+      "### 4. Configure the `production-recovery` GitHub Environment",
+    ),
+    deploymentDocs.indexOf("### 5. Releasing")
   );
 
   assert.match(recoverySetup, /Do \*\*not\*\* configure required reviewers/);
@@ -353,8 +355,8 @@ test("recovery environment setup documents the non-review main-only boundary", (
   assert.match(recoverySetup, /production-recovery-main-only-v1/);
   assert.match(recoverySetup, /Delete every repository-level/);
   assert.match(
-    readme,
-    /cannot enforce an environment's\s+deployment branch policy/
+    deploymentDocs,
+    /cannot enforce[\s\S]*deployment branch\s+policy/
   );
 });
 
