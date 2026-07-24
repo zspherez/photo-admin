@@ -59,7 +59,7 @@ This no-mutation boundary is enforced server-side through the signed session.
 Template previews are redacted with Lorem ipsum so stored outreach copy is not
 exposed. Contact the repository owner for a test view-only login.
 
-## Local setup
+# Info for Local setup
 
 Requires Node.js 22.x, Postgres, and credentials only for integrations in use.
 
