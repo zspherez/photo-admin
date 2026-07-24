@@ -7,8 +7,6 @@ import {
   RESEND_FROM_EMAIL_CONFIGURATION_ERROR,
   RESEND_FROM_EMAIL_INVALID_CONFIGURATION_ERROR,
   RESEND_FULL_CONFIGURATION_ERROR,
-  RATE_CARD_MISSING_WARNING,
-  ResendPreparationError,
   buildArbitraryResendDeliveryPolicy,
   buildResendDeliveryPolicy,
   canBindResendWebhookProviderMessage,
@@ -23,7 +21,6 @@ import {
   hashAttachmentContent,
   hashResendRequestSnapshot,
   isValidResendSender,
-  loadRateCardAttachments,
   parseResendRequestSnapshot,
   sendPreparedEmailViaResend,
   shouldMirrorResendAttempt,
@@ -52,7 +49,7 @@ const REQUEST: ResendRequestSnapshot = {
   ],
   attachments: [
     {
-      filename: "rate-card.pdf",
+      filename: "historical-attachment.pdf",
       contentSha256: PDF_HASH,
       byteLength: 3,
       contentType: "application/pdf",
@@ -458,123 +455,6 @@ test("provider credential rejections are configuration outages without broadenin
       statusCode: null,
     }),
     "uncertain",
-  );
-});
-
-test("confirmed missing rate cards are omitted but other download failures remain explicit", async () => {
-  const missingUrl = await loadRateCardAttachments(
-    {
-      source: "https://example.com/missing.pdf",
-      filename: "missing.pdf",
-      kind: "url",
-      exists: true,
-    },
-    {
-      fetchImpl: async () => new Response(null, { status: 404 }),
-    },
-  );
-  assert.deepEqual(missingUrl.warnings, [RATE_CARD_MISSING_WARNING]);
-  assert.equal(missingUrl.rateCardAttachmentOmitted, true);
-  assert.deepEqual(missingUrl.snapshots, []);
-
-  const missingFile = await loadRateCardAttachments(
-    {
-      source: "missing.pdf",
-      filename: "missing.pdf",
-      kind: "file",
-      exists: false,
-    },
-    {
-      readFileImpl: async () => {
-        throw Object.assign(new Error("missing"), { code: "ENOENT" });
-      },
-    },
-  );
-  assert.equal(missingFile.rateCardAttachmentOmitted, true);
-
-  for (const status of [408, 429, 503]) {
-    await assert.rejects(
-      loadRateCardAttachments(
-        {
-          source: "https://example.com/broken.pdf",
-          filename: "broken.pdf",
-          kind: "url",
-          exists: true,
-        },
-        {
-          fetchImpl: async () => new Response(null, { status }),
-        },
-      ),
-      (error: unknown) => {
-        assert.ok(error instanceof ResendPreparationError);
-        assert.equal(error.preparationDisposition, "retryable");
-        assert.match(error.message, new RegExp(`HTTP ${status}`));
-        return true;
-      },
-    );
-  }
-
-  await assert.rejects(
-    loadRateCardAttachments(
-      {
-        source: "https://example.com/network.pdf",
-        filename: "network.pdf",
-        kind: "url",
-        exists: true,
-      },
-      {
-        fetchImpl: async () => {
-          throw new TypeError("fetch failed");
-        },
-      },
-    ),
-    (error: unknown) => {
-      assert.ok(error instanceof ResendPreparationError);
-      assert.equal(error.preparationDisposition, "retryable");
-      assert.match(error.message, /fetch failed/);
-      return true;
-    },
-  );
-
-  await assert.rejects(
-    loadRateCardAttachments(
-      {
-        source: "https://example.com/bad-request.pdf",
-        filename: "bad-request.pdf",
-        kind: "url",
-        exists: true,
-      },
-      {
-        fetchImpl: async () => new Response(null, { status: 400 }),
-      },
-    ),
-    (error: unknown) => {
-      assert.ok(error instanceof ResendPreparationError);
-      assert.equal(error.preparationDisposition, "permanent");
-      return true;
-    },
-  );
-
-  await assert.rejects(
-    loadRateCardAttachments(
-      {
-        source: "forbidden.pdf",
-        filename: "forbidden.pdf",
-        kind: "file",
-        exists: true,
-      },
-      {
-        readFileImpl: async () => {
-          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-        },
-      },
-    ),
-    (error: unknown) => {
-      assert.ok(error instanceof ResendPreparationError);
-      assert.equal(error.preparationDisposition, "permanent");
-      assert.match(error.message, /permission denied/);
-      return true;
-    },
   );
 });
 

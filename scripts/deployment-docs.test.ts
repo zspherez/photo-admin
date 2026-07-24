@@ -52,7 +52,7 @@ test("deployment guide documents the offline readiness command and its guarantee
 
 test("README's hardened release section links to the deployment guide and documents the configurable repository variable", () => {
   const hardenedSection = readme.slice(
-    readme.indexOf("## Production release safety"),
+    readme.indexOf("## Deployment"),
   );
   assert.match(hardenedSection, /\[docs\/deployment\.md\]\(docs\/deployment\.md\)/);
   assert.match(hardenedSection, /HARDENED_RELEASE_REPOSITORY/);

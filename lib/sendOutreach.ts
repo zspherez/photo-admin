@@ -90,7 +90,6 @@ export interface SendOutreachOutput {
   retryScheduled?: boolean;
   nextAttemptAt?: Date;
   warnings?: string[];
-  rateCardAttachmentOmitted?: boolean;
 }
 
 export interface FollowUpParentOutreachProof {
@@ -367,7 +366,6 @@ type AttemptResult =
       outreach: ClaimedOutreach;
       attempt: StoredAttempt;
       warnings: string[];
-      rateCardAttachmentOmitted: boolean;
     }
   | CompletedResult;
 
@@ -4163,7 +4161,6 @@ async function ensureAttempt(outreachInput: ClaimedOutreach): Promise<AttemptRes
       outreach: outreachInput,
       attempt: outreachInput.attempt,
       warnings: [],
-      rateCardAttachmentOmitted: false,
     };
   }
   if (outreachInput.attemptCount > 0 || outreachInput.providerMessageId) {
@@ -4324,7 +4321,6 @@ async function ensureAttempt(outreachInput: ClaimedOutreach): Promise<AttemptRes
       outreach: { ...outreach, attempt },
       attempt,
       warnings: prepared.warnings,
-      rateCardAttachmentOmitted: prepared.rateCardAttachmentOmitted,
     };
   });
 }
@@ -4887,12 +4883,10 @@ async function finishClaimedSend(
   testSend: boolean,
   result: Awaited<ReturnType<typeof sendPreparedEmailViaResend>>,
   warnings: string[],
-  rateCardAttachmentOmitted: boolean,
 ): Promise<SendOutreachOutput> {
   const completedAt = new Date();
   const outputMetadata = {
     ...(warnings.length > 0 ? { warnings } : {}),
-    ...(rateCardAttachmentOmitted ? { rateCardAttachmentOmitted: true } : {}),
   };
   return withSerializableRetry(async (tx) => {
     const [current, attempt] = await Promise.all([
@@ -5284,7 +5278,6 @@ async function executeClaimedSend(
     started.testSend,
     started.result,
     ensured.warnings,
-    ensured.rateCardAttachmentOmitted,
   );
 }
 

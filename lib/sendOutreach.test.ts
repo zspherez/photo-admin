@@ -609,7 +609,7 @@ test("transient preparation failures retry without creating ambiguous provider a
     true,
     0,
     "retryable",
-    "Unable to snapshot rate card attachment: fetch failed",
+    "Temporary preparation dependency failed",
     NOW,
   );
   assert.equal(first.status, "retry_scheduled");
@@ -634,7 +634,7 @@ test("transient preparation failures retry without creating ambiguous provider a
     true,
     first.retryCount,
     "retryable",
-    "Unable to snapshot rate card attachment: timed out",
+    "Temporary preparation dependency timed out",
     NOW,
   );
   assert.equal(second.status, "retry_scheduled");
@@ -669,7 +669,7 @@ test("transient preparation failures retry without creating ambiguous provider a
     true,
     0,
     "permanent",
-    "invalid rate card path",
+    "invalid preparation input",
     NOW,
   );
   assert.equal(permanent.status, "failed");

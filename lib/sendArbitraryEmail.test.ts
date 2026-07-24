@@ -294,7 +294,6 @@ function prepareWithSettings(
       intendedRecipients: resolved.policy.intendedRecipients,
       attachmentBlobs: [],
       warnings: [],
-      rateCardAttachmentOmitted: false,
     };
   };
 }

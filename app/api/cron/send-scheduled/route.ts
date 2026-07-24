@@ -70,7 +70,6 @@ export async function GET(request: NextRequest) {
     retryScheduled?: boolean;
     nextAttemptAt?: Date;
     warnings?: string[];
-    rateCardAttachmentOmitted?: boolean;
     error?: string;
   }[] = [];
 
@@ -190,10 +189,6 @@ export async function GET(request: NextRequest) {
           retryScheduled: result.retryScheduled || undefined,
           nextAttemptAt: result.nextAttemptAt,
           warnings: "warnings" in result ? result.warnings : undefined,
-          rateCardAttachmentOmitted:
-            ("rateCardAttachmentOmitted" in result &&
-              result.rateCardAttachmentOmitted) ||
-            undefined,
           error: result.error,
         });
       } catch (error) {

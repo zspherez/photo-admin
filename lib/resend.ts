@@ -1,15 +1,10 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
 import type { Prisma } from "@prisma/client";
 import { Resend, type ErrorResponse } from "resend";
 import { db } from "@/lib/db";
 import { readGeneralDeliverySettingsInTransaction } from "@/lib/generalSettings";
 
 export const RESEND_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1000;
-export const RATE_CARD_MISSING_WARNING =
-  "Configured rate card attachment was not found and was omitted";
 export const RESEND_CONFIGURATION_ERROR =
   "Resend is unavailable because RESEND_API_KEY is missing or blank";
 export const RESEND_FROM_EMAIL_CONFIGURATION_ERROR =
@@ -19,7 +14,6 @@ export const RESEND_FROM_EMAIL_INVALID_CONFIGURATION_ERROR =
 export const RESEND_FULL_CONFIGURATION_ERROR =
   "Resend is unavailable because RESEND_API_KEY and RESEND_FROM_EMAIL are missing or blank";
 export const RESEND_PROVIDER_REQUEST_TIMEOUT_MS = 20_000;
-export const RATE_CARD_REQUEST_TIMEOUT_MS = 20_000;
 export const RESEND_CREDENTIAL_SCOPE_PREFIX = "resend:key-sha256:";
 
 let _client: Resend | null = null;
@@ -144,7 +138,6 @@ export type PrepareResendRequestResult =
       intendedRecipients: string[];
       attachmentBlobs: ResendAttachmentBlob[];
       warnings: string[];
-      rateCardAttachmentOmitted: boolean;
     }
   | {
       ok: false;
@@ -263,174 +256,6 @@ export async function getResendDeliverySettingsSnapshot(
     };
   };
   return tx ? readSnapshot(tx) : db.$transaction(readSnapshot);
-}
-
-export interface AttachmentInfo {
-  source: string;
-  filename: string;
-  kind: "url" | "file";
-  exists: boolean;
-}
-
-export function getRateCardInfo(): AttachmentInfo | null {
-  const source = process.env.RATE_CARD_PATH?.trim();
-  if (!source) return null;
-  if (/^https?:\/\//i.test(source)) {
-    const filename = new URL(source).pathname.split("/").pop() || "rate-card.pdf";
-    return { source, filename, kind: "url", exists: true };
-  }
-  return { source, filename: basename(source), kind: "file", exists: existsSync(source) };
-}
-
-export interface LoadedResendAttachments {
-  snapshots: ResendAttachmentSnapshot[];
-  blobs: ResendAttachmentBlob[];
-  warnings: string[];
-  rateCardAttachmentOmitted: boolean;
-}
-
-export interface RateCardAttachmentLoadDependencies {
-  fetchImpl?: typeof fetch;
-  readFileImpl?: (path: string) => Promise<Uint8Array>;
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT"
-  );
-}
-
-function isTransientFileError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return false;
-  }
-  return new Set([
-    "EAGAIN",
-    "EBUSY",
-    "EMFILE",
-    "ENFILE",
-    "ENETDOWN",
-    "ENETRESET",
-    "ENETUNREACH",
-    "ETIMEDOUT",
-  ]).has(String((error as { code?: unknown }).code));
-}
-
-function isRetryableAttachmentStatus(status: number): boolean {
-  return status === 408 || status === 429 || status >= 500;
-}
-
-export class ResendPreparationError extends Error {
-  readonly preparationDisposition: ResendPreparationDisposition;
-
-  constructor(
-    message: string,
-    preparationDisposition: ResendPreparationDisposition,
-  ) {
-    super(message);
-    this.name = "ResendPreparationError";
-    this.preparationDisposition = preparationDisposition;
-  }
-}
-
-export async function loadRateCardAttachments(
-  info: AttachmentInfo | null | undefined = undefined,
-  dependencies: RateCardAttachmentLoadDependencies = {},
-): Promise<LoadedResendAttachments> {
-  let resolvedInfo: AttachmentInfo | null = null;
-  try {
-    resolvedInfo = info === undefined ? getRateCardInfo() : info;
-    if (!resolvedInfo) {
-      return {
-        snapshots: [],
-        blobs: [],
-        warnings: [],
-        rateCardAttachmentOmitted: false,
-      };
-    }
-
-    let content: Buffer;
-    let contentType: string | null;
-    if (resolvedInfo.kind === "url") {
-      const response = await (dependencies.fetchImpl ?? fetch)(
-        resolvedInfo.source,
-        {
-        cache: "no-store",
-        signal: AbortSignal.timeout(RATE_CARD_REQUEST_TIMEOUT_MS),
-        },
-      );
-      if (!response.ok) {
-        if (response.status === 404 || response.status === 410) {
-          return {
-            snapshots: [],
-            blobs: [],
-            warnings: [RATE_CARD_MISSING_WARNING],
-            rateCardAttachmentOmitted: true,
-          };
-        }
-        throw new ResendPreparationError(
-          `Unable to snapshot rate card attachment: Rate card request returned HTTP ${response.status}`,
-          isRetryableAttachmentStatus(response.status)
-            ? "retryable"
-            : "permanent",
-        );
-      }
-      content = Buffer.from(await response.arrayBuffer());
-      contentType = response.headers.get("content-type");
-    } else {
-      try {
-        const bytes = await (dependencies.readFileImpl ?? readFile)(
-          resolvedInfo.source,
-        );
-        content = Buffer.from(bytes);
-      } catch (error) {
-        if (isMissingFileError(error)) {
-          return {
-            snapshots: [],
-            blobs: [],
-            warnings: [RATE_CARD_MISSING_WARNING],
-            rateCardAttachmentOmitted: true,
-          };
-        }
-        throw error;
-      }
-      contentType = null;
-    }
-
-    const sha256 = hashAttachmentContent(content);
-    return {
-      snapshots: [{
-        filename: resolvedInfo.filename,
-        contentSha256: sha256,
-        byteLength: content.byteLength,
-        contentType,
-        contentId: null,
-      }],
-      blobs: [
-        {
-          sha256,
-          content: Uint8Array.from(content),
-          byteLength: content.byteLength,
-        },
-      ],
-      warnings: [],
-      rateCardAttachmentOmitted: false,
-    };
-  } catch (error) {
-    if (error instanceof ResendPreparationError) throw error;
-    const message = error instanceof Error ? error.message : "unknown attachment error";
-    const preparationDisposition =
-      resolvedInfo?.kind === "url" || isTransientFileError(error)
-        ? "retryable"
-        : "permanent";
-    throw new ResendPreparationError(
-      `Unable to snapshot rate card attachment: ${message}`,
-      preparationDisposition,
-    );
-  }
 }
 
 export interface ResendDeliveryPolicy {
@@ -721,7 +546,6 @@ export async function prepareResendRequest({
     intendedRecipients: policy.intendedRecipients,
     attachmentBlobs: [],
     warnings: [],
-    rateCardAttachmentOmitted: false,
   };
 }
 
@@ -764,7 +588,6 @@ export async function prepareArbitraryResendRequest({
     intendedRecipients: policy.intendedRecipients,
     attachmentBlobs: [],
     warnings: [],
-    rateCardAttachmentOmitted: false,
   };
 }
 
