@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import {
   DEFAULT_TEMPLATE_HTML,
@@ -27,8 +28,8 @@ import { renderTrackedEmailHtml } from "@/lib/emailUtm";
 import { readEmailUtmSettingsSnapshot } from "@/lib/generalSettings";
 import { TemplateEditor } from "@/components/template-editor";
 import { Card, CardBody } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { easternTodayStoredDate } from "@/lib/calendarDate";
 import { pickEmailContact } from "@/lib/contactSelection";
 import { activeListenSignalWhere } from "@/lib/listenSignal";
@@ -70,6 +71,19 @@ function templateSettingsPath(kind: TemplateKind): string {
     : `/settings/template?kind=${kind}`;
 }
 
+function templateSettingsResultPath(
+  kind: TemplateKind,
+  result: { saved?: string; reset?: string; error?: string },
+): string {
+  const params = new URLSearchParams();
+  if (kind !== "original") params.set("kind", kind);
+  for (const [key, value] of Object.entries(result)) {
+    if (value) params.set(key, value);
+  }
+  const query = params.toString();
+  return query ? `/settings/template?${query}` : "/settings/template";
+}
+
 async function ensureTemplate(kind: TemplateKind) {
   if (kind === "festival") return ensureFestivalTemplate();
   if (kind === "follow_up") return ensureFollowUpTemplate();
@@ -93,34 +107,72 @@ function templateUtmKind(kind: TemplateKind): "original" | "follow_up" {
 async function saveTemplate(formData: FormData) {
   "use server";
   await requireServerActionAuth("/settings/template");
-  const kind = requiredTemplateKind(formData.get("kind"));
-  const content = normalizeTemplateContent({
-    subject: (formData.get("subject") as string)?.trim() ?? "",
-    htmlBody: (formData.get("html") as string) ?? "",
-  });
+  let kind: TemplateKind;
+  try {
+    kind = requiredTemplateKind(formData.get("kind"));
+  } catch {
+    redirect(
+      templateSettingsResultPath("original", {
+        error: "Invalid email template type.",
+      }),
+    );
+  }
+  let content: ReturnType<typeof normalizeTemplateContent>;
+  try {
+    content = normalizeTemplateContent({
+      subject: String(formData.get("subject") ?? "").trim(),
+      htmlBody: String(formData.get("html") ?? ""),
+    });
+  } catch {
+    redirect(
+      templateSettingsResultPath(kind, {
+        error: "Template content could not be normalized.",
+      }),
+    );
+  }
   const { subject, htmlBody } = content;
-  if (!subject || !htmlBody) return;
+  if (!subject || !htmlBody) {
+    redirect(
+      templateSettingsResultPath(kind, {
+        error: "Subject and body are required.",
+      }),
+    );
+  }
   const malformed = malformedTemplateVariableTokens(content);
   if (malformed.length > 0) {
-    throw new Error(
-      `Malformed ${templateLabel(kind).toLowerCase()} variable token(s): ${malformed.join(", ")}`,
+    redirect(
+      templateSettingsResultPath(kind, {
+        error: `Malformed ${templateLabel(kind).toLowerCase()} variable token(s): ${malformed.join(", ")}`,
+      }),
     );
   }
   const unsupported = unsupportedTemplateVars(content, kind);
   if (unsupported.length > 0) {
-    throw new Error(
-      `Unsupported ${templateLabel(kind).toLowerCase()} variable(s): ${unsupported
-        .map((variable) => `{{${variable}}}`)
-        .join(", ")}`,
+    redirect(
+      templateSettingsResultPath(kind, {
+        error: `Unsupported ${templateLabel(kind).toLowerCase()} variable(s): ${unsupported
+          .map((variable) => `{{${variable}}}`)
+          .join(", ")}`,
+      }),
     );
   }
-  const existing = await ensureTemplate(kind);
-  await db.emailTemplate.update({
-    where: { id: existing.id },
-    data: { subject, htmlBody },
-  });
+  try {
+    const existing = await ensureTemplate(kind);
+    await db.emailTemplate.update({
+      where: { id: existing.id },
+      data: { subject, htmlBody },
+    });
+  } catch (error) {
+    console.error("Unable to save email template", error);
+    redirect(
+      templateSettingsResultPath(kind, {
+        error: "Template could not be saved. Try again.",
+      }),
+    );
+  }
   revalidatePath("/settings/template");
   revalidatePath("/");
+  redirect(templateSettingsResultPath(kind, { saved: "1" }));
 }
 
 async function resetToDefault(formData: FormData) {
@@ -148,14 +200,24 @@ async function resetToDefault(formData: FormData) {
     data: content,
   });
   revalidatePath("/settings/template");
+  redirect(templateSettingsResultPath(kind, { reset: "1" }));
 }
 
 export default async function TemplateSettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ kind?: SearchParamValue }>;
+  searchParams: Promise<{
+    kind?: SearchParamValue;
+    saved?: SearchParamValue;
+    reset?: SearchParamValue;
+    error?: SearchParamValue;
+  }>;
 }) {
-  const kind = parseTemplateKind((await searchParams).kind);
+  const search = await searchParams;
+  const kind = parseTemplateKind(search.kind);
+  const saved = firstSearchParam(search.saved);
+  const reset = firstSearchParam(search.reset);
+  const actionError = firstSearchParam(search.error);
   const now = new Date();
   const access = await getSessionAccess(
     (await cookies()).get(SESSION_COOKIE)?.value,
@@ -249,6 +311,22 @@ export default async function TemplateSettingsPage({
     <main className="mx-auto max-w-4xl px-6 py-10">
       <Link href="/settings" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Settings</Link>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">Email template</h1>
+      {(saved || reset) && (
+        <div
+          role="status"
+          className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+        >
+          {reset ? "Template reset to the built-in default." : "Template saved."}
+        </div>
+      )}
+      {actionError && (
+        <div
+          role="alert"
+          className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+        >
+          {actionError}
+        </div>
+      )}
       <nav
         aria-label="Email template type"
         className="mt-4 flex gap-1 border-b border-zinc-200 dark:border-zinc-800"
@@ -286,11 +364,16 @@ export default async function TemplateSettingsPage({
               initialSubject={template.subject}
               initialHtml={template.htmlBody}
               variables={allVars}
+              disabled={access === "read_only"}
             />
             <div className="mobile-sticky-actions mt-4 flex items-center justify-between gap-2">
-              <Button type="submit" variant="primary">
+              <PendingSubmitButton
+                variant="primary"
+                pendingLabel="Saving template…"
+                disabled={access === "read_only"}
+              >
                 Save {templateLabel(kind).toLowerCase()} template
-              </Button>
+              </PendingSubmitButton>
             </div>
           </form>
         </CardBody>
@@ -298,7 +381,11 @@ export default async function TemplateSettingsPage({
 
       <form action={resetToDefault} className="mt-3">
         <input type="hidden" name="kind" value={kind} />
-        <button type="submit" className="text-xs text-zinc-500 hover:underline">
+        <button
+          type="submit"
+          disabled={access === "read_only"}
+          className="text-xs text-zinc-500 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+        >
           Reset to built-in default
         </button>
       </form>
