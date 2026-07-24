@@ -37,6 +37,7 @@ export async function POST(
     return NextResponse.json({
       ok: true,
       runComplete: result.runComplete,
+      autoResolved: result.autoResolved,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

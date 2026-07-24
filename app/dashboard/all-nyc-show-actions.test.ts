@@ -42,6 +42,15 @@ test("All NYC cards reuse shared send, queue, customize, and cancellation contro
   assert.match(queueButton, /name="returnTo"/);
 });
 
+test("All NYC cards can record manual outreach without a listening match", () => {
+  assert.match(
+    client,
+    /query\.mode === "all-nyc" \|\|[\s\S]*artist\.workflowEligible[\s\S]*artist\.canMarkManually[\s\S]*action=\{markSentAction\}/,
+  );
+  assert.match(client, />\s*Mark sent \(manual\)\s*</);
+  assert.match(client, /action=\{unmarkSentAction\}/);
+});
+
 test("shared outreach pipeline retains policy, template, snapshot, and idempotency safeguards", () => {
   assert.match(sendOutreach, /evaluateOutreachDeliveryPolicy/);
   assert.match(sendOutreach, /ensureOriginalTemplateForShow\(show\)/);

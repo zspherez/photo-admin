@@ -1370,7 +1370,9 @@ export function DashboardClient({
                             cancelAction={cancelScheduledAction}
                           />
                         )}
-                        {artist.workflowEligible && artist.canMarkManually && (
+                        {(query.mode === "all-nyc" ||
+                          artist.workflowEligible) &&
+                          artist.canMarkManually && (
                           <form action={markSentAction}>
                             <input
                               type="hidden"

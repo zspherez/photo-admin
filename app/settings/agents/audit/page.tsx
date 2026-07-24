@@ -1,21 +1,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Card, CardBody } from "@/components/ui/card";
-import { readGlobalAgentRulesForEditing } from "@/lib/agentRules";
+import { readContactAuditAgentRules } from "@/lib/contactAuditAgentRules";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
-import { AgentRulesForm } from "./agent-rules-form";
+import { AuditAgentRulesForm } from "./audit-agent-rules-form";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Agent rules" };
+export const metadata: Metadata = { title: "Contact audit agent rules" };
 
-export default async function AgentRulesPage({
+export default async function AuditAgentRulesPage({
   searchParams,
 }: {
   searchParams: Promise<{ saved?: SearchParamValue }>;
 }) {
   const raw = await searchParams;
   const saved = firstSearchParam(raw.saved);
-  const rules = await readGlobalAgentRulesForEditing();
+  const rules = await readContactAuditAgentRules();
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
@@ -26,18 +26,12 @@ export default async function AgentRulesPage({
         ← Settings
       </Link>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-        Agent rules
+        Contact audit agent rules
       </h1>
       <p className="mt-1 text-sm text-zinc-500">
-        Trusted instructions shared by contact research and other agent jobs.
+        Versioned operator instructions snapshotted into each contact audit
+        claim.
       </p>
-      <Link
-        href="/settings/agents/audit"
-        className="mt-3 inline-block text-sm text-blue-700 hover:underline dark:text-blue-300"
-      >
-        Configure contact audit rules →
-      </Link>
-
       {saved && (
         <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
           Saved version {rules.version}.
@@ -45,14 +39,14 @@ export default async function AgentRulesPage({
       )}
       <Card className="mt-6">
         <CardBody>
-          <AgentRulesForm
+          <AuditAgentRulesForm
             version={rules.version}
             initialState={{
-              message: rules.directOutreachStorageError,
+              message: null,
               values: {
                 instructions: rules.instructions,
-                directOutreachInstructions:
-                  rules.directOutreachInstructions,
+                autoAppendAdditionalContact:
+                  rules.autoAppendAdditionalContact,
               },
               fieldErrors: {},
             }}
