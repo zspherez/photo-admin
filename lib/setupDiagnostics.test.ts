@@ -56,9 +56,45 @@ test("rejects a non-http(s) APP_BASE_URL", () => {
     ...VALID_CORE_ENV,
     APP_BASE_URL: "ftp://example.com",
   });
+
   const item = report.required.find((entry) => entry.key === "APP_BASE_URL");
   assert.equal(item?.status, "invalid");
   assert.equal(report.ok, false);
+});
+
+test("APP_BASE_URL must be a pathless origin and HTTP is loopback-only", () => {
+  for (const value of [
+    "https://example.com/app",
+    "https://example.com?tenant=x",
+    "https://example.com#fragment",
+    "http://example.com",
+  ]) {
+    const report = runSetupDiagnostics({
+      ...VALID_CORE_ENV,
+      APP_BASE_URL: value,
+    });
+    assert.equal(
+      report.required.find((entry) => entry.key === "APP_BASE_URL")?.status,
+      "invalid",
+      value,
+    );
+  }
+  for (const value of [
+    "https://example.com",
+    "https://example.com/",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+  ]) {
+    const report = runSetupDiagnostics({
+      ...VALID_CORE_ENV,
+      APP_BASE_URL: value,
+    });
+    assert.equal(
+      report.required.find((entry) => entry.key === "APP_BASE_URL")?.status,
+      "ok",
+      value,
+    );
+  }
 });
 
 test("fork-identity overrides are only checked when explicitly set", () => {

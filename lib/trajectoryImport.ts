@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
+import { appConfig } from "@/lib/appConfig";
 import { db } from "@/lib/db";
 import {
   assertOperationTimeRemaining,
@@ -963,7 +964,7 @@ async function promoteTrajectoryImportPlan(
         freshnessPolicy: {
           staleAfterHours: TRAJECTORY_STALE_AFTER_HOURS,
           expectedRefreshCadenceHours: 24,
-          timezone: "America/New_York",
+          timezone: appConfig.timeZone,
         },
       },
     });

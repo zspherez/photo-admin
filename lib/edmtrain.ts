@@ -46,7 +46,10 @@ import {
 import { appConfig } from "@/lib/appConfig";
 
 const EDMTRAIN_BASE = "https://edmtrain.com/api/events";
-const NYC_LOCATION_ID = appConfig.edmtrain.locationIds[0] ?? 38;
+const MARKET_LOCATION_IDS =
+  appConfig.edmtrain.locationIds.length > 0
+    ? [...appConfig.edmtrain.locationIds]
+    : [38];
 const EDMTRAIN_CHUNK_DAYS = 30;
 const EDMTRAIN_MAX_ATTEMPTS = 4;
 const EDMTRAIN_DEFAULT_OPERATION_MS = 5 * 60 * 1_000;
@@ -255,7 +258,7 @@ async function fetchEdmtrainSnapshot(
 
 export async function fetchEdmtrainEvents(
   daysAhead = 90,
-  locationIds: number[] | null = [NYC_LOCATION_ID],
+  locationIds: number[] | null = MARKET_LOCATION_IDS,
   deadline: OperationDeadline = defaultEdmtrainDeadline()
 ): Promise<EdmtrainEvent[]> {
   return (await fetchEdmtrainSnapshot(daysAhead, locationIds, deadline)).events;
@@ -533,7 +536,13 @@ async function reconcileEdmtrainSnapshots(
             state: venue.state,
             countryCode: venue.countryCode,
             countryName: venue.countryName,
-            status: edmtrainEventStatus(event, venue.nycStatus, now),
+            status: edmtrainEventStatus(
+              event,
+              snapshot.scope === "nyc" && !event.festivalInd
+                ? "inside_nyc"
+                : venue.nycStatus,
+              now,
+            ),
           };
         });
 
@@ -839,7 +848,7 @@ export async function syncEdmtrainShows(
   daysAhead = 90,
   deadline: OperationDeadline = defaultEdmtrainDeadline()
 ): Promise<EdmtrainScopeSyncResult> {
-  return syncEdmtrainScope("nyc", daysAhead, [NYC_LOCATION_ID], deadline);
+  return syncEdmtrainScope("nyc", daysAhead, MARKET_LOCATION_IDS, deadline);
 }
 
 export async function syncEdmtrainFestivals(
@@ -862,7 +871,7 @@ export async function syncAllEdmtrain(
         syncEdmtrainScope(
           "nyc",
           showDaysAhead,
-          [NYC_LOCATION_ID],
+          MARKET_LOCATION_IDS,
           deadline,
           scheduleReconciliation
         ),

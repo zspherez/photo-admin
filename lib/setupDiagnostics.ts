@@ -92,7 +92,19 @@ function checkAbsoluteUrl(
   }
   try {
     const parsed = new URL(value!.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    const isLoopback =
+      parsed.hostname === "127.0.0.1" ||
+      parsed.hostname === "localhost" ||
+      parsed.hostname === "[::1]";
+    if (
+      (parsed.protocol !== "https:" &&
+        !(parsed.protocol === "http:" && isLoopback)) ||
+      parsed.username ||
+      parsed.password ||
+      (parsed.pathname !== "" && parsed.pathname !== "/") ||
+      parsed.search ||
+      parsed.hash
+    ) {
       throw new Error("invalid");
     }
     return { key, label, status: "ok", detail: "set" };
@@ -101,7 +113,7 @@ function checkAbsoluteUrl(
       key,
       label,
       status: "invalid",
-      detail: `${key} must be an absolute http(s) URL`,
+      detail: `${key} must be an HTTPS origin or an HTTP loopback origin`,
     };
   }
 }

@@ -22,7 +22,6 @@ test("default config reproduces this deployment's current behavior exactly", () 
   assert.equal(appConfig.outreachDispatch.hour, 9);
   assert.equal(appConfig.outreachDispatch.minute, 0);
   assert.equal(appConfig.outreachDispatch.label, "9:00 AM ET");
-  assert.deepEqual(appConfig.outreachDispatch.candidateUtcHours, [13, 14]);
   assert.equal(appConfig.repository.slug, "zspherez/photo-admin");
   assert.equal(appConfig.repository.owner, "zspherez");
   assert.equal(appConfig.repository.name, "photo-admin");

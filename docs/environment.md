@@ -110,6 +110,7 @@ _Optional integration._
 | Variable | Secret | Description |
 |---|---|---|
 | `SEND_TEST_OVERRIDE` | no | Legacy env-based test override for redirecting sends. |
+| `RATE_CARD_PATH` | no | Optional local path or HTTPS URL for a rate-card attachment. |
 
 ## Google Sheets (optional one-way contact export)
 

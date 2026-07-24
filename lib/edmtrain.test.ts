@@ -516,6 +516,26 @@ test("festival migration permits every emitted sync status and retains blocked o
   assert.ok(begin >= 0 && begin < drop && drop < add && add < commit);
 });
 
+test("market sync passes every configured EDMTrain location ID", () => {
+  const source = readFileSync(new URL("./edmtrain.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /const MARKET_LOCATION_IDS =[\s\S]*\[\.\.\.appConfig\.edmtrain\.locationIds\]/,
+  );
+  assert.ok(
+    (
+      source.match(
+        /syncEdmtrainScope\([\s\S]{0,120}?MARKET_LOCATION_IDS/g,
+      ) ?? []
+    ).length >= 2,
+  );
+  assert.match(
+    source,
+    /snapshot\.scope === "nyc" && !event\.festivalInd[\s\S]*\? "inside_nyc"[\s\S]*: venue\.nycStatus/,
+  );
+  assert.doesNotMatch(source, /\[NYC_LOCATION_ID\]/);
+});
+
 test("EDMTrain retry-budget failures remain structured at the provider boundary", async () => {
   const deadline = createOperationDeadline(10_000, { now: () => 0 });
   const result = await runIndependentEdmtrainSyncs(

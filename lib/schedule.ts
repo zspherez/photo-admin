@@ -11,8 +11,6 @@ export const OUTREACH_MORNING_DISPATCH_HOUR = appConfig.outreachDispatch.hour;
 export const OUTREACH_MORNING_DISPATCH_MINUTE =
   appConfig.outreachDispatch.minute;
 export const OUTREACH_MORNING_DISPATCH_LABEL = appConfig.outreachDispatch.label;
-export const OUTREACH_MORNING_UTC_CANDIDATE_HOURS =
-  appConfig.outreachDispatch.candidateUtcHours;
 export const OUTREACH_RECOVERY_OVERDUE_MS = 2 * 60 * 60 * 1000;
 export const OUTREACH_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
 export const OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS = 30 * 1000;
@@ -112,8 +110,14 @@ function partsInET(date: Date): ZonedParts {
   };
 }
 
-function localETToUtc(year: number, month: number, day: number, hour: number): Date {
-  const localAsUtc = Date.UTC(year, month - 1, day, hour);
+function localETToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): Date {
+  const localAsUtc = Date.UTC(year, month - 1, day, hour, minute);
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: OUTREACH_TIME_ZONE,
     year: "numeric",
@@ -173,6 +177,7 @@ export function getNextMondaySlot(now: Date = new Date()): Date {
     target.getUTCMonth() + 1,
     target.getUTCDate(),
     OUTREACH_MORNING_DISPATCH_HOUR,
+    OUTREACH_MORNING_DISPATCH_MINUTE,
   );
 }
 
@@ -210,6 +215,7 @@ export function getNextNormalOutreachDispatch(now: Date = new Date()): Date {
         target.getUTCMonth() + 1,
         target.getUTCDate(),
         OUTREACH_MORNING_DISPATCH_HOUR,
+        OUTREACH_MORNING_DISPATCH_MINUTE,
       );
     }
     daysToAdd += 1;

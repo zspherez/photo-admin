@@ -81,6 +81,21 @@ test("either profile still fails when core configuration is missing", () => {
   }
 });
 
+test("deployment readiness always applies production authentication semantics", () => {
+  const report = runDeploymentReadiness("basic", {
+    ...VALID_CORE_ENV,
+    ADMIN_PASSWORD: undefined,
+    ADMIN_SESSION_SECRET: undefined,
+    ALLOW_INSECURE_OPEN_MODE: "true",
+    NODE_ENV: undefined,
+  });
+  assert.equal(report.ok, false);
+  assert.equal(
+    report.core.find((item) => item.key === "AUTH")?.status,
+    "invalid",
+  );
+});
+
 test("optional integrations are reported the same way regardless of profile", () => {
   const withResend = runDeploymentReadiness("basic", {
     ...VALID_CORE_ENV,

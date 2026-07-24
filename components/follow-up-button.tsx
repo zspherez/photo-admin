@@ -1,4 +1,5 @@
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { appConfig } from "@/lib/appConfig";
 import { isCancellableOutreachStatus } from "@/lib/outreachStatus";
 import type { FollowUpEligibility } from "@/lib/sendOutreach";
 
@@ -69,7 +70,7 @@ export function FollowUpButton({
               : "Follow-up scheduled"}
           {eligibility.nextAttemptAt
             ? ` · ${eligibility.nextAttemptAt.toLocaleString("en-US", {
-                timeZone: "America/New_York",
+                timeZone: appConfig.timeZone,
                 weekday: "short",
                 hour: "numeric",
                 minute: "2-digit",

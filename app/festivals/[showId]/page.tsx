@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { appConfig } from "@/lib/appConfig";
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { cache } from "react";
@@ -203,7 +204,7 @@ function sendabilityLabel(
       ? `retry scheduled · ${sendability.blockingNextAttemptAt.toLocaleString(
           "en-US",
           {
-            timeZone: "America/New_York",
+            timeZone: appConfig.timeZone,
             weekday: "short",
             hour: "numeric",
             minute: "2-digit",

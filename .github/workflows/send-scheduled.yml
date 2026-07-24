@@ -2,10 +2,9 @@ name: Dispatch scheduled outreach
 
 on:
   schedule:
-    # Candidate UTC hours for the single weekday 09:00 America/New_York run.
-    # The workflow's IANA-time-zone gate selects exactly one across DST changes.
-    - cron: "0 13 * * 1-5"
-    - cron: "0 14 * * 1-5"
+    # Poll every ten minutes. The app applies its configured market time zone,
+    # weekday, and dispatch-hour gate, so forks need no UTC/DST cron edits.
+    - cron: "*/10 * * * *"
     # Exceptional recovery only: retries, stale claims, and overdue missed sends.
     - cron: "17 */4 * * *"
   workflow_dispatch:
@@ -46,17 +45,11 @@ jobs:
             exit 1
           fi
 
-          date_bin="${DATE_BIN:-date}"
           dispatch_mode="${OUTREACH_DISPATCH_MODE:-}"
           case "${SCHEDULE_EXPRESSION:-}" in
-            "0 13 * * 1-5"|"0 14 * * 1-5")
-              local_hour="${OUTREACH_LOCAL_HOUR_OVERRIDE:-$(TZ=America/New_York "${date_bin}" +%H)}"
-              if [[ "${local_hour}" != "09" ]]; then
-                echo "::notice::Skipping inactive UTC candidate; normal outreach dispatch runs only during 09:00-09:59 America/New_York"
-                exit 0
-              fi
+            "*/10 * * * *")
               dispatch_mode="morning"
-              echo "::notice::Normal morning outreach dispatch (09:00 America/New_York)"
+              echo "::notice::Polling configured morning outreach window"
               ;;
             "17 */4 * * *")
               dispatch_mode="recovery"

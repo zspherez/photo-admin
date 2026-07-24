@@ -28,8 +28,6 @@ export interface OutreachDispatchConfig {
   readonly minute: number;
   /** Human label for the dispatch time, e.g. "9:00 AM ET". */
   readonly label: string;
-  /** DST-spanning candidate UTC hours a fixed cron schedule must cover. */
-  readonly candidateUtcHours: readonly number[];
 }
 
 export interface EdmtrainScopeConfig {
@@ -73,7 +71,6 @@ const DEFAULT_OUTREACH_DISPATCH: OutreachDispatchConfig = {
   hour: 9,
   minute: 0,
   label: "9:00 AM ET",
-  candidateUtcHours: [13, 14],
 };
 
 export const WORKFLOW_TRUSTED_BRANCH_REF = "refs/heads/main";

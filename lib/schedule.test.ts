@@ -13,7 +13,6 @@ import {
   OUTREACH_CLAIM_TIMEOUT_MS,
   OUTREACH_MORNING_DISPATCH_HOUR,
   OUTREACH_MORNING_DISPATCH_LABEL,
-  OUTREACH_MORNING_UTC_CANDIDATE_HOURS,
   OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
   SCHEDULED_DISPATCH_MAX_MS,
   SCHEDULED_DISPATCH_ROUTE_TIMEOUT_MS,
@@ -188,23 +187,14 @@ test("normal morning dispatch and exceptional recovery stay distinct", () => {
     "utf8",
   );
 
-  assert.match(workflow, /cron: "0 13 \* \* 1-5"/);
-  assert.match(workflow, /cron: "0 14 \* \* 1-5"/);
+  assert.match(workflow, /cron: "\*\/10 \* \* \* \*"/);
   assert.match(workflow, /cron: "17 \*\/4 \* \* \*"/);
-  assert.match(workflow, /TZ=America\/New_York/);
-  assert.match(workflow, /local_hour.*!= "09"/);
-  assert.deepEqual(OUTREACH_MORNING_UTC_CANDIDATE_HOURS, [13, 14]);
   assert.equal(OUTREACH_MORNING_DISPATCH_HOUR, 9);
-  for (const candidateHour of OUTREACH_MORNING_UTC_CANDIDATE_HOURS) {
-    assert.ok(
-      workflow.includes(`cron: "0 ${candidateHour} * * 1-5"`),
-    );
-  }
+  assert.match(route, /isOutreachMorningDispatchWindow/);
+  assert.match(workflow, /Polling configured morning outreach window/);
   assert.match(
-    workflow,
-    new RegExp(
-      `local_hour.*!= "${String(OUTREACH_MORNING_DISPATCH_HOUR).padStart(2, "0")}"`,
-    ),
+    readFileSync(new URL("./schedule.ts", import.meta.url), "utf8"),
+    /localETToUtc\([\s\S]*OUTREACH_MORNING_DISPATCH_HOUR,[\s\S]*OUTREACH_MORNING_DISPATCH_MINUTE/,
   );
   assert.match(workflow, /dispatch_mode="morning"/);
   assert.match(workflow, /dispatch_mode="recovery"/);

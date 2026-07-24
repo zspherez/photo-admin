@@ -69,7 +69,10 @@ export function runDeploymentReadiness(
   profile: DeploymentProfile,
   env: SetupCheckEnvironment = process.env,
 ): DeploymentReadinessReport {
-  const core = runSetupDiagnostics(env);
+  const core = runSetupDiagnostics({
+    ...env,
+    NODE_ENV: "production",
+  });
   const profileRequired: SetupCheckItem[] = [];
   const warnings: string[] = [];
   const cronSecretSet = !isBlank(env.CRON_SECRET);

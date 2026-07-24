@@ -263,7 +263,7 @@ test("recovery credentials are main-only environment secrets and execute no chec
   assert.match(recoverySource, /github\.ref == 'refs\/heads\/main'/);
   assert.match(
     recoverySource,
-    /github\.repository == env\.HARDENED_RELEASE_REPOSITORY/
+    /github\.repository == needs\.trust\.outputs\.hardened_repository/
   );
   assert.match(
     recoverySource,
@@ -280,7 +280,7 @@ test("hardened repository trust is configurable but fails closed to this deploym
   const workflow = readFileSync(releaseWorkflow, "utf8");
 
   // Exactly one literal default value: the workflow-level fallback. Every
-  // authorization check must reference the resolved env/context value
+  // authorization check must reference the resolved trust-job output
   // instead of re-hardcoding the literal, so a fork can retarget every
   // check by setting a single repository variable.
   assert.equal(
@@ -304,23 +304,34 @@ test("hardened repository trust is configurable but fails closed to this deploym
   for (const block of jobIfBlocks) {
     assert.match(
       block,
-      /github\.repository == env\.HARDENED_RELEASE_REPOSITORY/
+      /github\.repository == needs\.trust\.outputs\.hardened_repository/
     );
     assert.match(
       block,
-      /github\.workflow_ref == format\('\{0\}\/\.github\/workflows\/release-production\.yml@refs\/heads\/main', env\.HARDENED_RELEASE_REPOSITORY\)/
+      /github\.workflow_ref == format\('\{0\}\/\.github\/workflows\/release-production\.yml@refs\/heads\/main', needs\.trust\.outputs\.hardened_repository\)/
     );
     assert.doesNotMatch(block, /'zspherez\/photo-admin'/);
   }
 
-  // Both shell-level gates (trust job + recovery watchdog reassertion)
-  // compare against the shared env value rather than a hardcoded literal.
+  // The trust gate resolves the repository variable; the watchdog receives
+  // that exact validated value from the trust job output.
   const trustGate = workflowStep(workflow, "Reject untrusted repository or ref");
   const watchdogGate = workflowStep(workflow, "Reassert trusted watchdog context");
+  assert.match(
+    trustGate,
+    /HARDENED_RELEASE_REPOSITORY: \$\{\{ env\.HARDENED_RELEASE_REPOSITORY \}\}/,
+  );
+  assert.match(
+    watchdogGate,
+    /HARDENED_RELEASE_REPOSITORY: \$\{\{ needs\.trust\.outputs\.hardened_repository \}\}/,
+  );
   for (const gate of [trustGate, watchdogGate]) {
-    assert.match(gate, /HARDENED_RELEASE_REPOSITORY: \$\{\{ env\.HARDENED_RELEASE_REPOSITORY \}\}/);
-    assert.match(gate, /"\$\{GITHUB_REPOSITORY\}" != "\$\{HARDENED_RELEASE_REPOSITORY\}"/);
+    assert.match(
+      gate,
+      /"\$\{GITHUB_REPOSITORY\}" != "\$\{HARDENED_RELEASE_REPOSITORY\}"/,
+    );
     assert.doesNotMatch(gate, /"zspherez\/photo-admin"/);
+    assert.doesNotMatch(gate, /EVENT_REPOSITORY_FORK/);
   }
 });
 

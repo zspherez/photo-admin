@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { appConfig } from "@/lib/appConfig";
 import Image from "next/image";
 import Link from "next/link";
 import { notFound, redirect, RedirectType } from "next/navigation";
@@ -607,13 +608,13 @@ export default async function ArtistPage({
                     Claimed{" "}
                     {researchJob.claimedAt
                       ? researchJob.claimedAt.toLocaleString("en-US", {
-                          timeZone: "America/New_York",
+                          timeZone: appConfig.timeZone,
                         })
                       : "without a recorded timestamp"}
                     {researchJob.claimExpiresAt
                       ? ` · expires ${researchJob.claimExpiresAt.toLocaleString(
                           "en-US",
-                          { timeZone: "America/New_York" }
+                          { timeZone: appConfig.timeZone }
                         )}`
                       : ""}
                   </p>
@@ -808,7 +809,7 @@ export default async function ArtistPage({
                             } · ${sendability.blockingNextAttemptAt.toLocaleString(
                               "en-US",
                               {
-                                timeZone: "America/New_York",
+                                timeZone: appConfig.timeZone,
                                 weekday: "short",
                                 hour: "numeric",
                                 minute: "2-digit",

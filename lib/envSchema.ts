@@ -357,6 +357,18 @@ export const ENV_SCHEMA: readonly EnvVarDefinition[] = [
     defaultValue: "",
   },
   {
+    key: "RATE_CARD_PATH",
+    group: "send-behavior",
+    secret: false,
+    summary:
+      "Optional local path or HTTPS URL for a rate-card attachment.",
+    notes: [
+      "When set, outreach snapshots the referenced attachment before sending.",
+      "Leave blank to send without a rate-card attachment.",
+    ],
+    defaultValue: "",
+  },
+  {
     key: "GOOGLE_CREDENTIALS_JSON",
     group: "google-sheets",
     secret: true,
