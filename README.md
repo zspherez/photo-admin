@@ -128,7 +128,7 @@ verify neither generated file has drifted.
 | Core | Database URLs, `APP_BASE_URL`, admin password/session secret, optional `READ_ONLY_PASSWORD` |
 | Fork identity | Optional `REPOSITORY_SLUG` and workflow trust ref overrides — see [Forking](#forking) |
 | Deployment profile | Optional `DEPLOYMENT_PROFILE` — read only by `npm run deployment:readiness`, see [docs/deployment.md](docs/deployment.md) |
-| Email | Resend API key, sender, webhook secret, optional test override and `RATE_CARD_PATH` attachment |
+| Email | Resend API key, sender, webhook secret, optional test override |
 | Shows/listening | EDMTrain key, Spotify client credentials, stats.fm token |
 | Google Sheets export | Optional Google credentials and `GOOGLE_CONTACT_EXPORT_SPREADSHEET_ID` |
 | Automation | `CRON_SECRET`; local-only contact agent tokens |
