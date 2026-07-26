@@ -93,7 +93,7 @@ test("strict photo-admin-import-v1 contract is accepted and derives freshness", 
   assert.equal(parsed.manifest.recommendations[0].arm, "trajectory");
   assert.equal(
     parsed.validUntil.toISOString(),
-    "2026-07-23T05:14:16.108Z",
+    "2026-07-27T05:14:16.108Z",
   );
   assert.equal(parseTrajectoryDigest(digest.toUpperCase()), digest);
 });
@@ -223,18 +223,18 @@ test("generation cannot precede the feature and decision dates", () => {
 });
 
 test("ready model opinion is actionable only through its contract freshness bound", () => {
-  const validUntil = new Date("2026-07-23T05:14:16.108Z");
+  const validUntil = new Date("2026-07-27T05:14:16.108Z");
   assert.equal(
     isTrajectoryRunActionable(
       { status: "ready", validUntil },
-      new Date("2026-07-23T05:14:16.108Z"),
+      new Date("2026-07-27T05:14:16.108Z"),
     ),
     true,
   );
   assert.equal(
     isTrajectoryRunActionable(
       { status: "ready", validUntil },
-      new Date("2026-07-23T05:14:16.109Z"),
+      new Date("2026-07-27T05:14:16.109Z"),
     ),
     false,
   );

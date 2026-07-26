@@ -8,7 +8,7 @@ export const TRAJECTORY_PRODUCER_SCHEMA_VERSION =
 export const TRAJECTORY_MODEL_STATUS =
   "provisional_population_matched_event_momentum";
 export const TRAJECTORY_RAW_SIZE_LIMIT_BYTES = 1_000_000;
-export const TRAJECTORY_STALE_AFTER_HOURS = 72;
+export const TRAJECTORY_STALE_AFTER_HOURS = 168;
 
 export const TRAJECTORY_ARMS = [
   "trajectory",

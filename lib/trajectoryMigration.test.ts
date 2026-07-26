@@ -20,6 +20,13 @@ const ingestMigration = readFileSync(
   ),
   "utf8",
 );
+const validityMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260726190000_trajectory_seven_day_validity/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 function modelBlock(name: string): string {
   const match = schema.match(
@@ -58,6 +65,17 @@ test("trajectory migration is additive, transactional, and fully constrained", (
     migration,
     /TrajectoryRecommendation_runId_slatePosition_suggested_key[\s\S]*WHERE "isSuggested"/,
   );
+});
+
+test("trajectory validity is extended to seven days transactionally", () => {
+  assert.match(validityMigration, /^BEGIN;/);
+  assert.match(validityMigration, /DROP CONSTRAINT "TrajectoryModelRun_freshness_check"/);
+  assert.match(
+    validityMigration,
+    /UPDATE "TrajectoryModelRun"[\s\S]*"validUntil" = "generatedAt" \+ INTERVAL '168 hours'/,
+  );
+  assert.match(validityMigration, /INTERVAL '168 hours'/);
+  assert.match(validityMigration, /COMMIT;\s*$/);
 });
 
 test("trajectory schema remains an additive model-opinion layer", () => {
