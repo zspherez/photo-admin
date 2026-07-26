@@ -352,7 +352,7 @@ test("exact EDMTrain mappings and ShowArtist membership import atomically", asyn
       unresolvedNonSuggestedRate: 0,
       recommendationHorizonEnd: "2026-10-18T00:00:00.000Z",
       freshnessPolicy: {
-        staleAfterHours: 72,
+        staleAfterHours: 168,
         expectedRefreshCadenceHours: 24,
         timezone: "America/New_York",
       },
@@ -431,7 +431,7 @@ test("non-suggested mapping issues persist at the 2% default threshold", async (
       unresolvedNonSuggestedRate: 0.02,
       recommendationHorizonEnd: "2026-10-18T00:00:00.000Z",
       freshnessPolicy: {
-        staleAfterHours: 72,
+        staleAfterHours: 168,
         expectedRefreshCadenceHours: 24,
         timezone: "America/New_York",
       },
@@ -565,8 +565,8 @@ test("membership changes between planning and promotion reject atomically", asyn
 
 test("expired and exact-boundary manifests reject before lease or writes", async () => {
   for (const importTime of [
-    "2026-07-23T05:14:16.108Z",
-    "2026-07-23T05:14:16.109Z",
+    "2026-07-27T05:14:16.108Z",
+    "2026-07-27T05:14:16.109Z",
   ]) {
     const value = manifest();
     const persistence = new MemoryPersistence(exactSnapshot(value));
@@ -614,7 +614,7 @@ test("a manifest generated after import time is rejected before writes", async (
 test("freshness is rechecked at transaction time before any insert", async () => {
   const value = manifest();
   const persistence = new MemoryPersistence(exactSnapshot(value));
-  persistence.transactionNow = new Date("2026-07-23T05:14:16.108Z");
+  persistence.transactionNow = new Date("2026-07-27T05:14:16.108Z");
   persistence.runs.push({
     id: "old-ready",
     producer: "artist_trajectory",
@@ -644,8 +644,8 @@ test("expiry during inserts rolls back before ready-run supersession", async () 
   const value = manifest();
   const persistence = new MemoryPersistence(exactSnapshot(value));
   persistence.transactionTimes = [
-    new Date("2026-07-23T05:14:16.107Z"),
-    new Date("2026-07-23T05:14:16.108Z"),
+    new Date("2026-07-27T05:14:16.107Z"),
+    new Date("2026-07-27T05:14:16.108Z"),
   ];
   persistence.runs.push({
     id: "old-ready",
