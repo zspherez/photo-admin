@@ -70,6 +70,10 @@ test("trajectory migration is additive, transactional, and fully constrained", (
 test("trajectory validity is extended to seven days transactionally", () => {
   assert.match(validityMigration, /^BEGIN;/);
   assert.match(validityMigration, /DROP CONSTRAINT "TrajectoryModelRun_freshness_check"/);
+  assert.match(
+    validityMigration,
+    /UPDATE "TrajectoryModelRun"[\s\S]*"validUntil" = "generatedAt" \+ INTERVAL '168 hours'/,
+  );
   assert.match(validityMigration, /INTERVAL '168 hours'/);
   assert.match(validityMigration, /COMMIT;\s*$/);
 });
