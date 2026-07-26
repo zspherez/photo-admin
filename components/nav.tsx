@@ -11,7 +11,7 @@ const ITEMS: { href: string; label: string; match: (p: string) => boolean }[] = 
   { href: "/recommendations", label: "Recommendations", match: (p) => p === "/recommendations" || p.startsWith("/recommendations/") },
   { href: "/festivals", label: "Festivals", match: (p) => p === "/festivals" || p.startsWith("/festivals/") },
   { href: "/research", label: "Research", match: (p) => p === "/research" },
-  { href: "/contacts", label: "Contacts", match: (p) => p === "/contacts" },
+  { href: "/artists", label: "Artists", match: (p) => p === "/artists" || p.startsWith("/artists/") || p === "/contacts" },
   { href: "/contact-audit", label: "Audit", match: (p) => p === "/contact-audit" },
   {
     href: "/outreach",
