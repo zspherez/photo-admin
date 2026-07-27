@@ -110,6 +110,11 @@ test("artist header exposes authenticated queue research and queue audit actions
   assert.match(source, /requireServerActionAuth/);
   assert.match(source, /research_queued/);
   assert.match(source, /audit_queued/);
+  assert.match(source, /const hasExplicitQueueShow = upcomingShows\.length > 0/);
+  assert.match(
+    source,
+    /hasActiveEmailContact \|\|[\s\S]*activeResearchSkip !== null \|\|[\s\S]*!hasExplicitQueueShow/
+  );
   assert.match(
     source,
     /\n      \)\}\n\n      \{\(auditQueued \|\| auditError\) && \(/
@@ -126,6 +131,6 @@ test("no-job controls document non-queueing materialization and block ineligible
   assert.match(source, /hasEligibleFestivalContext/);
   assert.match(source, /canManage=\{canManageResearch\}/);
   assert.match(source, /new manager-research job will not be created/);
-  assert.match(source, /no eligible upcoming regular show or current festival context/);
+  assert.match(source, /no future active show to bind to a manager-research request/);
   assert.match(source, /mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10/);
 });

@@ -743,7 +743,7 @@ test("exhausted retry count uses the same current eligibility rules as the actio
   );
   assert.match(
     source,
-    /show\."isFestival" = false[\s\S]*show\."date" <= \?[\s\S]*show\."isFestival" = true[\s\S]*job\."requestedShowId" = show\."id"/
+    /show\."isFestival" = false[\s\S]*show\."date" <= \?[\s\S]*OR job\."requestedShowId" = show\."id"/
   );
   assert.match(
     source,
@@ -2686,13 +2686,13 @@ test("explicit artist queue revalidates policy and resets a claimed job to pendi
       where: { artistId: "artist-1" },
       create: {
         artistId: "artist-1",
-        requestedShowId: null,
+        requestedShowId: "show-1",
         status: "pending",
         priority: 318,
         nextShowAt: showDate,
       },
       update: {
-        requestedShowId: null,
+        requestedShowId: "show-1",
         status: "pending",
         priority: 318,
         nextShowAt: showDate,
@@ -2845,6 +2845,73 @@ test("explicit festival queue preserves the established festival priority boost"
   assert.equal(upserts[0].create.priority, 3_309);
 });
 
+test("explicit artist queue accepts a future festival without return context", async () => {
+  const now = new Date("2026-07-27T12:00:00.000Z");
+  const showDate = new Date("2026-10-31T00:00:00.000Z");
+  const upserts: Array<{
+    create: {
+      requestedShowId: string | null;
+      nextShowAt: Date;
+      status: string;
+    };
+  }> = [];
+  const result = await queueContactResearchArtistByArtistId("artist-1", {
+    now,
+    runTransaction: runWithTransaction({
+      $queryRaw: async () => [{ id: "artist-1" }],
+      artist: {
+        findUnique: async () => ({
+          id: "artist-1",
+          popularity: null,
+          contacts: [],
+          researchSkips: [],
+          listenSignals: [],
+        }),
+      },
+      contactResearchJob: {
+        findUnique: async () => ({
+          id: "job-1",
+          candidates: [],
+          directOutreachProposals: [],
+        }),
+        upsert: async (value: unknown) => {
+          upserts.push(
+            value as {
+              create: {
+                requestedShowId: string | null;
+                nextShowAt: Date;
+                status: string;
+              };
+            }
+          );
+          return { id: "job-1", status: "pending" };
+        },
+      },
+      showArtist: {
+        findMany: async () => [
+          {
+            showId: "future-festival",
+            show: {
+              date: showDate,
+              interestedAt: null,
+              isFestival: true,
+            },
+          },
+        ],
+      },
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(upserts[0].create, {
+    artistId: "artist-1",
+    requestedShowId: "future-festival",
+    status: "pending",
+    priority: 3_000,
+    nextShowAt: showDate,
+  });
+});
+
 test("artist skip materializes a skipped job and explicit unskip restores eligibility", async () => {
   const now = new Date("2026-07-20T12:00:00.000Z");
   const showDate = new Date("2026-08-20T00:00:00.000Z");
@@ -2953,6 +3020,42 @@ test("artist skip materializes a skipped job and explicit unskip restores eligib
     (restored[0] as { data: { status: string } }).data.status,
     "pending"
   );
+});
+
+test("artist unskip preserves a future regular manual-show override outside the window", async () => {
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const showQueries: unknown[] = [];
+  const result = await unskipContactResearchArtistByArtistId("artist-1", {
+    now,
+    runTransaction: runWithTransaction({
+      contactResearchJob: {
+        findUnique: async () => ({
+          id: "job-1",
+          artistId: "artist-1",
+          status: "skipped",
+          requestedShowId: "regular-future",
+          artist: { contacts: [] },
+        }),
+        update: async () => ({}),
+      },
+      artistResearchSkip: {
+        findFirst: async () => ({ id: "skip-1" }),
+        update: async () => ({}),
+      },
+      showArtist: {
+        findFirst: async (value: unknown) => {
+          showQueries.push(value);
+          return { showId: "regular-future" };
+        },
+      },
+    }),
+  });
+  assert.equal(result.ok, true);
+  const query = showQueries[0] as {
+    where: { show: Record<string, unknown> };
+  };
+  assert.equal("isFestival" in query.where.show, false);
+  assert.equal(query.where.show.syncStatus, "active");
 });
 
 test("artist unskip restores a validated festival return context", async () => {
@@ -4170,7 +4273,11 @@ test("claims require current eligibility and unexpired ownership", () => {
   assert.match(unskipSource, /reason: "active_contact"/);
   assert.match(
     unskipSource,
-    /eligibleFestival[\s\S]*isFestival: true[\s\S]*syncStatus: "active"[\s\S]*festivalLeadTimeWhere\(now\)/
+    /eligibleRequestedShow[\s\S]*syncStatus: "active"[\s\S]*festivalLeadTimeWhere\(now\)/
+  );
+  assert.match(
+    source,
+    /row\.requestedShow\.isFestival \? 2_000 : 0/
   );
   assert.match(
     unskipSource,
@@ -4214,7 +4321,7 @@ test("claims require current eligibility and unexpired ownership", () => {
   );
   assert.match(
     source,
-    /retryEligibleContactResearchJobs[\s\S]*show\."syncStatus" = 'active'[\s\S]*show\."date" <= \$\{end\}[\s\S]*show\."isFestival" = true[\s\S]*job\."requestedShowId" = show\."id"/
+    /retryEligibleContactResearchJobs[\s\S]*show\."syncStatus" = 'active'[\s\S]*show\."date" <= \$\{end\}[\s\S]*OR job\."requestedShowId" = show\."id"/
   );
   assert.match(
     source,
