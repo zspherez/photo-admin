@@ -7,6 +7,7 @@ import { cache } from "react";
 import { db } from "@/lib/db";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { LinkButton } from "@/components/ui/button";
 import { formatShowDate } from "@/lib/formatDate";
 import {
   cancelScheduledAction,
@@ -524,7 +525,7 @@ export default async function ArtistPage({
         </div>
       )}
 
-      <div className="mt-2 flex items-start gap-4">
+      <div className="mt-2 flex flex-wrap items-start gap-4">
         {artist.imageUrl && (
           <Image
             src={artist.imageUrl}
@@ -545,6 +546,17 @@ export default async function ArtistPage({
             )}
           </div>
         </div>
+        <LinkButton
+          href={withWorkflowReturnTo(
+            `/dashboard/add-contact/${artist.id}`,
+            currentReturnTo
+          )}
+          variant="secondary"
+          size="sm"
+          className="shrink-0"
+        >
+          Add contact
+        </LinkButton>
       </div>
 
       <section className="mt-6">
@@ -885,17 +897,7 @@ export default async function ArtistPage({
 
       {artist.contacts.length === 0 && (
         <p className="mt-6 text-xs text-zinc-500">
-          No contact yet.{" "}
-          <Link
-            href={withWorkflowReturnTo(
-              `/dashboard/add-contact/${artist.id}`,
-              safeReturnTo
-            )}
-            className="underline"
-          >
-            Add one
-          </Link>
-          .
+          No contact yet.
         </p>
       )}
     </main>
