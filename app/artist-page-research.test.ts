@@ -82,7 +82,7 @@ test("artist actions authenticate internally and mutate only by their bound arti
     source,
     /handleUnskipArtistResearch[\s\S]*unskipContactResearchArtistByArtistId\(artistId, \{[\s\S]*requestedShowId: workflowFestivalShowId\(returnTo\)/
   );
-  assert.ok((source.match(/RedirectType\.replace/g)?.length ?? 0) === 3);
+  assert.ok((source.match(/RedirectType\.replace/g)?.length ?? 0) === 5);
 });
 
 test("artist actions preserve return context and refresh artist, festival, and research views", () => {
@@ -97,6 +97,23 @@ test("artist actions preserve return context and refresh artist, festival, and r
   assert.match(source, /research_skipped/);
   assert.match(source, /research_unskipped/);
   assert.match(source, /research_error/);
+});
+
+test("artist header exposes authenticated queue research and queue audit actions", () => {
+  assert.match(source, />\s*Add contact\s*<\/LinkButton>/);
+  assert.match(source, />\s*Queue research\s*<\/PendingSubmitButton>/);
+  assert.match(source, />\s*Queue audit\s*<\/PendingSubmitButton>/);
+  assert.match(source, /queueContactResearchArtistByArtistId\(id/);
+  assert.match(source, /requestContactAuditForArtist\(id\)/);
+  assert.match(source, /async function queueArtistResearchAction/);
+  assert.match(source, /async function queueArtistAuditAction/);
+  assert.match(source, /requireServerActionAuth/);
+  assert.match(source, /research_queued/);
+  assert.match(source, /audit_queued/);
+  assert.match(
+    source,
+    /\n      \)\}\n\n      \{\(auditQueued \|\| auditError\) && \(/
+  );
 });
 
 test("no-job controls document non-queueing materialization and block ineligible artists", () => {

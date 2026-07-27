@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/button";
+import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { formatShowDate } from "@/lib/formatDate";
 import {
   cancelScheduledAction,
@@ -47,11 +48,13 @@ import {
 } from "@/lib/contactDisplay";
 import {
   CONTACT_RESEARCH_WINDOW_DAYS,
+  queueContactResearchArtistByArtistId,
   skipContactResearchArtistByArtistId,
   unskipContactResearchArtistByArtistId,
   updateContactResearchArtistUserNotes,
   type ArtistContactResearchMutationFailure,
 } from "@/lib/contactResearch";
+import { requestContactAuditForArtist } from "@/lib/contactAudit";
 import { requireServerActionAuth } from "@/lib/auth";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
 import { ContactResearchControls } from "@/components/contact-research-controls";
@@ -69,6 +72,12 @@ function researchMutationFailureMessage(
   if (reason === "artist_not_found") return "Artist could not be found.";
   if (reason === "active_contact") {
     return "This artist already has an active email contact, so a new research job was not created.";
+  }
+  if (reason === "intentional_skip") {
+    return "This artist is intentionally skipped from manager research.";
+  }
+  if (reason === "pending_review") {
+    return "This artist already has a pending research candidate or direct-outreach review.";
   }
   if (reason === "ineligible") {
     return "This artist has no eligible upcoming show context for durable manager research state.";
@@ -338,6 +347,9 @@ export default async function ArtistPage({
     research_skipped?: SearchParamValue;
     research_unskipped?: SearchParamValue;
     research_error?: SearchParamValue;
+    research_queued?: SearchParamValue;
+    audit_queued?: SearchParamValue;
+    audit_error?: SearchParamValue;
   }>;
 }) {
   const { id } = await params;
@@ -350,6 +362,9 @@ export default async function ArtistPage({
   const researchSkipped = firstSearchParam(search.research_skipped);
   const researchUnskipped = firstSearchParam(search.research_unskipped);
   const researchError = firstSearchParam(search.research_error);
+  const researchQueued = firstSearchParam(search.research_queued);
+  const auditQueued = firstSearchParam(search.audit_queued);
+  const auditError = firstSearchParam(search.audit_error);
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
   const currentReturnTo = withWorkflowReturnTo(
     `/artists/${id}`,
@@ -475,6 +490,84 @@ export default async function ArtistPage({
     await handleUnskipArtistResearch(id, actionReturnTo);
   }
 
+  async function queueArtistResearchAction(formData: FormData) {
+    "use server";
+    await requireServerActionAuth(
+      artistWorkflowPath(id, formData.get("returnTo"))
+    );
+    const actionReturnTo = workflowReturnPath(formData.get("returnTo"));
+    let result:
+      | Awaited<ReturnType<typeof queueContactResearchArtistByArtistId>>
+      | null = null;
+    let error: string | null = null;
+    try {
+      result = await queueContactResearchArtistByArtistId(id, {
+        requestedShowId: workflowFestivalShowId(actionReturnTo),
+      });
+    } catch (caught) {
+      error = researchActionError(caught);
+    }
+    if (result?.ok) {
+      refreshWorkflowViews(actionReturnTo, [
+        artistWorkflowPath(id, actionReturnTo),
+        "/research",
+        "/settings",
+      ]);
+    }
+    redirect(
+      artistWorkflowPath(id, actionReturnTo, {
+        ...(result?.ok ? { research_queued: "1" } : {}),
+        ...(!result?.ok
+          ? {
+              research_error:
+                error ??
+                (result
+                  ? researchMutationFailureMessage(result.reason)
+                  : "Manager research could not be queued."),
+            }
+          : {}),
+      }),
+      RedirectType.replace
+    );
+  }
+
+  async function queueArtistAuditAction(formData: FormData) {
+    "use server";
+    await requireServerActionAuth(
+      artistWorkflowPath(id, formData.get("returnTo"))
+    );
+    const actionReturnTo = workflowReturnPath(formData.get("returnTo"));
+    let queued: "created" | "existing" | null = null;
+    let error: string | null = null;
+    try {
+      const result = await requestContactAuditForArtist(id);
+      if (result.ok) {
+        queued = result.request.created ? "created" : "existing";
+      } else {
+        error =
+          result.reason === "artist_not_found"
+            ? "Artist could not be found."
+            : "This artist has no active contacts to audit.";
+      }
+    } catch (caught) {
+      error = researchActionError(caught);
+    }
+    if (queued) {
+      refreshWorkflowViews(actionReturnTo, [
+        artistWorkflowPath(id, actionReturnTo),
+        "/contact-audit",
+        "/settings",
+      ]);
+    }
+    redirect(
+      artistWorkflowPath(id, actionReturnTo, {
+        ...(queued ? { audit_queued: queued } : {}),
+        ...(error ? { audit_error: error } : {}),
+      }),
+      RedirectType.replace
+    );
+  }
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
       <Link href={safeReturnTo} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Back</Link>
@@ -507,6 +600,7 @@ export default async function ArtistPage({
       {(researchSaved ||
         researchSkipped ||
         researchUnskipped ||
+        researchQueued ||
         researchError) && (
         <div className="mt-4">
           {researchError ? (
@@ -519,7 +613,25 @@ export default async function ArtistPage({
                 ? "Artist intentionally skipped from manager research."
                 : researchUnskipped
                   ? "Intentional skip cleared and normal eligibility restored."
+                  : researchQueued
+                    ? "Artist queued for manager research."
                   : "Research instructions saved."}
+            </div>
+          )}
+        </div>
+      )}
+
+      {(auditQueued || auditError) && (
+        <div className="mt-4">
+          {auditError ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+              Contact audit queue failed: {auditError}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+              {auditQueued === "existing"
+                ? "This artist already has a contact audit queued or running."
+                : "Artist queued for contact audit."}
             </div>
           )}
         </div>
@@ -546,17 +658,44 @@ export default async function ArtistPage({
             )}
           </div>
         </div>
-        <LinkButton
-          href={withWorkflowReturnTo(
-            `/dashboard/add-contact/${artist.id}`,
-            currentReturnTo
-          )}
-          variant="secondary"
-          size="sm"
-          className="shrink-0"
-        >
-          Add contact
-        </LinkButton>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <LinkButton
+            href={withWorkflowReturnTo(
+              `/dashboard/add-contact/${artist.id}`,
+              currentReturnTo
+            )}
+            variant="secondary"
+            size="sm"
+          >
+            Add contact
+          </LinkButton>
+          <form action={queueArtistResearchAction}>
+            <input type="hidden" name="returnTo" value={safeReturnTo} />
+            <PendingSubmitButton
+              variant="secondary"
+              size="sm"
+              pendingLabel="Queueing research…"
+              disabled={
+                hasActiveEmailContact ||
+                activeResearchSkip !== null ||
+                (!hasEligibleRegularShow && !hasEligibleFestivalContext)
+              }
+            >
+              Queue research
+            </PendingSubmitButton>
+          </form>
+          <form action={queueArtistAuditAction}>
+            <input type="hidden" name="returnTo" value={safeReturnTo} />
+            <PendingSubmitButton
+              variant="secondary"
+              size="sm"
+              pendingLabel="Queueing audit…"
+              disabled={artist.contacts.length === 0}
+            >
+              Queue audit
+            </PendingSubmitButton>
+          </form>
+        </div>
       </div>
 
       <section className="mt-6">

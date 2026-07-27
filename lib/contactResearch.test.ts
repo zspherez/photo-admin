@@ -35,6 +35,7 @@ import {
   isOfficialManagementAutoApprovalEligible,
   isContactResearchApprovalEffective,
   refreshContactResearchQueue,
+  queueContactResearchArtistByArtistId,
   retryAllExhaustedContactResearchJobs,
   retryAllReviewContactResearchJobs,
   retryContactResearchJob,
@@ -2611,6 +2612,7 @@ test("artist notes materialize one inactive job without queueing research", asyn
     jobId: "job-1",
     status: "inactive",
   });
+
   assert.deepEqual(upserts, [
     {
       where: { artistId: "artist-1" },
@@ -2630,6 +2632,217 @@ test("artist notes materialize one inactive job without queueing research", asyn
       data: { userNotes: "Use the festival website." },
     },
   ]);
+});
+
+test("explicit artist queue revalidates policy and resets a claimed job to pending", async () => {
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const showDate = new Date("2026-08-01T00:00:00.000Z");
+  const upserts: unknown[] = [];
+  const result = await queueContactResearchArtistByArtistId("artist-1", {
+    now,
+    runTransaction: runWithTransaction({
+      $queryRaw: async () => [{ id: "artist-1" }],
+      artist: {
+        findUnique: async () => ({
+          id: "artist-1",
+          popularity: 40,
+          contacts: [],
+          researchSkips: [],
+          listenSignals: [{ id: "signal-1" }],
+        }),
+      },
+      contactResearchJob: {
+        findUnique: async () => ({
+          id: "job-1",
+          candidates: [],
+          directOutreachProposals: [],
+        }),
+        upsert: async (value: unknown) => {
+          upserts.push(value);
+          return { id: "job-1", status: "pending" };
+        },
+      },
+      showArtist: {
+        findMany: async () => [
+          {
+            showId: "show-1",
+            show: {
+              date: showDate,
+              interestedAt: null,
+              isFestival: false,
+            },
+          },
+        ],
+      },
+    }),
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    jobId: "job-1",
+    status: "pending",
+  });
+  assert.deepEqual(upserts, [
+    {
+      where: { artistId: "artist-1" },
+      create: {
+        artistId: "artist-1",
+        requestedShowId: null,
+        status: "pending",
+        priority: 318,
+        nextShowAt: showDate,
+      },
+      update: {
+        requestedShowId: null,
+        status: "pending",
+        priority: 318,
+        nextShowAt: showDate,
+        completedAt: null,
+        claimToken: null,
+        claimedAt: null,
+        claimExpiresAt: null,
+      },
+      select: { id: true, status: true },
+    },
+  ]);
+});
+
+test("explicit artist queue fails closed for contacts, skips, pending review, and no show", async () => {
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const base = {
+    $queryRaw: async () => [{ id: "artist-1" }],
+    contactResearchJob: {
+      findUnique: async () => ({
+        id: "job-1",
+        candidates: [],
+        directOutreachProposals: [],
+      }),
+    },
+    showArtist: { findMany: async () => [] },
+  };
+  const scenarios = [
+    {
+      expected: "active_contact",
+      artist: {
+        id: "artist-1",
+        popularity: 0,
+        contacts: [{ id: "contact-1" }],
+        researchSkips: [],
+        listenSignals: [],
+      },
+    },
+    {
+      expected: "intentional_skip",
+      artist: {
+        id: "artist-1",
+        popularity: 0,
+        contacts: [],
+        researchSkips: [{ id: "skip-1" }],
+        listenSignals: [],
+      },
+    },
+  ] as const;
+  for (const scenario of scenarios) {
+    const result = await queueContactResearchArtistByArtistId("artist-1", {
+      now,
+      runTransaction: runWithTransaction({
+        ...base,
+        artist: { findUnique: async () => scenario.artist },
+      }),
+    });
+    assert.deepEqual(result, { ok: false, reason: scenario.expected });
+  }
+  const pending = await queueContactResearchArtistByArtistId("artist-1", {
+    now,
+    runTransaction: runWithTransaction({
+      ...base,
+      artist: {
+        findUnique: async () => ({
+          id: "artist-1",
+          popularity: 0,
+          contacts: [],
+          researchSkips: [],
+          listenSignals: [],
+        }),
+      },
+      contactResearchJob: {
+        findUnique: async () => ({
+          id: "job-1",
+          candidates: [{ id: "candidate-1" }],
+          directOutreachProposals: [],
+        }),
+      },
+    }),
+  });
+  assert.deepEqual(pending, { ok: false, reason: "pending_review" });
+  const noShow = await queueContactResearchArtistByArtistId("artist-1", {
+    now,
+    runTransaction: runWithTransaction({
+      ...base,
+      artist: {
+        findUnique: async () => ({
+          id: "artist-1",
+          popularity: 0,
+          contacts: [],
+          researchSkips: [],
+          listenSignals: [],
+        }),
+      },
+    }),
+  });
+  assert.deepEqual(noShow, { ok: false, reason: "ineligible" });
+});
+
+test("explicit festival queue preserves the established festival priority boost", async () => {
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const showDate = new Date("2026-08-20T00:00:00.000Z");
+  const upserts: Array<{
+    create: { priority: number; requestedShowId: string | null };
+  }> = [];
+  await queueContactResearchArtistByArtistId("artist-1", {
+    now,
+    requestedShowId: "festival-1",
+    runTransaction: runWithTransaction({
+      $queryRaw: async () => [{ id: "artist-1" }],
+      artist: {
+        findUnique: async () => ({
+          id: "artist-1",
+          popularity: 50,
+          contacts: [],
+          researchSkips: [],
+          listenSignals: [{ id: "signal-1" }],
+        }),
+      },
+      contactResearchJob: {
+        findUnique: async () => ({
+          id: "job-1",
+          candidates: [],
+          directOutreachProposals: [],
+        }),
+        upsert: async (value: unknown) => {
+          upserts.push(
+            value as {
+              create: { priority: number; requestedShowId: string | null };
+            }
+          );
+          return { id: "job-1", status: "pending" };
+        },
+      },
+      showArtist: {
+        findMany: async () => [
+          {
+            showId: "festival-1",
+            show: {
+              date: showDate,
+              interestedAt: null,
+              isFestival: true,
+            },
+          },
+        ],
+      },
+    }),
+  });
+  assert.equal(upserts[0].create.requestedShowId, "festival-1");
+  assert.equal(upserts[0].create.priority, 3_309);
 });
 
 test("artist skip materializes a skipped job and explicit unskip restores eligibility", async () => {

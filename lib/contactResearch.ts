@@ -183,6 +183,8 @@ export type ContactResearchQueryRunner = <T>(
 export type ArtistContactResearchMutationFailure =
   | "artist_not_found"
   | "active_contact"
+  | "intentional_skip"
+  | "pending_review"
   | "ineligible"
   | "empty_instructions"
   | "job_not_found"
@@ -3296,6 +3298,215 @@ export async function updateContactResearchArtistUserNotes(
     options.requestedShowId ?? null,
     options.runTransaction ?? ((work) => withSerializableRetry(work))
   );
+}
+
+export async function queueContactResearchArtistByArtistId(
+  artistId: string,
+  options: {
+    now?: Date;
+    requestedShowId?: string | null;
+    runTransaction?: ContactResearchTransactionRunner;
+  } = {}
+): Promise<ArtistContactResearchMutationResult> {
+  const now = options.now ?? new Date();
+  const requestedShowId = options.requestedShowId ?? null;
+  const runTransaction =
+    options.runTransaction ?? ((work) => withSerializableRetry(work));
+  return runTransaction(async (tx) => {
+    const lockedArtist = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT artist."id"
+      FROM "Artist" artist
+      WHERE artist."id" = ${artistId}
+      FOR UPDATE
+    `);
+    if (lockedArtist.length === 0) {
+      return { ok: false, reason: "artist_not_found" };
+    }
+    await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT contact."id"
+      FROM "Contact" contact
+      WHERE contact."artistId" = ${artistId}
+      ORDER BY contact."id"
+      FOR UPDATE
+    `);
+    await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT research_skip."id"
+      FROM "ArtistResearchSkip" research_skip
+      WHERE research_skip."artistId" = ${artistId}
+      ORDER BY research_skip."id"
+      FOR UPDATE
+    `);
+    const lockedJobs = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT job."id"
+      FROM "ContactResearchJob" job
+      WHERE job."artistId" = ${artistId}
+      FOR UPDATE
+    `);
+    const existingJobId = lockedJobs[0]?.id ?? null;
+    if (existingJobId) {
+      await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT candidate."id"
+        FROM "ContactResearchCandidate" candidate
+        WHERE candidate."jobId" = ${existingJobId}
+        ORDER BY candidate."id"
+        FOR UPDATE
+      `);
+      await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT proposal."id"
+        FROM "ContactResearchDirectOutreachProposal" proposal
+        WHERE proposal."jobId" = ${existingJobId}
+        ORDER BY proposal."id"
+        FOR UPDATE
+      `);
+    }
+
+    const artist = await tx.artist.findUnique({
+      where: { id: artistId },
+      select: {
+        id: true,
+        popularity: true,
+        contacts: {
+          where: ACTIVE_EMAIL_CONTACT_WHERE,
+          take: 1,
+          select: { id: true },
+        },
+        researchSkips: {
+          where: { clearedAt: null },
+          take: 1,
+          select: { id: true },
+        },
+        listenSignals: {
+          where: activeListenSignalWhere(now),
+          take: 1,
+          select: { id: true },
+        },
+      },
+    });
+    if (!artist) return { ok: false, reason: "artist_not_found" };
+    if (artist.contacts.length > 0) {
+      return { ok: false, reason: "active_contact" };
+    }
+    if (artist.researchSkips.length > 0) {
+      return { ok: false, reason: "intentional_skip" };
+    }
+
+    const existingJob = await tx.contactResearchJob.findUnique({
+      where: { artistId },
+      select: {
+        id: true,
+        candidates: {
+          where: { status: "pending" },
+          take: 1,
+          select: { id: true },
+        },
+        directOutreachProposals: {
+          where: { status: "pending" },
+          take: 1,
+          select: { id: true },
+        },
+      },
+    });
+    if (
+      existingJob?.candidates.length ||
+      existingJob?.directOutreachProposals.length
+    ) {
+      return { ok: false, reason: "pending_review" };
+    }
+
+    const today = easternTodayStoredDate(now);
+    const end = parseDateOnly(
+      addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
+    );
+    const shows = await tx.showArtist.findMany({
+      where: {
+        artistId,
+        show: {
+          date: { gte: today },
+          syncStatus: "active",
+          OR: [
+            { isFestival: false, date: { lte: end } },
+            ...(requestedShowId
+              ? [
+                  {
+                    id: requestedShowId,
+                    isFestival: true,
+                    AND: [festivalLeadTimeWhere(now)],
+                  },
+                ]
+              : []),
+          ],
+        },
+      },
+      orderBy: { show: { date: "asc" } },
+      select: {
+        showId: true,
+        show: {
+          select: {
+            date: true,
+            interestedAt: true,
+            isFestival: true,
+          },
+        },
+      },
+    });
+    if (shows.length === 0) {
+      return { ok: false, reason: "ineligible" };
+    }
+    const requestedShow = shows.find(
+      (row) => row.showId === requestedShowId && row.show.isFestival
+    );
+    const nextShowAt = shows[0].show.date;
+    const priority = Math.max(
+      ...shows.map((row) =>
+        row.show.isFestival
+          ? 2_000 +
+            contactResearchPriority({
+              interested: true,
+              hasActiveSignal: artist.listenSignals.length > 0,
+              popularity: artist.popularity,
+              daysUntilShow: Math.max(
+                0,
+                Math.round(
+                  (row.show.date.getTime() - today.getTime()) / 86_400_000
+                )
+              ),
+            })
+          : contactResearchPriority({
+              interested: row.show.interestedAt !== null,
+              hasActiveSignal: artist.listenSignals.length > 0,
+              popularity: artist.popularity,
+              daysUntilShow: Math.max(
+                0,
+                Math.round(
+                  (row.show.date.getTime() - today.getTime()) / 86_400_000
+                )
+              ),
+            })
+      )
+    );
+    const job = await tx.contactResearchJob.upsert({
+      where: { artistId },
+      create: {
+        artistId,
+        requestedShowId: requestedShow?.showId ?? null,
+        status: "pending",
+        priority,
+        nextShowAt,
+      },
+      update: {
+        requestedShowId: requestedShow?.showId ?? null,
+        status: "pending",
+        priority,
+        nextShowAt,
+        completedAt: null,
+        claimToken: null,
+        claimedAt: null,
+        claimExpiresAt: null,
+      },
+      select: { id: true, status: true },
+    });
+    return { ok: true, jobId: job.id, status: job.status };
+  });
 }
 
 export async function skipContactResearchArtistByArtistId(
