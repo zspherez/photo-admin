@@ -444,13 +444,14 @@ export default async function ArtistPage({
   const hasEligibleFestivalContext = upcomingShows.some(
     (show) => show.id === festivalContextShowId && show.isFestival
   );
+  const hasExplicitQueueShow = upcomingShows.length > 0;
   const canManageResearch =
     researchJob !== null ||
     (!hasActiveEmailContact &&
       (hasEligibleRegularShow || hasEligibleFestivalContext));
   const researchUnavailableMessage = hasActiveEmailContact
     ? "This artist already has an active email contact. A new manager-research job will not be created, but any existing research record remains available above."
-    : "This artist has no eligible upcoming regular show or current festival context, so a durable manager-research record will not be created yet.";
+    : "This artist has no future active show to bind to a manager-research request.";
   const visibleResearchFilter: ResearchStatusFilter | null = activeResearchSkip
     ? "skipped"
     : researchJob &&
@@ -678,7 +679,7 @@ export default async function ArtistPage({
               disabled={
                 hasActiveEmailContact ||
                 activeResearchSkip !== null ||
-                (!hasEligibleRegularShow && !hasEligibleFestivalContext)
+                !hasExplicitQueueShow
               }
             >
               Queue research

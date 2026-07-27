@@ -51,6 +51,16 @@ test("All NYC cards can record manual outreach without a listening match", () =>
   assert.match(client, /action=\{unmarkSentAction\}/);
 });
 
+test("show status pills expose the email sent timestamp on hover", () => {
+  assert.match(
+    client,
+    /function statusTitle\(outreach: OutreachState\): string \| undefined/
+  );
+  assert.match(client, /`Email sent \$\{outreach\.sentAt\.toLocaleString/);
+  assert.match(client, /title=\{statusTitle\(outreach\)\}/);
+  assert.match(client, /timeZone: appConfig\.timeZone/);
+});
+
 test("shared outreach pipeline retains policy, template, snapshot, and idempotency safeguards", () => {
   assert.match(sendOutreach, /evaluateOutreachDeliveryPolicy/);
   assert.match(sendOutreach, /ensureOriginalTemplateForShow\(show\)/);

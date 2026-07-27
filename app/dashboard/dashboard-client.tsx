@@ -156,6 +156,15 @@ function statusTone(outreach: OutreachState): BadgeTone {
   return "default";
 }
 
+function statusTitle(outreach: OutreachState): string | undefined {
+  if (!outreach.sentAt) return undefined;
+  return `Email sent ${outreach.sentAt.toLocaleString("en-US", {
+    timeZone: appConfig.timeZone,
+    dateStyle: "medium",
+    timeStyle: "short",
+  })}`;
+}
+
 function queryWith(
   query: DashboardQuery,
   changes: {
@@ -1302,7 +1311,10 @@ export function DashboardClient({
                           </Link>
                         )}
                         {outreach && (
-                          <Badge tone={statusTone(outreach)}>
+                          <Badge
+                            tone={statusTone(outreach)}
+                            title={statusTitle(outreach)}
+                          >
                             Original · {statusLabels(outreach).join(" · ")}
                           </Badge>
                         )}

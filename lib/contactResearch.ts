@@ -1601,6 +1601,7 @@ export async function refreshContactResearchQueue(
         requestedShow: {
           select: {
             date: true,
+            isFestival: true,
             artists: { select: { artistId: true } },
           },
         },
@@ -1650,7 +1651,11 @@ export async function refreshContactResearchQueue(
       }
       const current = eligible.get(row.artistId);
       eligible.set(row.artistId, {
-        priority: Math.max(2_000, row.priority, current?.priority ?? 0),
+        priority: Math.max(
+          row.requestedShow.isFestival ? 2_000 : 0,
+          row.priority,
+          current?.priority ?? 0
+        ),
         nextShowAt:
           current && current.nextShowAt < row.requestedShow.date
             ? current.nextShowAt
@@ -3196,13 +3201,12 @@ async function unskipContactResearchTarget(
       "artistId" in target ? requestedShowId : null;
     const jobArtistId = job.artistId;
 
-    async function eligibleFestival(showId: string) {
+    async function eligibleRequestedShow(showId: string) {
       return tx.showArtist.findFirst({
         where: {
           artistId: jobArtistId,
           showId,
           show: {
-            isFestival: true,
             syncStatus: "active",
             date: { gte: today },
             AND: [festivalLeadTimeWhere(now)],
@@ -3213,13 +3217,25 @@ async function unskipContactResearchTarget(
     }
 
     const eligibleStoredRequestedShow = job.requestedShowId
-      ? await eligibleFestival(job.requestedShowId)
+      ? await eligibleRequestedShow(job.requestedShowId)
       : null;
     const eligibleSuppliedRequestedShow =
       suppliedRequestedShowId
         ? suppliedRequestedShowId === job.requestedShowId
           ? eligibleStoredRequestedShow
-          : await eligibleFestival(suppliedRequestedShowId)
+          : await tx.showArtist.findFirst({
+              where: {
+                artistId: jobArtistId,
+                showId: suppliedRequestedShowId,
+                show: {
+                  isFestival: true,
+                  syncStatus: "active",
+                  date: { gte: today },
+                  AND: [festivalLeadTimeWhere(now)],
+                },
+              },
+              select: { showId: true },
+            })
         : null;
     if (suppliedRequestedShowId && !eligibleSuppliedRequestedShow) {
       return { ok: false, reason: "ineligible" } as const;
@@ -3414,27 +3430,13 @@ export async function queueContactResearchArtistByArtistId(
     }
 
     const today = easternTodayStoredDate(now);
-    const end = parseDateOnly(
-      addDateOnlyDays(easternDateOnly(now), CONTACT_RESEARCH_WINDOW_DAYS)
-    );
     const shows = await tx.showArtist.findMany({
       where: {
         artistId,
         show: {
           date: { gte: today },
           syncStatus: "active",
-          OR: [
-            { isFestival: false, date: { lte: end } },
-            ...(requestedShowId
-              ? [
-                  {
-                    id: requestedShowId,
-                    isFestival: true,
-                    AND: [festivalLeadTimeWhere(now)],
-                  },
-                ]
-              : []),
-          ],
+          AND: [festivalLeadTimeWhere(now)],
         },
       },
       orderBy: { show: { date: "asc" } },
@@ -3452,10 +3454,9 @@ export async function queueContactResearchArtistByArtistId(
     if (shows.length === 0) {
       return { ok: false, reason: "ineligible" };
     }
-    const requestedShow = shows.find(
-      (row) => row.showId === requestedShowId && row.show.isFestival
-    );
-    const nextShowAt = shows[0].show.date;
+    const requestedShow =
+      shows.find((row) => row.showId === requestedShowId) ?? shows[0];
+    const nextShowAt = requestedShow.show.date;
     const priority = Math.max(
       ...shows.map((row) =>
         row.show.isFestival
@@ -3488,13 +3489,13 @@ export async function queueContactResearchArtistByArtistId(
       where: { artistId },
       create: {
         artistId,
-        requestedShowId: requestedShow?.showId ?? null,
+        requestedShowId: requestedShow.showId,
         status: "pending",
         priority,
         nextShowAt,
       },
       update: {
-        requestedShowId: requestedShow?.showId ?? null,
+        requestedShowId: requestedShow.showId,
         status: "pending",
         priority,
         nextShowAt,
@@ -3761,10 +3762,7 @@ function contactResearchRetryEligibilityRowsSql(
                 show."isFestival" = false
                 AND show."date" <= ${end}
               )
-              OR (
-                show."isFestival" = true
-                AND job."requestedShowId" = show."id"
-              )
+              OR job."requestedShowId" = show."id"
             )
         ) THEN 'no_eligible_show'
         ELSE 'eligible'
@@ -3949,10 +3947,7 @@ async function retryEligibleContactResearchJobs(
               show."isFestival" = false
               AND show."date" <= ${end}
             )
-            OR (
-              show."isFestival" = true
-              AND job."requestedShowId" = show."id"
-            )
+            OR job."requestedShowId" = show."id"
           )
       )
     `);
