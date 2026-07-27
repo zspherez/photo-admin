@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import type { Prisma } from "@prisma/client";
 import { db } from "./db";
 import {
   CONTACT_AUDIT_OIDC_AUDIENCE,
@@ -12,9 +13,130 @@ import {
   isValidContactAuditAuthorization,
   parseContactAuditClaimLimit,
   parseContactAuditSubmission,
+  requestContactAuditForArtist,
+  type ContactAuditTransactionRunner,
   resolveContactAuditJob,
   validateContactAuditAlternativeEmails,
 } from "./contactAudit";
+
+function runAuditTransaction(tx: unknown): ContactAuditTransactionRunner {
+  return async (work) => work(tx as Prisma.TransactionClient);
+}
+
+test("artist-scoped audit requests create one durable pending request", async () => {
+  const now = new Date("2026-07-27T12:00:00.000Z");
+  const creates: unknown[] = [];
+  const result = await requestContactAuditForArtist("artist-1", {
+    now,
+    runTransaction: runAuditTransaction({
+      $queryRaw: async () => [{ id: "artist-1" }],
+      contact: {
+        findFirst: async () => ({ id: "contact-1" }),
+      },
+      contactAuditRequest: {
+        findFirst: async () => null,
+        create: async (value: unknown) => {
+          creates.push(value);
+          return {
+            id: "request-1",
+            requestKey: null,
+            source: "artist_manual",
+            artistId: "artist-1",
+            status: "pending",
+            requestedAt: now,
+            startedAt: null,
+            completedAt: null,
+            runId: null,
+            attemptCount: 0,
+            lastAttemptAt: null,
+            lastWorkflowRunId: null,
+            lastError: null,
+          };
+        },
+      },
+    }),
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.request.created, true);
+  assert.equal(creates.length, 1);
+  const create = creates[0] as {
+    data: Record<string, unknown>;
+    select: Record<string, boolean>;
+  };
+  assert.match(String(create.data.id), /^[0-9a-f-]{36}$/);
+  assert.deepEqual(
+    { ...create.data, id: "<generated>" },
+    {
+      id: "<generated>",
+      source: "artist_manual",
+      artistId: "artist-1",
+      status: "pending",
+      requestedAt: now,
+    }
+  );
+  assert.equal(create.select.artistId, true);
+});
+
+test("artist-scoped audit requests fail without an artist or active contacts", async () => {
+  const missingArtist = await requestContactAuditForArtist("artist-1", {
+    runTransaction: runAuditTransaction({
+      $queryRaw: async () => [],
+    }),
+  });
+  assert.deepEqual(missingArtist, {
+    ok: false,
+    reason: "artist_not_found",
+  });
+
+  let queryCount = 0;
+  const noContacts = await requestContactAuditForArtist("artist-1", {
+    runTransaction: runAuditTransaction({
+      $queryRaw: async () => {
+        queryCount += 1;
+        return queryCount === 1 ? [{ id: "artist-1" }] : [];
+      },
+      contact: {
+        findFirst: async () => null,
+      },
+    }),
+  });
+  assert.deepEqual(noContacts, {
+    ok: false,
+    reason: "no_active_contacts",
+  });
+});
+
+test("audit preparation scopes targeted requests to the requested artist", () => {
+  const source = readFileSync(
+    new URL("./contactAudit.ts", import.meta.url),
+    "utf8"
+  );
+  assert.match(source, /source: "artist_manual"/);
+  assert.match(source, /artistId: true/);
+  assert.match(
+    source,
+    /\.\.\.\(request\.artistId \? \{ artistId: request\.artistId \} : \{\}\)/
+  );
+  const migration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260727124500_targeted_contact_audit_requests/migration.sql",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  assert.match(migration, /^BEGIN;\n/);
+  assert.match(migration, /\nCOMMIT;\s*$/);
+  assert.match(migration, /'artist_manual'/);
+  assert.match(migration, /ADD COLUMN "artistId" TEXT/);
+  assert.match(migration, /ContactAuditRequest_targeted_artist_check/);
+  assert.match(migration, /ContactAuditRequest_artistId_fkey/);
+  assert.match(migration, /ON DELETE RESTRICT/);
+  assert.match(
+    source,
+    /request\.source === "artist_manual" && !request\.artistId/
+  );
+});
 
 test("parses evidence-backed review-only audit findings", () => {
   const result = parseContactAuditSubmission(

@@ -103,6 +103,7 @@ export interface ContactAuditRequestResult {
   id: string;
   requestKey: string | null;
   source: string;
+  artistId: string | null;
   status: string;
   requestedAt: Date;
   startedAt: Date | null;
@@ -114,6 +115,20 @@ export interface ContactAuditRequestResult {
   lastError: string | null;
   created: boolean;
 }
+
+export type ContactAuditArtistRequestResult =
+  | {
+      ok: true;
+      request: ContactAuditRequestResult;
+    }
+  | {
+      ok: false;
+      reason: "artist_not_found" | "no_active_contacts";
+    };
+
+export type ContactAuditTransactionRunner = <T>(
+  work: (tx: Prisma.TransactionClient) => Promise<T>
+) => Promise<T>;
 
 export interface ContactAuditAlternativeInput {
   email: string;
@@ -612,6 +627,7 @@ function contactAuditRequestSelect() {
     id: true,
     requestKey: true,
     source: true,
+    artistId: true,
     status: true,
     requestedAt: true,
     startedAt: true,
@@ -698,6 +714,66 @@ export async function requestContactAudit(
   });
 }
 
+export async function requestContactAuditForArtist(
+  artistId: string,
+  options: {
+    now?: Date;
+    runTransaction?: ContactAuditTransactionRunner;
+  } = {}
+): Promise<ContactAuditArtistRequestResult> {
+  const now = options.now ?? new Date();
+  const runTransaction: ContactAuditTransactionRunner =
+    options.runTransaction ?? ((work) => withSerializableRetry(work));
+  return runTransaction(async (tx) => {
+    const lockedArtist = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT artist."id"
+      FROM "Artist" artist
+      WHERE artist."id" = ${artistId}
+      FOR UPDATE
+    `);
+    if (lockedArtist.length === 0) {
+      return { ok: false, reason: "artist_not_found" };
+    }
+    await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT contact."id"
+      FROM "Contact" contact
+      WHERE contact."artistId" = ${artistId}
+      ORDER BY contact."id"
+      FOR UPDATE
+    `);
+    const hasActiveContact = await tx.contact.findFirst({
+      where: { artistId, state: "active" },
+      select: { id: true },
+    });
+    if (!hasActiveContact) {
+      return { ok: false, reason: "no_active_contacts" };
+    }
+    const existing = await tx.contactAuditRequest.findFirst({
+      where: {
+        artistId,
+        source: "artist_manual",
+        status: { in: [...CONTACT_AUDIT_REQUEST_ACTIVE_STATUSES] },
+      },
+      orderBy: { requestedAt: "asc" },
+      select: contactAuditRequestSelect(),
+    });
+    if (existing) {
+      return { ok: true, request: { ...existing, created: false } };
+    }
+    const created = await tx.contactAuditRequest.create({
+      data: {
+        id: randomUUID(),
+        source: "artist_manual",
+        artistId,
+        status: "pending",
+        requestedAt: now,
+      },
+      select: contactAuditRequestSelect(),
+    });
+    return { ok: true, request: { ...created, created: true } };
+  });
+}
+
 export function contactAuditMonthlyRequestKey(now: Date): string {
   return `monthly:${now.getUTCFullYear()}-${String(
     now.getUTCMonth() + 1,
@@ -778,6 +854,7 @@ export async function prepareContactAudit(
       select: {
         id: true,
         source: true,
+        artistId: true,
         startedAt: true,
         runId: true,
         run: {
@@ -802,6 +879,7 @@ export async function prepareContactAudit(
         select: {
           id: true,
           source: true,
+          artistId: true,
           startedAt: true,
           runId: true,
           run: {
@@ -839,6 +917,7 @@ export async function prepareContactAudit(
           select: {
             id: true,
             source: true,
+            artistId: true,
             startedAt: true,
             runId: true,
           },
@@ -855,6 +934,11 @@ export async function prepareContactAudit(
         contactCount: 0,
         claimable: 0,
       };
+    }
+    if (request.source === "artist_manual" && !request.artistId) {
+      throw new ContactAuditValidationError(
+        "Targeted contact audit request lost its artist scope"
+      );
     }
 
     if (request.run) {
@@ -922,6 +1006,7 @@ export async function prepareContactAudit(
     const contacts = await tx.contact.findMany({
       where: {
         state: "active",
+        ...(request.artistId ? { artistId: request.artistId } : {}),
         ...(request.source === "rolling_monthly"
           ? {
               artist: {

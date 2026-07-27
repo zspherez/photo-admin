@@ -54,6 +54,7 @@ model Artist {
   outreaches         Outreach[]
   contactResearchJob ContactResearchJob?
   researchSkips      ArtistResearchSkip[]
+  contactAuditRequests ContactAuditRequest[]
   contactAuditJobs   ContactAuditJob[]
   contactAuditDecisions ContactAuditArtistDecision[]
   trajectoryRuns     TrajectoryRunArtist[]
@@ -429,6 +430,8 @@ model ContactAuditRequest {
   id                String           @id @default(cuid())
   requestKey        String?          @unique
   source            String           @default("manual")
+  artistId          String?
+  artist            Artist?          @relation(fields: [artistId], references: [id], onDelete: Restrict)
   status            String           @default("pending")
   requestedAt       DateTime         @default(now())
   startedAt         DateTime?
@@ -443,6 +446,7 @@ model ContactAuditRequest {
   updatedAt         DateTime         @updatedAt
 
   @@index([status, requestedAt])
+  @@index([artistId, status, requestedAt])
   @@index([requestedAt])
 }
 
