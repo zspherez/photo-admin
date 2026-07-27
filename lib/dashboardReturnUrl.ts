@@ -139,8 +139,10 @@ function outreachReturnPath(url: URL): string {
   return query ? `/outreach?${query}` : "/outreach";
 }
 
-function contactsReturnPath(url: URL): string {
+function artistsReturnPath(url: URL): string {
   const params = new URLSearchParams();
+  const view = url.searchParams.get("view");
+  if (view === "with" || view === "without") params.set("view", view);
   const search = validatedTrimmedSearchParam(
     url.searchParams.get("search"),
     { maxLength: 200 }
@@ -149,7 +151,7 @@ function contactsReturnPath(url: URL): string {
   const page = positiveIntegerSearchParam(url.searchParams.get("page"));
   if (page > 1) params.set("page", String(page));
   const query = params.toString();
-  return query ? `/contacts?${query}` : "/contacts";
+  return query ? `/artists?${query}` : "/artists";
 }
 
 function recommendationsReturnPath(url: URL): string {
@@ -183,7 +185,9 @@ export function workflowReturnPath(value: unknown): string {
   const url = parsedLocalUrl(value);
   if (!url) return "/dashboard";
   if (url.pathname === "/dashboard") return dashboardReturnPath(value);
-  if (url.pathname === "/contacts") return contactsReturnPath(url);
+  if (url.pathname === "/artists" || url.pathname === "/contacts") {
+    return artistsReturnPath(url);
+  }
   if (url.pathname === "/recommendations") {
     return recommendationsReturnPath(url);
   }

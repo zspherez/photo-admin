@@ -90,10 +90,10 @@ export default async function ContactsSettingsPage({
       <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">Contacts</h1>
         <Link
-          href="/contacts"
+          href="/artists"
           className="text-sm text-blue-700 hover:underline dark:text-blue-300"
         >
-          View all contacts
+          View artists
         </Link>
       </div>
       <p className="mt-1 text-sm text-zinc-500">

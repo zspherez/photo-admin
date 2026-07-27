@@ -81,7 +81,7 @@ test("agent-created direct outreach provenance appears on research and contact s
   for (const file of [
     "app/research/page.tsx",
     "app/artists/[id]/page.tsx",
-    "app/contacts/page.tsx",
+    "app/artists/page.tsx",
     "app/dashboard/contact/[contactId]/page.tsx",
   ]) {
     assert.match(
