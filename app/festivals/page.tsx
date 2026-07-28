@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { syncEdmtrainFestivals } from "@/lib/edmtrain";
 import { Card } from "@/components/ui/card";
 import { LinkButton } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { SyncBanner } from "@/components/sync-banner";
+import { SyncForm } from "@/components/sync-form";
 import { pickEmailContact } from "@/lib/contactSelection";
 import { countryLabel } from "@/lib/country";
 import {
@@ -18,14 +23,23 @@ import {
 import { formatShowDate } from "@/lib/formatDate";
 import { pickTopListenSignal } from "@/lib/listenSignal";
 import { festivalReturnPath } from "@/lib/dashboardReturnUrl";
-import type { SearchParamValue } from "@/lib/searchParams";
+import {
+  firstSearchParam,
+  type SearchParamValue,
+} from "@/lib/searchParams";
 import { activeFestivalWhere } from "@/lib/festivalEligibility";
 import {
   dismissShowAction,
   restoreShowAction,
 } from "@/app/dashboard/actions";
+import { requireServerActionAuth } from "@/lib/auth";
+import {
+  createOperationDeadline,
+  ROUTE_DEADLINE_SAFETY_MARGIN_MS,
+} from "@/lib/integrationUtils";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 export const metadata: Metadata = {
   title: "Festivals",
   description: "Upcoming festival outreach, filtered to the United States by default.",
@@ -126,15 +140,80 @@ function visibleGroups(
   ).filter((group) => group.primary.artists.length > 0);
 }
 
+async function refreshFestivals(formData: FormData) {
+  "use server";
+  await requireServerActionAuth(formData.get("returnTo") ?? "/festivals");
+  const view = parseFestivalListView({
+    includeInternational: formData.get("includeInternational"),
+    dismissed: formData.get("dismissed"),
+  });
+  const returnTo = festivalListPath(view);
+
+  const destination = new URL(returnTo, "https://photo-admin.invalid");
+  try {
+    const deadline = createOperationDeadline(maxDuration * 1_000, {
+      safetyMarginMs: ROUTE_DEADLINE_SAFETY_MARGIN_MS,
+    });
+    const result = await syncEdmtrainFestivals(365, deadline);
+    if (!result.ok) {
+      const busy = "status" in result && result.status === "busy";
+      const detail = busy
+        ? `Another festival sync owns ${result.leaseKey}; retry after it finishes.`
+        : "error" in result
+          ? result.error
+          : "Festival synchronization was deferred; retry shortly.";
+      destination.searchParams.set("synced", busy ? "busy" : "error");
+      destination.searchParams.set("detail", detail.slice(0, 200));
+    } else {
+      destination.searchParams.set("synced", "ok");
+      destination.searchParams.set("fetched", String(result.data.fetched));
+      destination.searchParams.set("upserted", String(result.data.upserted));
+      destination.searchParams.set(
+        "linked",
+        String(result.data.artistsLinked)
+      );
+      destination.searchParams.set(
+        "excluded",
+        String(result.data.leadTimeExcluded)
+      );
+    }
+  } catch (error) {
+    destination.searchParams.set("synced", "error");
+    destination.searchParams.set(
+      "detail",
+      (error instanceof Error ? error.message : String(error)).slice(0, 200)
+    );
+  }
+  revalidatePath("/festivals");
+  revalidatePath("/artists");
+  revalidatePath("/research");
+  redirect(`${destination.pathname}${destination.search}`);
+}
+
 export default async function FestivalsPage({
   searchParams,
 }: {
   searchParams: Promise<{
     includeInternational?: SearchParamValue;
     dismissed?: SearchParamValue;
+    synced?: SearchParamValue;
+    fetched?: SearchParamValue;
+    upserted?: SearchParamValue;
+    linked?: SearchParamValue;
+    excluded?: SearchParamValue;
+    detail?: SearchParamValue;
   }>;
 }) {
-  const view = parseFestivalListView(await searchParams);
+  const rawSearchParams = await searchParams;
+  const view = parseFestivalListView(rawSearchParams);
+  const syncResult = {
+    synced: firstSearchParam(rawSearchParams.synced),
+    fetched: firstSearchParam(rawSearchParams.fetched),
+    upserted: firstSearchParam(rawSearchParams.upserted),
+    linked: firstSearchParam(rawSearchParams.linked),
+    excluded: firstSearchParam(rawSearchParams.excluded),
+    detail: firstSearchParam(rawSearchParams.detail),
+  };
   const now = new Date();
   const festivals = await loadFestivals(now);
   const returnTo = festivalListPath(view);
@@ -179,14 +258,50 @@ export default async function FestivalsPage({
               ` · ${hiddenCountryCount} international or unknown hidden`}
           </p>
         </div>
-        <LinkButton
-          href={`/festivals/new?returnTo=${encodeURIComponent(returnTo)}`}
-          variant="primary"
-          size="sm"
-        >
-          + Add festival
-        </LinkButton>
+        <div className="flex flex-wrap gap-2">
+          <SyncForm
+            action={refreshFestivals}
+            label="Refresh festivals"
+            pendingLabel="Refreshing…"
+            variant="secondary"
+            size="sm"
+            hiddenFields={{
+              returnTo,
+              includeInternational: view.includeInternational ? "1" : "0",
+              dismissed: view.dismissed ? "1" : "0",
+            }}
+          />
+          <LinkButton
+            href={`/festivals/new?returnTo=${encodeURIComponent(returnTo)}`}
+            variant="primary"
+            size="sm"
+          >
+            + Add festival
+          </LinkButton>
+        </div>
       </div>
+
+      {syncResult.synced === "ok" && (
+        <SyncBanner
+          tone="success"
+          title="Festivals refreshed."
+          detail={`${syncResult.fetched ?? "?"} fetched · ${syncResult.upserted ?? "?"} upserted · ${syncResult.linked ?? "?"} artists linked · ${syncResult.excluded ?? "?"} excluded by lead time`}
+        />
+      )}
+      {syncResult.synced === "error" && (
+        <SyncBanner
+          tone="error"
+          title="Festival refresh failed."
+          detail={syncResult.detail ?? "Unknown error"}
+        />
+      )}
+      {syncResult.synced === "busy" && (
+        <SyncBanner
+          tone="error"
+          title="Festival refresh already running."
+          detail={syncResult.detail ?? "Retry shortly."}
+        />
+      )}
 
       <nav
         aria-label="Festival visibility"
