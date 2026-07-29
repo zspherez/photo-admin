@@ -165,7 +165,7 @@ export function getOutreachRecoveryCutoff(now: Date = new Date()): Date {
 }
 
 /**
- * Returns the next Monday at 9:00 AM ET as a UTC Date.
+ * Returns the next Monday at the configured morning dispatch time as a UTC Date.
  */
 export function getNextMondaySlot(now: Date = new Date()): Date {
   const et = partsInET(now);
@@ -186,9 +186,9 @@ function isWeekday(weekday: string): boolean {
 }
 
 /**
- * Returns the next normal weekday 09:00 ET dispatch instant.
- * Before 09:00 on a weekday, the same day's dispatch is still upcoming.
- * At or after 09:00, the target advances to the next weekday.
+ * Returns the next normal weekday morning dispatch instant.
+ * Before the configured time on a weekday, the same day's dispatch is upcoming.
+ * At or after that time, the target advances to the next weekday.
  */
 export function getNextNormalOutreachDispatch(now: Date = new Date()): Date {
   const et = partsInET(now);
@@ -227,7 +227,7 @@ export function formatNextDispatchActionLabel(utcDate: Date): string {
     timeZone: OUTREACH_TIME_ZONE,
     weekday: "short",
   });
-  return `Queue for ${weekday} ${OUTREACH_MORNING_DISPATCH_LABEL}`;
+  return `Schedule for ${weekday} ${OUTREACH_MORNING_DISPATCH_LABEL}`;
 }
 
 export function isStaleOutreachClaim(

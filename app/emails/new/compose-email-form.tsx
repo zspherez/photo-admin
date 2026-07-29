@@ -7,10 +7,10 @@ import { TemplateEditor } from "@/components/template-editor";
 
 export function ComposeEmailForm({
   compositionId,
-  queueLabel,
+  scheduleLabel,
 }: {
   compositionId: string;
-  queueLabel: string;
+  scheduleLabel: string;
 }) {
   const [state, formAction] = useActionState(sendArbitraryEmailAction, {
     error: null,
@@ -95,9 +95,9 @@ export function ComposeEmailForm({
           name="intent"
           value="queue"
           variant="secondary"
-          pendingLabel="Queueing…"
+          pendingLabel="Scheduling…"
         >
-          {queueLabel}
+          {scheduleLabel}
         </PendingSubmitButton>
         <PendingSubmitButton
           name="intent"

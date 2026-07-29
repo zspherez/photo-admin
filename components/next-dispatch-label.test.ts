@@ -26,7 +26,7 @@ function LabelProbe({
 }
 
 test("live label changes exactly at the weekday dispatch cutoff", (t) => {
-  const now = new Date("2026-07-22T12:59:59.000Z");
+  const now = new Date("2026-07-22T13:06:59.000Z");
   const boundary = boundaryAt(now);
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now });
   const changes: ReturnType<typeof nextDispatchLabelState>[] = [];
@@ -34,21 +34,24 @@ test("live label changes exactly at the weekday dispatch cutoff", (t) => {
     changes.push(state);
   });
 
-  assert.equal(nextDispatchLabelState(boundary.dispatchAtMs).label, "Queue for Wed 9:00 AM ET");
+  assert.equal(
+    nextDispatchLabelState(boundary.dispatchAtMs).label,
+    "Schedule for Wed 9:07 AM ET",
+  );
   t.mock.timers.tick(999);
   assert.deepEqual(changes, []);
   t.mock.timers.tick(1);
   assert.deepEqual(changes, [
     {
-      dispatchAtMs: new Date("2026-07-23T13:00:00.000Z").getTime(),
-      label: "Queue for Thu 9:00 AM ET",
+      dispatchAtMs: new Date("2026-07-23T13:07:00.000Z").getTime(),
+      label: "Schedule for Thu 9:07 AM ET",
     },
   ]);
   stop();
 });
 
 test("Friday and weekend boundaries advance to the next weekday", (t) => {
-  const friday = new Date("2026-07-24T12:59:59.000Z");
+  const friday = new Date("2026-07-24T13:06:59.000Z");
   const fridayBoundary = boundaryAt(friday);
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: friday });
   const fridayChanges: ReturnType<typeof nextDispatchLabelState>[] = [];
@@ -62,8 +65,8 @@ test("Friday and weekend boundaries advance to the next weekday", (t) => {
   t.mock.timers.tick(1_000);
   assert.deepEqual(fridayChanges, [
     {
-      dispatchAtMs: new Date("2026-07-27T13:00:00.000Z").getTime(),
-      label: "Queue for Mon 9:00 AM ET",
+      dispatchAtMs: new Date("2026-07-27T13:07:00.000Z").getTime(),
+      label: "Schedule for Mon 9:07 AM ET",
     },
   ]);
   stopFriday();
@@ -86,15 +89,15 @@ test("Friday and weekend boundaries advance to the next weekday", (t) => {
   t.mock.timers.tick(1);
   assert.deepEqual(weekendChanges, [
     {
-      dispatchAtMs: new Date("2026-07-28T13:00:00.000Z").getTime(),
-      label: "Queue for Tue 9:00 AM ET",
+      dispatchAtMs: new Date("2026-07-28T13:07:00.000Z").getTime(),
+      label: "Schedule for Tue 9:07 AM ET",
     },
   ]);
   stopWeekend();
 });
 
 test("DST transitions keep the timer boundary on 9 AM America/New_York", (t) => {
-  const springFriday = new Date("2026-03-06T13:59:59.000Z");
+  const springFriday = new Date("2026-03-06T14:06:59.000Z");
   const springBoundary = boundaryAt(springFriday);
   t.mock.timers.enable({
     apis: ["Date", "setTimeout"],
@@ -111,12 +114,12 @@ test("DST transitions keep the timer boundary on 9 AM America/New_York", (t) => 
   t.mock.timers.tick(1_000);
   assert.equal(
     springChanges[0]?.dispatchAtMs,
-    new Date("2026-03-09T13:00:00.000Z").getTime(),
+    new Date("2026-03-09T13:07:00.000Z").getTime(),
   );
   stopSpring();
   t.mock.timers.reset();
 
-  const fallFriday = new Date("2026-10-30T12:59:59.000Z");
+  const fallFriday = new Date("2026-10-30T13:06:59.000Z");
   const fallBoundary = boundaryAt(fallFriday);
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: fallFriday });
   const fallChanges: ReturnType<typeof nextDispatchLabelState>[] = [];
@@ -127,15 +130,15 @@ test("DST transitions keep the timer boundary on 9 AM America/New_York", (t) => 
   t.mock.timers.tick(1_000);
   assert.equal(
     fallChanges[0]?.dispatchAtMs,
-    new Date("2026-11-02T14:00:00.000Z").getTime(),
+    new Date("2026-11-02T14:07:00.000Z").getTime(),
   );
   stopFall();
 });
 
 test("hydration keeps the server label, then reconciles a stale boundary", (t) => {
-  const renderedAt = new Date("2026-07-22T12:59:00.000Z");
+  const renderedAt = new Date("2026-07-22T13:06:00.000Z");
   const boundary = boundaryAt(renderedAt);
-  const hydratedAt = new Date("2026-07-22T13:01:00.000Z");
+  const hydratedAt = new Date("2026-07-22T13:08:00.000Z");
   t.mock.timers.enable({
     apis: ["Date", "setTimeout"],
     now: hydratedAt,
@@ -143,7 +146,7 @@ test("hydration keeps the server label, then reconciles a stale boundary", (t) =
 
   assert.equal(
     renderToStaticMarkup(createElement(LabelProbe, { boundary })),
-    "<span>Queue for Wed 9:00 AM ET</span>",
+    "<span>Schedule for Wed 9:07 AM ET</span>",
   );
 
   const changes: ReturnType<typeof nextDispatchLabelState>[] = [];
@@ -153,8 +156,8 @@ test("hydration keeps the server label, then reconciles a stale boundary", (t) =
   t.mock.timers.tick(0);
   assert.deepEqual(changes, [
     {
-      dispatchAtMs: new Date("2026-07-23T13:00:00.000Z").getTime(),
-      label: "Queue for Thu 9:00 AM ET",
+      dispatchAtMs: new Date("2026-07-23T13:07:00.000Z").getTime(),
+      label: "Schedule for Thu 9:07 AM ET",
     },
   ]);
   stop();

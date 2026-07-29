@@ -26,7 +26,7 @@ export interface OutreachDispatchConfig {
   readonly hour: number;
   /** Local dispatch minute (0-59) in `timeZone`. */
   readonly minute: number;
-  /** Human label for the dispatch time, e.g. "9:00 AM ET". */
+  /** Human label for the dispatch time, e.g. "9:07 AM ET". */
   readonly label: string;
 }
 
@@ -69,8 +69,8 @@ const DEFAULT_REPOSITORY_SLUG = "zspherez/photo-admin";
 const DEFAULT_EDMTRAIN_LOCATION_IDS: readonly number[] = [38];
 const DEFAULT_OUTREACH_DISPATCH: OutreachDispatchConfig = {
   hour: 9,
-  minute: 0,
-  label: "9:00 AM ET",
+  minute: 7,
+  label: "9:07 AM ET",
 };
 
 export const WORKFLOW_TRUSTED_BRANCH_REF = "refs/heads/main";
