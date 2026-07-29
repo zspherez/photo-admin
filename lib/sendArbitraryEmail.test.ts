@@ -399,12 +399,11 @@ test("settings and recipient locks remain held through provider submission", asy
   const send = sendArbitraryEmailWithDependencies(
     INPUT,
     dependencies(database, settings, async (request) => {
-      assert.deepEqual(request.to, ["sender@example.com"]);
-      assert.deepEqual(request.bcc, [
-        "audit@example.com",
+      assert.deepEqual(request.to, [
         "first@example.com",
         "second@example.com",
       ]);
+      assert.deepEqual(request.bcc, ["audit@example.com"]);
       providerEntered();
       await providerGate;
       return {

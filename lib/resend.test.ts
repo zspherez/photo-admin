@@ -285,7 +285,7 @@ test("retry policy detects suppression, test-mode, BCC, and sender changes", () 
   );
 });
 
-test("arbitrary multi-recipient delivery hides every recipient in BCC", () => {
+test("arbitrary multi-recipient delivery keeps recipients on To and audit copies on BCC", () => {
   const result = buildArbitraryResendDeliveryPolicy({
     from: "Photo Admin <sender@example.com>",
     intendedRecipients: [
@@ -301,11 +301,13 @@ test("arbitrary multi-recipient delivery hides every recipient in BCC", () => {
 
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.deepEqual(result.policy.to, ["sender@example.com"]);
-  assert.deepEqual(result.policy.bcc, [
-    "audit@example.com",
+  assert.deepEqual(result.policy.to, [
     "first@example.com",
     "second@example.com",
+  ]);
+  assert.deepEqual(result.policy.bcc, [
+    "audit@example.com",
+    "sender@example.com",
   ]);
   assert.deepEqual(result.policy.intendedRecipients, [
     "first@example.com",

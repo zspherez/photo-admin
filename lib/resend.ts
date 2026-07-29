@@ -346,41 +346,12 @@ export function buildArbitraryResendDeliveryPolicy(
   if (!resolved.ok || resolved.policy.testSend) return resolved;
 
   const { policy } = resolved;
-  if (policy.intendedRecipients.length === 1) {
-    const to = new Set(policy.to);
-    return {
-      ok: true,
-      policy: {
-        ...policy,
-        bcc: policy.bcc.filter((email) => !to.has(email)),
-      },
-    };
-  }
-
-  const neutralTo = normalizeEmail(policy.from);
-  if (!neutralTo) {
-    return {
-      ok: false,
-      error: "Configured sender cannot be used as the privacy-preserving To address",
-    };
-  }
-  const blocked = new Set(normalizeEmails(Array.from(args.suppressedEmails)));
-  if (blocked.has(neutralTo)) {
-    return {
-      ok: false,
-      error: "Configured sender is suppressed and cannot receive the privacy copy",
-    };
-  }
-
+  const to = new Set(policy.to);
   return {
     ok: true,
     policy: {
       ...policy,
-      to: [neutralTo],
-      bcc: normalizeEmails([
-        ...policy.intendedRecipients,
-        ...policy.bcc,
-      ]).filter((email) => email !== neutralTo),
+      bcc: policy.bcc.filter((email) => !to.has(email)),
     },
   };
 }
