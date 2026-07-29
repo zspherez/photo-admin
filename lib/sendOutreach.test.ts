@@ -1461,6 +1461,75 @@ test("customized outreach selects one address even from a full-team marker", () 
   }
 });
 
+test("festival all-contacts mode includes every active email without a full-team marker", () => {
+  const primary = {
+    id: "contact-1",
+    artistId: "artist-1",
+    email: "manager@example.com",
+    state: "active" as const,
+    isFullTeam: false,
+  };
+  const decision = evaluateOutreachDeliveryPolicy(
+    deliveryPolicyFixture({
+      contact: primary,
+      artistContacts: [
+        primary,
+        {
+          id: "contact-2",
+          artistId: "artist-1",
+          email: "co-manager@example.com",
+          state: "active",
+          isFullTeam: false,
+        },
+      ],
+      stored: null,
+      attempt: null,
+      bccEmails: [],
+      requestedFullTeamSend: true,
+      requestedFestivalAllContactsSend: true,
+    }),
+  );
+  assert.equal(decision.ok, true);
+  if (decision.ok) {
+    assert.deepEqual(decision.currentRecipients, [
+      "co-manager@example.com",
+      "manager@example.com",
+    ]);
+    assert.equal(decision.fullTeamSend, true);
+    assert.deepEqual(decision.policy.to, [
+      "co-manager@example.com",
+      "manager@example.com",
+    ]);
+  }
+});
+
+test("festival all-contacts mode stays off for one active email", () => {
+  const primary = {
+    id: "contact-1",
+    artistId: "artist-1",
+    email: "manager@example.com",
+    state: "active" as const,
+    isFullTeam: false,
+  };
+  const decision = evaluateOutreachDeliveryPolicy(
+    deliveryPolicyFixture({
+      contact: primary,
+      artistContacts: [primary],
+      stored: null,
+      attempt: null,
+      bccEmails: [],
+      requestedFullTeamSend: true,
+      requestedFestivalAllContactsSend: true,
+    }),
+  );
+  assert.equal(decision.ok, true);
+  if (decision.ok) {
+    assert.equal(decision.fullTeamSend, false);
+    assert.equal(decision.festivalAllContactsSend, false);
+    assert.deepEqual(decision.currentRecipients, ["manager@example.com"]);
+  }
+});
+
 test("test override changes delivery but not the selected intended-recipient snapshot", () => {
   const teamContact = {
     id: "contact-1",
