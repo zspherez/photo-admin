@@ -2,8 +2,8 @@ name: Dispatch scheduled outreach
 
 on:
   schedule:
-    # Poll every ten minutes. The app applies its configured market time zone,
-    # weekday, and dispatch-hour gate, so forks need no UTC/DST cron edits.
+    # Poll every ten minutes at :07 offset. Stored nextAttemptAt timestamps
+    # enforce the configured market time; delayed workflow starts still drain.
     - cron: "7,17,27,37,47,57 * * * *"
     # Exceptional recovery only: retries, stale claims, and overdue missed sends.
     - cron: "17 */4 * * *"
@@ -49,7 +49,7 @@ jobs:
           case "${SCHEDULE_EXPRESSION:-}" in
             "7,17,27,37,47,57 * * * *")
               dispatch_mode="morning"
-              echo "::notice::Polling configured morning outreach window"
+              echo "::notice::Polling due scheduled outreach"
               ;;
             "17 */4 * * *")
               dispatch_mode="recovery"

@@ -8,7 +8,6 @@ import {
   getScheduledDispatchHttpStatus,
   getScheduledDispatchState,
   getOutreachRecoveryCutoff,
-  isOutreachMorningDispatchWindow,
   OUTREACH_CLAIM_TIMEOUT_MS,
   SCHEDULED_DISPATCH_MAX_ROWS,
   type ScheduledDispatchDisposition,
@@ -37,29 +36,6 @@ export async function GET(request: NextRequest) {
   if (!mode) {
     return NextResponse.json({ error: "invalid dispatch mode" }, { status: 400 });
   }
-  if (mode === "morning" && !isOutreachMorningDispatchWindow()) {
-    return NextResponse.json({
-      ok: true,
-      complete: true,
-      state: "complete",
-      mode,
-      outsideMorningWindow: true,
-      dispatched: 0,
-      skipped: 0,
-      retriesScheduled: 0,
-      scheduledRetries: 0,
-      nextRetryAt: null,
-      pendingClaims: 0,
-      nextClaimExpiryAt: null,
-      failures: 0,
-      terminalFailures: 0,
-      retryableFailures: 0,
-      unscheduledRetryableFailures: 0,
-      bounded: false,
-      results: [],
-    });
-  }
-
   const startedAt = Date.now();
   const results: {
     id: string;
