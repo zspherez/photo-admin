@@ -377,7 +377,11 @@ async function bulkSend(formData: FormData) {
     candidates.targetsByContactId.has(contactId)
   );
   const sendability = await getOutreachSendabilityBatch(
-    candidateIds.map((contactId) => ({ showId, contactId })),
+    candidateIds.map((contactId) => ({
+      showId,
+      contactId,
+      festivalAllContacts: true,
+    })),
     now
   );
   const sendabilityByContact = new Map(
@@ -449,12 +453,17 @@ async function bulkSend(formData: FormData) {
                 })
             : scheduledFor
               ? await scheduleOutreach(
-                  { showId, contactId: group.contactId },
+                  {
+                    showId,
+                    contactId: group.contactId,
+                    festivalAllContacts: true,
+                  },
                   scheduledFor,
                 )
               : await sendOutreach({
                   showId,
                   contactId: group.contactId,
+                  festivalAllContacts: true,
                 });
         return { group, result };
       } catch (error) {
@@ -569,7 +578,11 @@ async function queueFestivalOutreach(formData: FormData) {
     })
     .sort((left, right) => left.artistId.localeCompare(right.artistId));
   const sendability = await getOutreachSendabilityBatch(
-    targets.map(({ contactId }) => ({ showId, contactId })),
+    targets.map(({ contactId }) => ({
+      showId,
+      contactId,
+      festivalAllContacts: true,
+    })),
     now,
   );
   const sendabilityByContact = new Map(
@@ -616,6 +629,7 @@ async function queueFestivalOutreach(formData: FormData) {
                 {
                   showId,
                   contactId: group.contactId,
+                  festivalAllContacts: true,
                 },
                 scheduledFor,
               );
@@ -880,7 +894,11 @@ export default async function FestivalDetailPage({
   const [sendabilityResults, testOutreaches, followUpEligibilityRows] =
     await Promise.all([
     getOutreachSendabilityBatch(
-      contactIds.map((contactId) => ({ showId, contactId })),
+      contactIds.map((contactId) => ({
+        showId,
+        contactId,
+        festivalAllContacts: true,
+      })),
       now
     ),
     contactIds.length === 0

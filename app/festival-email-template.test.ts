@@ -248,6 +248,28 @@ test("multi-artist festival scheduling persists artist coverage", () => {
   assert.match(migration, /\nCOMMIT;\s*$/);
 });
 
+test("festival all-contact mode is immutable and release constrained", () => {
+  const send = source("lib/sendOutreach.ts");
+  assert.match(send, /festivalAllContacts\?: boolean/);
+  assert.match(send, /requestedFestivalAllContactsSend/);
+  assert.match(send, /festivalAllContactsSend: prep\.festivalAllContactsSend/);
+  assert.match(
+    send,
+    /scheduled\.festivalAllContactsSend ===[\s\S]*prep\.festivalAllContactsSend/,
+  );
+  assert.match(
+    send,
+    /Existing retry uses a different festival recipient mode/,
+  );
+  const migration = source(
+    "prisma/migrations/20260729133000_festival_all_contacts_send/migration.sql",
+  );
+  assert.match(migration, /^BEGIN;\n/);
+  assert.match(migration, /ADD COLUMN "festivalAllContactsSend" BOOLEAN/);
+  assert.match(migration, /Outreach_festival_all_contacts_check/);
+  assert.match(migration, /\nCOMMIT;\s*$/);
+});
+
 test("grouped festival follow-ups preserve coverage and single-recipient policy", () => {
   const send = source("lib/sendOutreach.ts");
   assert.match(

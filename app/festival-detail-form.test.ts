@@ -217,6 +217,16 @@ test("selected festival sends use the same manager grouping as queue-all", () =>
   );
 });
 
+test("festival individual outreach snapshots all active management contacts", () => {
+  assert.ok(
+    (source.match(/festivalAllContacts: true/g)?.length ?? 0) >= 3,
+  );
+  assert.match(
+    source,
+    /!row\.sendability\.fullTeamSend &&[\s\S]*groupKey: shareable/,
+  );
+});
+
 test("covered artists keep shared outreach status and actions without a current contact", () => {
   assert.match(source, /const coveredOutreach =/);
   assert.match(source, /storedOutreachLabel\(r\.coveredOutreach\)/);
