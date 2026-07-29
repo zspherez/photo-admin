@@ -15,6 +15,7 @@ import {
   sendArbitraryEmail,
 } from "@/lib/sendArbitraryEmail";
 import { getNextNormalOutreachDispatch } from "@/lib/schedule";
+import { db } from "@/lib/db";
 
 export interface ArbitraryEmailActionState {
   error: string | null;
@@ -102,4 +103,45 @@ export async function cancelArbitraryEmailAction(formData: FormData) {
     );
   }
   redirect(`/emails?cancelled=${encodeURIComponent(id)}`);
+}
+
+function selectedEmailIds(formData: FormData): string[] {
+  return Array.from(
+    new Set(
+      formData
+        .getAll("emailIds")
+        .map((value) => String(value).trim())
+        .filter((value) =>
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+            value,
+          ),
+        ),
+    ),
+  ).slice(0, 100);
+}
+
+export async function updateArbitraryEmailVisibilityAction(
+  formData: FormData,
+) {
+  await requireServerActionAuth("/emails");
+  const view = formData.get("view") === "dismissed" ? "dismissed" : "active";
+  const ids = selectedEmailIds(formData);
+  if (ids.length === 0) {
+    redirect(`/emails?view=${view}&error=Select%20at%20least%20one%20email`);
+  }
+  const result = await db.arbitraryEmail.updateMany({
+    where: {
+      id: { in: ids },
+      dismissedAt: view === "dismissed" ? { not: null } : null,
+    },
+    data: {
+      dismissedAt: view === "dismissed" ? null : new Date(),
+    },
+  });
+  revalidatePath("/emails");
+  const destinationView = view === "dismissed" ? "dismissed" : "active";
+  const resultKey = view === "dismissed" ? "restored" : "dismissed";
+  redirect(
+    `/emails?view=${destinationView}&${resultKey}=${result.count}`,
+  );
 }

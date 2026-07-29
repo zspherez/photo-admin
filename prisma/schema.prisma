@@ -1022,11 +1022,13 @@ model ArbitraryEmail {
   clickCount              Int                  @default(0)
   bouncedAt               DateTime?
   complainedAt            DateTime?
+  dismissedAt             DateTime?
   webhookEvents           ResendWebhookEvent[]
   createdAt               DateTime             @default(now())
   updatedAt               DateTime             @updatedAt
 
   @@index([createdAt])
+  @@index([dismissedAt, createdAt])
   @@index([status, createdAt])
   @@index([status, nextAttemptAt])
   @@index([status, claimedAt])
