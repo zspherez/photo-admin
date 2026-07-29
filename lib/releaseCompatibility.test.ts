@@ -336,6 +336,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "clickCount",
       "bouncedAt",
       "complainedAt",
+      "dismissedAt",
       "createdAt",
       "updatedAt",
     ],
@@ -485,7 +486,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ArbitraryEmail\.providerCredentialScope",[\s\S]*"Outreach\.expectedRecipientUpdatedAt",[\s\S]*"Outreach_dispatch_recipient_identity_check",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*"TrajectoryModelRun",[\s\S]*"TrajectoryRunArtist",[\s\S]*"TrajectoryRecommendation",[\s\S]*"TrajectoryImportIssue",[\s\S]*"TrajectoryFeedbackEvent",[\s\S]*"TrajectoryShowOutcome",[\s\S]*"Outreach\.trajectoryRecommendationId",[\s\S]*"Trajectory feedback append-only triggers",[\s\S]*"Trajectory feedback indexes",[\s\S]*"TrajectoryModelRun_one_ready_artist_trajectory_idx",[\s\S]*\]/,
+    /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ArbitraryEmail\.providerCredentialScope",[\s\S]*"ArbitraryEmail\.dismissedAt",[\s\S]*"Outreach\.expectedRecipientUpdatedAt",[\s\S]*"Outreach_dispatch_recipient_identity_check",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*"TrajectoryModelRun",[\s\S]*"TrajectoryRunArtist",[\s\S]*"TrajectoryRecommendation",[\s\S]*"TrajectoryImportIssue",[\s\S]*"TrajectoryFeedbackEvent",[\s\S]*"TrajectoryShowOutcome",[\s\S]*"Outreach\.trajectoryRecommendationId",[\s\S]*"Trajectory feedback append-only triggers",[\s\S]*"Trajectory feedback indexes",[\s\S]*"TrajectoryModelRun_one_ready_artist_trajectory_idx",[\s\S]*\]/,
   );
   assert.match(
     source,

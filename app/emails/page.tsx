@@ -5,7 +5,11 @@ import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { EmailCenterHeader } from "@/components/email-center-header";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
-import { cancelArbitraryEmailAction } from "@/app/emails/actions";
+import {
+  cancelArbitraryEmailAction,
+  updateArbitraryEmailVisibilityAction,
+} from "@/app/emails/actions";
+import { EmailBulkSelection } from "@/components/email-bulk-selection";
 import { db } from "@/lib/db";
 import { getPagination } from "@/lib/match";
 import { formatScheduledTime } from "@/lib/schedule";
@@ -19,6 +23,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Emails" };
 
 const PAGE_SIZE = 50;
+type EmailView = "active" | "dismissed";
 
 function statusTone(status: string): BadgeTone {
   if (status === "failed") return "danger";
@@ -35,8 +40,16 @@ function statusTone(status: string): BadgeTone {
   return "default";
 }
 
-function emailsHref(page: number): string {
-  return page > 1 ? `/emails?page=${page}` : "/emails";
+function parseEmailView(value: SearchParamValue | undefined): EmailView {
+  return firstSearchParam(value) === "dismissed" ? "dismissed" : "active";
+}
+
+function emailsHref(view: EmailView, page: number): string {
+  const params = new URLSearchParams();
+  if (view === "dismissed") params.set("view", "dismissed");
+  if (page > 1) params.set("page", String(page));
+  const query = params.toString();
+  return query ? `/emails?${query}` : "/emails";
 }
 
 export default async function EmailsPage({
@@ -44,34 +57,55 @@ export default async function EmailsPage({
 }: {
   searchParams: Promise<{
     page?: SearchParamValue;
+    view?: SearchParamValue;
     sent?: SearchParamValue;
     queued?: SearchParamValue;
     cancelled?: SearchParamValue;
     error?: SearchParamValue;
+    dismissed?: SearchParamValue;
+    restored?: SearchParamValue;
   }>;
 }) {
   const sp = await searchParams;
+  const view = parseEmailView(sp.view);
   const requestedPage = positiveIntegerSearchParam(sp.page);
   const sent = firstSearchParam(sp.sent);
   const queued = firstSearchParam(sp.queued);
   const cancelled = firstSearchParam(sp.cancelled);
   const error = firstSearchParam(sp.error);
+  const dismissed = firstSearchParam(sp.dismissed);
+  const restored = firstSearchParam(sp.restored);
+  const visibilityWhere = {
+    dismissedAt: view === "dismissed" ? { not: null } : null,
+  } as const;
   const queuedEmail = queued
     ? await db.arbitraryEmail.findUnique({
         where: { id: queued },
         select: { scheduledFor: true },
       })
     : null;
-  const [total, delivered, opened, clicked] = await Promise.all([
-    db.arbitraryEmail.count(),
-    db.arbitraryEmail.count({ where: { deliveredAt: { not: null } } }),
-    db.arbitraryEmail.count({ where: { openCount: { gt: 0 } } }),
-    db.arbitraryEmail.count({ where: { clickCount: { gt: 0 } } }),
+  const [activeCount, dismissedCount, delivered, opened, clicked] =
+    await Promise.all([
+    db.arbitraryEmail.count({ where: { dismissedAt: null } }),
+    db.arbitraryEmail.count({ where: { dismissedAt: { not: null } } }),
+    db.arbitraryEmail.count({
+      where: { dismissedAt: null, deliveredAt: { not: null } },
+    }),
+    db.arbitraryEmail.count({
+      where: { dismissedAt: null, openCount: { gt: 0 } },
+    }),
+    db.arbitraryEmail.count({
+      where: { dismissedAt: null, clickCount: { gt: 0 } },
+    }),
   ]);
+  const total = view === "dismissed" ? dismissedCount : activeCount;
   const pagination = getPagination(total, requestedPage, PAGE_SIZE);
-  if (pagination.page !== requestedPage) redirect(emailsHref(pagination.page));
+  if (pagination.page !== requestedPage) {
+    redirect(emailsHref(view, pagination.page));
+  }
 
   const emails = await db.arbitraryEmail.findMany({
+    where: visibilityWhere,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     skip: (pagination.page - 1) * PAGE_SIZE,
     take: PAGE_SIZE,
@@ -90,14 +124,18 @@ export default async function EmailsPage({
       deliveredAt: true,
       openCount: true,
       clickCount: true,
+      dismissedAt: true,
     },
   });
+  const selectionFormId = "custom-email-bulk-selection";
+  const visibleEmailIds = emails.map((email) => email.id);
+  const selectionKey = `${view}:${pagination.page}:${visibleEmailIds.join(",")}`;
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
       <EmailCenterHeader active="custom" />
 
-      {(sent || queued || cancelled || error) && (
+      {(sent || queued || cancelled || dismissed || restored || error) && (
         <div className={`mt-5 rounded-lg border px-4 py-3 text-sm ${
           error
             ? "border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
@@ -113,13 +151,45 @@ export default async function EmailsPage({
                 : "Email queued."
               : cancelled
                 ? "Queued email cancelled."
+                : dismissed
+                  ? `${dismissed} email${dismissed === "1" ? "" : "s"} deleted from the active list.`
+                  : restored
+                    ? `${restored} email${restored === "1" ? "" : "s"} restored.`
                 : "Email sent."}
         </div>
       )}
 
+      <nav
+        aria-label="Custom email visibility"
+        className="mt-5 flex gap-2"
+      >
+        <Link
+          href={emailsHref("active", 1)}
+          aria-current={view === "active" ? "page" : undefined}
+          className={`rounded-full px-3 py-1 text-xs font-medium ${
+            view === "active"
+              ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+              : "border border-zinc-200 text-zinc-600 dark:border-zinc-800 dark:text-zinc-400"
+          }`}
+        >
+          Active {activeCount}
+        </Link>
+        <Link
+          href={emailsHref("dismissed", 1)}
+          aria-current={view === "dismissed" ? "page" : undefined}
+          className={`rounded-full px-3 py-1 text-xs font-medium ${
+            view === "dismissed"
+              ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+              : "border border-zinc-200 text-zinc-600 dark:border-zinc-800 dark:text-zinc-400"
+          }`}
+        >
+          Dismissed {dismissedCount}
+        </Link>
+      </nav>
+
       <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
-          ["Total", total],
+          ["Active", activeCount],
           ["Delivered", delivered],
           ["Opened", opened],
           ["Clicked links", clicked],
@@ -131,9 +201,21 @@ export default async function EmailsPage({
         ))}
       </div>
 
+      {emails.length > 0 && (
+        <EmailBulkSelection
+          key={selectionKey}
+          action={updateArbitraryEmailVisibilityAction}
+          formId={selectionFormId}
+          emailIds={visibleEmailIds}
+          view={view}
+        />
+      )}
+
       {emails.length === 0 ? (
         <div className="mt-8 rounded-xl border border-dashed border-zinc-300 p-12 text-center text-sm text-zinc-500 dark:border-zinc-700">
-          No custom emails yet.
+          {view === "dismissed"
+            ? "No dismissed custom emails."
+            : "No active custom emails yet."}
         </div>
       ) : (
         <div className="mt-6 sm:overflow-hidden sm:rounded-xl sm:border sm:border-zinc-200 sm:dark:border-zinc-800">
@@ -141,6 +223,9 @@ export default async function EmailsPage({
             <table className="mobile-stack w-full text-left text-sm">
               <thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
                 <tr>
+                  <th className="w-10 px-4 py-3">
+                    <span className="sr-only">Select</span>
+                  </th>
                   <th className="px-4 py-3">Email</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Delivered</th>
@@ -152,6 +237,16 @@ export default async function EmailsPage({
               <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                 {emails.map((email) => (
                   <tr key={email.id}>
+                    <td data-label="Select" className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        name="emailIds"
+                        value={email.id}
+                        form={selectionFormId}
+                        aria-label={`Select ${email.subject}`}
+                        className="h-4 w-4 accent-zinc-900 dark:accent-zinc-100"
+                      />
+                    </td>
                     <td data-label="Email" className="max-w-md px-4 py-3">
                       <div className="truncate font-medium">{email.subject}</div>
                       <div className="truncate text-xs text-zinc-500">
@@ -228,13 +323,13 @@ export default async function EmailsPage({
       {pagination.pageCount > 1 && (
         <div className="mt-6 flex items-center justify-between text-sm">
           {pagination.page > 1 ? (
-            <Link href={emailsHref(pagination.page - 1)}>Previous</Link>
+            <Link href={emailsHref(view, pagination.page - 1)}>Previous</Link>
           ) : <span />}
           <span className="text-zinc-500">
             Page {pagination.page} of {pagination.pageCount}
           </span>
           {pagination.hasNext ? (
-            <Link href={emailsHref(pagination.page + 1)}>Next</Link>
+            <Link href={emailsHref(view, pagination.page + 1)}>Next</Link>
           ) : <span />}
         </div>
       )}
