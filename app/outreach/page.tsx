@@ -432,8 +432,8 @@ export default async function OutreachLogPage({
                     aria-label={`Select outreach for ${artistDisplayName(o.artist)}`}
                     className="mt-1 h-4 w-4 shrink-0 accent-zinc-900 dark:accent-zinc-100"
                   />
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0">
+                  <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <ArtistLink artistId={o.artistId} className="text-sm font-medium">
                           {artistDisplayName(o.artist)}
@@ -506,7 +506,7 @@ export default async function OutreachLogPage({
                         </p>
                       )}
                     </div>
-                    <div className="flex shrink-0 flex-col items-end gap-1.5">
+                    <div className="ml-auto flex shrink-0 flex-col items-end gap-1.5">
                       <p className="text-xs text-zinc-400">
                         {sentDate.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                       </p>

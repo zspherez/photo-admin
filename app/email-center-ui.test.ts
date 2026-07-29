@@ -54,3 +54,15 @@ test("outreach history has recoverable bulk dismissal and restore", () => {
   assert.match(migration, /Outreach_dismissedAt_createdAt_idx/);
   assert.match(migration, /\nCOMMIT;\s*$/);
 });
+
+test("outreach sent date and follow-up controls stay right aligned", () => {
+  const outreach = source("app/outreach/page.tsx");
+  assert.match(
+    outreach,
+    /className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-2"/,
+  );
+  assert.match(
+    outreach,
+    /className="ml-auto flex shrink-0 flex-col items-end gap-1\.5"/,
+  );
+});
