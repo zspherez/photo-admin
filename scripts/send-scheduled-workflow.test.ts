@@ -108,7 +108,7 @@ test("workflow polls the app-configured morning window", () => {
     },
   );
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Polling configured morning outreach window/);
+  assert.match(result.stdout, /Polling due scheduled outreach/);
   assert.match(result.stdout, /Outreach dispatch attempt/);
 });
 

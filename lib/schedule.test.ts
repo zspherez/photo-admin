@@ -189,8 +189,9 @@ test("normal morning dispatch and exceptional recovery stay distinct", () => {
   assert.match(workflow, /cron: "7,17,27,37,47,57 \* \* \* \*"/);
   assert.match(workflow, /cron: "17 \*\/4 \* \* \*"/);
   assert.equal(OUTREACH_MORNING_DISPATCH_HOUR, 9);
-  assert.match(route, /isOutreachMorningDispatchWindow/);
-  assert.match(workflow, /Polling configured morning outreach window/);
+  assert.doesNotMatch(route, /isOutreachMorningDispatchWindow/);
+  assert.doesNotMatch(route, /outsideMorningWindow/);
+  assert.match(workflow, /Polling due scheduled outreach/);
   assert.match(
     readFileSync(new URL("./schedule.ts", import.meta.url), "utf8"),
     /localETToUtc\([\s\S]*OUTREACH_MORNING_DISPATCH_HOUR,[\s\S]*OUTREACH_MORNING_DISPATCH_MINUTE/,
@@ -252,7 +253,6 @@ test("normal morning dispatch and exceptional recovery stay distinct", () => {
     route,
     /status: "sending",\s+nextAttemptAt: \{ lte: now \},\s+claimedAt: \{ lte: staleBefore \}/,
   );
-  assert.match(route, /isOutreachMorningDispatchWindow\(\)/);
   assert.match(route, /export const maxDuration = 60/);
   assert.match(route, /nextRetryAt,/);
   assert.match(route, /nextClaimExpiryAt,/);
