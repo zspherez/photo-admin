@@ -4,7 +4,7 @@ on:
   schedule:
     # Poll every ten minutes. The app applies its configured market time zone,
     # weekday, and dispatch-hour gate, so forks need no UTC/DST cron edits.
-    - cron: "*/10 * * * *"
+    - cron: "7,17,27,37,47,57 * * * *"
     # Exceptional recovery only: retries, stale claims, and overdue missed sends.
     - cron: "17 */4 * * *"
   workflow_dispatch:
@@ -47,7 +47,7 @@ jobs:
 
           dispatch_mode="${OUTREACH_DISPATCH_MODE:-}"
           case "${SCHEDULE_EXPRESSION:-}" in
-            "*/10 * * * *")
+            "7,17,27,37,47,57 * * * *")
               dispatch_mode="morning"
               echo "::notice::Polling configured morning outreach window"
               ;;

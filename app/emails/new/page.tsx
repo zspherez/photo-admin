@@ -30,7 +30,7 @@ export default function ComposeEmailPage() {
         <CardBody>
           <ComposeEmailForm
             compositionId={randomUUID()}
-            queueLabel={formatNextDispatchActionLabel(
+            scheduleLabel={formatNextDispatchActionLabel(
               getNextNormalOutreachDispatch(),
             )}
           />

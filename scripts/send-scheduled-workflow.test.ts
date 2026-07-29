@@ -104,7 +104,7 @@ test("workflow polls the app-configured morning window", () => {
     "morning-poll",
     [`0\t200\t${response("complete")}`],
     {
-      SCHEDULE_EXPRESSION: "*/10 * * * *",
+      SCHEDULE_EXPRESSION: "7,17,27,37,47,57 * * * *",
     },
   );
   assert.equal(result.status, 0, result.stderr);
