@@ -15,6 +15,7 @@ async function main(): Promise<void> {
     outreachAttemptProbe,
     syncLeaseProbe,
     artistClaimProbe,
+    artistCustomNameProbe,
     contactResearchJobProbe,
     contactResearchCandidateProbe,
     contactResearchCandidateStatusConstraintProbe,
@@ -135,6 +136,10 @@ async function main(): Promise<void> {
     db.outreachSendAttempt.count({ take: 1 }),
     db.integrationSyncLease.count({ take: 1 }),
     db.artistIdentityNameClaim.count({ take: 1 }),
+    db.artist.findMany({
+      take: 1,
+      select: { id: true, customName: true },
+    }),
     db.contactResearchJob.findMany({
       take: 1,
       select: {
@@ -702,6 +707,7 @@ async function main(): Promise<void> {
       ].every(Number.isInteger) &&
         [
           contactResearchJobProbe,
+          artistCustomNameProbe,
           contactResearchCandidateProbe,
           contactResearchCandidateStatusConstraintProbe,
           contactExportSnapshotProbe,
@@ -784,6 +790,7 @@ async function main(): Promise<void> {
       event: "release_compatibility_verified",
       addedRuntimeRoleProbes: [
         "ArtistResearchSkip",
+        "Artist.customName",
         "ContactResearchCandidate_status_check",
         "ContactResearchDirectOutreachProposal",
         "Contact.agentDirectOutreachProvenance",

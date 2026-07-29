@@ -4,6 +4,7 @@ import { appConfig } from "@/lib/appConfig";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 import { Card } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { EmailCenterHeader } from "@/components/email-center-header";
@@ -211,7 +212,7 @@ export default async function OutreachLogPage({
           date: true,
         },
       },
-      artist: { select: { name: true } },
+      artist: { select: { name: true, customName: true } },
       contact: {
         select: {
           id: true,
@@ -354,7 +355,7 @@ export default async function OutreachLogPage({
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <ArtistLink artistId={o.artistId} className="text-sm font-medium">
-                          {o.artist.name}
+                          {artistDisplayName(o.artist)}
                         </ArtistLink>
                         <Badge tone={statusTone(o)}>{statusLabels(o).join(" · ")}</Badge>
                         <Badge

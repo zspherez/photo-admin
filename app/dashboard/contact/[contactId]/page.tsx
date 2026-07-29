@@ -18,6 +18,7 @@ import { FollowUpButton } from "@/components/follow-up-button";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 import { getFollowUpEligibilityBatch } from "@/lib/sendOutreach";
 import { isWeekendET } from "@/lib/schedule";
 import {
@@ -57,7 +58,7 @@ const getEditableContact = cache(async (contactId: string) =>
       customPrice: true,
       notes: true,
       source: true,
-      artist: { select: { name: true } },
+      artist: { select: { name: true, customName: true } },
     },
   }),
 );
@@ -71,7 +72,7 @@ export async function generateMetadata({
   const contact = await getEditableContact(contactId);
   return {
     title: contact
-      ? `Edit ${contact.name || "contact"} for ${contact.artist.name}`
+      ? `Edit ${contact.name || "contact"} for ${artistDisplayName(contact.artist)}`
       : "Edit contact",
   };
 }
@@ -318,7 +319,7 @@ export default async function ContactEditPage({
       <Link href={safeReturnTo} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Back</Link>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">Edit contact</h1>
       <p className="mt-1 text-sm text-zinc-500">
-        Artist: <b>{contact.artist.name}</b>
+        Artist: <b>{artistDisplayName(contact.artist)}</b>
         {contact.source && <span className="ml-2 text-xs">(source: {contact.source})</span>}
       </p>
 

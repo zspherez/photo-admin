@@ -12,6 +12,7 @@ import { easternTodayStoredDate } from "@/lib/calendarDate";
 import { activeListenSignalWhere } from "@/lib/listenSignal";
 import { festivalLeadTimeWhere } from "@/lib/festivalEligibility";
 import { requireServerActionAuth } from "@/lib/auth";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 import type { SearchParamValue } from "@/lib/searchParams";
 import {
   NEW_SHOWS_PAGE_SIZE,
@@ -213,7 +214,10 @@ export default async function NewlyAnnouncedPage({
               const matched = show.artists.filter((sa) => sa.artist.listenSignals.length > 0).length;
               const withContact = show.artists.filter((sa) => sa.artist.contacts.length > 0).length;
               const detailHref = show.isFestival ? `/festivals/${show.id}` : `/dashboard`;
-              const headliners = show.artists.slice(0, 4).map((sa) => sa.artist.name).join(", ");
+              const headliners = show.artists
+                .slice(0, 4)
+                .map((sa) => artistDisplayName(sa.artist))
+                .join(", ");
               return (
                 <li key={show.id} className="px-4 py-3">
                   <Link href={detailHref} className="block transition hover:opacity-80">

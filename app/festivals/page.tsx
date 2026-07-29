@@ -33,6 +33,7 @@ import {
   restoreShowAction,
 } from "@/app/dashboard/actions";
 import { requireServerActionAuth } from "@/lib/auth";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 import {
   createOperationDeadline,
   ROUTE_DEADLINE_SAFETY_MARGIN_MS,
@@ -377,7 +378,7 @@ export default async function FestivalsPage({
             ).length;
             const headliners = festival.artists
               .slice(0, 3)
-              .map((showArtist) => showArtist.artist.name);
+              .map((showArtist) => artistDisplayName(showArtist.artist));
             const countryCategory = festivalCountryCategory(festival);
             return (
               <li key={key}>

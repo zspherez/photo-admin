@@ -68,6 +68,7 @@ import {
 } from "@/app/dashboard/actions";
 import { requireServerActionAuth } from "@/lib/auth";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 import {
   canMarkOutreachManually,
   isActiveManualOutreachMarker,
@@ -109,6 +110,7 @@ const getFestivalDetails = cache(async (showId: string) =>
             select: {
               id: true,
               name: true,
+              customName: true,
               genres: true,
               listenSignals: {
                 select: {
@@ -994,7 +996,7 @@ export default async function FestivalDetailPage({
                         className="h-4 w-4 accent-zinc-900 disabled:cursor-not-allowed disabled:opacity-30 dark:accent-zinc-100"
                       />
                       <label htmlFor={checkboxId} className="sr-only">
-                        Select {r.artist.name} for outreach
+                        Select {artistDisplayName(r.artist)} for outreach
                       </label>
                     </>
                   )}
@@ -1005,7 +1007,7 @@ export default async function FestivalDetailPage({
                         returnTo={returnTo}
                         className="text-sm font-medium"
                       >
-                        {r.artist.name}
+                        {artistDisplayName(r.artist)}
                       </ArtistLink>
                       {r.topSignal && (
                         <Badge tone="success">
@@ -1105,7 +1107,7 @@ export default async function FestivalDetailPage({
                           variant="danger"
                           size="sm"
                           pendingLabel="Cancelling…"
-                          aria-label={`Cancel scheduled outreach for ${r.artist.name}`}
+                          aria-label={`Cancel scheduled outreach for ${artistDisplayName(r.artist)}`}
                         >
                           Cancel
                         </PendingSubmitButton>

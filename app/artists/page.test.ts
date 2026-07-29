@@ -13,6 +13,8 @@ test("Contacts navigation is presented as a searchable Artists view", () => {
   assert.match(page, /metadata: Metadata = \{ title: "Artists" \}/);
   assert.match(page, />Artists</);
   assert.match(page, /Search artists, emails, phones, managers, or notes/);
+  assert.match(page, /COALESCE\(artist\."customName", ''\)/);
+  assert.match(page, /artistDisplayName\(artist\)/);
   assert.match(page, /COALESCE\(contact\."phone", ''\)/);
 });
 

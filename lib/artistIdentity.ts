@@ -476,6 +476,7 @@ export async function resolveArtists(
       artist = {
         id: randomUUID(),
         name: input.name,
+        customName: null,
         normalizedName,
         spotifyId: input.spotifyId ?? null,
         statsfmId: input.statsfmId ?? null,

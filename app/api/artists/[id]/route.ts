@@ -17,6 +17,7 @@ import {
   getNextNormalOutreachDispatch,
   isWeekendET,
 } from "@/lib/schedule";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -101,7 +102,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
   return NextResponse.json({
     id: artist.id,
-    name: artist.name,
+    name: artistDisplayName(artist),
+    canonicalName: artist.name,
+    customName: artist.customName,
     imageUrl: artist.imageUrl,
     spotifyId: artist.spotifyId,
     statsfmId: artist.statsfmId,

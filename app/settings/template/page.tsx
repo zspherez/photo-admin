@@ -43,6 +43,7 @@ import {
   firstSearchParam,
   type SearchParamValue,
 } from "@/lib/searchParams";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Email template" };
@@ -283,8 +284,9 @@ export default async function TemplateSettingsPage({
     if (matched) {
       const contact = pickEmailContact(matched.artist.contacts);
       if (!contact) throw new Error("Template sample contact disappeared");
+      const sampleArtistName = artistDisplayName(matched.artist);
       const sampleVars = await buildVarsForShow({
-        artistName: matched.artist.name,
+        artistName: sampleArtistName,
         venueName: sample.venueName,
         showDate: sample.date,
         managerName: contact.name,
@@ -299,11 +301,11 @@ export default async function TemplateSettingsPage({
         template.htmlBody,
         sampleVars,
         templateUtmKind(kind),
-        matched.artist.name,
+        sampleArtistName,
         utmSettings,
       );
-      sampleLabel = `Preview: ${matched.artist.name} at ${sample.venueName}`;
-      previewArtist = matched.artist.name;
+      sampleLabel = `Preview: ${sampleArtistName} at ${sample.venueName}`;
+      previewArtist = sampleArtistName;
     }
   }
 
