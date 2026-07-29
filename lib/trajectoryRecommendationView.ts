@@ -73,6 +73,7 @@ export interface RecommendationView {
     name: string | null;
   } | null;
   phoneContact: {
+    id: string;
     phone: string;
     name: string | null;
   } | null;

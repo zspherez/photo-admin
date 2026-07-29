@@ -1090,8 +1090,10 @@ export default async function ArtistPage({
                       {(emailContact || phoneContact) && (
                         <SendButton
                           showId={s.id}
+                          artistId={artist.id}
                           contactId={emailContact?.id ?? null}
                           contactName={emailContact?.name ?? null}
+                          phoneContactId={phoneContact?.id ?? null}
                           phone={phoneContact?.phone ?? null}
                           phoneContactName={phoneContact?.name ?? null}
                           alreadySent={alreadySent}

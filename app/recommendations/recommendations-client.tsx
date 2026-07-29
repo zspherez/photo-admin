@@ -253,8 +253,10 @@ function RecommendationCard({
           {(recommendation.emailContact || recommendation.phoneContact) && (
             <SendButton
               showId={recommendation.showId}
+              artistId={recommendation.artistId}
               contactId={recommendation.emailContact?.id ?? null}
               contactName={recommendation.emailContact?.name ?? null}
+              phoneContactId={recommendation.phoneContact?.id ?? null}
               phone={recommendation.phoneContact?.phone ?? null}
               phoneContactName={recommendation.phoneContact?.name ?? null}
               alreadySent={recommendation.alreadySent}

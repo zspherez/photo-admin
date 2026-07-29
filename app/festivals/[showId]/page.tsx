@@ -93,6 +93,7 @@ import {
   FestivalBulkOutreachForm,
   type FestivalBulkConfirmationCandidate,
 } from "@/components/festival-bulk-outreach-form";
+import { OutreachDeliveryBadges } from "@/components/outreach-delivery-badges";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -159,6 +160,10 @@ const getFestivalDetails = cache(async (showId: string) =>
           status: true,
           providerMessageId: true,
           attemptCount: true,
+          sentAt: true,
+          deliveredAt: true,
+          openCount: true,
+          clickCount: true,
           finalSubject: true,
           finalHtml: true,
           scheduledFor: true,
@@ -855,6 +860,16 @@ export default async function FestivalDetailPage({
         finalHtml: outreach.finalHtml,
       })
     );
+    const engagementOutreach = outreachHistory.find(
+      (outreach) =>
+        outreach.id !== manualMarker?.id &&
+        outreach.status !== "test" &&
+        (outreach.providerMessageId !== null ||
+          outreach.sentAt !== null ||
+          outreach.deliveredAt !== null ||
+          outreach.openCount > 0 ||
+          outreach.clickCount > 0),
+    );
     const coveredOutreach =
       outreachHistory.find((outreach) => outreach.status === "scheduled") ??
       outreachHistory.find(
@@ -876,6 +891,7 @@ export default async function FestivalDetailPage({
       hasAnyContact: a.contacts.length > 0,
       genres,
       manualMarker,
+      engagementOutreach,
       coveredOutreach,
       canMarkManually: canMarkOutreachManually(
         outreachHistory.map((outreach) => ({
@@ -1372,6 +1388,11 @@ export default async function FestivalDetailPage({
                         )}
                       {r.managerResearchEligible && (
                         <Badge tone="warning">Manager needed</Badge>
+                      )}
+                      {r.engagementOutreach && (
+                        <OutreachDeliveryBadges
+                          outreach={r.engagementOutreach}
+                        />
                       )}
                     </div>
                     {r.displayContact ? (

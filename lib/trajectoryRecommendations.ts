@@ -877,7 +877,7 @@ export async function getTrajectoryRecommendationPage(
       emailContact: email ? { id: email.id, name: email.name } : null,
       phoneContact:
         phone?.phone
-          ? { phone: phone.phone, name: phone.name }
+          ? { id: phone.id, phone: phone.phone, name: phone.name }
           : null,
       contactId: displayContact?.id ?? null,
       sendability: sendability

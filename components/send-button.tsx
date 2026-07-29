@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { buildSmsDraftHref } from "@/lib/smsDraft";
 
 type FormAction = (formData: FormData) => void | Promise<void>;
 type HiddenField = { name: string; value: string };
@@ -19,12 +20,18 @@ function HiddenFields({ fields }: { fields: readonly HiddenField[] }) {
 }
 
 function SmsButton({
+  showId,
+  artistId,
+  phoneContactId,
   phone,
   phoneContactName,
   emailContactName,
   emailAvailable,
   disabled,
 }: {
+  showId: string;
+  artistId: string;
+  phoneContactId: string | null;
   phone: string | null;
   phoneContactName: string | null;
   emailContactName: string | null;
@@ -32,10 +39,13 @@ function SmsButton({
   disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [loadingDraft, setLoadingDraft] = useState(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const descriptionId = useId();
-  const hasPhone = Boolean(phone?.trim());
+  const hasPhone = Boolean(phoneContactId && phone?.trim());
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -47,6 +57,45 @@ function SmsButton({
 
   if (!hasPhone) return null;
 
+  const openDraft = async () => {
+    setOpen(true);
+    if (draft || loadingDraft) return;
+    setLoadingDraft(true);
+    setDraftError(null);
+    try {
+      const query = new URLSearchParams({
+        showId,
+        artistId,
+        phoneContactId: phoneContactId!,
+      });
+      const response = await fetch(`/api/outreach/text-draft?${query}`, {
+        cache: "no-store",
+      });
+      const value = (await response.json()) as {
+        body?: unknown;
+        error?: unknown;
+      };
+      if (
+        !response.ok ||
+        typeof value.body !== "string" ||
+        !value.body.trim()
+      ) {
+        throw new Error(
+          typeof value.error === "string"
+            ? value.error
+            : "Could not create text draft",
+        );
+      }
+      setDraft(value.body);
+    } catch (error) {
+      setDraftError(
+        error instanceof Error ? error.message : "Could not create text draft",
+      );
+    } finally {
+      setLoadingDraft(false);
+    }
+  };
+
   return (
     <>
       <Button
@@ -54,7 +103,7 @@ function SmsButton({
         variant="secondary"
         size="sm"
         disabled={disabled}
-        onClick={() => setOpen(true)}
+        onClick={() => void openDraft()}
       >
         Text
       </Button>
@@ -73,11 +122,20 @@ function SmsButton({
             Text {phoneContactName ?? emailContactName ?? "contact"}
           </h2>
           <p id={descriptionId} className="mt-1 text-xs text-zinc-500">
-            Open your messaging app for {phone}.{" "}
+            Open your messaging app for {phone} with the personalized outreach
+            template.{" "}
             {emailAvailable
               ? "Email remains available as a separate outreach option."
               : "No email address is available for this artist."}
           </p>
+          {draftError && (
+            <p
+              role="alert"
+              className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300"
+            >
+              {draftError}
+            </p>
+          )}
           <div className="mt-4 flex justify-end gap-2">
             <Button
               type="button"
@@ -88,13 +146,19 @@ function SmsButton({
             >
               Cancel
             </Button>
-            <a
-              href={`sms:${phone}`}
-              className="inline-flex min-h-10 items-center rounded-md bg-zinc-900 px-3 text-xs font-medium text-white hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 sm:min-h-7 sm:px-2.5 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
-              onClick={() => dialogRef.current?.close()}
-            >
-              Open Messages
-            </a>
+            {draft ? (
+              <a
+                href={buildSmsDraftHref(phone!, draft)}
+                className="inline-flex min-h-10 items-center rounded-md bg-zinc-900 px-3 text-xs font-medium text-white hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 focus-visible:ring-offset-2 sm:min-h-7 sm:px-2.5 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                onClick={() => dialogRef.current?.close()}
+              >
+                Open Messages
+              </a>
+            ) : (
+              <Button type="button" size="sm" disabled>
+                {loadingDraft ? "Loading draft…" : "Draft unavailable"}
+              </Button>
+            )}
           </div>
         </div>
       </dialog>
@@ -104,8 +168,10 @@ function SmsButton({
 
 export function SendButton({
   showId,
+  artistId,
   contactId,
   contactName,
+  phoneContactId,
   phone,
   phoneContactName,
   alreadySent,
@@ -120,8 +186,10 @@ export function SendButton({
   hiddenFields = [],
 }: {
   showId: string;
+  artistId: string;
   contactId: string | null;
   contactName: string | null;
+  phoneContactId: string | null;
   phone: string | null;
   phoneContactName?: string | null;
   alreadySent: boolean;
@@ -163,6 +231,9 @@ export function SendButton({
           </form>
         )}
         <SmsButton
+          showId={showId}
+          artistId={artistId}
+          phoneContactId={phoneContactId}
           phone={phone}
           phoneContactName={phoneContactName ?? null}
           emailContactName={contactName}
@@ -225,6 +296,9 @@ export function SendButton({
       </form>
 
       <SmsButton
+        showId={showId}
+        artistId={artistId}
+        phoneContactId={phoneContactId}
         phone={phone}
         phoneContactName={phoneContactName ?? null}
         emailContactName={contactName}

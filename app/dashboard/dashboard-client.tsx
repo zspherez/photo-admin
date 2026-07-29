@@ -1325,8 +1325,10 @@ export function DashboardClient({
                           <div className="flex flex-wrap gap-1.5">
                             <SendButton
                               showId={show.id}
+                              artistId={artist.id}
                               contactId={emailContact?.id ?? null}
                               contactName={emailContact?.name ?? null}
+                              phoneContactId={phoneContact?.id ?? null}
                               phone={phoneContact?.phone ?? null}
                               phoneContactName={phoneContact?.name ?? null}
                               alreadySent={alreadySent}
