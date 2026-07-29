@@ -246,6 +246,23 @@ test("multi-artist festival scheduling persists artist coverage", () => {
   assert.match(migration, /OutreachCoveredArtist_outreachId_fkey/);
   assert.match(migration, /OutreachCoveredArtist_artistId_fkey/);
   assert.match(migration, /\nCOMMIT;\s*$/);
+  const constraintRepair = source(
+    "prisma/migrations/20260729194500_email_template_multi_artist_constraint/migration.sql",
+  );
+  assert.match(constraintRepair, /^BEGIN;\n/);
+  assert.match(
+    constraintRepair,
+    /DROP CONSTRAINT IF EXISTS "EmailTemplate_canonical_purpose_default_check"/,
+  );
+  assert.match(
+    constraintRepair,
+    /"purpose" IN \('festival', 'festival_multi_artist', 'follow_up'\)/,
+  );
+  assert.match(
+    constraintRepair,
+    /"purpose" = 'original'[\s\S]*"isDefault" = true/,
+  );
+  assert.match(constraintRepair, /\nCOMMIT;\s*$/);
 });
 
 test("festival all-contact mode is immutable and release constrained", () => {
@@ -326,5 +343,13 @@ test("festival template migration is transactional, preserving, constrained, and
   assert.match(migration, /COMMIT;\s*$/);
   assert.match(schema, /purpose\s+EmailTemplatePurpose\?\s+@unique/);
   assert.match(releaseProbe, /db\.emailTemplate\.findMany\([\s\S]*purpose: true/);
+  assert.match(
+    releaseProbe,
+    /probeCanonicalEmailTemplateWrites\(\)/,
+  );
+  assert.match(
+    releaseProbe,
+    /festival_multi_artist[\s\S]*isDefault: false/,
+  );
   assert.match(releaseProbe, /"EmailTemplate\.purpose"/);
 });

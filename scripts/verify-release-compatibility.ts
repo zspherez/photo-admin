@@ -1,7 +1,44 @@
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { assertReleaseCompatibility } from "@/lib/releaseCompatibility";
+
+class EmailTemplateProbeRollback extends Error {}
+
+async function probeCanonicalEmailTemplateWrites(): Promise<
+  Array<{ purpose: string; isDefault: boolean }>
+> {
+  const rows = [
+    { purpose: "original" as const, isDefault: true },
+    { purpose: "festival" as const, isDefault: false },
+    { purpose: "festival_multi_artist" as const, isDefault: false },
+    { purpose: "follow_up" as const, isDefault: false },
+  ];
+  const marker = randomUUID();
+  try {
+    await db.$transaction(async (tx) => {
+      for (const row of rows) {
+        await tx.emailTemplate.upsert({
+          where: { purpose: row.purpose },
+          update: { isDefault: row.isDefault },
+          create: {
+            id: `release-probe-${marker}-${row.purpose}`,
+            name: `release_probe_${marker}_${row.purpose}`,
+            purpose: row.purpose,
+            subject: "release compatibility probe",
+            htmlBody: "<p>release compatibility probe</p>",
+            isDefault: row.isDefault,
+          },
+        });
+      }
+      throw new EmailTemplateProbeRollback();
+    });
+  } catch (error) {
+    if (!(error instanceof EmailTemplateProbeRollback)) throw error;
+  }
+  return rows;
+}
 
 async function main(): Promise<void> {
   const [
@@ -37,6 +74,8 @@ async function main(): Promise<void> {
     arbitraryEmailProbe,
     resendWebhookArbitraryEmailProbe,
     emailTemplateProbe,
+    emailTemplateConstraintProbe,
+    emailTemplateCanonicalWriteProbe,
     dashboardShowSnapshotProbe,
     dashboardShowSnapshotMemberProbe,
     trajectoryModelRunProbe,
@@ -500,6 +539,29 @@ async function main(): Promise<void> {
         purpose: true,
       },
     }),
+    db.$queryRaw<
+      Array<{
+        constraintName: string;
+        constraintDefinition: string;
+        validated: boolean;
+      }>
+    >(Prisma.sql`
+      SELECT
+        constraint_row."conname" AS "constraintName",
+        pg_get_constraintdef(constraint_row.oid) AS "constraintDefinition",
+        constraint_row."convalidated" AS "validated"
+      FROM pg_constraint AS constraint_row
+      JOIN pg_class AS table_row
+        ON table_row.oid = constraint_row."conrelid"
+      JOIN pg_namespace AS namespace_row
+        ON namespace_row.oid = table_row."relnamespace"
+      WHERE namespace_row."nspname" = current_schema()
+        AND table_row."relname" = 'EmailTemplate'
+        AND constraint_row."conname" =
+          'EmailTemplate_canonical_purpose_default_check'
+        AND constraint_row."contype" = 'c'
+    `),
+    probeCanonicalEmailTemplateWrites(),
     db.dashboardShowSnapshot.findMany({
       take: 1,
       select: {
@@ -743,6 +805,8 @@ async function main(): Promise<void> {
           arbitraryEmailProbe,
           resendWebhookArbitraryEmailProbe,
           emailTemplateProbe,
+          emailTemplateConstraintProbe,
+          emailTemplateCanonicalWriteProbe,
           dashboardShowSnapshotProbe,
           dashboardShowSnapshotMemberProbe,
           trajectoryModelRunProbe,
@@ -766,6 +830,19 @@ async function main(): Promise<void> {
             constraint.constraintDefinition.includes("rejected") &&
             constraint.constraintDefinition.includes("superseded"),
         ) &&
+        emailTemplateConstraintProbe.some(
+          (constraint) =>
+            constraint.constraintName ===
+              "EmailTemplate_canonical_purpose_default_check" &&
+            constraint.validated,
+        ) &&
+        emailTemplateCanonicalWriteProbe.length === 4 &&
+        emailTemplateCanonicalWriteProbe.some(
+          (row) => row.purpose === "original" && row.isDefault,
+        ) &&
+        emailTemplateCanonicalWriteProbe
+          .filter((row) => row.purpose !== "original")
+          .every((row) => !row.isDefault) &&
         contactAuditRosterConstraintProbe.length === 6 &&
         contactAuditRosterConstraintProbe.every(
           (constraint) => constraint.validated,
@@ -831,6 +908,8 @@ async function main(): Promise<void> {
         "Outreach_dispatch_recipient_identity_check",
         "ResendWebhookEvent.arbitraryEmailId",
         "EmailTemplate.purpose",
+        "EmailTemplate_canonical_purpose_default_check",
+        "EmailTemplate canonical write rollback probe",
         "DashboardShowSnapshot",
         "DashboardShowSnapshotMember",
         "TrajectoryModelRun",
