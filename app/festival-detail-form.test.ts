@@ -107,6 +107,14 @@ test("festival outreach forms are valid and explicitly associated", () => {
         );
       }
     }
+    if (
+      ts.isJsxSelfClosingElement(node) &&
+      tagName(node.tagName) === "FestivalBulkOutreachForm"
+    ) {
+      bulkFormFound =
+        isIdentifierExpression(attribute(node.attributes, "action"), "bulkSend") &&
+        isIdentifierExpression(attribute(node.attributes, "formId"), "bulkFormId");
+    }
 
     ts.forEachChild(node, (child) => visit(child, childFormDepth));
   };
@@ -186,6 +194,26 @@ test("festival sendability and bulk queueing do not require listen signals", () 
   assert.doesNotMatch(
     source,
     /const disabledReason = !r\.matched[\s\S]*No active listen signal/,
+  );
+});
+
+test("selected festival sends use the same manager grouping as queue-all", () => {
+  const bulk = source.slice(
+    source.indexOf("async function bulkSend"),
+    source.indexOf("async function queueFestivalOutreach"),
+  );
+  assert.match(bulk, /groupFestivalManagerTargets/);
+  assert.match(bulk, /sendFestivalManagerOutreach/);
+  assert.match(bulk, /scheduleFestivalManagerOutreach/);
+  assert.match(source, /FestivalBulkOutreachForm/);
+  assert.match(source, /bulkConfirmationCandidates/);
+  assert.match(
+    source,
+    /!result\.fullTeamSend &&[\s\S]*recipients\.length === 1/,
+  );
+  assert.match(
+    source,
+    /!row\.sendability\.fullTeamSend &&[\s\S]*recipients\.length === 1/,
   );
 });
 
