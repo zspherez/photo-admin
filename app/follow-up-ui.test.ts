@@ -33,7 +33,10 @@ test("follow-up controls preserve each page's validated return URL and banners",
   assert.match(dashboard, /followup_scheduled/);
   assert.match(artist, /currentReturnTo = withWorkflowReturnTo/);
   assert.match(contact, /currentReturnTo = contactPageHref/);
-  assert.match(outreach, /returnTo = outreachHref\(status, search, pagination\.page\)/);
+  assert.match(
+    outreach,
+    /returnTo = outreachHref\(status, search, view, pagination\.page\)/,
+  );
   assert.match(festival, /returnTo = festivalReturnPath/);
 
   for (const contents of [artist, festival, contact, outreach]) {

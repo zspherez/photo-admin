@@ -30,11 +30,13 @@ export function EmailBulkSelection({
   formId,
   emailIds,
   view,
+  returnTo,
 }: {
   action: (formData: FormData) => void | Promise<void>;
   formId: string;
   emailIds: string[];
   view: "active" | "dismissed";
+  returnTo?: string;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [anchorId, setAnchorId] = useState<string | null>(null);
@@ -95,6 +97,7 @@ export function EmailBulkSelection({
       }}
     >
       <input type="hidden" name="view" value={view} />
+      {returnTo && <input type="hidden" name="returnTo" value={returnTo} />}
       <span className="text-sm text-zinc-500">
         {selected.length} selected
       </span>
