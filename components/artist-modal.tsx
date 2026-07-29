@@ -53,7 +53,7 @@ interface ArtistData {
   }[];
   actionContacts: {
     email: { id: string; name: string | null } | null;
-    phone: { phone: string | null; name: string | null } | null;
+    phone: { id: string; phone: string | null; name: string | null } | null;
   };
   nextDispatchBoundary: {
     renderedAtMs: number;
@@ -427,8 +427,10 @@ function ArtistModal({
                           {(emailContact || phoneContact) && (
                             <SendButton
                               showId={s.id}
+                              artistId={data.id}
                               contactId={emailContact?.id ?? null}
                               contactName={emailContact?.name ?? null}
+                              phoneContactId={phoneContact?.id ?? null}
                               phone={phoneContact?.phone ?? null}
                               phoneContactName={phoneContact?.name ?? null}
                               alreadySent={s.alreadySent}

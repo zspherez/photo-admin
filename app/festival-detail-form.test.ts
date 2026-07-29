@@ -239,3 +239,17 @@ test("covered artists keep shared outreach status and actions without a current 
     /\{outreachEnabled && r\.followUpEligibility && \(/,
   );
 });
+
+test("festival rows show provider-tracked delivery and engagement badges", () => {
+  for (const field of ["sentAt", "deliveredAt", "openCount", "clickCount"]) {
+    assert.match(source, new RegExp(`${field}: true`));
+  }
+  assert.match(
+    source,
+    /const engagementOutreach = outreachHistory\.find\([\s\S]*outreach\.id !== manualMarker\?\.id[\s\S]*outreach\.status !== "test"[\s\S]*outreach\.providerMessageId !== null/,
+  );
+  assert.match(
+    source,
+    /\{r\.engagementOutreach && \(\s*<OutreachDeliveryBadges[\s\S]*outreach=\{r\.engagementOutreach\}/,
+  );
+});
