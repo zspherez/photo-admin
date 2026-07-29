@@ -7,12 +7,17 @@ import { db } from "@/lib/db";
 import {
   getOutreachSendabilityBatch,
   getFollowUpEligibilityBatch,
+  scheduleFestivalManagerOutreach,
   sendOutreach,
   scheduleOutreach,
   type OutreachSendability,
 } from "@/lib/sendOutreach";
 import { getTestOverride } from "@/lib/resend";
-import { isWeekendET, getNextMondaySlot } from "@/lib/schedule";
+import {
+  getNextNormalOutreachDispatch,
+  isWeekendET,
+  getNextMondaySlot,
+} from "@/lib/schedule";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/button";
@@ -81,6 +86,8 @@ import {
   activeFestivalWhere,
   satisfiesFestivalLeadTime,
 } from "@/lib/festivalEligibility";
+import { normalizeEmail, normalizeEmails } from "@/lib/resend";
+import { groupFestivalManagerTargets } from "@/lib/festivalOutreach";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -149,6 +156,9 @@ const getFestivalDetails = cache(async (showId: string) =>
           attemptCount: true,
           finalSubject: true,
           finalHtml: true,
+          scheduledFor: true,
+          nextAttemptAt: true,
+          coveredArtists: { select: { artistId: true } },
           _count: { select: { sendAttempts: true } },
         },
       },
@@ -199,6 +209,7 @@ function sendabilityLabel(
     if (sendability.mode === "retry") return "retry ready";
     return hasTestSend ? "test sent (sendable)" : null;
   }
+
   if (sendability.blockingStatus === "sent") return "already sent";
   if (sendability.blockingStatus === "scheduled") return "already scheduled";
   if (sendability.blockingStatus === "retry_scheduled") {
@@ -220,6 +231,30 @@ function sendabilityLabel(
     return "manual review required";
   }
   return sendability.reason;
+}
+
+function storedOutreachLabel(outreach: {
+  status: string;
+  nextAttemptAt: Date | null;
+  scheduledFor: Date | null;
+}): string {
+  if (outreach.status === "sent") return "already sent";
+  if (outreach.status === "scheduled") return "already scheduled";
+  if (outreach.status === "retry_scheduled") {
+    const next = outreach.nextAttemptAt ?? outreach.scheduledFor;
+    return next
+      ? `retry scheduled · ${next.toLocaleString("en-US", {
+          timeZone: appConfig.timeZone,
+          weekday: "short",
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        })}`
+      : "retry scheduled";
+  }
+  if (outreach.status === "queued") return "send in progress";
+  if (outreach.status === "manual_review") return "manual review required";
+  return outreach.status.replaceAll("_", " ");
 }
 
 async function festivalBulkCandidates(
@@ -267,7 +302,6 @@ async function festivalBulkCandidates(
     festival.dismissedAt === null
   ) {
     for (const { artist } of festival.artists) {
-      if (!pickTopListenSignal(artist.listenSignals, now)) continue;
       const contact = pickEmailContact(artist.contacts);
       if (contact) contactIds.add(contact.id);
     }
@@ -398,6 +432,162 @@ async function bulkSend(formData: FormData) {
   redirect(bulkResultHref(showId, filter, genre, listView, resultParams));
 }
 
+async function queueFestivalOutreach(formData: FormData) {
+  "use server";
+  await requireServerActionAuth(formData.get("returnTo") ?? "/festivals");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
+  const showId = String(formData.get("showId") ?? "").trim();
+  const filter = parseFestivalFilter(formData.get("filter"));
+  const genre = parseFestivalGenre(formData.get("genre"));
+  const listView = parseFestivalListView({
+    includeInternational: formData.get("includeInternational"),
+    dismissed: formData.get("dismissed"),
+  });
+  if (!showId) redirect(festivalListPath(listView));
+
+  const now = new Date();
+  const festival = await db.show.findUnique({
+    where: { id: showId },
+    select: {
+      isFestival: true,
+      date: true,
+      festivalNycStatus: true,
+      syncStatus: true,
+      dismissedAt: true,
+      artists: {
+        select: {
+          artistId: true,
+          artist: {
+            select: {
+              contacts: {
+                where: { state: "active", email: { not: null } },
+                orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+                select: {
+                  id: true,
+                  email: true,
+                  phone: true,
+                  directOutreachNote: true,
+                  name: true,
+                  role: true,
+                  state: true,
+                  isFullTeam: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (
+    !festival?.isFestival ||
+    festival.syncStatus !== "active" ||
+    festival.dismissedAt !== null ||
+    !satisfiesFestivalLeadTime(festival, now)
+  ) {
+    redirect(
+      bulkResultHref(showId, filter, genre, listView, {
+        error: "inactive_show",
+      }),
+    );
+  }
+
+  const targets = festival.artists
+    .flatMap(({ artistId, artist }) => {
+      const contact = pickEmailContact(artist.contacts);
+      const email = normalizeEmail(contact?.email ?? "");
+      return contact && email ? [{ artistId, contactId: contact.id, email }] : [];
+    })
+    .sort((left, right) => left.artistId.localeCompare(right.artistId));
+  const sendability = await getOutreachSendabilityBatch(
+    targets.map(({ contactId }) => ({ showId, contactId })),
+    now,
+  );
+  const sendabilityByContact = new Map(
+    sendability.map((result) => [result.contactId, result]),
+  );
+  const { groups, skipped } = groupFestivalManagerTargets(
+    targets.map((target) => {
+      const result = sendabilityByContact.get(target.contactId);
+      const recipients = normalizeEmails(result?.recipients ?? []);
+      return {
+        ...target,
+        email:
+          recipients.length === 1 && recipients[0] === target.email
+            ? target.email
+            : `contact:${target.contactId}`,
+      };
+    }),
+    new Set(
+      [...sendabilityByContact]
+        .filter(([, result]) => result.sendable)
+        .map(([contactId]) => contactId),
+    ),
+  );
+
+  const scheduledFor = getNextNormalOutreachDispatch(now);
+  const results = await mapWithConcurrency(
+    groups,
+    BULK_SEND_CONCURRENCY,
+    async (group) => {
+      try {
+        const result =
+          group.artistIds.length > 1
+            ? await scheduleFestivalManagerOutreach(
+                {
+                  showId,
+                  contactId: group.contactId,
+                  coveredArtistIds: group.artistIds,
+                },
+                scheduledFor,
+              )
+            : await scheduleOutreach(
+                {
+                  showId,
+                  contactId: group.contactId,
+                },
+                scheduledFor,
+              );
+        return { group, result };
+      } catch (error) {
+        return {
+          group,
+          result: {
+            ok: false,
+            error:
+              error instanceof Error ? error.message : "Unexpected queue error",
+          },
+        };
+      }
+    },
+  );
+
+  let scheduledManagers = 0;
+  let coveredArtists = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  for (const { group, result } of results) {
+    if (result.ok) {
+      scheduledManagers += 1;
+      coveredArtists += group.artistIds.length;
+    } else {
+      failed += 1;
+      errors.push(result.error ?? "Unknown queue failure");
+    }
+  }
+  refreshWorkflowViews(returnTo, ["/outreach"]);
+  redirect(
+    bulkResultHref(showId, filter, genre, listView, {
+      queue_outreach: "1",
+      queue_managers: String(scheduledManagers),
+      queue_artists: String(coveredArtists),
+      queue_failed: String(failed),
+      queue_skipped: String(skipped),
+      ...(errors.length ? { errors: errors.slice(0, 5).join(" | ") } : {}),
+    }),
+  );
+}
+
 async function queueFestivalManagerResearch(formData: FormData) {
   "use server";
   await requireServerActionAuth(formData.get("returnTo") ?? "/festivals");
@@ -452,6 +642,11 @@ export default async function FestivalDetailPage({
     manager_eligible?: SearchParamValue;
     manager_queued?: SearchParamValue;
     manager_existing?: SearchParamValue;
+    queue_outreach?: SearchParamValue;
+    queue_managers?: SearchParamValue;
+    queue_artists?: SearchParamValue;
+    queue_failed?: SearchParamValue;
+    queue_skipped?: SearchParamValue;
     filter?: SearchParamValue;
     genre?: SearchParamValue;
     marked?: SearchParamValue;
@@ -488,6 +683,11 @@ export default async function FestivalDetailPage({
     managerEligible: firstSearchParam(sp.manager_eligible),
     managerQueued: firstSearchParam(sp.manager_queued),
     managerExisting: firstSearchParam(sp.manager_existing),
+    queueOutreach: firstSearchParam(sp.queue_outreach),
+    queueManagers: firstSearchParam(sp.queue_managers),
+    queueArtists: firstSearchParam(sp.queue_artists),
+    queueFailed: firstSearchParam(sp.queue_failed),
+    queueSkipped: firstSearchParam(sp.queue_skipped),
   };
   const now = new Date();
   const weekend = isWeekendET();
@@ -550,7 +750,11 @@ export default async function FestivalDetailPage({
     })();
     const outreachHistory = festival.outreaches.filter(
       (outreach) =>
-        outreach.artistId === a.id && outreach.kind === "original"
+        outreach.kind === "original" &&
+        (outreach.artistId === a.id ||
+          outreach.coveredArtists.some(
+            (covered) => covered.artistId === a.id,
+          ))
     );
     const manualMarker = outreachHistory.find((outreach) =>
       isActiveManualOutreachMarker({
@@ -566,6 +770,17 @@ export default async function FestivalDetailPage({
         finalHtml: outreach.finalHtml,
       })
     );
+    const coveredOutreach =
+      outreachHistory.find((outreach) => outreach.status === "scheduled") ??
+      outreachHistory.find(
+        (outreach) => outreach.status === "retry_scheduled",
+      ) ??
+      outreachHistory.find((outreach) => outreach.status === "sent") ??
+      outreachHistory.find((outreach) => outreach.status === "queued") ??
+      outreachHistory.find(
+        (outreach) => outreach.status === "manual_review",
+      ) ??
+      null;
     return {
       artist: a,
       topSignal,
@@ -576,6 +791,7 @@ export default async function FestivalDetailPage({
       hasAnyContact: a.contacts.length > 0,
       genres,
       manualMarker,
+      coveredOutreach,
       canMarkManually: canMarkOutreachManually(
         outreachHistory.map((outreach) => ({
           status: outreach.status,
@@ -658,7 +874,7 @@ export default async function FestivalDetailPage({
     if (filter === "needs_contact" && !(r.matched && !r.contact)) return false;
     if (
       filter === "unsent" &&
-      !(r.matched && r.sendability?.sendable)
+      !r.sendability?.sendable
     ) {
       return false;
     }
@@ -668,9 +884,7 @@ export default async function FestivalDetailPage({
 
   const eligibleSendCount = outreachEnabled
     ? filtered.filter(
-        (r) =>
-          r.matched &&
-          r.sendability?.sendable
+        (r) => r.sendability?.sendable
       ).length
     : 0;
   const managerResearchCount = rows.filter(
@@ -727,6 +941,25 @@ export default async function FestivalDetailPage({
               pendingLabel="Queueing managers…"
             >
               Research managers ({managerResearchCount})
+            </PendingSubmitButton>
+          </form>
+          <form action={queueFestivalOutreach}>
+            <input type="hidden" name="showId" value={showId} />
+            <input type="hidden" name="filter" value={filter} />
+            <input type="hidden" name="genre" value={genreFilter} />
+            <input type="hidden" name="returnTo" value={returnTo} />
+            {listView.includeInternational && (
+              <input type="hidden" name="includeInternational" value="1" />
+            )}
+            {listView.dismissed && (
+              <input type="hidden" name="dismissed" value="1" />
+            )}
+            <PendingSubmitButton
+              variant="secondary"
+              disabled={!outreachEnabled || contactIds.length === 0}
+              pendingLabel="Queueing outreach…"
+            >
+              Queue outreach ({contactIds.length})
             </PendingSubmitButton>
           </form>
           <form
@@ -809,6 +1042,16 @@ export default async function FestivalDetailPage({
             Manager research: {notices.managerQueued ?? 0} queued,{" "}
             {notices.managerExisting ?? 0} already active,{" "}
             {notices.managerEligible ?? 0} eligible.
+          </div>
+        )}
+        {notices.queueOutreach && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Festival outreach queued: {notices.queueManagers ?? 0} manager
+            {notices.queueManagers === "1" ? "" : "s"} covering{" "}
+            {notices.queueArtists ?? 0} artist
+            {notices.queueArtists === "1" ? "" : "s"};{" "}
+            {notices.queueSkipped ?? 0} skipped and{" "}
+            {notices.queueFailed ?? 0} failed.
           </div>
         )}
         {!notices.bulk && notices.sent && (
@@ -961,7 +1204,6 @@ export default async function FestivalDetailPage({
           {filtered.map((r) => {
               const canSend =
                 outreachEnabled &&
-                r.matched &&
                 r.sendability?.sendable === true;
               const canCustomize =
                 outreachEnabled &&
@@ -969,17 +1211,34 @@ export default async function FestivalDetailPage({
                 r.sendability?.mode !== "retry";
               const checkboxId = `festival-outreach-${r.artist.id}`;
               const reasonId = `${checkboxId}-reason`;
-              const disabledReason = !r.matched
-                ? "No active listen signal"
-                : !r.contact
-                  ? "No email contact"
-                  : r.sendability?.reason ?? "Outreach is unavailable";
+              const disabledReason = !r.contact
+                ? "No email contact"
+                : r.sendability?.reason ?? "Outreach is unavailable";
               const statusLabel = sendabilityLabel(
                 r.sendability,
                 r.hasTestSend
               );
               const displayStatus =
-                statusLabel ?? (!canSend ? disabledReason : null);
+                statusLabel ??
+                (r.coveredOutreach
+                  ? storedOutreachLabel(r.coveredOutreach)
+                  : !canSend
+                    ? disabledReason
+                    : null);
+              const cancellableOutreach =
+                r.sendability?.blockingOutreachId &&
+                isCancellableOutreachStatus(
+                  r.sendability.blockingStatus,
+                )
+                  ? {
+                      id: r.sendability.blockingOutreachId,
+                    }
+                  : r.coveredOutreach &&
+                      isCancellableOutreachStatus(r.coveredOutreach.status)
+                    ? {
+                        id: r.coveredOutreach.id,
+                      }
+                    : null;
               return (
                 <li key={r.artist.id} className="flex items-center gap-3 px-4 py-3">
                   {outreachEnabled && (
@@ -1055,7 +1314,9 @@ export default async function FestivalDetailPage({
                         id={reasonId}
                         className="mt-0.5 text-xs text-amber-700 dark:text-amber-400"
                       >
-                        No email contact ·{" "}
+                        No email contact
+                        {displayStatus ? ` · original: ${displayStatus}` : ""}
+                        {" · "}
                         <Link
                           href={
                             r.hasAnyContact
@@ -1087,16 +1348,12 @@ export default async function FestivalDetailPage({
                       Customize
                     </LinkButton>
                   )}
-                  {outreachEnabled &&
-                    isCancellableOutreachStatus(
-                      r.sendability?.blockingStatus
-                    ) &&
-                    r.sendability.blockingOutreachId && (
+                  {outreachEnabled && cancellableOutreach && (
                       <form action={cancelScheduledAction}>
                         <input
                           type="hidden"
                           name="outreachId"
-                          value={r.sendability.blockingOutreachId}
+                          value={cancellableOutreach.id}
                         />
                         <input
                           type="hidden"
@@ -1113,7 +1370,7 @@ export default async function FestivalDetailPage({
                         </PendingSubmitButton>
                       </form>
                     )}
-                  {outreachEnabled && r.contact && r.followUpEligibility && (
+                  {outreachEnabled && r.followUpEligibility && (
                     <FollowUpButton
                       eligibility={r.followUpEligibility}
                       returnTo={returnTo}

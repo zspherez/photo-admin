@@ -53,6 +53,7 @@ model Artist {
   listenSignals      ListenSignal[]
   playlists          ArtistPlaylist[]
   outreaches         Outreach[]
+  outreachCoverages  OutreachCoveredArtist[]
   contactResearchJob ContactResearchJob?
   researchSkips      ArtistResearchSkip[]
   contactAuditRequests ContactAuditRequest[]
@@ -823,6 +824,7 @@ model EmailTemplate {
 enum EmailTemplatePurpose {
   original
   festival
+  festival_multi_artist
   follow_up
 }
 
@@ -877,6 +879,7 @@ model Outreach {
   scheduledFor               DateTime?
   nextAttemptAt              DateTime?
   sendAttempts               OutreachSendAttempt[]
+  coveredArtists             OutreachCoveredArtist[]
   webhookEvents              ResendWebhookEvent[]
   createdAt                  DateTime              @default(now())
 
@@ -889,6 +892,17 @@ model Outreach {
   @@index([status, scheduledFor])
   @@index([status, nextAttemptAt])
   @@index([status, claimedAt])
+}
+
+model OutreachCoveredArtist {
+  outreachId String
+  artistId   String
+  outreach   Outreach @relation(fields: [outreachId], references: [id], onDelete: Cascade)
+  artist     Artist   @relation(fields: [artistId], references: [id], onDelete: Restrict)
+  createdAt  DateTime @default(now())
+
+  @@id([outreachId, artistId])
+  @@index([artistId])
 }
 
 model OutreachSendAttempt {

@@ -140,7 +140,7 @@ test("immediate, scheduled, and retry delivery use the selected immutable snapsh
   assert.match(schedule, /sameExpectedRecipientIdentity\(/);
   assert.match(
     schedule,
-    /scheduled\.finalSubject === prep\.subject[\s\S]*scheduled\.finalHtml === prep\.html[\s\S]*scheduled\.scheduledFor\?\.getTime\(\) === scheduledFor\.getTime\(\)[\s\S]*ok: true/,
+    /scheduled\.finalSubject === prep\.subject[\s\S]*scheduled\.finalHtml === prep\.html[\s\S]*scheduled\.scheduledFor\?\.getTime\(\) === scheduledFor\.getTime\(\)[\s\S]*scheduledOutreachResult\(/,
   );
   assert.match(locked, /outreach\.fullTeamSend/);
   assert.match(locked, /stored: outreach/);
@@ -378,7 +378,7 @@ test("default and bulk outreach calls retain existing recipient semantics", () =
   assert.match(followUp, /updatedAt: true/);
   assert.match(
     followUp,
-    /expectedRecipientIdentity = customizeRecipientIdentity\(parent\.contact\)/,
+    /expectedRecipientIdentity = storedExpectedRecipientIdentity\(parent\)/,
   );
   assert.match(followUp, /expectedRecipientIdentity,/);
 });

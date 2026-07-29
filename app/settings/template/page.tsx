@@ -9,12 +9,15 @@ import {
   DEFAULT_TEMPLATE_SUBJECT,
   FESTIVAL_TEMPLATE_HTML,
   FESTIVAL_TEMPLATE_SUBJECT,
+  FESTIVAL_MULTI_ARTIST_TEMPLATE_HTML,
+  FESTIVAL_MULTI_ARTIST_TEMPLATE_SUBJECT,
   FOLLOW_UP_TEMPLATE_HTML,
   FOLLOW_UP_TEMPLATE_SUBJECT,
   applyTemplate,
   buildVarsForShow,
   ensureDefaultTemplate,
   ensureFestivalTemplate,
+  ensureFestivalMultiArtistTemplate,
   ensureFollowUpTemplate,
   extractVars,
   malformedTemplateVariableTokens,
@@ -48,17 +51,26 @@ import { artistDisplayName } from "@/lib/artistDisplayName";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Email template" };
 
-type TemplateKind = "original" | "festival" | "follow_up";
+type TemplateKind =
+  | "original"
+  | "festival"
+  | "festival_multi_artist"
+  | "follow_up";
 
 function parseTemplateKind(value: unknown): TemplateKind {
   const kind = firstSearchParam(value);
-  return kind === "festival" || kind === "follow_up" ? kind : "original";
+  return kind === "festival" ||
+    kind === "festival_multi_artist" ||
+    kind === "follow_up"
+    ? kind
+    : "original";
 }
 
 function requiredTemplateKind(value: FormDataEntryValue | null): TemplateKind {
   if (
     value === "original" ||
     value === "festival" ||
+    value === "festival_multi_artist" ||
     value === "follow_up"
   ) {
     return value;
@@ -87,6 +99,9 @@ function templateSettingsResultPath(
 
 async function ensureTemplate(kind: TemplateKind) {
   if (kind === "festival") return ensureFestivalTemplate();
+  if (kind === "festival_multi_artist") {
+    return ensureFestivalMultiArtistTemplate();
+  }
   if (kind === "follow_up") return ensureFollowUpTemplate();
   return ensureDefaultTemplate();
 }
@@ -97,6 +112,9 @@ function readTemplate(kind: TemplateKind) {
 
 function templateLabel(kind: TemplateKind): string {
   if (kind === "festival") return "Festival outreach";
+  if (kind === "festival_multi_artist") {
+    return "Shared-manager festival";
+  }
   if (kind === "follow_up") return "Follow-up";
   return "Normal show outreach";
 }
@@ -187,6 +205,11 @@ async function resetToDefault(formData: FormData) {
           subject: FOLLOW_UP_TEMPLATE_SUBJECT,
           htmlBody: FOLLOW_UP_TEMPLATE_HTML,
         }
+      : kind === "festival_multi_artist"
+        ? {
+            subject: FESTIVAL_MULTI_ARTIST_TEMPLATE_SUBJECT,
+            htmlBody: FESTIVAL_MULTI_ARTIST_TEMPLATE_HTML,
+          }
       : kind === "festival"
         ? {
             subject: FESTIVAL_TEMPLATE_SUBJECT,
@@ -233,7 +256,10 @@ export default async function TemplateSettingsPage({
         syncStatus: "active",
         ...(kind === "follow_up"
           ? {}
-          : { isFestival: kind === "festival" }),
+          : {
+              isFestival:
+                kind === "festival" || kind === "festival_multi_artist",
+            }),
         AND: [festivalLeadTimeWhere(now)],
         artists: {
           some: {
@@ -333,7 +359,12 @@ export default async function TemplateSettingsPage({
         aria-label="Email template type"
         className="mt-4 flex gap-1 border-b border-zinc-200 dark:border-zinc-800"
       >
-        {(["original", "festival", "follow_up"] as const).map((tab) => (
+        {([
+          "original",
+          "festival",
+          "festival_multi_artist",
+          "follow_up",
+        ] as const).map((tab) => (
           <Link
             key={tab}
             href={templateSettingsPath(tab)}
