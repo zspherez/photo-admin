@@ -33,6 +33,56 @@ interface ResendEvent {
   };
 }
 
+export const RESEND_WEBHOOK_LOCK_CLASS = 1_380_273_301;
+const RESEND_WEBHOOK_TRANSACTION_ATTEMPTS = 8;
+
+export function resendWebhookSerializationKeys(
+  eventId: string,
+  parsed: ResendEvent,
+): string[] {
+  const values = [
+    parsed.data.email_id
+      ? `message:${parsed.data.email_id}`
+      : null,
+    findAttemptId(parsed)
+      ? `attempt:${findAttemptId(parsed)}`
+      : null,
+    findArbitraryEmailId(parsed)
+      ? `arbitrary:${findArbitraryEmailId(parsed)}`
+      : null,
+    findOutreachId(parsed)
+      ? `outreach:${findOutreachId(parsed)}`
+      : null,
+  ].filter((value): value is string => value !== null);
+  return values.length > 0
+    ? Array.from(new Set(values)).sort()
+    : [`event:${eventId}`];
+}
+
+async function acquireResendWebhookSerializationLocks(
+  tx: Prisma.TransactionClient,
+  eventId: string,
+  parsed: ResendEvent,
+): Promise<void> {
+  for (const key of resendWebhookSerializationKeys(eventId, parsed)) {
+    await tx.$queryRaw<Array<{ locked: number }>>(Prisma.sql`
+      SELECT 1 AS "locked"
+      FROM (
+        SELECT pg_advisory_xact_lock(
+          CAST(${RESEND_WEBHOOK_LOCK_CLASS} AS INTEGER),
+          CAST(hashtext(${key}) AS INTEGER)
+        )
+      ) AS "resendWebhookSerializationLock"
+    `);
+  }
+}
+
+function waitForWebhookRetry(attempt: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 25 * 2 ** attempt);
+  });
+}
+
 function findTag(evt: ResendEvent, name: string): string | null {
   const tags = evt.data.tags;
   if (!tags) return null;
@@ -148,10 +198,19 @@ async function processEvent(
   eventId: string,
   parsed: ResendEvent,
 ): Promise<{ note?: string }> {
-  for (let retry = 0; retry < 4; retry += 1) {
+  for (
+    let retry = 0;
+    retry < RESEND_WEBHOOK_TRANSACTION_ATTEMPTS;
+    retry += 1
+  ) {
     try {
       return await db.$transaction(
         async (tx) => {
+          await acquireResendWebhookSerializationLocks(
+            tx,
+            eventId,
+            parsed,
+          );
           const attemptId = findAttemptId(parsed);
           const outreachId = findOutreachId(parsed);
           const arbitraryEmailId = findArbitraryEmailId(parsed);
@@ -739,18 +798,31 @@ async function processEvent(
             ? {}
             : { note: "historical attempt updated; current outreach unchanged" };
         },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+          maxWait: 5_000,
+          timeout: 15_000,
+        },
       );
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError) {
-        if (error.code === "P2034" && retry < 3) continue;
+        if (
+          error.code === "P2034" &&
+          retry < RESEND_WEBHOOK_TRANSACTION_ATTEMPTS - 1
+        ) {
+          await waitForWebhookRetry(retry);
+          continue;
+        }
         if (error.code === "P2002") {
           const duplicate = await db.resendWebhookEvent.findUnique({
             where: { eventId },
             select: { eventId: true },
           });
           if (duplicate) return { note: "duplicate event" };
-          if (retry < 3) continue;
+          if (retry < RESEND_WEBHOOK_TRANSACTION_ATTEMPTS - 1) {
+            await waitForWebhookRetry(retry);
+            continue;
+          }
         }
       }
       throw error;
