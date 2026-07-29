@@ -17,6 +17,7 @@ import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { requireServerActionAuth } from "@/lib/auth";
 import { firstSearchParam, type SearchParamValue } from "@/lib/searchParams";
 import { refreshWorkflowViews } from "@/lib/workflowRefresh";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 import {
   contactDisplayValue,
   directOutreachNoteValue,
@@ -45,7 +46,9 @@ export async function generateMetadata({
   const { artistId } = await params;
   const artist = await getArtistForContact(artistId);
   return {
-    title: artist ? `Add contacts for ${artist.name}` : "Add contacts",
+    title: artist
+      ? `Add contacts for ${artistDisplayName(artist)}`
+      : "Add contacts",
   };
 }
 
@@ -209,7 +212,7 @@ export default async function AddContactPage({
       <Link href={safeReturnTo} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Back</Link>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">Add contacts</h1>
       <p className="mt-1 text-sm text-zinc-500">
-        Artist: <b>{artist.name}</b>
+        Artist: <b>{artistDisplayName(artist)}</b>
       </p>
       {upcomingShows.length > 0 && (
         <p className="mt-1 text-xs text-zinc-500">

@@ -36,6 +36,16 @@ import {
   type DeliveryPolicyAttempt,
   type EvaluateOutreachDeliveryPolicyInput,
 } from "./sendOutreach";
+
+test("outreach personalization uses artist display-name overrides", () => {
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /artistDisplayName\(contact\.artist\)/);
+  assert.match(source, /artistDisplayName\(parent\.contact\.artist\)/);
+  assert.match(source, /artist: \{ select: \{ name: true, customName: true \} \}/);
+});
 import {
   RESEND_IDEMPOTENCY_RETENTION_MS,
   RESEND_PROVIDER_REQUEST_TIMEOUT_MS,

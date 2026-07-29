@@ -82,7 +82,18 @@ test("artist actions authenticate internally and mutate only by their bound arti
     source,
     /handleUnskipArtistResearch[\s\S]*unskipContactResearchArtistByArtistId\(artistId, \{[\s\S]*requestedShowId: workflowFestivalShowId\(returnTo\)/
   );
-  assert.ok((source.match(/RedirectType\.replace/g)?.length ?? 0) === 5);
+  assert.ok((source.match(/RedirectType\.replace/g)?.length ?? 0) === 6);
+});
+
+test("artist page edits a display-only name without changing imported identity", () => {
+  assert.match(source, /artistDisplayName\(artist\)/);
+  assert.match(source, /normalizeArtistCustomName\(formData\.get\("customName"\)\)/);
+  assert.match(source, /data: \{ customName \}/);
+  assert.match(source, /Custom display name/);
+  assert.match(source, /Imported name: \{artist\.name\}/);
+  assert.match(source, /Identity matching still uses the[\s\S]*imported value/);
+  assert.match(source, /name_saved/);
+  assert.match(source, /name_error/);
 });
 
 test("artist actions preserve return context and refresh artist, festival, and research views", () => {

@@ -43,6 +43,7 @@ import {
 } from "@/lib/trajectoryActiveRun";
 import { captureTrajectoryAction } from "@/lib/trajectoryActionError";
 import { SESSION_COOKIE, getSessionAccess } from "@/lib/auth";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 
 export const dynamic = "force-dynamic";
 
@@ -67,7 +68,7 @@ export async function generateMetadata({
   return {
     title:
       show && contact
-        ? `Customize ${contact.artist.name} at ${
+        ? `Customize ${artistDisplayName(contact.artist)} at ${
             show.eventName || show.venueName
           }`
         : "Customize outreach",
@@ -224,7 +225,7 @@ export default async function CustomizePage({
     await Promise.all(
       eligibleContacts.map(async (candidate) => {
         const vars = await buildVarsForShow({
-          artistName: contact.artist.name,
+          artistName: artistDisplayName(contact.artist),
           venueName: show.venueName,
           showDate: show.date,
           managerName: candidate.name,
@@ -328,7 +329,7 @@ export default async function CustomizePage({
         Customize &amp; {initialIntent === "queue" ? "queue" : "send"}
       </h1>
       <p className="mt-1 text-sm text-zinc-500">
-        {contact.artist.name} at {show.venueName},{" "}
+        {artistDisplayName(contact.artist)} at {show.venueName},{" "}
         {formatShowDate(show.date, {})}
       </p>
       {hasDirectOutreachNote(contact) && (

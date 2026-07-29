@@ -63,6 +63,10 @@ import {
   researchStatusHref,
   type ResearchStatusFilter,
 } from "@/lib/researchStatusFilter";
+import {
+  artistDisplayName,
+  normalizeArtistCustomName,
+} from "@/lib/artistDisplayName";
 
 export const dynamic = "force-dynamic";
 
@@ -329,7 +333,7 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { id } = await params;
   const { artist } = await getArtistPageData(id);
-  return { title: artist?.name ?? "Artist" };
+  return { title: artist ? artistDisplayName(artist) : "Artist" };
 }
 
 export default async function ArtistPage({
@@ -350,6 +354,8 @@ export default async function ArtistPage({
     research_queued?: SearchParamValue;
     audit_queued?: SearchParamValue;
     audit_error?: SearchParamValue;
+    name_saved?: SearchParamValue;
+    name_error?: SearchParamValue;
   }>;
 }) {
   const { id } = await params;
@@ -365,6 +371,8 @@ export default async function ArtistPage({
   const researchQueued = firstSearchParam(search.research_queued);
   const auditQueued = firstSearchParam(search.audit_queued);
   const auditError = firstSearchParam(search.audit_error);
+  const nameSaved = firstSearchParam(search.name_saved);
+  const nameError = firstSearchParam(search.name_error);
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
   const currentReturnTo = withWorkflowReturnTo(
     `/artists/${id}`,
@@ -373,6 +381,7 @@ export default async function ArtistPage({
   const { artist, outreaches, now } = await getArtistPageData(id);
   const today = easternTodayStoredDate(now);
   if (!artist) return notFound();
+  const displayName = artistDisplayName(artist);
 
   const genres: string[] = (() => {
     try {
@@ -471,6 +480,38 @@ export default async function ArtistPage({
     );
     const actionReturnTo = workflowReturnPath(formData.get("returnTo"));
     await handleSaveArtistResearchNotes(id, actionReturnTo, formData);
+  }
+
+  async function saveArtistCustomNameAction(formData: FormData) {
+    "use server";
+    await requireServerActionAuth(
+      artistWorkflowPath(id, formData.get("returnTo"))
+    );
+    const actionReturnTo = workflowReturnPath(formData.get("returnTo"));
+    let error: string | null = null;
+    try {
+      const customName = normalizeArtistCustomName(formData.get("customName"));
+      await db.artist.update({
+        where: { id },
+        data: { customName },
+      });
+      refreshWorkflowViews(actionReturnTo, [
+        artistWorkflowPath(id, actionReturnTo),
+        "/artists",
+        "/dashboard",
+        "/festivals",
+        "/recommendations",
+        "/outreach",
+      ]);
+    } catch (caught) {
+      error = researchActionError(caught);
+    }
+    redirect(
+      artistWorkflowPath(id, actionReturnTo, {
+        ...(error ? { name_error: error } : { name_saved: "1" }),
+      }),
+      RedirectType.replace
+    );
   }
 
   async function skipArtistResearchAction(formData: FormData) {
@@ -635,6 +676,20 @@ export default async function ArtistPage({
                 : "Artist queued for contact audit."}
             </div>
           )}
+
+          {(nameSaved || nameError) && (
+            <div className="mt-4">
+              {nameError ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+                  Artist display name update failed: {nameError}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+                  Artist display name saved.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -649,7 +704,12 @@ export default async function ArtistPage({
           />
         )}
         <div className="min-w-0 flex-1">
-          <h1 className="text-2xl font-semibold tracking-tight">{artist.name}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{displayName}</h1>
+          {artist.customName && (
+            <p className="mt-1 text-xs text-zinc-500">
+              Imported name: {artist.name}
+            </p>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {genres.slice(0, 6).map((g) => (
               <Badge key={g} tone="muted" size="xs">{g}</Badge>
@@ -659,6 +719,34 @@ export default async function ArtistPage({
             )}
           </div>
         </div>
+
+        <form
+          action={saveArtistCustomNameAction}
+          className="mt-4 flex flex-wrap items-end gap-2"
+        >
+          <input type="hidden" name="returnTo" value={safeReturnTo} />
+          <label className="min-w-64 flex-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+            Custom display name
+            <input
+              name="customName"
+              defaultValue={artist.customName ?? ""}
+              maxLength={200}
+              placeholder={artist.name}
+              className="mt-1 block min-h-10 w-full rounded-md border border-zinc-300 bg-white px-3 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+            />
+          </label>
+          <PendingSubmitButton
+            variant="secondary"
+            size="sm"
+            pendingLabel="Saving name…"
+          >
+            Save name
+          </PendingSubmitButton>
+        </form>
+        <p className="mt-1 text-xs text-zinc-500">
+          Leave blank to use the imported name. Identity matching still uses the
+          imported value.
+        </p>
         <div className="flex shrink-0 flex-wrap gap-2">
           <LinkButton
             href={withWorkflowReturnTo(

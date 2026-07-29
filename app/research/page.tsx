@@ -40,6 +40,7 @@ import {
   researchStatusFilterDefinition,
   researchStatusHref,
 } from "@/lib/researchStatusFilter";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 import {
   type VenueTier,
   venueTierSql,
@@ -556,6 +557,7 @@ export default async function ContactResearchPage({
         select: {
           id: true,
           name: true,
+          customName: true,
           popularity: true,
           contacts: {
             where: {
@@ -806,7 +808,7 @@ export default async function ContactResearchPage({
                         href={`/artists/${job.artist.id}`}
                         className="font-medium hover:underline"
                       >
-                        {job.artist.name}
+                        {artistDisplayName(job.artist)}
                       </Link>
                       <p className="mt-1 text-xs text-zinc-500">
                         {job.nextShowAt

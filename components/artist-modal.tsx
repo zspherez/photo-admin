@@ -31,6 +31,7 @@ import {
 interface ArtistData {
   id: string;
   name: string;
+  canonicalName: string;
   imageUrl: string | null;
   spotifyId: string | null;
   statsfmId: string | null;
@@ -507,13 +508,13 @@ function buildExternalLinks(d: ArtistData): { label: string; href: string; exter
   if (d.statsfmId) links.push({ label: "Stats.fm", href: `https://stats.fm/artist/${d.statsfmId}`, external: true });
   links.push({
     label: "SoundCloud (search)",
-    href: `https://soundcloud.com/search/people?q=${encodeURIComponent(d.name)}`,
+    href: `https://soundcloud.com/search/people?q=${encodeURIComponent(d.canonicalName)}`,
     external: true,
   });
   if (d.edmtrainId) {
     links.push({
       label: "EDMTrain",
-      href: `https://edmtrain.com/${d.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      href: `https://edmtrain.com/${d.canonicalName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
       external: true,
     });
   }

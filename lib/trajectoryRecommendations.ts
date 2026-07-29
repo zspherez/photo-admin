@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { TrajectoryArm, TrajectoryRunStatus } from "@prisma/client";
 import { appConfig } from "@/lib/appConfig";
 import { db } from "@/lib/db";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 import {
   pickDirectOutreachContact,
   pickEmailContact,
@@ -356,6 +357,7 @@ const DEFAULT_STORE: TrajectoryRecommendationStore = {
               select: {
                 id: true,
                 name: true,
+                customName: true,
                 contacts: {
                   orderBy: [{ isFullTeam: "desc" }, { id: "asc" }],
                   select: {
@@ -850,7 +852,7 @@ export async function getTrajectoryRecommendationPage(
       ticketUrl: record.show.ticketUrl,
       eventName: record.show.eventName,
       artistId: artist.id,
-      artistName: artist.name,
+      artistName: artistDisplayName(artist),
       arm: record.arm,
       listRank: record.listRank,
       isSuggested: record.isSuggested,

@@ -14,6 +14,7 @@ import {
   createOperationDeadline,
   ROUTE_DEADLINE_SAFETY_MARGIN_MS,
 } from "@/lib/integrationUtils";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 180;
@@ -139,7 +140,9 @@ export default async function ShowsPage({
               <li key={show.id} className="flex items-center justify-between gap-4 px-4 py-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">
-                    {show.artists.map((sa: { artist: { name: string } }) => sa.artist.name).join(", ") || "TBA"}
+                    {show.artists
+                      .map((sa) => artistDisplayName(sa.artist))
+                      .join(", ") || "TBA"}
                   </p>
                   <p className="mt-0.5 truncate text-xs text-zinc-500">
                     {show.venueName} · {show.city}

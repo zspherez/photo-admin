@@ -57,6 +57,7 @@ import {
   OUTREACH_CLAIM_TIMEOUT_MS,
   OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
 } from "@/lib/schedule";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 import {
   requireActionableTrajectoryRecommendationInTransaction,
   runAfterActionableTrajectoryValidation,
@@ -2573,7 +2574,7 @@ async function prepareOriginalOutreach(
   }
 
   const vars = await buildVarsForShow({
-    artistName: contact.artist.name,
+    artistName: artistDisplayName(contact.artist),
     venueName: show.venueName,
     showDate: show.date,
     managerName: contact.name,
@@ -2608,14 +2609,14 @@ async function prepareOriginalOutreach(
       ? appendEmailUtmToHtml(
           normalizedHtmlOverride,
           "original",
-          contact.artist.name,
+          artistDisplayName(contact.artist),
           utmSettings,
         )
       : renderTrackedEmailHtml(
           template.htmlBody,
           vars,
           "original",
-          contact.artist.name,
+          artistDisplayName(contact.artist),
           utmSettings,
         ),
     expectedRecipientIdentity:
@@ -2671,7 +2672,7 @@ async function prepareFollowUpOutreach(
             name: true,
             state: true,
             updatedAt: true,
-            artist: { select: { name: true } },
+            artist: { select: { name: true, customName: true } },
           },
         },
       },
@@ -2733,7 +2734,7 @@ async function prepareFollowUpOutreach(
   }
 
   const vars = await buildVarsForShow({
-    artistName: parent.contact.artist.name,
+    artistName: artistDisplayName(parent.contact.artist),
     venueName: parent.show.venueName,
     showDate: parent.show.date,
     managerName: parent.contact.name,
@@ -2760,7 +2761,7 @@ async function prepareFollowUpOutreach(
       template.htmlBody,
       vars,
       "follow_up",
-      parent.contact.artist.name,
+      artistDisplayName(parent.contact.artist),
       utmSettings,
     ),
     expectedRecipientIdentity,

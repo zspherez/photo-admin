@@ -22,6 +22,7 @@ import {
   type SearchParamValue,
 } from "@/lib/searchParams";
 import { withWorkflowReturnTo } from "@/lib/workflowLinks";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Artists" };
@@ -72,6 +73,7 @@ export default async function ArtistsPage({
     ? Prisma.sql`
         AND (
           STRPOS(LOWER(artist."name"), LOWER(${search})) > 0
+          OR STRPOS(LOWER(COALESCE(artist."customName", '')), LOWER(${search})) > 0
           OR EXISTS (
             SELECT 1
             FROM "Contact" contact
@@ -240,7 +242,7 @@ export default async function ArtistsPage({
                         )}
                         className="text-sm font-semibold hover:underline"
                       >
-                        {artist.name}
+                        {artistDisplayName(artist)}
                       </Link>
                       <div className="mt-1">
                         {artist.contacts.length > 0 ? (

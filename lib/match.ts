@@ -17,6 +17,7 @@ import {
   isActiveManualOutreachMarker,
 } from "@/lib/manualOutreach";
 import { pickEmailContact } from "@/lib/contactSelection";
+import { artistDisplayName } from "@/lib/artistDisplayName";
 import {
   DASHBOARD_BATCH_SIZE,
   type DashboardMode,
@@ -317,6 +318,7 @@ function dashboardShowSelect(
           select: {
             id: true,
             name: true,
+            customName: true,
             genres: true,
             popularity: true,
             listenSignals: {
@@ -502,7 +504,7 @@ async function hydrateDashboardShowRows(
           query.filters.source
         )
       ) {
-        otherArtists.push({ id: artist.id, name: artist.name });
+        otherArtists.push({ id: artist.id, name: artistDisplayName(artist) });
         continue;
       }
 
@@ -528,7 +530,7 @@ async function hydrateDashboardShowRows(
       );
       matchedArtists.push({
         id: artist.id,
-        name: artist.name,
+        name: artistDisplayName(artist),
         workflowEligible,
         outreachEligible: isDashboardArtistOutreachEligible(
           query.mode,
