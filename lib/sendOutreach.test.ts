@@ -43,7 +43,10 @@ test("outreach personalization uses artist display-name overrides", () => {
     "utf8",
   );
   assert.match(source, /artistDisplayName\(contact\.artist\)/);
-  assert.match(source, /artistDisplayName\(parent\.contact\.artist\)/);
+  assert.match(
+    source,
+    /coveredArtists[\s\S]*artistDisplayName\(covered\.artist\)/,
+  );
   assert.match(source, /artist: \{ select: \{ name: true, customName: true \} \}/);
 });
 import {

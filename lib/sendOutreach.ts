@@ -8,6 +8,7 @@ import {
 import {
   applyTemplate,
   buildVarsForShow,
+  ensureFestivalMultiArtistTemplate,
   ensureFollowUpTemplate,
   ensureOriginalTemplateForShow,
   normalizeLegacyRateTemplateHtml,
@@ -76,6 +77,7 @@ export interface SendOutreachInput {
   singleRecipient?: boolean;
   expectedRecipientIdentity?: CustomizeRecipientIdentity;
   trajectoryContext?: TrajectoryActionContext;
+  festivalCoveredArtistIds?: string[];
 }
 
 export type OutreachKindValue = "original" | "follow_up";
@@ -199,6 +201,7 @@ interface PreparedOutreach {
   subject: string;
   html: string;
   expectedRecipientIdentity: CustomizeRecipientIdentity | null;
+  coveredArtistIds: string[];
 }
 
 export function resolveTrajectoryRecommendationAttribution(
@@ -1057,6 +1060,16 @@ function sameEmails(left: string[], right: string[]): boolean {
   );
 }
 
+function sameOrderedStrings(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
 export function recipientSnapshotConflict(
   stored: {
     recipientEmails: string[];
@@ -1560,24 +1573,37 @@ async function evaluateLockedOutreachDeliveryPolicy(
       submissionCredential: null,
     };
   }
+  const storedCoverage = await tx.outreachCoveredArtist.findMany({
+    where: { outreachId: outreach.id },
+    orderBy: { artistId: "asc" },
+    select: { artistId: true },
+  });
+  const coveredArtistIds =
+    storedCoverage.length > 0
+      ? storedCoverage.map((row) => row.artistId)
+      : [outreach.artistId];
   await tx.$queryRaw<Array<{ id: string }>>(
     Prisma.sql`
       SELECT "id"
       FROM "Artist"
-      WHERE "id" = ${outreach.artistId}
+      WHERE "id" IN (${Prisma.join(coveredArtistIds)})
+      ORDER BY "id"
       FOR UPDATE
     `,
   );
-  const association = await tx.$queryRaw<Array<{ showId: string }>>(
+  const associations = await tx.$queryRaw<
+    Array<{ showId: string; artistId: string }>
+  >(
     Prisma.sql`
-      SELECT "showId"
+      SELECT "showId", "artistId"
       FROM "ShowArtist"
       WHERE "showId" = ${outreach.showId}
-        AND "artistId" = ${outreach.artistId}
+        AND "artistId" IN (${Prisma.join(coveredArtistIds)})
+      ORDER BY "artistId"
       FOR UPDATE
     `,
   );
-  const artistContacts = await tx.$queryRaw<
+  const coveredContacts = await tx.$queryRaw<
     Array<DeliveryPolicyContact & { updatedAt: Date }>
   >(
     Prisma.sql`
@@ -1589,14 +1615,42 @@ async function evaluateLockedOutreachDeliveryPolicy(
         "isFullTeam",
         "updatedAt"
       FROM "Contact"
-      WHERE "artistId" = ${outreach.artistId}
+      WHERE "artistId" IN (${Prisma.join(coveredArtistIds)})
       ORDER BY "id"
       FOR UPDATE
     `,
   );
+  const artistContacts = coveredContacts.filter(
+    (candidate) => candidate.artistId === outreach.artistId,
+  );
   const contact =
     artistContacts.find((candidate) => candidate.id === outreach.contactId) ??
     null;
+  if (
+    coveredArtistIds.length > 1 &&
+    (!outreach.expectedRecipientIdentity ||
+      coveredArtistIds.some(
+        (artistId) =>
+          !coveredContacts.some(
+            (candidate) =>
+              candidate.artistId === artistId &&
+              candidate.state === "active" &&
+              normalizeEmails([candidate.email ?? ""]).includes(
+                outreach.expectedRecipientIdentity!.normalizedEmail,
+              ),
+          ),
+      ))
+  ) {
+    return {
+      decision: {
+        ok: false,
+        state: "manual_review",
+        error:
+          "Shared festival manager coverage changed after scheduling",
+      },
+      submissionCredential: null,
+    };
+  }
 
   const deliverySettings = await getResendDeliverySettingsSnapshot(tx);
   const { testOverride, bccEmails } = deliverySettings;
@@ -1647,7 +1701,8 @@ async function evaluateLockedOutreachDeliveryPolicy(
   return {
     decision: evaluateOutreachDeliveryPolicy({
       showSyncStatus: show?.syncStatus ?? null,
-      associationExists: association.length === 1,
+      associationExists:
+        associations.length === coveredArtistIds.length,
       artistId: outreach.artistId,
       contactId: outreach.contactId,
       subject: outreach.finalSubject,
@@ -1793,7 +1848,14 @@ export async function getOutreachSendabilityBatch(
           where: {
             kind: "original",
             showId: { in: showIds },
-            artistId: { in: artistIds },
+            OR: [
+              { artistId: { in: artistIds } },
+              {
+                coveredArtists: {
+                  some: { artistId: { in: artistIds } },
+                },
+              },
+            ],
             status: {
               in: [
                 "sent",
@@ -1806,6 +1868,12 @@ export async function getOutreachSendabilityBatch(
             },
           },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          include: {
+            coveredArtists: {
+              orderBy: { artistId: "asc" },
+              select: { artistId: true },
+            },
+          },
         });
   const attempts =
     relevantOutreaches.length === 0
@@ -1820,10 +1888,16 @@ export async function getOutreachSendabilityBatch(
   );
   const outreachesByTarget = new Map<string, typeof relevantOutreaches>();
   for (const outreach of relevantOutreaches) {
-    const key = `${outreach.showId}\u0000${outreach.artistId}`;
-    const rows = outreachesByTarget.get(key) ?? [];
-    rows.push(outreach);
-    outreachesByTarget.set(key, rows);
+    const coveredIds = new Set([
+      outreach.artistId,
+      ...outreach.coveredArtists.map((row) => row.artistId),
+    ]);
+    for (const artistId of coveredIds) {
+      const key = `${outreach.showId}\u0000${artistId}`;
+      const rows = outreachesByTarget.get(key) ?? [];
+      rows.push(outreach);
+      outreachesByTarget.set(key, rows);
+    }
   }
 
   return inputs.map((input) => {
@@ -2185,6 +2259,18 @@ export async function getFollowUpEligibilityBatch(
         showId: true,
         artistId: true,
         contactId: true,
+        expectedRecipientContactId: true,
+        expectedRecipientArtistId: true,
+        expectedRecipientEmail: true,
+        expectedRecipientUpdatedAt: true,
+        coveredArtists: {
+          orderBy: { artistId: "asc" },
+          select: {
+            artistId: true,
+            artist: { select: { name: true, customName: true } },
+          },
+        },
+        fullTeamSend: true,
         followUp: {
           select: {
             id: true,
@@ -2195,6 +2281,10 @@ export async function getFollowUpEligibilityBatch(
             showId: true,
             artistId: true,
             contactId: true,
+            expectedRecipientContactId: true,
+            expectedRecipientArtistId: true,
+            expectedRecipientEmail: true,
+            expectedRecipientUpdatedAt: true,
             finalSubject: true,
             finalHtml: true,
             recipientEmails: true,
@@ -2206,6 +2296,10 @@ export async function getFollowUpEligibilityBatch(
             nextAttemptAt: true,
             claimedAt: true,
             attemptCount: true,
+            coveredArtists: {
+              orderBy: { artistId: "asc" },
+              select: { artistId: true },
+            },
           },
         },
       },
@@ -2230,7 +2324,12 @@ export async function getFollowUpEligibilityBatch(
     attempts.map((attempt) => [attempt.idempotencyKey, attempt]),
   );
   const artistIds = Array.from(
-    new Set(parents.map((parent) => parent.artistId)),
+    new Set(
+      parents.flatMap((parent) => [
+        parent.artistId,
+        ...parent.coveredArtists.map((covered) => covered.artistId),
+      ]),
+    ),
   );
   const showIds = Array.from(new Set(parents.map((parent) => parent.showId)));
   const [shows, contacts] = await Promise.all([
@@ -2254,11 +2353,15 @@ export async function getFollowUpEligibilityBatch(
         email: true,
         state: true,
         isFullTeam: true,
+        updatedAt: true,
       },
     }),
   ]);
   const showById = new Map(shows.map((show) => [show.id, show]));
-  const contactsByArtist = new Map<string, DeliveryPolicyContact[]>();
+  const contactsByArtist = new Map<
+    string,
+    Array<DeliveryPolicyContact & { updatedAt: Date }>
+  >();
   for (const contact of contacts) {
     const rows = contactsByArtist.get(contact.artistId) ?? [];
     rows.push(contact);
@@ -2286,6 +2389,18 @@ export async function getFollowUpEligibilityBatch(
 
   return parentOutreachIds.map((parentOutreachId) => {
     const parent = parentById.get(parentOutreachId);
+    let parentRecipientIdentity: CustomizeRecipientIdentity | null = null;
+    if (parent) {
+      try {
+        parentRecipientIdentity = storedExpectedRecipientIdentity(parent);
+      } catch (error) {
+        return followUpResult(
+          parentOutreachId,
+          "blocked",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
     const parentAttempt = parent
       ? attemptByKey.get(parent.idempotencyKey)
       : null;
@@ -2311,7 +2426,16 @@ export async function getFollowUpEligibilityBatch(
         child.parentOutreachId !== parent.id ||
         child.showId !== parent.showId ||
         child.artistId !== parent.artistId ||
-        child.contactId !== parent.contactId)
+        child.contactId !== parent.contactId ||
+        !sameExpectedRecipientIdentity(child, parentRecipientIdentity) ||
+        !sameOrderedStrings(
+          child.coveredArtists.length > 0
+            ? child.coveredArtists.map((covered) => covered.artistId)
+            : [child.artistId],
+          parent.coveredArtists.length > 0
+            ? parent.coveredArtists.map((covered) => covered.artistId)
+            : [parent.artistId],
+        ))
     ) {
       return followUpResult(
         parent.id,
@@ -2447,16 +2571,31 @@ export async function getFollowUpEligibilityBatch(
         },
       );
     }
+    const coveredArtistIds =
+      parent.coveredArtists.length > 0
+        ? parent.coveredArtists.map((covered) => covered.artistId)
+        : [parent.artistId];
     const artistContacts = contactsByArtist.get(parent.artistId) ?? [];
     const contact =
       artistContacts.find((candidate) => candidate.id === parent.contactId) ??
       null;
+    const identityError = parentRecipientIdentity
+      ? customizeRecipientIdentityError(contact, parentRecipientIdentity)
+      : null;
+    if (identityError) {
+      return followUpResult(parent.id, "blocked", identityError, {
+        followUpOutreachId: child?.id,
+        followUpStatus: child?.status,
+      });
+    }
     const policy = evaluateOutreachDeliveryPolicy({
       showSyncStatus: show?.syncStatus ?? null,
       associationExists:
-        show?.artists.some(
-          (association) => association.artistId === parent.artistId,
-        ) ?? false,
+        coveredArtistIds.every((artistId) =>
+          show?.artists.some(
+            (association) => association.artistId === artistId,
+          ),
+        ),
       artistId: parent.artistId,
       contactId: parent.contactId,
       subject: mode === "retry" && child ? child.finalSubject : "",
@@ -2469,12 +2608,37 @@ export async function getFollowUpEligibilityBatch(
       bccEmails: deliverySettings.bccEmails,
       suppressedEmails,
       allowMissingFrom: mode === "new",
+      requestedFullTeamSend: parent.fullTeamSend,
     });
     if (!policy.ok) {
       return followUpResult(parent.id, "blocked", policy.error, {
         followUpOutreachId: child?.id,
         followUpStatus: child?.status,
       });
+    }
+    if (
+      coveredArtistIds.length > 1 &&
+      (!parent.expectedRecipientEmail ||
+        coveredArtistIds.some(
+          (artistId) =>
+            !normalizeEmails(
+              (contactsByArtist.get(artistId) ?? []).flatMap((candidate) =>
+                candidate.state === "active" && candidate.email
+                  ? [candidate.email]
+                  : [],
+              ),
+            ).includes(parent.expectedRecipientEmail!),
+        ))
+    ) {
+      return followUpResult(
+        parent.id,
+        "blocked",
+        "Shared festival manager coverage changed after the original send",
+        {
+          followUpOutreachId: child?.id,
+          followUpStatus: child?.status,
+        },
+      );
     }
     return followUpResult(parent.id, "eligible", null, {
       mode,
@@ -2513,6 +2677,7 @@ async function prepareOriginalOutreach(
     singleRecipient,
     expectedRecipientIdentity,
     trajectoryContext,
+    festivalCoveredArtistIds,
   } = input;
   const [sendability] = await getOutreachSendabilityBatch([
     { showId, contactId, singleRecipient },
@@ -2535,7 +2700,6 @@ async function prepareOriginalOutreach(
   }
   const festivalBlocked = festivalOutreachBlockingReason(show, "original");
   if (festivalBlocked) return { error: festivalBlocked };
-  const templatePurpose = originalTemplatePurposeForShow(show);
   if (!contact) return { error: "Contact not found" };
   if (contact.state !== "active") {
     return { error: "Selected contact is quarantined" };
@@ -2548,6 +2712,65 @@ async function prepareOriginalOutreach(
   if (!currentRecipientIdentity) {
     return { error: "Selected contact has no valid active recipient address" };
   }
+  const coveredArtistIds = Array.from(
+    new Set(
+      (festivalCoveredArtistIds?.length
+        ? festivalCoveredArtistIds
+        : [contact.artistId]
+      ).map((artistId) => artistId.trim()).filter(Boolean),
+    ),
+  ).sort();
+  if (!coveredArtistIds.includes(contact.artistId)) {
+    return { error: "Festival manager coverage must include the contact artist" };
+  }
+  const multiArtistFestival = coveredArtistIds.length > 1;
+  const templatePurpose: EmailTemplatePurpose = multiArtistFestival
+    ? "festival_multi_artist"
+    : originalTemplatePurposeForShow(show);
+  if (multiArtistFestival && !show.isFestival) {
+    return { error: "Multi-artist manager outreach requires a festival" };
+  }
+  const coveredAssociations = await db.showArtist.findMany({
+    where: {
+      showId,
+      artistId: { in: coveredArtistIds },
+    },
+    select: {
+      artistId: true,
+      artist: {
+        select: {
+          name: true,
+          customName: true,
+          contacts: {
+            where: { state: "active", email: { not: null } },
+            select: { email: true },
+          },
+        },
+      },
+    },
+  });
+  if (coveredAssociations.length !== coveredArtistIds.length) {
+    return { error: "One or more covered artists are no longer on this festival" };
+  }
+  if (multiArtistFestival) {
+    const managerEmail = normalizeEmails([contact.email ?? ""])[0];
+    if (
+      !managerEmail ||
+      coveredAssociations.some(
+        ({ artist }) =>
+          !normalizeEmails(
+            artist.contacts.flatMap((candidate) =>
+              candidate.email ? [candidate.email] : [],
+            ),
+          ).includes(managerEmail),
+      )
+    ) {
+      return {
+        error:
+          "Covered festival artists no longer share the selected manager email",
+      };
+    }
+  }
   const association = await db.showArtist.findUnique({
     where: {
       showId_artistId: { showId, artistId: contact.artistId },
@@ -2559,7 +2782,10 @@ async function prepareOriginalOutreach(
     runAfterActionableTrajectoryValidation(
       trajectoryContext,
       { showId, artistId: contact.artistId },
-      () => ensureOriginalTemplateForShow(show),
+      () =>
+        multiArtistFestival
+          ? ensureFestivalMultiArtistTemplate()
+          : ensureOriginalTemplateForShow(show),
     ),
   );
   if (!capturedTemplate.ok) {
@@ -2573,8 +2799,14 @@ async function prepareOriginalOutreach(
     return { error: "The selected outreach template purpose is unavailable" };
   }
 
+  const coveredArtistNames = coveredAssociations.map(({ artist }) =>
+    artistDisplayName(artist),
+  );
+  const trackingArtistName = multiArtistFestival
+    ? coveredArtistNames.join(", ")
+    : artistDisplayName(contact.artist);
   const vars = await buildVarsForShow({
-    artistName: artistDisplayName(contact.artist),
+    artistName: trackingArtistName,
     venueName: show.venueName,
     showDate: show.date,
     managerName: contact.name,
@@ -2609,18 +2841,19 @@ async function prepareOriginalOutreach(
       ? appendEmailUtmToHtml(
           normalizedHtmlOverride,
           "original",
-          artistDisplayName(contact.artist),
+          trackingArtistName,
           utmSettings,
         )
       : renderTrackedEmailHtml(
           template.htmlBody,
           vars,
           "original",
-          artistDisplayName(contact.artist),
+          trackingArtistName,
           utmSettings,
         ),
     expectedRecipientIdentity:
       expectedRecipientIdentity ?? currentRecipientIdentity,
+    coveredArtistIds,
   };
 }
 
@@ -2649,6 +2882,17 @@ async function prepareFollowUpOutreach(
         showId: true,
         artistId: true,
         contactId: true,
+        expectedRecipientContactId: true,
+        expectedRecipientArtistId: true,
+        expectedRecipientEmail: true,
+        expectedRecipientUpdatedAt: true,
+        coveredArtists: {
+          orderBy: { artistId: "asc" },
+          select: {
+            artistId: true,
+            artist: { select: { name: true, customName: true } },
+          },
+        },
         show: {
           select: {
             venueName: true,
@@ -2701,20 +2945,29 @@ async function prepareFollowUpOutreach(
       error: "Selected contact no longer belongs to the outreach artist",
     };
   }
-  const expectedRecipientIdentity = customizeRecipientIdentity(parent.contact);
+  const expectedRecipientIdentity = storedExpectedRecipientIdentity(parent);
   if (!expectedRecipientIdentity) {
     return { error: "Selected contact has no valid active recipient address" };
   }
-  const association = await db.showArtist.findUnique({
+  const coveredArtists =
+    parent.coveredArtists.length > 0
+      ? parent.coveredArtists
+      : [
+          {
+            artistId: parent.artistId,
+            artist: parent.contact.artist,
+          },
+        ];
+  const associations = await db.showArtist.findMany({
     where: {
-      showId_artistId: {
-        showId: parent.showId,
-        artistId: parent.artistId,
-      },
+      showId: parent.showId,
+      artistId: { in: coveredArtists.map((covered) => covered.artistId) },
     },
-    select: { showId: true },
+    select: { artistId: true },
   });
-  if (!association) return { error: artistNotOnShowError() };
+  if (associations.length !== coveredArtists.length) {
+    return { error: artistNotOnShowError() };
+  }
   const capturedTemplate = await captureTrajectoryPreparation(() =>
     runAfterActionableTrajectoryValidation(
       trajectoryContext,
@@ -2733,8 +2986,11 @@ async function prepareFollowUpOutreach(
     return { error: "The follow-up template purpose is unavailable" };
   }
 
+  const trackingArtistName = coveredArtists
+    .map((covered) => artistDisplayName(covered.artist))
+    .join(", ");
   const vars = await buildVarsForShow({
-    artistName: artistDisplayName(parent.contact.artist),
+    artistName: trackingArtistName,
     venueName: parent.show.venueName,
     showDate: parent.show.date,
     managerName: parent.contact.name,
@@ -2761,10 +3017,11 @@ async function prepareFollowUpOutreach(
       template.htmlBody,
       vars,
       "follow_up",
-      artistDisplayName(parent.contact.artist),
+      trackingArtistName,
       utmSettings,
     ),
     expectedRecipientIdentity,
+    coveredArtistIds: coveredArtists.map((covered) => covered.artistId),
   };
 }
 
@@ -3176,8 +3433,28 @@ function preparedOutreachScopeWhere(
     : {
         kind: "original",
         showId: prep.showId,
-        artistId: prep.artistId,
+        OR: [
+          { artistId: { in: prep.coveredArtistIds } },
+          {
+            coveredArtists: {
+              some: { artistId: { in: prep.coveredArtistIds } },
+            },
+          },
+        ],
       };
+}
+
+async function lockPreparedOutreachArtists(
+  tx: Prisma.TransactionClient,
+  prep: PreparedOutreach,
+): Promise<void> {
+  await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT artist."id"
+    FROM "Artist" artist
+    WHERE artist."id" IN (${Prisma.join(prep.coveredArtistIds)})
+    ORDER BY artist."id"
+    FOR UPDATE
+  `);
 }
 
 function preparedOutreachUniqueWhere(
@@ -3289,7 +3566,7 @@ async function preparedDeliveryPolicyBlockingReason(
   tx: Prisma.TransactionClient,
   prep: PreparedOutreach,
 ): Promise<string | null> {
-  const [show, association] = await Promise.all([
+  const [show, associations] = await Promise.all([
       tx.show.findUnique({
         where: { id: prep.showId },
         select: {
@@ -3300,17 +3577,15 @@ async function preparedDeliveryPolicyBlockingReason(
           dismissedAt: true,
         },
       }),
-      tx.showArtist.findUnique({
+      tx.showArtist.findMany({
         where: {
-          showId_artistId: {
-            showId: prep.showId,
-            artistId: prep.artistId,
-          },
+          showId: prep.showId,
+          artistId: { in: prep.coveredArtistIds },
         },
-        select: { showId: true },
+        select: { artistId: true },
       }),
     ]);
-  const artistContacts = await tx.$queryRaw<
+  const coveredContacts = await tx.$queryRaw<
     Array<DeliveryPolicyContact & { updatedAt: Date }>
   >(
     Prisma.sql`
@@ -3322,10 +3597,13 @@ async function preparedDeliveryPolicyBlockingReason(
         "isFullTeam",
         "updatedAt"
       FROM "Contact"
-      WHERE "artistId" = ${prep.artistId}
+      WHERE "artistId" IN (${Prisma.join(prep.coveredArtistIds)})
       ORDER BY "id"
       FOR UPDATE
     `,
+  );
+  const artistContacts = coveredContacts.filter(
+    (candidate) => candidate.artistId === prep.artistId,
   );
   const deliverySettings = await getResendDeliverySettingsSnapshot(tx);
   const festivalBlocked = festivalOutreachBlockingReason(show, prep.kind);
@@ -3357,6 +3635,23 @@ async function preparedDeliveryPolicyBlockingReason(
       )
     : null;
   if (identityError) return identityError;
+  if (
+    prep.coveredArtistIds.length > 1 &&
+    (!prep.expectedRecipientIdentity ||
+      prep.coveredArtistIds.some(
+        (artistId) =>
+          !coveredContacts.some(
+            (candidate) =>
+              candidate.artistId === artistId &&
+              candidate.state === "active" &&
+              normalizeEmails([candidate.email ?? ""]).includes(
+                prep.expectedRecipientIdentity!.normalizedEmail,
+              ),
+          ),
+      ))
+  ) {
+    return "Covered festival artists no longer share the selected manager email";
+  }
   const suppressions =
     policyEmails.length === 0
       ? []
@@ -3366,7 +3661,8 @@ async function preparedDeliveryPolicyBlockingReason(
         });
   const decision = evaluateOutreachDeliveryPolicy({
     showSyncStatus: show?.syncStatus ?? null,
-    associationExists: association !== null,
+    associationExists:
+      associations.length === prep.coveredArtistIds.length,
     artistId: prep.artistId,
     contactId: prep.contactId,
     subject: prep.subject,
@@ -3398,15 +3694,42 @@ export function preparedTemplatePurposeBlockingReason(
   prep: {
     kind: OutreachKindValue;
     templatePurpose: EmailTemplatePurpose;
+    coveredArtistIds?: readonly string[];
   },
 ): string | null {
   const expectedPurpose =
     prep.kind === "follow_up"
       ? "follow_up"
+      : show.isFestival && (prep.coveredArtistIds?.length ?? 0) > 1
+        ? "festival_multi_artist"
       : originalTemplatePurposeForShow(show);
   return prep.templatePurpose === expectedPurpose
     ? null
     : "Show festival classification changed while preparing outreach; retry to reprepare the correct template";
+}
+
+async function claimedOutreachResult(
+  tx: Prisma.TransactionClient,
+  row: Parameters<typeof claimedOutreach>[0],
+  attempt: StoredAttempt | null,
+  automaticRetry: boolean,
+  recovery: OutreachClaimRecoveryState,
+  prep: PreparedOutreach,
+): Promise<ClaimResult> {
+  const persistedAttempt =
+    attempt ??
+    (await tx.outreachSendAttempt.findFirst({
+      where: { outreachId: row.id },
+      select: { id: true },
+    }));
+  if (persistedAttempt) {
+    await assertStoredOutreachCoverageMatches(tx, row.id, prep);
+  }
+  await syncOutreachCoveredArtists(tx, row.id, prep.coveredArtistIds);
+  return {
+    kind: "claimed",
+    outreach: claimedOutreach(row, attempt, automaticRetry, recovery),
+  };
 }
 
 async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResult> {
@@ -3465,6 +3788,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         result: { ok: false, error: artistNotOnShowError() },
       };
     }
+    await lockPreparedOutreachArtists(tx, prep);
     const followUpBlocked = await preparedFollowUpBlockingReason(tx, prep);
     if (followUpBlocked) {
       return {
@@ -3598,6 +3922,9 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
       }
 
       const attempt = await currentAttempt(tx, queued.idempotencyKey);
+      if (attempt) {
+        await assertStoredOutreachCoverageMatches(tx, queued.id, prep);
+      }
       if (attempt?.providerMessageId) {
         return finishAlreadyAccepted(tx, queued, attempt);
       }
@@ -3668,15 +3995,14 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
             : {}),
         },
       });
-      return {
-        kind: "claimed",
-        outreach: claimedOutreach(
-          recovered,
-          attempt,
-          false,
-          outreachClaimRecoveryState(queued),
-        ),
-      };
+      return claimedOutreachResult(
+        tx,
+        recovered,
+        attempt,
+        false,
+        outreachClaimRecoveryState(queued),
+        prep,
+      );
     }
     const failedForAnotherContact = active.find(
       (row) =>
@@ -3712,6 +4038,12 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
     const existingAttempt = existing
       ? await currentAttempt(tx, existing.idempotencyKey)
       : null;
+    if (existing && existingAttempt) {
+      await assertStoredOutreachCoverageMatches(tx, existing.id, prep);
+    }
+    if (existing && existingAttempt) {
+      await assertStoredOutreachCoverageMatches(tx, existing.id, prep);
+    }
     if (
       existing &&
       existingAttempt?.providerMessageId &&
@@ -3768,15 +4100,14 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           ...resetDeliveryState(),
         },
       });
-      return {
-        kind: "claimed",
-        outreach: claimedOutreach(
-          updated,
-          null,
-          false,
-          freshImmediateClaimRecoveryState(),
-        ),
-      };
+      return claimedOutreachResult(
+        tx,
+        updated,
+        null,
+        false,
+        freshImmediateClaimRecoveryState(),
+        prep,
+      );
     }
 
     if (existing && isNonBlockingLegacyUnknownAttempt(existingAttempt)) {
@@ -3807,15 +4138,14 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           ...resetDeliveryState(),
         },
       });
-      return {
-        kind: "claimed",
-        outreach: claimedOutreach(
-          updated,
-          null,
-          false,
-          freshImmediateClaimRecoveryState(),
-        ),
-      };
+      return claimedOutreachResult(
+        tx,
+        updated,
+        null,
+        false,
+        freshImmediateClaimRecoveryState(),
+        prep,
+      );
     }
 
     if (existing?.status === "failed") {
@@ -3867,15 +4197,14 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
             ),
           },
         });
-        return {
-          kind: "claimed",
-          outreach: claimedOutreach(
-            updated,
-            attempt,
-            false,
-            outreachClaimRecoveryState(existing),
-          ),
-        };
+        return claimedOutreachResult(
+          tx,
+          updated,
+          attempt,
+          false,
+          outreachClaimRecoveryState(existing),
+          prep,
+        );
       }
       if (!canReplaceUnattemptedOutreachSnapshot(existing, false)) {
         return markManualReview(tx, existing.id, MANUAL_REVIEW_LEGACY);
@@ -3908,15 +4237,14 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           idempotencyKey: identity.idempotencyKey,
         },
       });
-      return {
-        kind: "claimed",
-        outreach: claimedOutreach(
-          updated,
-          null,
-          false,
-          outreachClaimRecoveryState(existing),
-        ),
-      };
+      return claimedOutreachResult(
+        tx,
+        updated,
+        null,
+        false,
+        outreachClaimRecoveryState(existing),
+        prep,
+      );
     }
 
     if (existing) {
@@ -3982,15 +4310,14 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           ...resetDeliveryState(),
         },
       });
-      return {
-        kind: "claimed",
-        outreach: claimedOutreach(
-          updated,
-          null,
-          false,
-          freshImmediateClaimRecoveryState(),
-        ),
-      };
+      return claimedOutreachResult(
+        tx,
+        updated,
+        null,
+        false,
+        freshImmediateClaimRecoveryState(),
+        prep,
+      );
     }
 
     const id = randomUUID();
@@ -4019,15 +4346,14 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         nextAttemptAt: null,
       },
     });
-    return {
-      kind: "claimed",
-      outreach: claimedOutreach(
-        created,
-        null,
-        false,
-        freshImmediateClaimRecoveryState(),
-      ),
-    };
+    return claimedOutreachResult(
+      tx,
+      created,
+      null,
+      false,
+      freshImmediateClaimRecoveryState(),
+      prep,
+    );
   });
 }
 
@@ -5318,6 +5644,77 @@ export async function sendFollowUp(
   return executeClaimedSend(claim.outreach);
 }
 
+async function syncOutreachCoveredArtists(
+  tx: Prisma.TransactionClient,
+  outreachId: string,
+  coveredArtistIds: readonly string[],
+): Promise<void> {
+  await tx.outreachCoveredArtist.deleteMany({
+    where: {
+      outreachId,
+      artistId: { notIn: [...coveredArtistIds] },
+    },
+  });
+  await tx.outreachCoveredArtist.createMany({
+    data: coveredArtistIds.map((artistId) => ({ outreachId, artistId })),
+    skipDuplicates: true,
+  });
+}
+
+async function assertStoredOutreachCoverageMatches(
+  tx: Prisma.TransactionClient,
+  outreachId: string,
+  prep: PreparedOutreach,
+): Promise<void> {
+  const stored = await tx.outreach.findUnique({
+    where: { id: outreachId },
+    select: {
+      artistId: true,
+      coveredArtists: {
+        orderBy: { artistId: "asc" },
+        select: { artistId: true },
+      },
+    },
+  });
+  const storedCoverage =
+    stored?.coveredArtists.length
+      ? stored.coveredArtists.map((row) => row.artistId)
+      : stored
+        ? [stored.artistId]
+        : [];
+  if (!sameOrderedStrings(storedCoverage, prep.coveredArtistIds)) {
+    throw new Error(
+      "Existing provider attempt has different festival artist coverage",
+    );
+  }
+}
+
+async function scheduledOutreachResult(
+  tx: Prisma.TransactionClient,
+  outreachId: string,
+  prep: PreparedOutreach,
+  scheduledFor: Date,
+): Promise<SendOutreachOutput> {
+  const existingAttempt = await tx.outreachSendAttempt.findFirst({
+    where: { outreachId },
+    select: { id: true },
+  });
+  if (existingAttempt) {
+    await assertStoredOutreachCoverageMatches(tx, outreachId, prep);
+  }
+  await syncOutreachCoveredArtists(
+    tx,
+    outreachId,
+    prep.coveredArtistIds,
+  );
+  return {
+    ok: true,
+    outreachId,
+    scheduled: true,
+    scheduledFor,
+  };
+}
+
 async function schedulePreparedOutreach(
   prep: PreparedOutreach,
   scheduledFor: Date,
@@ -5325,7 +5722,7 @@ async function schedulePreparedOutreach(
   const now = new Date();
 
   return withSerializableRetry(async (tx): Promise<SendOutreachOutput> => {
-    const [show, association] = await Promise.all([
+    const [show, associations] = await Promise.all([
       tx.show.findUnique({
         where: { id: prep.showId },
         select: {
@@ -5336,14 +5733,12 @@ async function schedulePreparedOutreach(
           dismissedAt: true,
         },
       }),
-      tx.showArtist.findUnique({
+      tx.showArtist.findMany({
         where: {
-          showId_artistId: {
-            showId: prep.showId,
-            artistId: prep.artistId,
-          },
+          showId: prep.showId,
+          artistId: { in: prep.coveredArtistIds },
         },
-        select: { showId: true },
+        select: { artistId: true },
       }),
     ]);
     if (!show) return { ok: false, error: "Show not found" };
@@ -5359,7 +5754,40 @@ async function schedulePreparedOutreach(
     }
     const festivalBlocked = festivalOutreachBlockingReason(show, prep.kind);
     if (festivalBlocked) return { ok: false, error: festivalBlocked };
-    if (!association) return { ok: false, error: artistNotOnShowError() };
+    if (associations.length !== prep.coveredArtistIds.length) {
+      return { ok: false, error: artistNotOnShowError() };
+    }
+    await lockPreparedOutreachArtists(tx, prep);
+    if (prep.coveredArtistIds.length > 1) {
+      const managerEmail = prep.expectedRecipientIdentity?.normalizedEmail;
+      const coveredContacts = await tx.contact.findMany({
+        where: {
+          artistId: { in: prep.coveredArtistIds },
+          state: "active",
+          email: { not: null },
+        },
+        select: { artistId: true, email: true },
+      });
+      if (
+        !managerEmail ||
+        prep.coveredArtistIds.some(
+          (artistId) =>
+            !coveredContacts.some(
+              (candidate) =>
+                candidate.artistId === artistId &&
+                normalizeEmails([candidate.email ?? ""]).includes(
+                  managerEmail,
+                ),
+            ),
+        )
+      ) {
+        return {
+          ok: false,
+          error:
+            "Covered festival artists no longer share the selected manager email",
+        };
+      }
+    }
     const followUpBlocked = await preparedFollowUpBlockingReason(tx, prep);
     if (followUpBlocked) return { ok: false, error: followUpBlocked };
     const trajectoryBlocked = await preparedTrajectoryBlockingReason(
@@ -5408,6 +5836,15 @@ async function schedulePreparedOutreach(
     }
     const scheduled = active.find((row) => row.status === "scheduled");
     if (scheduled) {
+      const storedCoverage = (
+        await tx.outreachCoveredArtist.findMany({
+          where: { outreachId: scheduled.id },
+          orderBy: { artistId: "asc" },
+          select: { artistId: true },
+        })
+      ).map((row) => row.artistId);
+      const scheduledCoverage =
+        storedCoverage.length > 0 ? storedCoverage : [scheduled.artistId];
       if (
         scheduled.contactId === prep.contactId &&
         scheduled.templateId === prep.templateId &&
@@ -5420,7 +5857,8 @@ async function schedulePreparedOutreach(
           scheduled,
           prep.expectedRecipientIdentity,
         ) &&
-        scheduled.scheduledFor?.getTime() === scheduledFor.getTime()
+        scheduled.scheduledFor?.getTime() === scheduledFor.getTime() &&
+        sameOrderedStrings(scheduledCoverage, prep.coveredArtistIds)
       ) {
         const recommendationId = resolveTrajectoryRecommendationAttribution(
           prep.trajectoryContext?.recommendationId ?? null,
@@ -5436,12 +5874,12 @@ async function schedulePreparedOutreach(
             data: { trajectoryRecommendationId: recommendationId },
           });
         }
-        return {
-          ok: true,
-          outreachId: scheduled.id,
-          scheduled: true,
+        return scheduledOutreachResult(
+          tx,
+          scheduled.id,
+          prep,
           scheduledFor,
-        };
+        );
       }
       return {
         ok: false,
@@ -5495,6 +5933,9 @@ async function schedulePreparedOutreach(
       }
 
       const attempt = await currentAttempt(tx, queued.idempotencyKey);
+      if (attempt) {
+        await assertStoredOutreachCoverageMatches(tx, queued.id, prep);
+      }
       if (attempt?.providerMessageId) {
         return (await finishAlreadyAccepted(tx, queued, attempt)).result;
       }
@@ -5560,12 +6001,7 @@ async function schedulePreparedOutreach(
             : {}),
         },
       });
-      return {
-        ok: true,
-        outreachId: outreach.id,
-        scheduled: true,
-        scheduledFor,
-      };
+      return scheduledOutreachResult(tx, outreach.id, prep, scheduledFor);
     }
     const failedForAnotherContact = active.find(
       (row) =>
@@ -5654,12 +6090,7 @@ async function schedulePreparedOutreach(
           ...resetDeliveryState(),
         },
       });
-      return {
-        ok: true,
-        outreachId: outreach.id,
-        scheduled: true,
-        scheduledFor,
-      };
+      return scheduledOutreachResult(tx, outreach.id, prep, scheduledFor);
     }
     if (existing && isNonBlockingLegacyUnknownAttempt(existingAttempt)) {
       const identity = newAttemptIdentity(existing.id);
@@ -5689,12 +6120,7 @@ async function schedulePreparedOutreach(
           ...resetDeliveryState(),
         },
       });
-      return {
-        ok: true,
-        outreachId: outreach.id,
-        scheduled: true,
-        scheduledFor,
-      };
+      return scheduledOutreachResult(tx, outreach.id, prep, scheduledFor);
     }
     if (existing?.status === "failed") {
       const attempt = existingAttempt;
@@ -5735,12 +6161,7 @@ async function schedulePreparedOutreach(
             ),
           },
         });
-        return {
-          ok: true,
-          outreachId: outreach.id,
-          scheduled: true,
-          scheduledFor,
-        };
+        return scheduledOutreachResult(tx, outreach.id, prep, scheduledFor);
       }
       if (!canReplaceUnattemptedOutreachSnapshot(existing, false)) {
         await markManualReview(tx, existing.id, MANUAL_REVIEW_LEGACY);
@@ -5777,12 +6198,7 @@ async function schedulePreparedOutreach(
           idempotencyKey: identity.idempotencyKey,
         },
       });
-      return {
-        ok: true,
-        outreachId: outreach.id,
-        scheduled: true,
-        scheduledFor,
-      };
+      return scheduledOutreachResult(tx, outreach.id, prep, scheduledFor);
     }
 
     if (existing) {
@@ -5849,12 +6265,7 @@ async function schedulePreparedOutreach(
           ...resetDeliveryState(),
         },
       });
-      return {
-        ok: true,
-        outreachId: outreach.id,
-        scheduled: true,
-        scheduledFor,
-      };
+      return scheduledOutreachResult(tx, outreach.id, prep, scheduledFor);
     }
 
     const id = randomUUID();
@@ -5881,12 +6292,7 @@ async function schedulePreparedOutreach(
         idempotencyKey: identity.idempotencyKey,
       },
     });
-    return {
-      ok: true,
-      outreachId: outreach.id,
-      scheduled: true,
-      scheduledFor,
-    };
+    return scheduledOutreachResult(tx, outreach.id, prep, scheduledFor);
   });
 }
 
@@ -5895,6 +6301,24 @@ export async function scheduleOutreach(
   scheduledFor: Date,
 ): Promise<SendOutreachOutput> {
   const prep = await prepareOriginalOutreach(input);
+  if ("error" in prep) return { ok: false, ...prep };
+  return schedulePreparedOutreach(prep, scheduledFor);
+}
+
+export async function scheduleFestivalManagerOutreach(
+  input: {
+    showId: string;
+    contactId: string;
+    coveredArtistIds: string[];
+  },
+  scheduledFor: Date,
+): Promise<SendOutreachOutput> {
+  const prep = await prepareOriginalOutreach({
+    showId: input.showId,
+    contactId: input.contactId,
+    singleRecipient: true,
+    festivalCoveredArtistIds: input.coveredArtistIds,
+  });
   if ("error" in prep) return { ok: false, ...prep };
   return schedulePreparedOutreach(prep, scheduledFor);
 }

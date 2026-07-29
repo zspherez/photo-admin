@@ -63,7 +63,7 @@ export const SUPPORTED_TEMPLATE_VARS = FESTIVAL_TEMPLATE_VARS;
 export function supportedTemplateVars(
   purpose: EmailTemplatePurpose,
 ): readonly string[] {
-  return purpose === "festival"
+  return purpose === "festival" || purpose === "festival_multi_artist"
     ? FESTIVAL_TEMPLATE_VARS
     : COMMON_TEMPLATE_VARS;
 }
@@ -432,6 +432,8 @@ export function extractVars(template: string): string[] {
 
 export const DEFAULT_TEMPLATE_NAME = "default";
 export const FESTIVAL_TEMPLATE_NAME = "festival_outreach";
+export const FESTIVAL_MULTI_ARTIST_TEMPLATE_NAME =
+  "festival_multi_artist_outreach";
 export const FOLLOW_UP_TEMPLATE_NAME = "follow_up";
 
 export const DEFAULT_TEMPLATE_SUBJECT =
@@ -447,6 +449,11 @@ export const FESTIVAL_TEMPLATE_SUBJECT =
   "Photo coverage request: {{artist}} at {{festival_name}}";
 
 export const FESTIVAL_TEMPLATE_HTML = `<p>Hi {{manager_name}}, wanted to shoot a quick message over regarding the {{artist}} set at {{festival_name}} in a few weeks! I am a photographer and videographer specializing in the electronic music space and would love to work together to capture this show!</p><p>Here's a brief summary of my deliverables, and I'm happy to work with you to meet your needs!</p><p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`;
+
+export const FESTIVAL_MULTI_ARTIST_TEMPLATE_SUBJECT =
+  "{{festival_name}} Photo/Video";
+
+export const FESTIVAL_MULTI_ARTIST_TEMPLATE_HTML = `<p>Hi {{manager_name}}, wanted to shoot a quick message over regarding your artists under managements' sets at {{festival_name}} in a few weeks! I am a photographer and videographer specializing in the electronic music space and would love to work together to capture this show!</p><p>Here's a brief summary of my per show deliverables, and I'm happy to work with you to meet your needs!</p><p>My minimum deliverables include 25 photos and 3-5 clips night of show; complete gallery with 50+ additional photos and 7-10 additional clips the following day.</p><p>You can check out some examples of my previous work at <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p><p>Best,<br>{{sender_name}}<br><a target="_blank" rel="noopener noreferrer nofollow" href="mailto:{{sender_email}}">{{sender_email}}</a> // {{sender_phone}} // <a target="_blank" rel="noopener noreferrer nofollow" href="{{portfolio_url}}">{{portfolio_url}}</a></p>`;
 
 export interface TemplateContent {
   subject: string;
@@ -509,6 +516,21 @@ export async function ensureFestivalTemplate() {
   return persistNormalizedTemplate(template, normalizeTemplateContent);
 }
 
+export async function ensureFestivalMultiArtistTemplate() {
+  const template = await db.emailTemplate.upsert({
+    where: { purpose: "festival_multi_artist" },
+    update: {},
+    create: {
+      name: FESTIVAL_MULTI_ARTIST_TEMPLATE_NAME,
+      purpose: "festival_multi_artist",
+      subject: FESTIVAL_MULTI_ARTIST_TEMPLATE_SUBJECT,
+      htmlBody: FESTIVAL_MULTI_ARTIST_TEMPLATE_HTML,
+      isDefault: false,
+    },
+  });
+  return persistNormalizedTemplate(template, normalizeTemplateContent);
+}
+
 export async function ensureFollowUpTemplate() {
   const template = await db.emailTemplate.upsert({
     where: { purpose: "follow_up" },
@@ -535,6 +557,13 @@ function fallbackTemplate(
           htmlBody: FESTIVAL_TEMPLATE_HTML,
           isDefault: false,
         }
+      : purpose === "festival_multi_artist"
+        ? {
+            name: FESTIVAL_MULTI_ARTIST_TEMPLATE_NAME,
+            subject: FESTIVAL_MULTI_ARTIST_TEMPLATE_SUBJECT,
+            htmlBody: FESTIVAL_MULTI_ARTIST_TEMPLATE_HTML,
+            isDefault: false,
+          }
       : purpose === "follow_up"
         ? {
             name: FOLLOW_UP_TEMPLATE_NAME,

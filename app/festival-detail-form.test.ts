@@ -47,6 +47,7 @@ test("festival outreach forms are valid and explicitly associated", () => {
   let bulkFormFound = false;
   let cancelFormFound = false;
   let managerResearchFormFound = false;
+  let queueOutreachFormFound = false;
   let contactCheckboxFound = false;
 
   const visit = (node: ts.Node, formDepth: number) => {
@@ -79,6 +80,14 @@ test("festival outreach forms are valid and explicitly associated", () => {
         )
       ) {
         managerResearchFormFound = true;
+      }
+      if (
+        isIdentifierExpression(
+          attribute(attributes, "action"),
+          "queueFestivalOutreach",
+        )
+      ) {
+        queueOutreachFormFound = true;
       }
     }
 
@@ -119,6 +128,11 @@ test("festival outreach forms are valid and explicitly associated", () => {
     true,
     "Festival pages need an independent manager-research action",
   );
+  assert.equal(
+    queueOutreachFormFound,
+    true,
+    "Festival pages need a one-click queue-outreach action",
+  );
 });
 
 test("festival manager research UI reflects the full eligible lineup", () => {
@@ -150,5 +164,40 @@ test("festival customize links do not require a listening signal", () => {
   assert.doesNotMatch(
     source,
     /canCustomize[\s\S]{0,100}r\.matched/
+  );
+});
+
+test("festival sendability and bulk queueing do not require listen signals", () => {
+  assert.doesNotMatch(
+    source.slice(
+      source.indexOf("async function festivalBulkCandidates"),
+      source.indexOf("async function bulkSend"),
+    ),
+    /pickTopListenSignal/,
+  );
+  assert.match(source, /Queue outreach \(\{contactIds\.length\}\)/);
+  assert.match(source, /getNextNormalOutreachDispatch\(now\)/);
+  assert.match(source, /groupFestivalManagerTargets/);
+  assert.match(source, /scheduleFestivalManagerOutreach/);
+  assert.match(
+    source,
+    /const canSend =\s*outreachEnabled &&\s*r\.sendability\?\.sendable === true/,
+  );
+  assert.doesNotMatch(
+    source,
+    /const disabledReason = !r\.matched[\s\S]*No active listen signal/,
+  );
+});
+
+test("covered artists keep shared outreach status and actions without a current contact", () => {
+  assert.match(source, /const coveredOutreach =/);
+  assert.match(source, /storedOutreachLabel\(r\.coveredOutreach\)/);
+  assert.match(
+    source,
+    /r\.coveredOutreach &&[\s\S]*isCancellableOutreachStatus\(r\.coveredOutreach\.status\)/,
+  );
+  assert.match(
+    source,
+    /\{outreachEnabled && r\.followUpEligibility && \(/,
   );
 });

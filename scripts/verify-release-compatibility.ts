@@ -13,6 +13,7 @@ async function main(): Promise<void> {
     outreachKindProbe,
     outreachDispatchIdentityConstraintProbe,
     outreachAttemptProbe,
+    outreachCoveredArtistProbe,
     syncLeaseProbe,
     artistClaimProbe,
     artistCustomNameProbe,
@@ -134,6 +135,14 @@ async function main(): Promise<void> {
       `,
     ),
     db.outreachSendAttempt.count({ take: 1 }),
+    db.outreachCoveredArtist.findMany({
+      take: 1,
+      select: {
+        outreachId: true,
+        artistId: true,
+        createdAt: true,
+      },
+    }),
     db.integrationSyncLease.count({ take: 1 }),
     db.artistIdentityNameClaim.count({ take: 1 }),
     db.artist.findMany({
@@ -715,6 +724,7 @@ async function main(): Promise<void> {
           directOutreachProvenanceProbe,
           outreachKindProbe,
           outreachDispatchIdentityConstraintProbe,
+          outreachCoveredArtistProbe,
           artistResearchSkipProbe,
           agentRuleSetProbe,
           contactAuditRequestProbe,
@@ -811,6 +821,7 @@ async function main(): Promise<void> {
         "ArbitraryEmail.claimToken",
         "ArbitraryEmail.providerCredentialScope",
         "Outreach.expectedRecipientUpdatedAt",
+        "OutreachCoveredArtist",
         "Outreach_dispatch_recipient_identity_check",
         "ResendWebhookEvent.arbitraryEmailId",
         "EmailTemplate.purpose",

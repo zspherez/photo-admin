@@ -166,13 +166,17 @@ test("scheduled sends and retries retain stored festival snapshots", () => {
   assert.doesNotMatch(scheduledClaim, /ensureOriginalTemplateForShow/);
 });
 
-test("Settings edits, previews, and resets normal and festival templates independently", () => {
+test("Settings edits, previews, and resets every outreach template independently", () => {
   const settings = source("app/settings/template/page.tsx");
   const templates = source("lib/template.ts");
 
-  assert.match(settings, /\["original", "festival", "follow_up"\]/);
+  assert.match(settings, /"festival_multi_artist"/);
   assert.match(settings, /if \(kind === "festival"\) return ensureFestivalTemplate\(\)/);
-  assert.match(settings, /isFestival: kind === "festival"/);
+  assert.match(settings, /ensureFestivalMultiArtistTemplate/);
+  assert.match(
+    settings,
+    /isFestival:\s*kind === "festival" \|\| kind === "festival_multi_artist"/,
+  );
   assert.match(settings, /supportedTemplateVars\(kind\)/);
   assert.match(settings, /unsupportedTemplateVars\(content, kind\)/);
   assert.match(settings, /malformedTemplateVariableTokens\(content\)/);
@@ -182,6 +186,8 @@ test("Settings edits, previews, and resets normal and festival templates indepen
   assert.match(settings, /htmlBody: FOLLOW_UP_TEMPLATE_HTML/);
   assert.match(settings, /subject: FESTIVAL_TEMPLATE_SUBJECT/);
   assert.match(settings, /htmlBody: FESTIVAL_TEMPLATE_HTML/);
+  assert.match(settings, /subject: FESTIVAL_MULTI_ARTIST_TEMPLATE_SUBJECT/);
+  assert.match(settings, /htmlBody: FESTIVAL_MULTI_ARTIST_TEMPLATE_HTML/);
   assert.match(settings, /where: \{ id: existing\.id \}/);
   assert.match(settings, /templateUtmKind\(kind\)/);
   assert.match(
@@ -191,6 +197,84 @@ test("Settings edits, previews, and resets normal and festival templates indepen
   assert.match(
     templates,
     /where: \{ purpose: "festival" \},[\s\S]*update: \{\},[\s\S]*htmlBody: FESTIVAL_TEMPLATE_HTML/,
+  );
+  assert.match(
+    templates,
+    /where: \{ purpose: "festival_multi_artist" \},[\s\S]*htmlBody: FESTIVAL_MULTI_ARTIST_TEMPLATE_HTML/,
+  );
+});
+
+test("shared-manager festival template matches the requested copy", () => {
+  const templates = source("lib/template.ts");
+  assert.match(
+    templates,
+    /FESTIVAL_MULTI_ARTIST_TEMPLATE_SUBJECT =\s*"{{festival_name}} Photo\/Video"/,
+  );
+  assert.match(
+    templates,
+    /regarding your artists under managements' sets at {{festival_name}}/,
+  );
+  assert.match(templates, /Here's a brief summary of my per show deliverables/);
+});
+
+test("multi-artist festival scheduling persists artist coverage", () => {
+  const send = source("lib/sendOutreach.ts");
+  assert.match(send, /festivalCoveredArtistIds\?: string\[\]/);
+  assert.match(send, /templatePurpose: EmailTemplatePurpose = multiArtistFestival/);
+  assert.match(send, /syncOutreachCoveredArtists/);
+  assert.match(send, /tx\.outreachCoveredArtist\.createMany/);
+  assert.match(send, /coveredArtists: \{[\s\S]*some: \{ artistId:/);
+  assert.match(send, /scheduleFestivalManagerOutreach/);
+  assert.match(
+    send,
+    /preparedOutreachScopeWhere[\s\S]*coveredArtists:[\s\S]*some: \{ artistId: \{ in: prep\.coveredArtistIds \} \}/,
+  );
+  assert.match(send, /lockPreparedOutreachArtists/);
+  assert.match(
+    send,
+    /Existing provider attempt has different festival artist coverage/,
+  );
+  const migration = source(
+    "prisma/migrations/20260729031000_festival_multi_artist_outreach/migration.sql",
+  );
+  assert.match(migration, /^BEGIN;\n/);
+  assert.match(migration, /ADD VALUE IF NOT EXISTS 'festival_multi_artist'/);
+  assert.match(migration, /CREATE TABLE "OutreachCoveredArtist"/);
+  assert.match(migration, /OutreachCoveredArtist_outreachId_fkey/);
+  assert.match(migration, /OutreachCoveredArtist_artistId_fkey/);
+  assert.match(migration, /\nCOMMIT;\s*$/);
+});
+
+test("grouped festival follow-ups preserve coverage and single-recipient policy", () => {
+  const send = source("lib/sendOutreach.ts");
+  assert.match(
+    send,
+    /getFollowUpEligibilityBatch[\s\S]*coveredArtists:[\s\S]*fullTeamSend: true/,
+  );
+  assert.match(send, /requestedFullTeamSend: parent\.fullTeamSend/);
+  assert.match(
+    send,
+    /parentRecipientIdentity = storedExpectedRecipientIdentity\(parent\)/,
+  );
+  assert.match(
+    send,
+    /customizeRecipientIdentityError\(contact, parentRecipientIdentity\)/,
+  );
+  assert.match(
+    send,
+    /prepareFollowUpOutreach[\s\S]*coveredArtistIds: coveredArtists\.map/,
+  );
+  assert.match(
+    send,
+    /trackingArtistName = coveredArtists[\s\S]*artistDisplayName/,
+  );
+  assert.match(
+    send,
+    /Shared festival manager coverage changed after the original send/,
+  );
+  assert.match(
+    send,
+    /assertStoredOutreachCoverageMatches[\s\S]*finishAlreadyAccepted/,
   );
 });
 
