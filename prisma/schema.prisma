@@ -876,6 +876,7 @@ model Outreach {
   clickCount                 Int                   @default(0)
   bouncedAt                  DateTime?
   complainedAt               DateTime?
+  dismissedAt                DateTime?
   scheduledFor               DateTime?
   nextAttemptAt              DateTime?
   sendAttempts               OutreachSendAttempt[]
@@ -885,6 +886,7 @@ model Outreach {
 
   @@unique([showId, contactId, kind])
   @@index([showId])
+  @@index([dismissedAt, createdAt])
   @@index([contactId])
   @@index([artistId])
   @@index([trajectoryRecommendationId])

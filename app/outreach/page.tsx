@@ -31,11 +31,14 @@ import {
   hasDirectOutreachNote,
   isDirectOutreachOnly,
 } from "@/lib/contactDisplay";
+import { EmailBulkSelection } from "@/components/email-bulk-selection";
+import { updateOutreachEmailVisibilityAction } from "@/app/outreach/actions";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Outreach emails" };
 
 const OUTREACH_PAGE_SIZE = 50;
+type OutreachView = "active" | "dismissed";
 
 type StatusFilter =
   | "all"
@@ -102,9 +105,12 @@ function statusTone(o: OutreachLike): BadgeTone {
 
 function buildWhere(
   status: StatusFilter,
-  search: string
+  search: string,
+  view: OutreachView,
 ): Prisma.OutreachWhereInput {
-  const where: Prisma.OutreachWhereInput = {};
+  const where: Prisma.OutreachWhereInput = {
+    dismissedAt: view === "dismissed" ? { not: null } : null,
+  };
   if (status === "sent") where.status = "sent";
   else if (status === "scheduled") where.status = "scheduled";
   else if (status === "retry_scheduled") where.status = "retry_scheduled";
@@ -123,9 +129,11 @@ function buildWhere(
 function outreachHref(
   status: StatusFilter,
   search: string,
+  view: OutreachView,
   page = 1
 ): string {
   const params = new URLSearchParams();
+  if (view === "dismissed") params.set("view", "dismissed");
   if (status !== "all") params.set("status", status);
   if (search) params.set("search", search);
   if (page > 1) params.set("page", String(page));
@@ -138,16 +146,21 @@ export default async function OutreachLogPage({
 }: {
   searchParams: Promise<{
     status?: SearchParamValue;
+    view?: SearchParamValue;
     search?: SearchParamValue;
     page?: SearchParamValue;
     followup_sent?: SearchParamValue;
     followup_scheduled?: SearchParamValue;
     cancelled?: SearchParamValue;
     error?: SearchParamValue;
+    dismissed?: SearchParamValue;
+    restored?: SearchParamValue;
   }>;
 }) {
   const sp = await searchParams;
   const requestedStatus = firstSearchParam(sp.status);
+  const view: OutreachView =
+    firstSearchParam(sp.view) === "dismissed" ? "dismissed" : "active";
   const status = (STATUS_OPTIONS.find((s) => s.key === requestedStatus)?.key ??
     "all") as StatusFilter;
   const search =
@@ -157,8 +170,10 @@ export default async function OutreachLogPage({
   const followUpScheduled = firstSearchParam(sp.followup_scheduled);
   const cancelled = firstSearchParam(sp.cancelled);
   const actionError = firstSearchParam(sp.error);
+  const dismissed = firstSearchParam(sp.dismissed);
+  const restored = firstSearchParam(sp.restored);
 
-  const where = buildWhere(status, search);
+  const where = buildWhere(status, search, view);
 
   const [
     filteredTotal,
@@ -168,14 +183,24 @@ export default async function OutreachLogPage({
     totalOpened,
     totalClicked,
     totalFailed,
+    dismissedCount,
   ] = await Promise.all([
     db.outreach.count({ where }),
-    db.outreach.count(),
-    db.outreach.count({ where: { status: "sent" } }),
-    db.outreach.count({ where: { deliveredAt: { not: null } } }),
-    db.outreach.count({ where: { openCount: { gt: 0 } } }),
-    db.outreach.count({ where: { clickCount: { gt: 0 } } }),
-    db.outreach.count({ where: { status: "failed" } }),
+    db.outreach.count({ where: { dismissedAt: null } }),
+    db.outreach.count({ where: { dismissedAt: null, status: "sent" } }),
+    db.outreach.count({
+      where: { dismissedAt: null, deliveredAt: { not: null } },
+    }),
+    db.outreach.count({
+      where: { dismissedAt: null, openCount: { gt: 0 } },
+    }),
+    db.outreach.count({
+      where: { dismissedAt: null, clickCount: { gt: 0 } },
+    }),
+    db.outreach.count({
+      where: { dismissedAt: null, status: "failed" },
+    }),
+    db.outreach.count({ where: { dismissedAt: { not: null } } }),
   ]);
   const pagination = getPagination(
     filteredTotal,
@@ -183,7 +208,7 @@ export default async function OutreachLogPage({
     OUTREACH_PAGE_SIZE
   );
   if (pagination.page !== requestedPage) {
-    redirect(outreachHref(status, search, pagination.page));
+    redirect(outreachHref(status, search, view, pagination.page));
   }
   const outreach = await db.outreach.findMany({
     where,
@@ -231,7 +256,7 @@ export default async function OutreachLogPage({
   const followUpByParent = new Map(
     followUpEligibility.map((row) => [row.parentOutreachId, row]),
   );
-  const returnTo = outreachHref(status, search, pagination.page);
+  const returnTo = outreachHref(status, search, view, pagination.page);
   const weekend = isWeekendET();
 
   const stats = [
@@ -247,7 +272,12 @@ export default async function OutreachLogPage({
     <main className="mx-auto max-w-5xl px-6 py-10">
       <EmailCenterHeader active="outreach" />
 
-      {(followUpSent || followUpScheduled || cancelled || actionError) && (
+      {(followUpSent ||
+        followUpScheduled ||
+        cancelled ||
+        dismissed ||
+        restored ||
+        actionError) && (
         <div
           className={`mt-4 rounded-lg border px-4 py-2 text-sm ${
             actionError
@@ -261,9 +291,41 @@ export default async function OutreachLogPage({
               ? "Follow-up sent."
               : followUpScheduled
                 ? "Follow-up scheduled for Monday morning."
+                : dismissed
+                  ? `${dismissed} outreach email${dismissed === "1" ? "" : "s"} deleted from the active list.`
+                  : restored
+                    ? `${restored} outreach email${restored === "1" ? "" : "s"} restored.`
                 : "Scheduled follow-up or retry cancelled."}
         </div>
       )}
+
+      <nav
+        aria-label="Outreach email visibility"
+        className="mt-5 flex gap-2"
+      >
+        <Link
+          href={outreachHref(status, search, "active")}
+          aria-current={view === "active" ? "page" : undefined}
+          className={`rounded-full px-3 py-1 text-xs font-medium ${
+            view === "active"
+              ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+              : "border border-zinc-200 text-zinc-600 dark:border-zinc-800 dark:text-zinc-400"
+          }`}
+        >
+          Active {totalAll}
+        </Link>
+        <Link
+          href={outreachHref(status, search, "dismissed")}
+          aria-current={view === "dismissed" ? "page" : undefined}
+          className={`rounded-full px-3 py-1 text-xs font-medium ${
+            view === "dismissed"
+              ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+              : "border border-zinc-200 text-zinc-600 dark:border-zinc-800 dark:text-zinc-400"
+          }`}
+        >
+          Dismissed {dismissedCount}
+        </Link>
+      </nav>
 
       <div className="mt-5 grid grid-cols-3 gap-3 sm:grid-cols-6">
         {stats.map((s) => (
@@ -279,6 +341,9 @@ export default async function OutreachLogPage({
       <Card className="mt-6 p-3">
         <form className="flex gap-2" action="/outreach" method="get">
           {status !== "all" && <input type="hidden" name="status" value={status} />}
+          {view === "dismissed" && (
+            <input type="hidden" name="view" value="dismissed" />
+          )}
           <input
             type="text"
             name="search"
@@ -299,7 +364,7 @@ export default async function OutreachLogPage({
             return (
               <Link
                 key={opt.key}
-                href={outreachHref(opt.key, search)}
+                href={outreachHref(opt.key, search, view)}
                 className={cn(
                   "rounded-full px-2.5 py-0.5 text-xs font-medium transition",
                   status === opt.key
@@ -320,6 +385,14 @@ export default async function OutreachLogPage({
         </div>
       ) : (
         <>
+          <EmailBulkSelection
+            key={`${view}:${pagination.page}:${outreach.map((row) => row.id).join(",")}`}
+            action={updateOutreachEmailVisibilityAction}
+            formId="outreach-email-bulk-selection"
+            emailIds={outreach.map((row) => row.id)}
+            view={view}
+            returnTo={returnTo}
+          />
           <div className="mt-5 flex items-center justify-between gap-3 text-xs text-zinc-500">
             <span>
               {pagination.start}–{pagination.end} of {pagination.total}
@@ -350,7 +423,15 @@ export default async function OutreachLogPage({
                   ? followUpByParent.get(o.id)
                   : undefined;
               return (
-                <li key={o.id} className="px-4 py-3">
+                <li key={o.id} className="flex gap-3 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    name="emailIds"
+                    value={o.id}
+                    form="outreach-email-bulk-selection"
+                    aria-label={`Select outreach for ${artistDisplayName(o.artist)}`}
+                    className="mt-1 h-4 w-4 shrink-0 accent-zinc-900 dark:accent-zinc-100"
+                  />
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -452,7 +533,7 @@ export default async function OutreachLogPage({
             >
               {pagination.hasPrevious ? (
                 <Link
-                  href={outreachHref(status, search, pagination.page - 1)}
+                  href={outreachHref(status, search, view, pagination.page - 1)}
                   className="inline-flex h-9 items-center justify-center rounded-md border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
                 >
                   ← Previous
@@ -465,7 +546,7 @@ export default async function OutreachLogPage({
               </span>
               {pagination.hasNext ? (
                 <Link
-                  href={outreachHref(status, search, pagination.page + 1)}
+                  href={outreachHref(status, search, view, pagination.page + 1)}
                   className="inline-flex h-9 items-center justify-center rounded-md border border-zinc-200 bg-white px-4 text-sm font-medium text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
                 >
                   Next →

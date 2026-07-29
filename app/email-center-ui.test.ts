@@ -32,3 +32,25 @@ test("existing outreach URLs and filter forms remain stable", () => {
   assert.match(outreach, /return query \? `\/outreach\?\$\{query\}` : "\/outreach"/);
   assert.match(outreach, /action="\/outreach"/);
 });
+
+test("outreach history has recoverable bulk dismissal and restore", () => {
+  const outreach = source("app/outreach/page.tsx");
+  const actions = source("app/outreach/actions.ts");
+  assert.match(outreach, /OutreachView = "active" \| "dismissed"/);
+  assert.match(outreach, /EmailBulkSelection/);
+  assert.match(outreach, /name="emailIds"/);
+  assert.match(outreach, /Dismissed \{dismissedCount\}/);
+  assert.match(actions, /updateOutreachEmailVisibilityAction/);
+  assert.match(actions, /data: \{\s*dismissedAt:/);
+  assert.match(actions, /sanitizeNextPath\(formData\.get\("returnTo"\)\)/);
+  assert.match(actions, /destination\.searchParams\.set\(resultKey/);
+  assert.match(outreach, /returnTo=\{returnTo\}/);
+  assert.doesNotMatch(actions, /outreach\.delete/);
+  const migration = source(
+    "prisma/migrations/20260729113000_outreach_email_dismissal/migration.sql",
+  );
+  assert.match(migration, /^BEGIN;\n/);
+  assert.match(migration, /ADD COLUMN "dismissedAt" TIMESTAMP\(3\)/);
+  assert.match(migration, /Outreach_dismissedAt_createdAt_idx/);
+  assert.match(migration, /\nCOMMIT;\s*$/);
+});
