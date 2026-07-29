@@ -8,6 +8,7 @@ import {
   getOutreachSendabilityBatch,
   getFollowUpEligibilityBatch,
   scheduleFestivalManagerOutreach,
+  sendFestivalManagerOutreach,
   sendOutreach,
   scheduleOutreach,
   type OutreachSendability,
@@ -88,6 +89,10 @@ import {
 } from "@/lib/festivalEligibility";
 import { normalizeEmail, normalizeEmails } from "@/lib/resend";
 import { groupFestivalManagerTargets } from "@/lib/festivalOutreach";
+import {
+  FestivalBulkOutreachForm,
+  type FestivalBulkConfirmationCandidate,
+} from "@/components/festival-bulk-outreach-form";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -260,7 +265,13 @@ function storedOutreachLabel(outreach: {
 async function festivalBulkCandidates(
   showId: string,
   now: Date
-): Promise<{ active: boolean; contactIds: Set<string> } | null> {
+): Promise<{
+  active: boolean;
+  targetsByContactId: Map<
+    string,
+    { artistId: string; contactId: string; email: string }
+  >;
+} | null> {
   const festival = await db.show.findUnique({
     where: { id: showId },
     select: {
@@ -271,6 +282,7 @@ async function festivalBulkCandidates(
       dismissedAt: true,
       artists: {
         select: {
+          artistId: true,
           artist: {
             select: {
               listenSignals: {
@@ -295,15 +307,25 @@ async function festivalBulkCandidates(
   });
   if (!festival?.isFestival) return null;
 
-  const contactIds = new Set<string>();
+  const targetsByContactId = new Map<
+    string,
+    { artistId: string; contactId: string; email: string }
+  >();
   if (
     festival.syncStatus === "active" &&
     satisfiesFestivalLeadTime(festival, now) &&
     festival.dismissedAt === null
   ) {
-    for (const { artist } of festival.artists) {
+    for (const { artistId, artist } of festival.artists) {
       const contact = pickEmailContact(artist.contacts);
-      if (contact) contactIds.add(contact.id);
+      const email = normalizeEmail(contact?.email ?? "");
+      if (contact && email) {
+        targetsByContactId.set(contact.id, {
+          artistId,
+          contactId: contact.id,
+          email,
+        });
+      }
     }
   }
   return {
@@ -311,7 +333,7 @@ async function festivalBulkCandidates(
       festival.syncStatus === "active" &&
       satisfiesFestivalLeadTime(festival, now) &&
       festival.dismissedAt === null,
-    contactIds,
+    targetsByContactId,
   };
 }
 
@@ -352,29 +374,50 @@ async function bulkSend(formData: FormData) {
   }
 
   const candidateIds = requestedContactIds.filter((contactId) =>
-    candidates.contactIds.has(contactId)
+    candidates.targetsByContactId.has(contactId)
   );
   const sendability = await getOutreachSendabilityBatch(
     candidateIds.map((contactId) => ({ showId, contactId })),
     now
   );
-  const contactIds = sendability
-    .filter((result) => result.sendable)
-    .map((result) => result.contactId);
+  const sendabilityByContact = new Map(
+    sendability.map((result) => [result.contactId, result]),
+  );
+  const selectedTargets = candidateIds.flatMap((contactId) => {
+    const target = candidates.targetsByContactId.get(contactId);
+    const result = sendabilityByContact.get(contactId);
+    if (!target || !result?.sendable) return [];
+    const recipients = normalizeEmails(result.recipients);
+    return [
+      {
+        ...target,
+        email:
+          !result.fullTeamSend &&
+          recipients.length === 1 &&
+          recipients[0] === target.email
+            ? target.email
+            : `contact:${target.contactId}`,
+      },
+    ];
+  });
+  const { groups } = groupFestivalManagerTargets(
+    selectedTargets,
+    new Set(selectedTargets.map((target) => target.contactId)),
+  );
   const weekend = isWeekendET();
   const scheduledFor = weekend ? getNextMondaySlot() : null;
   let sent = 0;
   let scheduled = 0;
   let failed = 0;
-  let skipped = requestedContactIds.length - contactIds.length;
+  let skipped = requestedContactIds.length - selectedTargets.length;
   const errors: string[] = [];
   if (requestedContactIds.length === 0) {
     errors.push("Select at least one eligible artist");
   } else if (skipped > 0) {
-    const rejectedIds = new Set(contactIds);
+    const rejectedIds = new Set(selectedTargets.map((target) => target.contactId));
     for (const contactId of requestedContactIds) {
       if (rejectedIds.has(contactId)) continue;
-      const result = sendability.find((row) => row.contactId === contactId);
+      const result = sendabilityByContact.get(contactId);
       errors.push(
         `${contactId.slice(-6)}: ${
           result?.reason ?? "Selected contact is no longer eligible"
@@ -384,17 +427,39 @@ async function bulkSend(formData: FormData) {
   }
 
   const results = await mapWithConcurrency(
-    contactIds,
+    groups,
     BULK_SEND_CONCURRENCY,
-    async (contactId) => {
+    async (group) => {
       try {
-        const result = scheduledFor
-          ? await scheduleOutreach({ showId, contactId }, scheduledFor)
-          : await sendOutreach({ showId, contactId });
-        return { contactId, result };
+        const result =
+          group.artistIds.length > 1
+            ? scheduledFor
+              ? await scheduleFestivalManagerOutreach(
+                  {
+                    showId,
+                    contactId: group.contactId,
+                    coveredArtistIds: group.artistIds,
+                  },
+                  scheduledFor,
+                )
+              : await sendFestivalManagerOutreach({
+                  showId,
+                  contactId: group.contactId,
+                  coveredArtistIds: group.artistIds,
+                })
+            : scheduledFor
+              ? await scheduleOutreach(
+                  { showId, contactId: group.contactId },
+                  scheduledFor,
+                )
+              : await sendOutreach({
+                  showId,
+                  contactId: group.contactId,
+                });
+        return { group, result };
       } catch (error) {
         return {
-          contactId,
+          group,
           result: {
             ok: false,
             error: error instanceof Error ? error.message : "Unexpected send error",
@@ -404,7 +469,7 @@ async function bulkSend(formData: FormData) {
     }
   );
 
-  for (const { contactId, result } of results) {
+  for (const { group, result } of results) {
     if (result.ok) {
       if (result.scheduled === true) scheduled++;
       else sent++;
@@ -412,7 +477,11 @@ async function bulkSend(formData: FormData) {
       skipped++;
     } else {
       failed++;
-      errors.push(`${contactId.slice(-6)}: ${result.error ?? "Unknown send failure"}`);
+      errors.push(
+        `${group.contactId.slice(-6)}: ${
+          result.error ?? "Unknown send failure"
+        }`,
+      );
     }
   }
   refreshWorkflowViews(returnTo, ["/outreach"]);
@@ -513,7 +582,9 @@ async function queueFestivalOutreach(formData: FormData) {
       return {
         ...target,
         email:
-          recipients.length === 1 && recipients[0] === target.email
+          !result?.fullTeamSend &&
+          recipients.length === 1 &&
+          recipients[0] === target.email
             ? target.email
             : `contact:${target.contactId}`,
       };
@@ -882,15 +953,34 @@ export default async function FestivalDetailPage({
     return true;
   });
 
-  const eligibleSendCount = outreachEnabled
-    ? filtered.filter(
-        (r) => r.sendability?.sendable
-      ).length
-    : 0;
   const managerResearchCount = rows.filter(
     (row) => row.managerResearchEligible
   ).length;
   const bulkFormId = "festival-bulk-outreach";
+  const bulkConfirmationCandidates: FestivalBulkConfirmationCandidate[] =
+    outreachEnabled
+      ? filtered.flatMap((row) => {
+          if (!row.contact || !row.sendability?.sendable) return [];
+          const contactEmail = normalizeEmail(row.contact.email ?? "");
+          const recipients = normalizeEmails(row.sendability.recipients);
+          if (!contactEmail || recipients.length === 0) return [];
+          const shareable =
+            !row.sendability.fullTeamSend &&
+            recipients.length === 1 &&
+            recipients[0] === contactEmail;
+          return [
+            {
+              contactId: row.contact.id,
+              artistName: artistDisplayName(row.artist),
+              groupKey: shareable
+                ? contactEmail
+                : `contact:${row.contact.id}`,
+              emailLabel: recipients.join(", "),
+              selectedByDefault: filter === "unsent",
+            },
+          ];
+        })
+      : [];
 
   const filterOptions: { key: FestivalFilter; label: string }[] = [
     { key: "all", label: "All" },
@@ -1162,41 +1252,19 @@ export default async function FestivalDetailPage({
       </Card>
 
       {outreachEnabled && (
-        <form
-          id={bulkFormId}
+        <FestivalBulkOutreachForm
           action={bulkSend}
-          className="mt-6"
-          aria-label="Bulk festival outreach"
-        >
-          <input type="hidden" name="showId" value={showId} />
-          <input type="hidden" name="filter" value={filter} />
-          <input type="hidden" name="genre" value={genreFilter} />
-          <input
-            type="hidden"
-            name="includeInternational"
-            value={listView.includeInternational ? "1" : "0"}
-          />
-          <input
-            type="hidden"
-            name="dismissed"
-            value={listView.dismissed ? "1" : "0"}
-          />
-          <input type="hidden" name="returnTo" value={returnTo} />
-
-          <div className="z-20 -mx-1 mb-3 flex items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white/95 px-4 py-2 shadow-sm backdrop-blur sm:sticky sm:top-12 dark:border-zinc-800 dark:bg-zinc-950/95">
-            <span className="text-sm text-zinc-600 dark:text-zinc-400">
-              {filtered.length} shown · <b>{eligibleSendCount}</b> sendable
-            </span>
-            <PendingSubmitButton
-              variant="primary"
-              size="md"
-              disabled={eligibleSendCount === 0}
-              pendingLabel={weekend ? "Scheduling selected…" : "Sending selected…"}
-            >
-              Send to selected
-            </PendingSubmitButton>
-          </div>
-        </form>
+          formId={bulkFormId}
+          hiddenFields={{
+            showId,
+            filter,
+            genre: genreFilter,
+            includeInternational: listView.includeInternational ? "1" : "0",
+            dismissed: listView.dismissed ? "1" : "0",
+            returnTo,
+          }}
+          candidates={bulkConfirmationCandidates}
+        />
       )}
 
       <Card className={outreachEnabled ? undefined : "mt-6"}>

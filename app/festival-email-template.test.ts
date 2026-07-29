@@ -35,8 +35,11 @@ test("every original send path selects the show-purpose template before snapshot
     dashboardActions,
     /scheduleOutreach\(\s*\{\s*showId,\s*contactId,\s*trajectoryContext:/,
   );
-  assert.match(festival, /sendOutreach\(\{ showId, contactId \}\)/);
-  assert.match(festival, /scheduleOutreach\(\{ showId, contactId \}/);
+  assert.match(festival, /sendOutreach\(\{[\s\S]*contactId: group\.contactId/);
+  assert.match(
+    festival,
+    /scheduleOutreach\([\s\S]*contactId: group\.contactId/,
+  );
 });
 
 test("immediate and scheduled claims recheck template purpose before snapshots", () => {

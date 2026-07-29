@@ -6323,6 +6323,28 @@ export async function scheduleFestivalManagerOutreach(
   return schedulePreparedOutreach(prep, scheduledFor);
 }
 
+export async function sendFestivalManagerOutreach(input: {
+  showId: string;
+  contactId: string;
+  coveredArtistIds: string[];
+}): Promise<SendOutreachOutput> {
+  const configurationError = getResendConfigurationError(
+    process.env.RESEND_API_KEY,
+    process.env.RESEND_FROM_EMAIL,
+  );
+  if (configurationError) return { ok: false, error: configurationError };
+  const prep = await prepareOriginalOutreach({
+    showId: input.showId,
+    contactId: input.contactId,
+    singleRecipient: true,
+    festivalCoveredArtistIds: input.coveredArtistIds,
+  });
+  if ("error" in prep) return { ok: false, ...prep };
+  const claim = await claimImmediateOutreach(prep);
+  if (claim.kind === "complete") return claim.result;
+  return executeClaimedSend(claim.outreach);
+}
+
 export async function scheduleFollowUp(
   parentOutreachId: string,
   scheduledFor: Date,
