@@ -47,6 +47,7 @@ import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
 import {
   customizeRecipientIdentity,
   customizeRecipientIdentityError,
+  followUpRecipientIdentityError,
   type CustomizeRecipientIdentity,
 } from "@/lib/customizeRecipients";
 import {
@@ -1711,10 +1712,15 @@ async function evaluateLockedOutreachDeliveryPolicy(
   ]);
   await acquireOutreachRecipientPolicyLocks(tx, policyEmails);
   const identityError = outreach.expectedRecipientIdentity
-    ? customizeRecipientIdentityError(
-        contact,
-        outreach.expectedRecipientIdentity,
-      )
+    ? outreach.kind === "follow_up"
+      ? followUpRecipientIdentityError(
+          contact,
+          outreach.expectedRecipientIdentity,
+        )
+      : customizeRecipientIdentityError(
+          contact,
+          outreach.expectedRecipientIdentity,
+        )
     : null;
   if (identityError) {
     return {
@@ -2655,7 +2661,7 @@ export async function getFollowUpEligibilityBatch(
       artistContacts.find((candidate) => candidate.id === parent.contactId) ??
       null;
     const identityError = parentRecipientIdentity
-      ? customizeRecipientIdentityError(contact, parentRecipientIdentity)
+      ? followUpRecipientIdentityError(contact, parentRecipientIdentity)
       : null;
     if (identityError) {
       return followUpResult(parent.id, "blocked", identityError, {
@@ -3732,10 +3738,15 @@ async function preparedDeliveryPolicyBlockingReason(
   ]);
   await acquireOutreachRecipientPolicyLocks(tx, policyEmails);
   const identityError = prep.expectedRecipientIdentity
-    ? customizeRecipientIdentityError(
-        contact,
-        prep.expectedRecipientIdentity,
-      )
+    ? prep.kind === "follow_up"
+      ? followUpRecipientIdentityError(
+          contact,
+          prep.expectedRecipientIdentity,
+        )
+      : customizeRecipientIdentityError(
+          contact,
+          prep.expectedRecipientIdentity,
+        )
     : null;
   if (identityError) return identityError;
   if (
