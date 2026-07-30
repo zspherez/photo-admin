@@ -138,7 +138,11 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
   assert.match(form, /followUpMode/);
   assert.match(
     form,
-    /This follow-up will use the original immutable recipient/,
+    /This follow-up will be sent to the current active management recipient/,
+  );
+  assert.match(
+    form,
+    /This follow-up uses the immutable recipient snapshot/,
   );
   assert.match(form, /Send follow-up now/);
   assert.match(
