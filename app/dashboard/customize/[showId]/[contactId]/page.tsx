@@ -127,7 +127,6 @@ export default async function CustomizePage({
           kind: "original",
           showId,
           artistId: contact.artistId,
-          contactId,
         },
         select: {
           id: true,

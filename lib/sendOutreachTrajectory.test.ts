@@ -165,20 +165,56 @@ test("email sends recheck the selected contact artist under the delivery transac
 
 test("follow-ups tolerate contact version drift without relaxing recipient identity", () => {
   const send = source("lib/sendOutreach.ts");
-  const eligibility = send.slice(
-    send.indexOf("export async function getFollowUpEligibilityBatch"),
-    send.indexOf("type CapturedTrajectoryPreparation"),
-  );
   const preparedPolicy = send.slice(
     send.indexOf("async function preparedDeliveryPolicyBlockingReason"),
     send.indexOf("async function claimedOutreachResult"),
   );
-  assert.match(eligibility, /followUpRecipientIdentityError/);
-  assert.doesNotMatch(eligibility, /customizeRecipientIdentityError/);
   assert.match(preparedPolicy, /prep\.kind === "follow_up"/);
   assert.match(preparedPolicy, /followUpRecipientIdentityError/);
   assert.match(
     send,
     /outreach\.kind === "follow_up"[\s\S]*followUpRecipientIdentityError/,
+  );
+});
+
+test("new follow-ups rebind to current active recipients while retries remain immutable", () => {
+  const send = source("lib/sendOutreach.ts");
+  const eligibility = send.slice(
+    send.indexOf("export async function getFollowUpEligibilityBatch"),
+    send.indexOf("type CapturedTrajectoryPreparation"),
+  );
+  assert.match(eligibility, /currentFollowUpRecipientEmails/);
+  assert.match(eligibility, /mode === "retry" \? child\?\.contactId : parent\.contactId/);
+  assert.match(eligibility, /requestedRecipientEmails: currentRecipients/);
+  assert.match(eligibility, /allowUnmarkedFullTeamSend: true/);
+  assert.doesNotMatch(
+    eligibility,
+    /Shared festival manager coverage changed after the original send/,
+  );
+  assert.match(
+    send,
+    /const expectedRecipientIdentity =\s*customizeRecipientIdentity\(selectedContact\)/,
+  );
+  const preparedFollowUp = send.slice(
+    send.indexOf("async function preparedFollowUpBlockingReason"),
+    send.indexOf("async function preparedTrajectoryBlockingReason"),
+  );
+  assert.doesNotMatch(
+    preparedFollowUp,
+    /parent\.contactId !== prep\.contactId/,
+  );
+  assert.ok(
+    (
+      send.match(
+        /if \(attempt && queued\.contactId !== prep\.contactId\)/g,
+      ) ?? []
+    ).length >= 2,
+  );
+  assert.ok(
+    (
+      send.match(
+        /contactId: prep\.contactId,\s+finalSubject: prep\.subject/g,
+      ) ?? []
+    ).length >= 8,
   );
 });

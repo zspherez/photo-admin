@@ -427,7 +427,7 @@ test("default and bulk outreach calls retain existing recipient semantics", () =
   assert.match(followUp, /updatedAt: true/);
   assert.match(
     followUp,
-    /expectedRecipientIdentity = storedExpectedRecipientIdentity\(parent\)/,
+    /expectedRecipientIdentity =\s*customizeRecipientIdentity\(selectedContact\)/,
   );
   assert.match(followUp, /expectedRecipientIdentity,/);
 });

@@ -287,20 +287,18 @@ test("festival all-contact mode is immutable and release constrained", () => {
   assert.match(migration, /\nCOMMIT;\s*$/);
 });
 
-test("grouped festival follow-ups preserve coverage and single-recipient policy", () => {
+test("grouped festival follow-ups preserve coverage and use current shared recipients", () => {
   const send = source("lib/sendOutreach.ts");
   assert.match(
     send,
     /getFollowUpEligibilityBatch[\s\S]*coveredArtists:[\s\S]*fullTeamSend: true/,
   );
-  assert.match(send, /requestedFullTeamSend: parent\.fullTeamSend/);
+  assert.match(send, /currentFollowUpRecipientEmails/);
+  assert.match(send, /requestedRecipientEmails: currentRecipients/);
+  assert.match(send, /allowUnmarkedFullTeamSend: true/);
   assert.match(
     send,
-    /parentRecipientIdentity = storedExpectedRecipientIdentity\(parent\)/,
-  );
-  assert.match(
-    send,
-    /followUpRecipientIdentityError\(contact, parentRecipientIdentity\)/,
+    /expectedRecipientIdentity =\s*customizeRecipientIdentity\(selectedContact\)/,
   );
   assert.match(
     send,
@@ -310,7 +308,7 @@ test("grouped festival follow-ups preserve coverage and single-recipient policy"
     send,
     /trackingArtistName = coveredArtists[\s\S]*artistDisplayName/,
   );
-  assert.match(
+  assert.doesNotMatch(
     send,
     /Shared festival manager coverage changed after the original send/,
   );

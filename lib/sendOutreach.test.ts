@@ -11,6 +11,7 @@ import {
   canReplaceUnattemptedOutreachSnapshot,
   canRecoverConfigurationOutageWithoutAttempt,
   canRecoverPreparationFailureWithoutAttempt,
+  currentFollowUpRecipientEmails,
   evaluateAttemptRetryEligibility,
   evaluateOutreachDeliveryPolicy,
   festivalOutreachBlockingReason,
@@ -1373,6 +1374,116 @@ test("full-team recipient snapshots exclude quarantined and direct-only contacts
   );
 });
 
+test("follow-ups use every current active email and shared coverage uses the intersection", () => {
+  const contacts = [
+    {
+      artistId: "artist-1",
+      email: "original@example.com",
+      state: "quarantined" as const,
+    },
+    {
+      artistId: "artist-1",
+      email: "new@example.com",
+      state: "active" as const,
+    },
+    {
+      artistId: "artist-1",
+      email: "shared@example.com",
+      state: "active" as const,
+    },
+    {
+      artistId: "artist-2",
+      email: "other@example.com",
+      state: "active" as const,
+    },
+    {
+      artistId: "artist-2",
+      email: "shared@example.com",
+      state: "active" as const,
+    },
+  ];
+  assert.deepEqual(
+    currentFollowUpRecipientEmails(["artist-1"], contacts),
+    ["new@example.com", "shared@example.com"],
+  );
+  assert.deepEqual(
+    currentFollowUpRecipientEmails(["artist-1", "artist-2"], contacts),
+    ["shared@example.com"],
+  );
+});
+
+test("follow-up recipient snapshots can include multiple unmarked current contacts", () => {
+  const contact = {
+    id: "contact-new",
+    artistId: "artist-1",
+    email: "new@example.com",
+    state: "active" as const,
+    isFullTeam: false,
+  };
+  const decision = evaluateOutreachDeliveryPolicy(
+    deliveryPolicyFixture({
+      contactId: contact.id,
+      contact,
+      artistContacts: [
+        contact,
+        {
+          id: "contact-original",
+          artistId: "artist-1",
+          email: "original@example.com",
+          state: "active",
+          isFullTeam: false,
+        },
+      ],
+      stored: null,
+      attempt: null,
+      bccEmails: [],
+      requestedRecipientEmails: [
+        "new@example.com",
+        "original@example.com",
+      ],
+      allowUnmarkedFullTeamSend: true,
+    }),
+  );
+  assert.equal(decision.ok, true);
+  if (decision.ok) {
+    assert.deepEqual(decision.currentRecipients, [
+      "new@example.com",
+      "original@example.com",
+    ]);
+    assert.equal(decision.fullTeamSend, true);
+  }
+});
+
+test("festival all-contacts follow-ups preserve mode when one current email remains", () => {
+  const contact = {
+    id: "contact-current",
+    artistId: "artist-1",
+    email: "current@example.com",
+    state: "active" as const,
+    isFullTeam: false,
+  };
+  const decision = evaluateOutreachDeliveryPolicy(
+    deliveryPolicyFixture({
+      contactId: contact.id,
+      contact,
+      artistContacts: [contact],
+      stored: null,
+      attempt: null,
+      bccEmails: [],
+      requestedFestivalAllContactsSend: true,
+      preserveFestivalAllContactsSend: true,
+      requestedRecipientEmails: ["current@example.com"],
+      allowUnmarkedFullTeamSend: true,
+    }),
+  );
+  assert.equal(decision.ok, true);
+  if (decision.ok) {
+    assert.equal(decision.fullTeamSend, true);
+    assert.equal(decision.festivalAllContactsSend, true);
+    assert.deepEqual(decision.currentRecipients, ["current@example.com"]);
+  }
+});
+
 test("a direct-only contact cannot trigger full-team email fanout", () => {
   const directContact = {
     id: "contact-1",
@@ -2041,6 +2152,13 @@ test("follow-up migration preserves original identity and enforces one child", (
     new URL("../prisma/schema.prisma", import.meta.url),
     "utf8",
   );
+  const currentContactMigration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260730174000_follow_up_current_contact/migration.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
 
   assert.match(
     migration,
@@ -2078,6 +2196,20 @@ test("follow-up migration preserves original identity and enforces one child", (
     migration,
     /WHERE "contactId" IS NULL[\s\S]*CREATE UNIQUE INDEX/,
   );
+  assert.match(currentContactMigration, /^BEGIN;\n/);
+  assert.match(
+    currentContactMigration,
+    /CREATE OR REPLACE FUNCTION "enforce_outreach_follow_up_identity"/,
+  );
+  assert.doesNotMatch(
+    currentContactMigration,
+    /related\."contactId" IS DISTINCT FROM NEW\."contactId"/,
+  );
+  assert.match(
+    currentContactMigration,
+    /related\."showId" IS DISTINCT FROM NEW\."showId"[\s\S]*related\."artistId" IS DISTINCT FROM NEW\."artistId"/,
+  );
+  assert.match(currentContactMigration, /\nCOMMIT;\s*$/);
 
   assert.match(schema, /enum OutreachKind \{\s*original\s*follow_up\s*\}/);
   assert.match(schema, /parentOutreachId\s+String\?\s+@unique/);
