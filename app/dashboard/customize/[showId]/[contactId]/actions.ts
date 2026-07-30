@@ -15,8 +15,11 @@ import {
   type CustomizeRecipientIdentity,
 } from "@/lib/customizeRecipients";
 import {
+  getFollowUpEligibilityBatch,
   getOutreachSendabilityBatch,
+  scheduleFollowUp,
   scheduleOutreach,
+  sendFollowUp,
   sendOutreach,
 } from "@/lib/sendOutreach";
 import { normalizeEmail } from "@/lib/resend";
@@ -45,6 +48,7 @@ export interface CustomizeActionContext {
   contextArtistId: string;
   returnTo: string;
   retryContactId: string | null;
+  parentOutreachId: string | null;
   trajectoryContext: TrajectoryActionContext | null;
 }
 
@@ -93,6 +97,15 @@ export async function sendCustom(
     return actionError(
       selectedContactId,
       "An immutable retry must use its original selected contact",
+    );
+  }
+  if (
+    context.parentOutreachId &&
+    selectedContactId !== contextContactId
+  ) {
+    return actionError(
+      selectedContactId,
+      "A follow-up must use the original outreach contact",
     );
   }
 
@@ -185,31 +198,84 @@ export async function sendCustom(
     return actionError(selectedContactId, identityError);
   }
 
-  const [sendability] = await getOutreachSendabilityBatch([
-    { showId, contactId: selectedContactId, singleRecipient: true },
-  ]);
-  if (!sendability?.sendable) {
-    return actionError(
-      selectedContactId,
-      sendability?.reason ?? "Email outreach is unavailable",
-    );
+  if (context.parentOutreachId) {
+    const [eligibility] = await getFollowUpEligibilityBatch([
+      context.parentOutreachId,
+    ]);
+    if (!eligibility?.eligible) {
+      return actionError(
+        selectedContactId,
+        eligibility?.reason ?? "Follow-up is unavailable",
+      );
+    }
+  } else {
+    const [sendability] = await getOutreachSendabilityBatch([
+      { showId, contactId: selectedContactId, singleRecipient: true },
+    ]);
+    if (!sendability?.sendable) {
+      return actionError(
+        selectedContactId,
+        sendability?.reason ?? "Email outreach is unavailable",
+      );
+    }
   }
 
-  const input = {
-    showId,
-    contactId: selectedContactId,
-    subjectOverride,
-    htmlOverride,
-    singleRecipient: true,
-    expectedRecipientIdentity,
-    trajectoryContext: context.trajectoryContext ?? undefined,
-  };
   const capturedResult = await captureTrajectoryAction(returnTo, () =>
-    intent === "queue"
-      ? scheduleOutreach(input, getNextNormalOutreachDispatch())
-      : isWeekendET()
-        ? scheduleOutreach(input, getNextMondaySlot())
-        : sendOutreach(input),
+    context.parentOutreachId
+      ? intent === "queue"
+        ? scheduleFollowUp(
+            context.parentOutreachId,
+            getNextNormalOutreachDispatch(),
+            context.trajectoryContext ?? undefined,
+            { subjectOverride, htmlOverride },
+          )
+        : isWeekendET()
+          ? scheduleFollowUp(
+              context.parentOutreachId,
+              getNextMondaySlot(),
+              context.trajectoryContext ?? undefined,
+              { subjectOverride, htmlOverride },
+            )
+          : sendFollowUp(
+              context.parentOutreachId,
+              context.trajectoryContext ?? undefined,
+              { subjectOverride, htmlOverride },
+            )
+      : intent === "queue"
+        ? scheduleOutreach(
+            {
+              showId,
+              contactId: selectedContactId,
+              subjectOverride,
+              htmlOverride,
+              singleRecipient: true,
+              expectedRecipientIdentity,
+              trajectoryContext: context.trajectoryContext ?? undefined,
+            },
+            getNextNormalOutreachDispatch(),
+          )
+        : isWeekendET()
+          ? scheduleOutreach(
+              {
+                showId,
+                contactId: selectedContactId,
+                subjectOverride,
+                htmlOverride,
+                singleRecipient: true,
+                expectedRecipientIdentity,
+                trajectoryContext: context.trajectoryContext ?? undefined,
+              },
+              getNextMondaySlot(),
+            )
+          : sendOutreach({
+              showId,
+              contactId: selectedContactId,
+              subjectOverride,
+              htmlOverride,
+              singleRecipient: true,
+              expectedRecipientIdentity,
+              trajectoryContext: context.trajectoryContext ?? undefined,
+            }),
   );
   if (!capturedResult.ok) {
     redirect(capturedResult.errorHref);

@@ -26,6 +26,8 @@ export interface CustomizeRecipientOption {
   isFullTeam: boolean;
   subject: string | null;
   html: string | null;
+  contentLocked: boolean;
+  statusMessage: string | null;
 }
 
 export function CustomizeForm({
@@ -35,6 +37,7 @@ export function CustomizeForm({
   weekend,
   queueLabel,
   initialIntent,
+  followUpMode,
   action,
 }: {
   contextContactId: string;
@@ -43,6 +46,7 @@ export function CustomizeForm({
   weekend: boolean;
   queueLabel: string;
   initialIntent: "send" | "queue";
+  followUpMode: boolean;
   action: (
     previousState: CustomizeActionState,
     formData: FormData,
@@ -62,6 +66,7 @@ export function CustomizeForm({
   const selected =
     recipientOptions.find((option) => option.id === selectedContactId) ?? null;
   const isRetry = selected?.mode === "retry";
+  const contentLocked = selected?.contentLocked === true;
   const selectedDraft = selected ? drafts[selected.id] ?? null : null;
   const visibleError =
     state.error && state.selectedContactId === selectedContactId
@@ -98,7 +103,7 @@ export function CustomizeForm({
           id="selected-contact"
           value={selectedContactId}
           onChange={(event) => setSelectedContactId(event.target.value)}
-          disabled={isRetry}
+          disabled={followUpMode || isRetry}
           className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
         >
           {recipientOptions.map((option) => (
@@ -113,12 +118,16 @@ export function CustomizeForm({
         </select>
         {selected?.eligible && (
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-            {isRetry
+            {followUpMode
+              ? `This follow-up will use the original immutable recipient${
+                  selected.recipients.length === 1 ? "" : "s"
+                }: ${selected.recipients.join(", ")}.`
+              : isRetry
               ? `This retry will use the original immutable recipient${
                   selected.recipients.length === 1 ? "" : "s"
                 }: ${selected.recipients.join(", ")}.`
               : `This email will be sent only to ${selected.email}.`}
-            {selected.isFullTeam && !isRetry
+            {selected.isFullTeam && !isRetry && !followUpMode
               ? " This contact is marked full team, but Customize sends only to the selected address."
               : ""}
           </p>
@@ -160,6 +169,14 @@ export function CustomizeForm({
           {selected.reason ?? "Email outreach is unavailable."}
         </div>
       )}
+      {selected?.statusMessage && (
+        <div
+          role="status"
+          className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+        >
+          {selected.statusMessage}
+        </div>
+      )}
       {isRetry && selected?.sendable && (
         <div
           role="status"
@@ -197,7 +214,7 @@ export function CustomizeForm({
             )
           }
           variables={[]}
-          disabled={isRetry}
+          disabled={contentLocked}
         />
       ) : (
         <div
@@ -230,6 +247,10 @@ export function CustomizeForm({
             ? weekend
               ? "Schedule retry"
               : "Retry now"
+            : followUpMode
+              ? weekend
+                ? "Schedule follow-up"
+                : "Send follow-up now"
             : weekend
               ? "Schedule Monday"
               : "Send now"}

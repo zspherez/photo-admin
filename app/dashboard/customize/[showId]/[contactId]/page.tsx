@@ -5,7 +5,10 @@ import { cookies } from "next/headers";
 import { cache } from "react";
 import { db } from "@/lib/db";
 import { workflowReturnPath } from "@/lib/dashboardReturnUrl";
-import { getOutreachSendabilityBatch } from "@/lib/sendOutreach";
+import {
+  getFollowUpEligibilityBatch,
+  getOutreachSendabilityBatch,
+} from "@/lib/sendOutreach";
 import {
   formatNextDispatchActionLabel,
   getNextNormalOutreachDispatch,
@@ -15,6 +18,7 @@ import {
   buildVarsForShow,
   readOriginalTemplateForShow,
   readOnlyTemplateForPurpose,
+  readTemplateForPurpose,
   originalTemplatePurposeForShow,
 } from "@/lib/template";
 import { Card, CardBody } from "@/components/ui/card";
@@ -51,8 +55,8 @@ const getCustomizeContext = cache(
   async (showId: string, contactId: string) =>
     Promise.all([
       db.show.findUnique({ where: { id: showId } }),
-      db.contact.findFirst({
-        where: { id: contactId, state: "active" },
+      db.contact.findUnique({
+        where: { id: contactId },
         include: { artist: true },
       }),
     ]),
@@ -101,6 +105,7 @@ export default async function CustomizePage({
     runId?: SearchParamValue;
     artistId?: SearchParamValue;
     intent?: SearchParamValue;
+    parentOutreachId?: SearchParamValue;
   }>;
 }) {
   const { showId, contactId } = await params;
@@ -108,8 +113,53 @@ export default async function CustomizePage({
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
   const initialIntent =
     firstSearchParam(search.intent) === "queue" ? "queue" : "send";
+  const parentOutreachId =
+    firstSearchParam(search.parentOutreachId)?.trim() ?? "";
+  const followUpMode = parentOutreachId.length > 0;
   const [show, contact] = await getCustomizeContext(showId, contactId);
-  if (!show || !contact) return notFound();
+  if (!show || !contact || (!followUpMode && contact.state !== "active")) {
+    return notFound();
+  }
+  const followUpParent = followUpMode
+    ? await db.outreach.findFirst({
+        where: {
+          id: parentOutreachId,
+          kind: "original",
+          showId,
+          artistId: contact.artistId,
+          contactId,
+        },
+        select: {
+          id: true,
+          coveredArtists: {
+            orderBy: { artistId: "asc" },
+            select: {
+              artist: { select: { name: true, customName: true } },
+            },
+          },
+          followUp: {
+            select: {
+              id: true,
+              status: true,
+              finalSubject: true,
+              finalHtml: true,
+              recipientEmails: true,
+              recipientSnapshotState: true,
+            },
+          },
+        },
+      })
+    : null;
+  if (followUpMode && !followUpParent) return notFound();
+  const followUpArtistName =
+    followUpParent && followUpParent.coveredArtists.length > 0
+      ? followUpParent.coveredArtists
+          .map(({ artist }) => artistDisplayName(artist))
+          .join(", ")
+      : artistDisplayName(contact.artist);
+  const [followUpEligibility] = followUpMode
+    ? await getFollowUpEligibilityBatch([parentOutreachId])
+    : [];
   const access = await getSessionAccess(
     (await cookies()).get(SESSION_COOKIE)?.value,
   );
@@ -142,10 +192,14 @@ export default async function CustomizePage({
           access === "read_only"
             ? Promise.resolve(
                 readOnlyTemplateForPurpose(
-                  originalTemplatePurposeForShow(show),
+                  followUpMode
+                    ? "follow_up"
+                    : originalTemplatePurposeForShow(show),
                 ),
               )
-            : readOriginalTemplateForShow(show),
+            : followUpMode
+              ? readTemplateForPurpose("follow_up")
+              : readOriginalTemplateForShow(show),
       );
     },
   );
@@ -184,18 +238,22 @@ export default async function CustomizePage({
   const suppressedEmails = suppressions.map(
     (suppression) => suppression.normalizedEmail,
   );
-  const eligibleContacts = eligibleCustomizeRecipientContacts(
-    artistContacts,
-    contactId,
-    suppressedEmails,
-  );
-  const sendabilityRows = await getOutreachSendabilityBatch(
-    eligibleContacts.map((candidate) => ({
-      showId,
-      contactId: candidate.id,
-      singleRecipient: true,
-    })),
-  );
+  const eligibleContacts = followUpMode
+    ? artistContacts.filter((candidate) => candidate.id === contactId)
+    : eligibleCustomizeRecipientContacts(
+        artistContacts,
+        contactId,
+        suppressedEmails,
+      );
+  const sendabilityRows = followUpMode
+    ? []
+    : await getOutreachSendabilityBatch(
+        eligibleContacts.map((candidate) => ({
+          showId,
+          contactId: candidate.id,
+          singleRecipient: true,
+        })),
+      );
   const sendabilityByContact = new Map(
     sendabilityRows.map((row) => [row.contactId, row]),
   );
@@ -225,7 +283,9 @@ export default async function CustomizePage({
     await Promise.all(
       eligibleContacts.map(async (candidate) => {
         const vars = await buildVarsForShow({
-          artistName: artistDisplayName(contact.artist),
+          artistName: followUpMode
+            ? followUpArtistName
+            : artistDisplayName(contact.artist),
           venueName: show.venueName,
           showDate: show.date,
           managerName: candidate.name,
@@ -244,6 +304,57 @@ export default async function CustomizePage({
   );
   const recipientOptions: CustomizeRecipientOption[] = eligibleContacts.map(
     (candidate) => {
+      if (followUpMode) {
+        const identity = customizeRecipientIdentity(candidate)!;
+        const storedFollowUp = followUpParent?.followUp ?? null;
+        const storedContent =
+          storedFollowUp?.recipientSnapshotState === "verified"
+            ? {
+                subject: storedFollowUp.finalSubject,
+                html: storedFollowUp.finalHtml,
+              }
+            : null;
+        const renderedContent =
+          renderedContentByContact.get(candidate.id) ?? null;
+        const useStoredContent =
+          access !== "read_only" &&
+          (followUpEligibility?.mode === "retry" ||
+            followUpEligibility?.state === "pending" ||
+            followUpEligibility?.state === "sent");
+        const content = useStoredContent ? storedContent : renderedContent;
+        return {
+          id: candidate.id,
+          artistId: identity.artistId,
+          email: identity.normalizedEmail,
+          updatedAt: identity.updatedAt,
+          label: recipientLabel(candidate),
+          eligible: true,
+          selectable: false,
+          sendable:
+            followUpEligibility?.eligible === true && content !== null,
+          mode: followUpEligibility?.mode ?? null,
+          reason:
+            followUpEligibility?.reason ??
+            (content ? null : "Follow-up content is unavailable."),
+          recipients:
+            followUpEligibility && followUpEligibility.recipients.length > 0
+              ? followUpEligibility.recipients
+              : (storedFollowUp?.recipientEmails ?? []),
+          isFullTeam: candidate.isFullTeam,
+          subject: content?.subject ?? null,
+          html: content?.html ?? null,
+          contentLocked:
+            followUpEligibility?.mode === "retry" ||
+            followUpEligibility?.state === "pending" ||
+            followUpEligibility?.state === "sent",
+          statusMessage:
+            followUpEligibility?.state === "sent"
+              ? "Follow-up sent. The delivered content is shown below."
+              : followUpEligibility?.state === "pending"
+                ? "Follow-up is already scheduled or in progress. Its immutable content is shown below."
+                : null,
+        };
+      }
       const sendability = sendabilityByContact.get(candidate.id);
       const identity = customizeRecipientIdentity(candidate)!;
       const retrySnapshot =
@@ -294,6 +405,8 @@ export default async function CustomizePage({
         isFullTeam: candidate.isFullTeam,
         subject: content?.subject ?? null,
         html: content?.html ?? null,
+        contentLocked: sendability?.mode === "retry",
+        statusMessage: null,
       };
     },
   );
@@ -318,6 +431,8 @@ export default async function CustomizePage({
       isFullTeam: contact.isFullTeam,
       subject: null,
       html: null,
+      contentLocked: false,
+      statusMessage: null,
     });
   }
   const routeSendability = sendabilityByContact.get(contactId);
@@ -326,7 +441,9 @@ export default async function CustomizePage({
     <main className="mx-auto max-w-3xl px-6 py-10">
       <Link href={safeReturnTo} className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">← Back</Link>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-        Customize &amp; {initialIntent === "queue" ? "queue" : "send"}
+        {followUpMode
+          ? "Customize follow-up"
+          : `Customize & ${initialIntent === "queue" ? "queue" : "send"}`}
       </h1>
       <p className="mt-1 text-sm text-zinc-500">
         {artistDisplayName(contact.artist)} at {show.venueName},{" "}
@@ -345,6 +462,7 @@ export default async function CustomizePage({
             recipientOptions={recipientOptions}
             weekend={isWeekendET()}
             initialIntent={initialIntent}
+            followUpMode={followUpMode}
             queueLabel={formatNextDispatchActionLabel(
               getNextNormalOutreachDispatch(),
             )}
@@ -355,6 +473,7 @@ export default async function CustomizePage({
               returnTo: safeReturnTo,
               retryContactId:
                 routeSendability?.mode === "retry" ? contactId : null,
+              parentOutreachId: followUpMode ? parentOutreachId : null,
               trajectoryContext,
             })}
           />

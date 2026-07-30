@@ -81,6 +81,11 @@ export interface SendOutreachInput {
   festivalAllContacts?: boolean;
 }
 
+export interface FollowUpContentOverrides {
+  subjectOverride?: string;
+  htmlOverride?: string;
+}
+
 export type OutreachKindValue = "original" | "follow_up";
 
 export interface SendOutreachOutput {
@@ -176,6 +181,7 @@ export function followUpParentBlockingReason(
 
 export interface FollowUpEligibility {
   parentOutreachId: string;
+  contactId?: string;
   eligible: boolean;
   state: "eligible" | "pending" | "sent" | "blocked";
   mode: "new" | "retry" | null;
@@ -2280,6 +2286,7 @@ function followUpResult(
     nextAttemptAt?: Date | null;
     recipients?: string[];
     fullTeamSend?: boolean;
+    contactId?: string | null;
   } = {},
 ): FollowUpEligibility {
   return {
@@ -2290,6 +2297,7 @@ function followUpResult(
     reason,
     recipients: details.recipients ?? [],
     fullTeamSend: details.fullTeamSend ?? false,
+    ...(details.contactId ? { contactId: details.contactId } : {}),
     ...(details.followUpOutreachId
       ? { followUpOutreachId: details.followUpOutreachId }
       : {}),
@@ -2516,6 +2524,7 @@ export async function getFollowUpEligibilityBatch(
       isConclusiveRealOutreachAcceptance(child, childAttempt)
     ) {
       return followUpResult(parent.id, "sent", "Follow-up already sent", {
+        contactId: parent.contactId,
         followUpOutreachId: child.id,
         followUpStatus: child.status,
       });
@@ -2526,6 +2535,7 @@ export async function getFollowUpEligibilityBatch(
         "blocked",
         "Follow-up is marked sent without conclusive current provider proof",
         {
+          contactId: parent.contactId,
           followUpOutreachId: child.id,
           followUpStatus: child.status,
         },
@@ -2547,6 +2557,7 @@ export async function getFollowUpEligibilityBatch(
             ? "Follow-up retry is scheduled"
             : "Follow-up is scheduled",
         {
+          contactId: parent.contactId,
           followUpOutreachId: child.id,
           followUpStatus: child.status,
           nextAttemptAt: child.nextAttemptAt ?? child.scheduledFor,
@@ -2707,6 +2718,7 @@ export async function getFollowUpEligibilityBatch(
       );
     }
     return followUpResult(parent.id, "eligible", null, {
+      contactId: parent.contactId,
       mode,
       recipients: policy.currentRecipients,
       fullTeamSend: policy.fullTeamSend,
@@ -2929,6 +2941,7 @@ async function prepareOriginalOutreach(
 async function prepareFollowUpOutreach(
   parentOutreachId: string,
   trajectoryContext?: TrajectoryActionContext,
+  overrides: FollowUpContentOverrides = {},
 ): Promise<PreparedOutreach | { error: string; trajectoryError?: boolean }> {
   const [eligibility] = await getFollowUpEligibilityBatch([
     parentOutreachId,
@@ -3070,6 +3083,12 @@ async function prepareFollowUpOutreach(
     countryCode: parent.show.countryCode,
     countryName: parent.show.countryName,
   });
+  const normalizedSubjectOverride = normalizeLegacyRateTemplateVariable(
+    overrides.subjectOverride?.trim() ?? "",
+  );
+  const normalizedHtmlOverride = normalizeLegacyRateTemplateHtml(
+    overrides.htmlOverride?.trim() ?? "",
+  );
   return {
     kind: "follow_up",
     parentOutreachId: parent.id,
@@ -3083,14 +3102,25 @@ async function prepareFollowUpOutreach(
     recipients: eligibility.recipients,
     fullTeamSend: eligibility.fullTeamSend,
     festivalAllContactsSend: parent.festivalAllContactsSend,
-    subject: applyTemplate(template.subject, vars),
-    html: renderTrackedEmailHtml(
-      template.htmlBody,
-      vars,
-      "follow_up",
-      trackingArtistName,
-      utmSettings,
-    ),
+    subject:
+      eligibility.mode === "new" && normalizedSubjectOverride
+        ? normalizedSubjectOverride
+        : applyTemplate(template.subject, vars),
+    html:
+      eligibility.mode === "new" && normalizedHtmlOverride
+        ? appendEmailUtmToHtml(
+            normalizedHtmlOverride,
+            "follow_up",
+            trackingArtistName,
+            utmSettings,
+          )
+        : renderTrackedEmailHtml(
+            template.htmlBody,
+            vars,
+            "follow_up",
+            trackingArtistName,
+            utmSettings,
+          ),
     expectedRecipientIdentity,
     coveredArtistIds: coveredArtists.map((covered) => covered.artistId),
   };
@@ -5710,6 +5740,7 @@ export async function sendOutreach(
 export async function sendFollowUp(
   parentOutreachId: string,
   trajectoryContext?: TrajectoryActionContext,
+  overrides: FollowUpContentOverrides = {},
 ): Promise<SendOutreachOutput> {
   const configurationError = getResendConfigurationError(
     process.env.RESEND_API_KEY,
@@ -5720,6 +5751,7 @@ export async function sendFollowUp(
   const prep = await prepareFollowUpOutreach(
     parentOutreachId,
     trajectoryContext,
+    overrides,
   );
   if ("error" in prep) return { ok: false, ...prep };
   const claim = await claimImmediateOutreach(prep);
@@ -6442,10 +6474,12 @@ export async function scheduleFollowUp(
   parentOutreachId: string,
   scheduledFor: Date,
   trajectoryContext?: TrajectoryActionContext,
+  overrides: FollowUpContentOverrides = {},
 ): Promise<SendOutreachOutput> {
   const prep = await prepareFollowUpOutreach(
     parentOutreachId,
     trajectoryContext,
+    overrides,
   );
   if ("error" in prep) return { ok: false, ...prep };
   return schedulePreparedOutreach(prep, scheduledFor);

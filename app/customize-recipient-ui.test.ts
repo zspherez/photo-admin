@@ -29,7 +29,7 @@ test("Customize defaults to the URL contact and preserves editor navigation stat
   assert.match(page, /action=\{sendCustom\.bind\(null,/);
   assert.match(page, /returnTo: safeReturnTo/);
   assert.match(form, /<LinkButton href=\{returnTo\}/);
-  assert.match(form, /<TemplateEditor[\s\S]*disabled=\{isRetry\}/);
+  assert.match(form, /<TemplateEditor[\s\S]*disabled=\{contentLocked\}/);
   assert.match(form, /subjectValue=\{selectedDraft\.subject\}/);
   assert.match(form, /htmlValue=\{selectedDraft\.html\}/);
   assert.match(
@@ -71,11 +71,11 @@ test("Customize actions validate the selected contact and preserve failures in p
     actions,
     /getOutreachSendabilityBatch\(\[[\s\S]*singleRecipient: true/,
   );
-  assert.match(actions, /sendOutreach\(input\)/);
-  assert.match(actions, /scheduleOutreach\(input, getNextMondaySlot\(\)\)/);
+  assert.match(actions, /sendOutreach\(\{/);
+  assert.match(actions, /scheduleOutreach\([\s\S]*getNextMondaySlot\(\)/);
   assert.match(
     actions,
-    /scheduleOutreach\(input, getNextNormalOutreachDispatch\(\)\)/,
+    /scheduleOutreach\([\s\S]*getNextNormalOutreachDispatch\(\)/,
   );
   assert.match(actions, /intent === "queue"/);
   assert.match(actions, /return actionError\(selectedContactId/);
@@ -101,8 +101,54 @@ test("immutable retries load their stored preview and lock recipient selection",
   assert.match(page, /subject: validRetrySnapshot\.finalSubject/);
   assert.match(page, /html: validRetrySnapshot\.finalHtml/);
   assert.match(page, /retryContactId:/);
-  assert.match(form, /disabled=\{isRetry\}/);
+  assert.match(form, /disabled=\{followUpMode \|\| isRetry\}/);
+  assert.match(form, /disabled=\{contentLocked\}/);
   assert.match(form, /immutable retry content is unavailable/);
+});
+
+test("follow-up Customize uses the follow-up template and real follow-up actions", () => {
+  const page = source(
+    "app/dashboard/customize/[showId]/[contactId]/page.tsx",
+  );
+  const actions = source(
+    "app/dashboard/customize/[showId]/[contactId]/actions.ts",
+  );
+  const form = source(
+    "app/dashboard/customize/[showId]/[contactId]/customize-form.tsx",
+  );
+  const send = source("lib/sendOutreach.ts");
+
+  assert.match(page, /parentOutreachId/);
+  assert.match(page, /readTemplateForPurpose\("follow_up"\)/);
+  assert.match(page, /getFollowUpEligibilityBatch/);
+  assert.match(page, /followUpParent\?\.followUp/);
+  assert.match(page, /followUpParent\.coveredArtists[\s\S]*artistDisplayName/);
+  assert.match(
+    page,
+    /followUpEligibility\.recipients\.length > 0[\s\S]*storedFollowUp\?\.recipientEmails/,
+  );
+  assert.match(
+    page,
+    /!followUpMode && contact\.state !== "active"/,
+  );
+  assert.match(page, /Follow-up sent\. The delivered content is shown below\./);
+  assert.match(actions, /scheduleFollowUp\(/);
+  assert.match(actions, /sendFollowUp\(/);
+  assert.match(actions, /\{ subjectOverride, htmlOverride \}/);
+  assert.match(form, /followUpMode/);
+  assert.match(
+    form,
+    /This follow-up will use the original immutable recipient/,
+  );
+  assert.match(form, /Send follow-up now/);
+  assert.match(
+    send,
+    /eligibility\.mode === "new" && normalizedSubjectOverride/,
+  );
+  assert.match(
+    send,
+    /eligibility\.mode === "new" && normalizedHtmlOverride/,
+  );
 });
 
 test("immediate, scheduled, and retry delivery use the selected immutable snapshot", () => {

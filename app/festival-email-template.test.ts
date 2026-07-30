@@ -105,8 +105,8 @@ test("Customize uses the festival template and still personalizes each selected 
   assert.match(page, /renderCustomizeRecipientContent\(template, vars\)/);
   assert.match(actions, /contactId: selectedContactId/);
   assert.match(actions, /expectedRecipientIdentity/);
-  assert.match(actions, /sendOutreach\(input\)/);
-  assert.match(actions, /scheduleOutreach\(input, getNextMondaySlot\(\)\)/);
+  assert.match(actions, /sendOutreach\(\{/);
+  assert.match(actions, /scheduleOutreach\([\s\S]*getNextMondaySlot\(\)/);
 });
 
 test("trajectory-aware original, follow-up, and customize paths validate before template writes", () => {

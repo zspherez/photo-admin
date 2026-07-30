@@ -166,7 +166,7 @@ test("festival manager research UI reflects the full eligible lineup", () => {
 test("festival customize links do not require a listening signal", () => {
   assert.match(
     source,
-    /const canCustomize =\s*outreachEnabled &&\s*!!r\.contact &&\s*r\.sendability\?\.mode !== "retry";/
+    /const canCustomize =\s*outreachEnabled &&\s*!!r\.contact &&\s*!r\.followUpEligibility &&\s*r\.sendability\?\.mode !== "retry";/
   );
   assert.match(source, /\{canCustomize && r\.contact && \(/);
   assert.doesNotMatch(
