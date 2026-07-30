@@ -5,6 +5,7 @@ import {
   customizeRecipientIdentityError,
   customizeRecipientSelectionError,
   eligibleCustomizeRecipientContacts,
+  followUpRecipientIdentityError,
   renderCustomizeRecipientContent,
   type CustomizeRecipientContact,
 } from "./customizeRecipients";
@@ -205,5 +206,41 @@ test("bound recipient identity rejects email, state, artist, and version changes
       artistContacts: [contextContact, original],
     }) ?? "",
     /quarantined/,
+  );
+});
+
+test("follow-up identity allows unrelated contact edits but protects delivery identity", () => {
+  const original = contact("route", "manager@example.com");
+  const expected = customizeRecipientIdentity(original)!;
+  assert.equal(
+    followUpRecipientIdentityError(
+      {
+        ...original,
+        updatedAt: new Date("2026-07-30T15:00:00.000Z"),
+      },
+      expected,
+    ),
+    null,
+  );
+  assert.match(
+    followUpRecipientIdentityError(
+      { ...original, email: "new@example.com" },
+      expected,
+    ) ?? "",
+    /email changed/,
+  );
+  assert.match(
+    followUpRecipientIdentityError(
+      { ...original, artistId: "artist-2" },
+      expected,
+    ) ?? "",
+    /artist changed/,
+  );
+  assert.match(
+    followUpRecipientIdentityError(
+      { ...original, state: "quarantined" },
+      expected,
+    ) ?? "",
+    /no longer active/,
   );
 });

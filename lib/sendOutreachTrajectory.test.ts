@@ -162,3 +162,23 @@ test("email sends recheck the selected contact artist under the delivery transac
     /Selected contact no longer belongs to the outreach artist/,
   );
 });
+
+test("follow-ups tolerate contact version drift without relaxing recipient identity", () => {
+  const send = source("lib/sendOutreach.ts");
+  const eligibility = send.slice(
+    send.indexOf("export async function getFollowUpEligibilityBatch"),
+    send.indexOf("type CapturedTrajectoryPreparation"),
+  );
+  const preparedPolicy = send.slice(
+    send.indexOf("async function preparedDeliveryPolicyBlockingReason"),
+    send.indexOf("async function claimedOutreachResult"),
+  );
+  assert.match(eligibility, /followUpRecipientIdentityError/);
+  assert.doesNotMatch(eligibility, /customizeRecipientIdentityError/);
+  assert.match(preparedPolicy, /prep\.kind === "follow_up"/);
+  assert.match(preparedPolicy, /followUpRecipientIdentityError/);
+  assert.match(
+    send,
+    /outreach\.kind === "follow_up"[\s\S]*followUpRecipientIdentityError/,
+  );
+});

@@ -65,6 +65,33 @@ export function customizeRecipientIdentityError(
   return null;
 }
 
+export function followUpRecipientIdentityError(
+  contact: Pick<
+    CustomizeRecipientContact,
+    "id" | "artistId" | "email" | "state" | "updatedAt"
+  > | null,
+  expected: CustomizeRecipientIdentity | null,
+): string | null {
+  if (!contact || !expected) {
+    return "Original recipient identity is missing or invalid";
+  }
+  if (contact.state !== "active") {
+    return "Original recipient contact is no longer active";
+  }
+  const current = customizeRecipientIdentity(contact);
+  if (!current) return "Original recipient has no valid email address";
+  if (current.contactId !== expected.contactId) {
+    return "Original recipient contact changed";
+  }
+  if (current.artistId !== expected.artistId) {
+    return "Original recipient artist changed";
+  }
+  if (current.normalizedEmail !== expected.normalizedEmail) {
+    return "Original recipient email changed";
+  }
+  return null;
+}
+
 export function renderCustomizeRecipientContent(
   template: { subject: string; htmlBody: string },
   vars: TemplateVars,

@@ -300,7 +300,7 @@ test("grouped festival follow-ups preserve coverage and single-recipient policy"
   );
   assert.match(
     send,
-    /customizeRecipientIdentityError\(contact, parentRecipientIdentity\)/,
+    /followUpRecipientIdentityError\(contact, parentRecipientIdentity\)/,
   );
   assert.match(
     send,
