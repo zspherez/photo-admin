@@ -281,6 +281,12 @@ export async function sendFollowUpAction(formData: FormData) {
   const parentOutreachId = String(
     formData.get("parentOutreachId") ?? "",
   ).trim();
+  const intent = String(formData.get("intent") ?? "send");
+  if (intent !== "send" && intent !== "queue") {
+    redirect(
+      dashboardResultHref(returnTo, "error", "Unknown follow-up action"),
+    );
+  }
   if (!parentOutreachId) {
     redirect(
       dashboardResultHref(returnTo, "error", "Missing original outreach"),
@@ -313,13 +319,20 @@ export async function sendFollowUpAction(formData: FormData) {
     );
   }
 
-  const result = isWeekendET()
-    ? await scheduleFollowUp(
+  const result =
+    intent === "queue"
+      ? await scheduleFollowUp(
+          parentOutreachId,
+          getNextNormalOutreachDispatch(),
+          recommendation ?? undefined,
+        )
+      : isWeekendET()
+        ? await scheduleFollowUp(
         parentOutreachId,
         getNextMondaySlot(),
         recommendation ?? undefined,
       )
-    : await sendFollowUp(parentOutreachId, recommendation ?? undefined);
+        : await sendFollowUp(parentOutreachId, recommendation ?? undefined);
   const trajectoryErrorHref = trajectoryActionResultHref(returnTo, result);
   if (trajectoryErrorHref) redirect(trajectoryErrorHref);
   refreshWorkflowViews(returnTo, [

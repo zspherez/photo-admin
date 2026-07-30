@@ -1310,6 +1310,7 @@ export default async function FestivalDetailPage({
               const canCustomize =
                 outreachEnabled &&
                 !!r.contact &&
+                !r.followUpEligibility &&
                 r.sendability?.mode !== "retry";
               const checkboxId = `festival-outreach-${r.artist.id}`;
               const reasonId = `${checkboxId}-reason`;
@@ -1484,6 +1485,7 @@ export default async function FestivalDetailPage({
                       isWeekend={weekend}
                       action={sendFollowUpAction}
                       cancelAction={cancelScheduledAction}
+                      showId={showId}
                     />
                   )}
                   {outreachEnabled && r.manualMarker && (

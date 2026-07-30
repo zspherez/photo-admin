@@ -61,11 +61,33 @@ test("histories distinguish original and follow-up messages", () => {
   );
 });
 
-test("follow-up customization stays global-template only", () => {
+test("follow-up controls expose customization, 9:07 scheduling, and sent status together", () => {
   const button = source("components/follow-up-button.tsx");
   const customize = source(
     "app/dashboard/customize/[showId]/[contactId]/page.tsx",
   );
-  assert.doesNotMatch(button, /Customize|subject|html/);
-  assert.doesNotMatch(customize, /sendFollowUp|scheduleFollowUp/);
+  const actions = source(
+    "app/dashboard/customize/[showId]/[contactId]/actions.ts",
+  );
+  const recommendations = source(
+    "app/recommendations/recommendations-client.tsx",
+  );
+  assert.match(button, /Customize/);
+  assert.match(button, /eligibility\.contactId/);
+  assert.match(button, /Schedule \{OUTREACH_MORNING_DISPATCH_LABEL\}/);
+  assert.match(
+    button,
+    /<LinkButton[\s\S]*Customize[\s\S]*Follow-up sent/,
+  );
+  assert.match(customize, /readTemplateForPurpose\("follow_up"\)/);
+  assert.match(
+    recommendations,
+    /contactId: recommendation\.followUpEligibility\.contactId/,
+  );
+  assert.match(
+    button,
+    /eligibility\.state === "pending"[\s\S]*Customize/,
+  );
+  assert.match(actions, /sendFollowUp/);
+  assert.match(actions, /scheduleFollowUp/);
 });

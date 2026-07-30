@@ -510,13 +510,14 @@ export default async function OutreachLogPage({
                       <p className="text-xs text-zinc-400">
                         {sentDate.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                       </p>
-                      {activeContact?.email && followUpEligibility && (
+                      {followUpEligibility && (
                         <FollowUpButton
                           eligibility={followUpEligibility}
                           returnTo={returnTo}
                           isWeekend={weekend}
                           action={sendFollowUpAction}
                           cancelAction={cancelScheduledAction}
+                          showId={o.show.id}
                         />
                       )}
                     </div>

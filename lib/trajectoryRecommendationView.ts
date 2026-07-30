@@ -93,6 +93,7 @@ export interface RecommendationView {
   } | null;
   followUpEligibility: {
     parentOutreachId: string;
+    contactId?: string;
     eligible: boolean;
     state: "eligible" | "pending" | "sent" | "blocked";
     mode: "new" | "retry" | null;

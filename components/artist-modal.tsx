@@ -386,7 +386,9 @@ function ArtistModal({
                           )
                         : null;
                     const customizeHref =
-                      emailContact && s.sendability?.mode !== "retry"
+                      emailContact &&
+                      !s.followUpEligibility &&
+                      s.sendability?.mode !== "retry"
                         ? withWorkflowReturnTo(
                             `/dashboard/customize/${s.id}/${emailContact.id}`,
                             actionReturnTo,
@@ -467,7 +469,7 @@ function ArtistModal({
                               Customize
                             </LinkButton>
                           )}
-                          {emailContact && followUpEligibility && (
+                          {followUpEligibility && (
                             <FollowUpButton
                               eligibility={followUpEligibility}
                               returnTo={actionReturnTo}

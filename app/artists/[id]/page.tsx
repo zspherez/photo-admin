@@ -1107,13 +1107,14 @@ export default async function ArtistPage({
                           cancelAction={cancelScheduledAction}
                         />
                       )}
-                      {emailContact && followUpEligibility && (
+                      {followUpEligibility && (
                         <FollowUpButton
                           eligibility={followUpEligibility}
                           returnTo={currentReturnTo}
                           isWeekend={weekend}
                           action={sendFollowUpAction}
                           cancelAction={cancelScheduledAction}
+                          showId={s.id}
                         />
                       )}
                     </div>

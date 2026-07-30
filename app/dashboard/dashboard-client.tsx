@@ -1354,6 +1354,7 @@ export function DashboardClient({
                               />
                             )}
                             {emailContact &&
+                              !followUpEligibility &&
                               sendability?.mode !== "retry" && (
                               <LinkButton
                                 href={withWorkflowReturnTo(
@@ -1376,13 +1377,14 @@ export function DashboardClient({
                             No email or phone
                           </span>
                         )}
-                        {emailContact && followUpEligibility && (
+                        {followUpEligibility && (
                           <FollowUpButton
                             eligibility={followUpEligibility}
                             returnTo={returnTo}
                             isWeekend={isWeekend}
                             action={sendFollowUpAction}
                             cancelAction={cancelScheduledAction}
+                            showId={show.id}
                           />
                         )}
                         {(query.mode === "all-nyc" ||

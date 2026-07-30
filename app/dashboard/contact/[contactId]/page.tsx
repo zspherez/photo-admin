@@ -450,13 +450,14 @@ export default async function ContactEditPage({
                           {o.error ? ` · error: ${o.error}` : ""}
                         </p>
                       </div>
-                      {contact.email && eligibility && (
+                      {eligibility && (
                         <FollowUpButton
                           eligibility={eligibility}
                           returnTo={currentReturnTo}
                           isWeekend={weekend}
                           action={sendFollowUpAction}
                           cancelAction={cancelScheduledAction}
+                          showId={o.show.id}
                         />
                       )}
                     </div>

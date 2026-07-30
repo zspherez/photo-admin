@@ -130,6 +130,7 @@ function RecommendationCard({
     ? {
         parentOutreachId:
           recommendation.followUpEligibility.parentOutreachId,
+        contactId: recommendation.followUpEligibility.contactId,
         eligible: recommendation.followUpEligibility.eligible,
         state: recommendation.followUpEligibility.state,
         mode: recommendation.followUpEligibility.mode,
@@ -271,7 +272,9 @@ function RecommendationCard({
               hiddenFields={hiddenFields}
             />
           )}
-          {customizeHref && sendability?.mode !== "retry" && (
+          {customizeHref &&
+            !followUpEligibility &&
+            sendability?.mode !== "retry" && (
             <LinkButton href={customizeHref} variant="secondary" size="sm">
               Customize
             </LinkButton>
@@ -354,7 +357,7 @@ function RecommendationCard({
               {recommendation.dismissed ? "Restore" : "Dismiss"}
             </PendingSubmitButton>
           </form>
-          {followUpEligibility && recommendation.emailContact && (
+          {followUpEligibility && (
             <FollowUpButton
               eligibility={followUpEligibility}
               returnTo={returnTo}

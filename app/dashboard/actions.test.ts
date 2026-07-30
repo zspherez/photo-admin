@@ -114,6 +114,8 @@ test("follow-up action derives identity from the parent and preserves workflow r
     followUp,
     /sendFollowUp\(parentOutreachId, recommendation \?\? undefined\)/,
   );
+  assert.match(followUp, /intent === "queue"/);
+  assert.match(followUp, /getNextNormalOutreachDispatch\(\)/);
   assert.match(followUp, /refreshWorkflowViews\(returnTo/);
   assert.ok(
     followUp.indexOf("refreshWorkflowViews(returnTo") <
@@ -128,6 +130,11 @@ test("follow-up action derives identity from the parent and preserves workflow r
   assert.match(followUpButtonSource, /pendingLabel=/);
   assert.match(followUpButtonSource, /Send follow-up/);
   assert.match(followUpButtonSource, /Schedule follow-up/);
+  assert.match(
+    followUpButtonSource,
+    /Schedule \{OUTREACH_MORNING_DISPATCH_LABEL\}/,
+  );
+  assert.match(followUpButtonSource, /Customize/);
   assert.match(followUpButtonSource, /Follow-up sent/);
   assert.match(followUpButtonSource, /Follow-up unavailable/);
 });

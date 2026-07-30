@@ -60,14 +60,17 @@ test("direct-only contacts expose manual marking without email actions", () => {
   );
 
   assert.match(dashboard, /Boolean\(emailContact \|\| phoneContact\)/);
-  assert.match(dashboard, /emailContact && followUpEligibility/);
+  assert.match(dashboard, /\{followUpEligibility && \(/);
   assert.match(dashboard, /artist\.canMarkManually && \(/);
-  assert.match(festival, /outreachEnabled && r\.followUpEligibility/);
+  assert.match(
+    festival,
+    /outreachEnabled && r\.followUpEligibility/,
+  );
   assert.match(
     festival,
     /name="contactId"[\s\S]*value=\{r\.displayContact\.id\}/,
   );
-  assert.match(contact, /contact\.email && eligibility/);
+  assert.match(contact, /\{eligibility && \(/);
   assert.match(markSent, /select: \{ artistId: true \}/);
   assert.doesNotMatch(markSent, /select: \{ email: true \}/);
 });

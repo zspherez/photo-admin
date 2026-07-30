@@ -1,7 +1,10 @@
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { LinkButton } from "@/components/ui/button";
 import { appConfig } from "@/lib/appConfig";
 import { isCancellableOutreachStatus } from "@/lib/outreachStatus";
 import type { FollowUpEligibility } from "@/lib/sendOutreach";
+import { OUTREACH_MORNING_DISPATCH_LABEL } from "@/lib/schedule";
+import { withWorkflowReturnTo } from "@/lib/workflowLinks";
 
 type FormAction = (formData: FormData) => void | Promise<void>;
 type HiddenField = { name: string; value: string };
@@ -20,36 +23,83 @@ export function FollowUpButton({
   isWeekend: boolean;
   action: FormAction;
   cancelAction?: FormAction;
-  showId?: string;
+  showId: string;
   hiddenFields?: readonly HiddenField[];
 }) {
+  const customizeParams = new URLSearchParams({
+    parentOutreachId: eligibility.parentOutreachId,
+  });
+  for (const field of hiddenFields) {
+    customizeParams.set(field.name, field.value);
+  }
+  const customizeHref = eligibility.contactId
+    ? withWorkflowReturnTo(
+        `/dashboard/customize/${encodeURIComponent(
+          showId,
+        )}/${encodeURIComponent(eligibility.contactId)}?${customizeParams}`,
+        returnTo,
+      )
+    : null;
+
   if (eligibility.eligible) {
     return (
-      <form action={action}>
-        <input
-          type="hidden"
-          name="parentOutreachId"
-          value={eligibility.parentOutreachId}
-        />
-        <input type="hidden" name="returnTo" value={returnTo} />
-        {hiddenFields.map((field) => (
+      <div className="flex flex-wrap items-center gap-1.5">
+        {customizeHref && (
+          <LinkButton href={customizeHref} variant="secondary" size="sm">
+            Customize
+          </LinkButton>
+        )}
+        <form action={action}>
           <input
-            key={field.name}
             type="hidden"
-            name={field.name}
-            value={field.value}
+            name="parentOutreachId"
+            value={eligibility.parentOutreachId}
           />
-        ))}
-        <PendingSubmitButton
-          variant="secondary"
-          size="sm"
-          pendingLabel={
-            isWeekend ? "Scheduling follow-up…" : "Sending follow-up…"
-          }
-        >
-          {isWeekend ? "Schedule follow-up" : "Send follow-up"}
-        </PendingSubmitButton>
-      </form>
+          <input type="hidden" name="returnTo" value={returnTo} />
+          <input type="hidden" name="intent" value="send" />
+          {hiddenFields.map((field) => (
+            <input
+              key={field.name}
+              type="hidden"
+              name={field.name}
+              value={field.value}
+            />
+          ))}
+          <PendingSubmitButton
+            variant="secondary"
+            size="sm"
+            pendingLabel={
+              isWeekend ? "Scheduling follow-up…" : "Sending follow-up…"
+            }
+          >
+            {isWeekend ? "Schedule follow-up" : "Send follow-up"}
+          </PendingSubmitButton>
+        </form>
+        <form action={action}>
+          <input
+            type="hidden"
+            name="parentOutreachId"
+            value={eligibility.parentOutreachId}
+          />
+          <input type="hidden" name="returnTo" value={returnTo} />
+          <input type="hidden" name="intent" value="queue" />
+          {hiddenFields.map((field) => (
+            <input
+              key={field.name}
+              type="hidden"
+              name={field.name}
+              value={field.value}
+            />
+          ))}
+          <PendingSubmitButton
+            variant="secondary"
+            size="sm"
+            pendingLabel="Scheduling follow-up…"
+          >
+            Schedule {OUTREACH_MORNING_DISPATCH_LABEL}
+          </PendingSubmitButton>
+        </form>
+      </div>
     );
   }
 
@@ -59,6 +109,11 @@ export function FollowUpButton({
   ) {
     return (
       <div className="flex items-center gap-1.5">
+        {customizeHref && (
+          <LinkButton href={customizeHref} variant="secondary" size="sm">
+            Customize
+          </LinkButton>
+        )}
         <span
           className="text-xs font-medium text-amber-700 dark:text-amber-300"
           title={eligibility.reason ?? undefined}
@@ -113,9 +168,16 @@ export function FollowUpButton({
 
   if (eligibility.state === "sent") {
     return (
-      <span className="text-xs font-medium text-emerald-700 dark:text-emerald-300">
-        Follow-up sent
-      </span>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {customizeHref && (
+          <LinkButton href={customizeHref} variant="secondary" size="sm">
+            Customize
+          </LinkButton>
+        )}
+        <span className="text-xs font-medium text-emerald-700 dark:text-emerald-300">
+          Follow-up sent
+        </span>
+      </div>
     );
   }
 
