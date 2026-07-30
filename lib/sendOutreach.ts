@@ -533,6 +533,60 @@ export function activeContactRecipientEmails(
   );
 }
 
+export function currentFollowUpRecipientEmails(
+  coveredArtistIds: readonly string[],
+  contacts: readonly {
+    artistId: string;
+    email: string | null;
+    state: "active" | "quarantined";
+  }[],
+): string[] {
+  const artistIds = Array.from(new Set(coveredArtistIds));
+  if (artistIds.length === 0) return [];
+  const emailSets = artistIds.map(
+    (artistId) =>
+      new Set(
+        activeContactRecipientEmails(
+          contacts.filter((contact) => contact.artistId === artistId),
+        ),
+      ),
+  );
+  return [...emailSets[0]].filter((email) =>
+    emailSets.every((emails) => emails.has(email)),
+  );
+}
+
+function currentFollowUpContact<
+  T extends {
+    id: string;
+    artistId: string;
+    email: string | null;
+    state: "active" | "quarantined";
+  },
+>(
+  artistId: string,
+  recipientEmails: readonly string[],
+  contacts: readonly T[],
+  preferredContactId?: string | null,
+): T | null {
+  const recipients = new Set(normalizeEmails([...recipientEmails]));
+  const candidates = contacts
+    .filter(
+      (contact) =>
+        contact.artistId === artistId &&
+        contact.state === "active" &&
+        normalizeEmails(contact.email ? [contact.email] : []).some((email) =>
+          recipients.has(email),
+        ),
+    )
+    .sort((left, right) => left.id.localeCompare(right.id));
+  return (
+    candidates.find((contact) => contact.id === preferredContactId) ??
+    candidates[0] ??
+    null
+  );
+}
+
 export function getOutreachConfigurationRetryAt(
   completedAttempts: number,
   now: Date = new Date(),
@@ -1149,6 +1203,9 @@ export interface EvaluateOutreachDeliveryPolicyInput {
   allowMissingFrom?: boolean;
   requestedFullTeamSend?: boolean;
   requestedFestivalAllContactsSend?: boolean;
+  requestedRecipientEmails?: readonly string[];
+  allowUnmarkedFullTeamSend?: boolean;
+  preserveFestivalAllContactsSend?: boolean;
 }
 
 export type OutreachDeliveryPolicyDecision =
@@ -1193,6 +1250,9 @@ export function evaluateOutreachDeliveryPolicy({
   allowMissingFrom = false,
   requestedFullTeamSend,
   requestedFestivalAllContactsSend,
+  requestedRecipientEmails,
+  allowUnmarkedFullTeamSend = false,
+  preserveFestivalAllContactsSend = false,
 }: EvaluateOutreachDeliveryPolicyInput): OutreachDeliveryPolicyDecision {
   if (showSyncStatus === null) {
     return { ok: false, state: "cancelled", error: "Show not found" };
@@ -1242,12 +1302,18 @@ export function evaluateOutreachDeliveryPolicy({
 
   const festivalAllContactsSend =
     stored?.festivalAllContactsSend ??
-    (requestedFestivalAllContactsSend
+    (preserveFestivalAllContactsSend
+      ? requestedFestivalAllContactsSend === true
+      : requestedFestivalAllContactsSend
       ? activeContactRecipientEmails(artistContacts).length > 1
       : false);
   const fullTeamSend =
     stored?.fullTeamSend ??
-    (requestedFestivalAllContactsSend
+    (festivalAllContactsSend
+      ? true
+      : requestedRecipientEmails
+      ? normalizeEmails([...requestedRecipientEmails]).length > 1
+      : requestedFestivalAllContactsSend
       ? festivalAllContactsSend
       : requestedFullTeamSend ?? contact.isFullTeam);
   if (festivalAllContactsSend && !fullTeamSend) {
@@ -1257,7 +1323,12 @@ export function evaluateOutreachDeliveryPolicy({
       error: "Festival all-contacts mode requires an all-recipient snapshot",
     };
   }
-  if (fullTeamSend && !contact.isFullTeam && !festivalAllContactsSend) {
+  if (
+    fullTeamSend &&
+    !contact.isFullTeam &&
+    !festivalAllContactsSend &&
+    !allowUnmarkedFullTeamSend
+  ) {
     return {
       ok: false,
       state: stored ? "manual_review" : "cancelled",
@@ -1267,9 +1338,11 @@ export function evaluateOutreachDeliveryPolicy({
     };
   }
 
-  const intendedRecipients = fullTeamSend
-    ? activeContactRecipientEmails(artistContacts)
-    : activeContactRecipientEmails([contact]);
+  const intendedRecipients = requestedRecipientEmails
+    ? normalizeEmails([...requestedRecipientEmails])
+    : fullTeamSend
+      ? activeContactRecipientEmails(artistContacts)
+      : activeContactRecipientEmails([contact]);
   if (intendedRecipients.length === 0) {
     return {
       ok: false,
@@ -1660,43 +1733,22 @@ async function evaluateLockedOutreachDeliveryPolicy(
   const artistContacts = coveredContacts.filter(
     (candidate) => candidate.artistId === outreach.artistId,
   );
+  const currentFollowUpRecipients =
+    outreach.kind === "follow_up"
+      ? currentFollowUpRecipientEmails(coveredArtistIds, coveredContacts)
+      : null;
   const contact =
     artistContacts.find((candidate) => candidate.id === outreach.contactId) ??
     null;
-  if (
-    coveredArtistIds.length > 1 &&
-    (!outreach.expectedRecipientIdentity ||
-      coveredArtistIds.some(
-        (artistId) =>
-          !coveredContacts.some(
-            (candidate) =>
-              candidate.artistId === artistId &&
-              candidate.state === "active" &&
-              normalizeEmails([candidate.email ?? ""]).includes(
-                outreach.expectedRecipientIdentity!.normalizedEmail,
-              ),
-          ),
-      ))
-  ) {
-    return {
-      decision: {
-        ok: false,
-        state: "manual_review",
-        error:
-          "Shared festival manager coverage changed after scheduling",
-      },
-      submissionCredential: null,
-    };
-  }
-
   const deliverySettings = await getResendDeliverySettingsSnapshot(tx);
   const { testOverride, bccEmails } = deliverySettings;
   const intendedRecipients =
-    outreach.fullTeamSend
+    currentFollowUpRecipients ??
+    (outreach.fullTeamSend
       ? activeContactRecipientEmails(artistContacts)
       : contact
         ? activeContactRecipientEmails([contact])
-        : [];
+        : []);
   const storedRequest = parseResendRequestSnapshot(attempt.providerRequest);
   const policyEmails = normalizeEmails([
     ...intendedRecipients,
@@ -1762,6 +1814,10 @@ async function evaluateLockedOutreachDeliveryPolicy(
         deliverySettings.apiKey,
         deliverySettings.from,
       ),
+      requestedRecipientEmails:
+        currentFollowUpRecipients ?? undefined,
+      allowUnmarkedFullTeamSend: outreach.kind === "follow_up",
+      preserveFestivalAllContactsSend: outreach.kind === "follow_up",
     }),
     submissionCredential: getResendSubmissionCredential(
       deliverySettings.apiKey,
@@ -2466,18 +2522,6 @@ export async function getFollowUpEligibilityBatch(
 
   return parentOutreachIds.map((parentOutreachId) => {
     const parent = parentById.get(parentOutreachId);
-    let parentRecipientIdentity: CustomizeRecipientIdentity | null = null;
-    if (parent) {
-      try {
-        parentRecipientIdentity = storedExpectedRecipientIdentity(parent);
-      } catch (error) {
-        return followUpResult(
-          parentOutreachId,
-          "blocked",
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-    }
     const parentAttempt = parent
       ? attemptByKey.get(parent.idempotencyKey)
       : null;
@@ -2497,15 +2541,31 @@ export async function getFollowUpEligibilityBatch(
     const childAttempt = child
       ? attemptByKey.get(child.idempotencyKey)
       : null;
+    let childRecipientIdentity: CustomizeRecipientIdentity | null = null;
+    if (child) {
+      try {
+        childRecipientIdentity = storedExpectedRecipientIdentity(child);
+      } catch (error) {
+        return followUpResult(
+          parent.id,
+          "blocked",
+          error instanceof Error ? error.message : String(error),
+          {
+            followUpOutreachId: child.id,
+            followUpStatus: child.status,
+          },
+        );
+      }
+    }
     if (
       child &&
       (child.kind !== "follow_up" ||
         child.parentOutreachId !== parent.id ||
         child.showId !== parent.showId ||
         child.artistId !== parent.artistId ||
-        child.contactId !== parent.contactId ||
+        child.contactId !== childRecipientIdentity?.contactId ||
+        child.artistId !== childRecipientIdentity?.artistId ||
         child.festivalAllContactsSend !== parent.festivalAllContactsSend ||
-        !sameExpectedRecipientIdentity(child, parentRecipientIdentity) ||
         !sameOrderedStrings(
           child.coveredArtists.length > 0
             ? child.coveredArtists.map((covered) => covered.artistId)
@@ -2530,7 +2590,7 @@ export async function getFollowUpEligibilityBatch(
       isConclusiveRealOutreachAcceptance(child, childAttempt)
     ) {
       return followUpResult(parent.id, "sent", "Follow-up already sent", {
-        contactId: parent.contactId,
+        contactId: child.contactId,
         followUpOutreachId: child.id,
         followUpStatus: child.status,
       });
@@ -2541,7 +2601,7 @@ export async function getFollowUpEligibilityBatch(
         "blocked",
         "Follow-up is marked sent without conclusive current provider proof",
         {
-          contactId: parent.contactId,
+          contactId: child.contactId,
           followUpOutreachId: child.id,
           followUpStatus: child.status,
         },
@@ -2563,7 +2623,7 @@ export async function getFollowUpEligibilityBatch(
             ? "Follow-up retry is scheduled"
             : "Follow-up is scheduled",
         {
-          contactId: parent.contactId,
+          contactId: child.contactId,
           followUpOutreachId: child.id,
           followUpStatus: child.status,
           nextAttemptAt: child.nextAttemptAt ?? child.scheduledFor,
@@ -2656,19 +2716,28 @@ export async function getFollowUpEligibilityBatch(
       parent.coveredArtists.length > 0
         ? parent.coveredArtists.map((covered) => covered.artistId)
         : [parent.artistId];
-    const artistContacts = contactsByArtist.get(parent.artistId) ?? [];
-    const contact =
-      artistContacts.find((candidate) => candidate.id === parent.contactId) ??
-      null;
-    const identityError = parentRecipientIdentity
-      ? followUpRecipientIdentityError(contact, parentRecipientIdentity)
-      : null;
-    if (identityError) {
-      return followUpResult(parent.id, "blocked", identityError, {
+    const currentRecipients = currentFollowUpRecipientEmails(
+      coveredArtistIds,
+      contacts,
+    );
+    const unsuppressedRecipients = currentRecipients.filter(
+      (email) => !suppressedEmails.includes(email),
+    );
+    const preferredContactId =
+      mode === "retry" ? child?.contactId : parent.contactId;
+    const contact = currentFollowUpContact(
+      parent.artistId,
+      unsuppressedRecipients,
+      contacts,
+      preferredContactId,
+    );
+    if (!contact) {
+      return followUpResult(parent.id, "blocked", "No current active management email is available for follow-up", {
         followUpOutreachId: child?.id,
         followUpStatus: child?.status,
       });
     }
+    const artistContacts = contactsByArtist.get(parent.artistId) ?? [];
     const policy = evaluateOutreachDeliveryPolicy({
       showSyncStatus: show?.syncStatus ?? null,
       associationExists:
@@ -2678,7 +2747,7 @@ export async function getFollowUpEligibilityBatch(
           ),
         ),
       artistId: parent.artistId,
-      contactId: parent.contactId,
+      contactId: contact.id,
       subject: mode === "retry" && child ? child.finalSubject : "",
       contact,
       artistContacts,
@@ -2689,9 +2758,9 @@ export async function getFollowUpEligibilityBatch(
       bccEmails: deliverySettings.bccEmails,
       suppressedEmails,
       allowMissingFrom: mode === "new",
-      requestedFullTeamSend: parent.fullTeamSend,
-      requestedFestivalAllContactsSend:
-        parent.festivalAllContactsSend,
+      requestedRecipientEmails: currentRecipients,
+      allowUnmarkedFullTeamSend: true,
+      preserveFestivalAllContactsSend: true,
     });
     if (!policy.ok) {
       return followUpResult(parent.id, "blocked", policy.error, {
@@ -2699,32 +2768,8 @@ export async function getFollowUpEligibilityBatch(
         followUpStatus: child?.status,
       });
     }
-    if (
-      coveredArtistIds.length > 1 &&
-      (!parent.expectedRecipientEmail ||
-        coveredArtistIds.some(
-          (artistId) =>
-            !normalizeEmails(
-              (contactsByArtist.get(artistId) ?? []).flatMap((candidate) =>
-                candidate.state === "active" && candidate.email
-                  ? [candidate.email]
-                  : [],
-              ),
-            ).includes(parent.expectedRecipientEmail!),
-        ))
-    ) {
-      return followUpResult(
-        parent.id,
-        "blocked",
-        "Shared festival manager coverage changed after the original send",
-        {
-          followUpOutreachId: child?.id,
-          followUpStatus: child?.status,
-        },
-      );
-    }
     return followUpResult(parent.id, "eligible", null, {
-      contactId: parent.contactId,
+      contactId: contact.id,
       mode,
       recipients: policy.currentRecipients,
       fullTeamSend: policy.fullTeamSend,
@@ -2959,7 +3004,10 @@ async function prepareFollowUpOutreach(
     };
   }
 
-  const [parent, utmSettings] = await Promise.all([
+  if (!eligibility.contactId) {
+    return { error: "Current follow-up contact is unavailable" };
+  }
+  const [parent, selectedContact, utmSettings] = await Promise.all([
     db.outreach.findUnique({
       where: { id: parentOutreachId },
       select: {
@@ -2982,6 +3030,7 @@ async function prepareFollowUpOutreach(
             artist: { select: { name: true, customName: true } },
           },
         },
+        artist: { select: { name: true, customName: true } },
         show: {
           select: {
             venueName: true,
@@ -2997,17 +3046,17 @@ async function prepareFollowUpOutreach(
             dismissedAt: true,
           },
         },
-        contact: {
-          select: {
-            id: true,
-            artistId: true,
-            email: true,
-            name: true,
-            state: true,
-            updatedAt: true,
-            artist: { select: { name: true, customName: true } },
-          },
-        },
+      },
+    }),
+    db.contact.findUnique({
+      where: { id: eligibility.contactId },
+      select: {
+        id: true,
+        artistId: true,
+        email: true,
+        name: true,
+        state: true,
+        updatedAt: true,
       },
     }),
     readEmailUtmSettingsSnapshot(),
@@ -3021,22 +3070,18 @@ async function prepareFollowUpOutreach(
   if (parent.show.isFestival && parent.show.dismissedAt) {
     return { error: "Restore this festival before sending follow-up" };
   }
-  if (
-    !parent.contactId ||
-    !parent.contact ||
-    parent.contact.id !== parent.contactId ||
-    parent.contact.state !== "active"
-  ) {
-    return { error: "Selected contact is no longer available" };
+  if (!selectedContact || selectedContact.state !== "active") {
+    return { error: "Current follow-up contact is no longer available" };
   }
-  if (parent.contact.artistId !== parent.artistId) {
+  if (selectedContact.artistId !== parent.artistId) {
     return {
-      error: "Selected contact no longer belongs to the outreach artist",
+      error: "Current follow-up contact does not belong to the outreach artist",
     };
   }
-  const expectedRecipientIdentity = storedExpectedRecipientIdentity(parent);
+  const expectedRecipientIdentity =
+    customizeRecipientIdentity(selectedContact);
   if (!expectedRecipientIdentity) {
-    return { error: "Selected contact has no valid active recipient address" };
+    return { error: "Current follow-up contact has no valid email address" };
   }
   const coveredArtists =
     parent.coveredArtists.length > 0
@@ -3044,7 +3089,7 @@ async function prepareFollowUpOutreach(
       : [
           {
             artistId: parent.artistId,
-            artist: parent.contact.artist,
+            artist: parent.artist,
           },
         ];
   const associations = await db.showArtist.findMany({
@@ -3082,7 +3127,7 @@ async function prepareFollowUpOutreach(
     artistName: trackingArtistName,
     venueName: parent.show.venueName,
     showDate: parent.show.date,
-    managerName: parent.contact.name,
+    managerName: selectedContact.name,
     eventName: parent.show.eventName,
     city: parent.show.city,
     state: parent.show.state,
@@ -3102,7 +3147,7 @@ async function prepareFollowUpOutreach(
     trajectoryContext: trajectoryContext ?? null,
     showId: parent.showId,
     artistId: parent.artistId,
-    contactId: parent.contactId,
+    contactId: selectedContact.id,
     templateId: template.id,
     templatePurpose: "follow_up",
     recipients: eligibility.recipients,
@@ -3634,8 +3679,7 @@ async function preparedFollowUpBlockingReason(
   if (
     !parent ||
     parent.showId !== prep.showId ||
-    parent.artistId !== prep.artistId ||
-    parent.contactId !== prep.contactId
+    parent.artistId !== prep.artistId
   ) {
     return "Follow-up identity no longer matches its original outreach";
   }
@@ -3714,6 +3758,10 @@ async function preparedDeliveryPolicyBlockingReason(
   const artistContacts = coveredContacts.filter(
     (candidate) => candidate.artistId === prep.artistId,
   );
+  const currentFollowUpRecipients =
+    prep.kind === "follow_up"
+      ? currentFollowUpRecipientEmails(prep.coveredArtistIds, coveredContacts)
+      : null;
   const deliverySettings = await getResendDeliverySettingsSnapshot(tx);
   const festivalBlocked = festivalOutreachBlockingReason(show, prep.kind);
   if (festivalBlocked) return festivalBlocked;
@@ -3749,23 +3797,6 @@ async function preparedDeliveryPolicyBlockingReason(
         )
     : null;
   if (identityError) return identityError;
-  if (
-    prep.coveredArtistIds.length > 1 &&
-    (!prep.expectedRecipientIdentity ||
-      prep.coveredArtistIds.some(
-        (artistId) =>
-          !coveredContacts.some(
-            (candidate) =>
-              candidate.artistId === artistId &&
-              candidate.state === "active" &&
-              normalizeEmails([candidate.email ?? ""]).includes(
-                prep.expectedRecipientIdentity!.normalizedEmail,
-              ),
-          ),
-      ))
-  ) {
-    return "Covered festival artists no longer share the selected manager email";
-  }
   const suppressions =
     policyEmails.length === 0
       ? []
@@ -3794,6 +3825,10 @@ async function preparedDeliveryPolicyBlockingReason(
     requestedFullTeamSend: prep.fullTeamSend,
     requestedFestivalAllContactsSend:
       prep.festivalAllContactsSend,
+    requestedRecipientEmails:
+      currentFollowUpRecipients ?? undefined,
+    allowUnmarkedFullTeamSend: prep.kind === "follow_up",
+    preserveFestivalAllContactsSend: prep.kind === "follow_up",
   });
   if (!decision.ok) return decision.error;
   if (
@@ -4025,19 +4060,18 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           },
         };
       }
-      if (queued.contactId !== prep.contactId) {
+      const attempt = await currentAttempt(tx, queued.idempotencyKey);
+      if (attempt && queued.contactId !== prep.contactId) {
         return {
           kind: "complete",
           result: {
             ok: false,
             error:
-              "A previous queued send must be recovered with its original contact",
+              "An attempted queued send must be recovered with its immutable contact",
             outreachId: queued.id,
           },
         };
       }
-
-      const attempt = await currentAttempt(tx, queued.idempotencyKey);
       if (attempt) {
         await assertStoredOutreachCoverageMatches(tx, queued.id, prep);
       }
@@ -4099,7 +4133,8 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           ),
           ...(!attempt
             ? {
-                finalSubject: prep.subject,
+               contactId: prep.contactId,
+               finalSubject: prep.subject,
                 finalHtml: prep.html,
                 recipientEmails: prep.recipients,
                 recipientSnapshotState: "verified",
@@ -4197,6 +4232,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         data: {
           status: "queued",
           error: null,
+          contactId: prep.contactId,
           finalSubject: prep.subject,
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
@@ -4236,6 +4272,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         data: {
           status: "queued",
           error: null,
+          contactId: prep.contactId,
           finalSubject: prep.subject,
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
@@ -4339,6 +4376,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         data: {
           status: "queued",
           error: null,
+          contactId: prep.contactId,
           finalSubject: prep.subject,
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
@@ -4411,6 +4449,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         data: {
           status: "queued",
           error: null,
+          contactId: prep.contactId,
           finalSubject: prep.subject,
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
@@ -6051,16 +6090,15 @@ async function schedulePreparedOutreach(
           outreachId: queued.id,
         };
       }
-      if (queued.contactId !== prep.contactId) {
+      const attempt = await currentAttempt(tx, queued.idempotencyKey);
+      if (attempt && queued.contactId !== prep.contactId) {
         return {
           ok: false,
           error:
-            "A previous queued send must be recovered with its original contact",
+            "An attempted queued send must be recovered with its immutable contact",
           outreachId: queued.id,
         };
       }
-
-      const attempt = await currentAttempt(tx, queued.idempotencyKey);
       if (attempt) {
         await assertStoredOutreachCoverageMatches(tx, queued.id, prep);
       }
@@ -6117,7 +6155,8 @@ async function schedulePreparedOutreach(
           ),
           ...(!attempt
             ? {
-                finalSubject: prep.subject,
+               contactId: prep.contactId,
+               finalSubject: prep.subject,
                 finalHtml: prep.html,
                 recipientEmails: prep.recipients,
                 recipientSnapshotState: "verified",
@@ -6199,6 +6238,7 @@ async function schedulePreparedOutreach(
         data: {
           status: "scheduled",
           error: null,
+          contactId: prep.contactId,
           finalSubject: prep.subject,
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
@@ -6230,6 +6270,7 @@ async function schedulePreparedOutreach(
         data: {
           status: "scheduled",
           error: null,
+          contactId: prep.contactId,
           finalSubject: prep.subject,
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
@@ -6313,6 +6354,7 @@ async function schedulePreparedOutreach(
         data: {
           status: "scheduled",
           error: null,
+          contactId: prep.contactId,
           finalSubject: prep.subject,
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
@@ -6378,6 +6420,7 @@ async function schedulePreparedOutreach(
         data: {
           status: "scheduled",
           error: null,
+          contactId: prep.contactId,
           finalSubject: prep.subject,
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
