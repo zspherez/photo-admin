@@ -49,7 +49,11 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /contactProbe,\s*contactExportSnapshotProbe,\s*directOutreachNoteProbe,\s*directOutreachProvenanceProbe,\s*festivalGeographyProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*outreachAttemptProbe,\s*outreachCoveredArtistProbe/,
+    /contactProbe,\s*contactExportSnapshotProbe,\s*directOutreachNoteProbe,\s*directOutreachProvenanceProbe,\s*festivalGeographyProbe,\s*festivalUtmCampaignProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*outreachAttemptProbe,\s*outreachCoveredArtistProbe/,
+  );
+  assert.deepEqual(
+    selectedScalarFields(source, "show"),
+    ["id", "festivalUtmCampaign"],
   );
   assert.match(source, /db\.contactExportSnapshot\.findMany/);
   assert.deepEqual(
@@ -135,7 +139,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*artistCustomNameProbe,\s*contactResearchCandidateProbe,\s*contactResearchCandidateStatusConstraintProbe,\s*contactExportSnapshotProbe,\s*contactResearchDirectOutreachProbe,\s*directOutreachProvenanceProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*outreachCoveredArtistProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditRosterSnapshotProbe,\s*contactAuditRosterEntryProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*contactAuditArtistDecisionProbe,\s*contactAuditDecisionContactProbe,\s*contactAuditRosterConstraintProbe,\s*contactAuditRosterIndexProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*emailTemplateConstraintProbe,\s*emailTemplateCanonicalWriteProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryFeedbackEventProbe,\s*trajectoryShowOutcomeProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*trajectoryFeedbackTriggerProbe,\s*trajectoryFeedbackIndexProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*artistCustomNameProbe,\s*contactResearchCandidateProbe,\s*contactResearchCandidateStatusConstraintProbe,\s*contactExportSnapshotProbe,\s*contactResearchDirectOutreachProbe,\s*directOutreachProvenanceProbe,\s*festivalUtmCampaignProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*outreachCoveredArtistProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditRosterSnapshotProbe,\s*contactAuditRosterEntryProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*contactAuditArtistDecisionProbe,\s*contactAuditDecisionContactProbe,\s*contactAuditRosterConstraintProbe,\s*contactAuditRosterIndexProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*emailTemplateConstraintProbe,\s*emailTemplateCanonicalWriteProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryFeedbackEventProbe,\s*trajectoryShowOutcomeProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*trajectoryFeedbackTriggerProbe,\s*trajectoryFeedbackIndexProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,
@@ -502,6 +506,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
     source,
     /addedRuntimeRoleProbes: \[[\s\S]*"ArbitraryEmail",[\s\S]*"ArbitraryEmail\.text",[\s\S]*"ArbitraryEmail\.scheduledFor",[\s\S]*"ArbitraryEmail\.claimToken",[\s\S]*"ArbitraryEmail\.providerCredentialScope",[\s\S]*"ArbitraryEmail\.dismissedAt",[\s\S]*"Outreach\.expectedRecipientUpdatedAt",[\s\S]*"Outreach_dispatch_recipient_identity_check",[\s\S]*"ResendWebhookEvent\.arbitraryEmailId",[\s\S]*"EmailTemplate\.purpose",[\s\S]*"DashboardShowSnapshot",[\s\S]*"DashboardShowSnapshotMember",[\s\S]*"TrajectoryModelRun",[\s\S]*"TrajectoryRunArtist",[\s\S]*"TrajectoryRecommendation",[\s\S]*"TrajectoryImportIssue",[\s\S]*"TrajectoryFeedbackEvent",[\s\S]*"TrajectoryShowOutcome",[\s\S]*"Outreach\.trajectoryRecommendationId",[\s\S]*"Trajectory feedback append-only triggers",[\s\S]*"Trajectory feedback indexes",[\s\S]*"TrajectoryModelRun_one_ready_artist_trajectory_idx",[\s\S]*\]/,
   );
+  assert.match(source, /"Show\.festivalUtmCampaign"/);
   assert.match(
     source,
     /trajectoryFeedbackTriggerProbe\.length === 5[\s\S]*trigger\.enabled === "O"/,

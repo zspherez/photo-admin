@@ -183,11 +183,13 @@ export function appendEmailUtmToHtml(
   kind: EmailUtmKind,
   artistName: string,
   settings: EmailUtmSettings,
+  campaignOverride?: string | null,
 ): string {
   const campaign =
-    kind === "original"
+    campaignOverride?.trim() ||
+    (kind === "original"
       ? settings.utm_campaign_original
-      : settings.utm_campaign_follow_up;
+      : settings.utm_campaign_follow_up);
   return appendUtmParametersToHtml(html, [
     ["utm_source", settings.utm_source.trim()],
     ["utm_medium", settings.utm_medium.trim()],
@@ -244,11 +246,13 @@ export function renderTrackedEmailHtml(
   kind: EmailUtmKind,
   artistName: string,
   settings: EmailUtmSettings,
+  campaignOverride?: string | null,
 ): string {
   return appendEmailUtmToHtml(
     applyHtmlTemplate(templateHtml, vars),
     kind,
     artistName,
     settings,
+    campaignOverride,
   );
 }

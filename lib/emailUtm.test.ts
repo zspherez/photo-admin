@@ -41,6 +41,18 @@ test("explicit UTM parameters win while missing parameters are added", () => {
   assert.doesNotMatch(html, /utm_content=ignored-artist/);
 });
 
+test("festival campaign overrides replace the configured campaign for new links", () => {
+  const html = appendEmailUtmToHtml(
+    '<a href="https://example.com/gallery">Gallery</a>',
+    "follow_up",
+    "Artist",
+    DEFAULTS,
+    "experts-only-2026",
+  );
+  assert.match(html, /utm_campaign=experts-only-2026/);
+  assert.doesNotMatch(html, /utm_campaign=follow_up/);
+});
+
 test("single and double quoted hrefs and uppercase web schemes are tracked", () => {
   const html = appendEmailUtmToHtml(
     `<a href='HTTP://Example.com/one'>One</a><a HREF="HTTPS://example.com/two">Two</a>`,

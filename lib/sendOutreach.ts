@@ -2975,6 +2975,7 @@ async function prepareOriginalOutreach(
           "original",
           trackingArtistName,
           utmSettings,
+          show.isFestival ? show.festivalUtmCampaign : null,
         )
       : renderTrackedEmailHtml(
           template.htmlBody,
@@ -2982,6 +2983,7 @@ async function prepareOriginalOutreach(
           "original",
           trackingArtistName,
           utmSettings,
+          show.isFestival ? show.festivalUtmCampaign : null,
         ),
     expectedRecipientIdentity:
       expectedRecipientIdentity ?? currentRecipientIdentity,
@@ -3040,6 +3042,7 @@ async function prepareFollowUpOutreach(
             state: true,
             countryCode: true,
             countryName: true,
+            festivalUtmCampaign: true,
             syncStatus: true,
             isFestival: true,
             festivalNycStatus: true,
@@ -3164,6 +3167,9 @@ async function prepareFollowUpOutreach(
             "follow_up",
             trackingArtistName,
             utmSettings,
+            parent.show.isFestival
+              ? parent.show.festivalUtmCampaign
+              : null,
           )
         : renderTrackedEmailHtml(
             template.htmlBody,
@@ -3171,6 +3177,9 @@ async function prepareFollowUpOutreach(
             "follow_up",
             trackingArtistName,
             utmSettings,
+            parent.show.isFestival
+              ? parent.show.festivalUtmCampaign
+              : null,
           ),
     expectedRecipientIdentity,
     coveredArtistIds: coveredArtists.map((covered) => covered.artistId),

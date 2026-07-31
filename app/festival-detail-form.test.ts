@@ -253,3 +253,44 @@ test("festival rows show provider-tracked delivery and engagement badges", () =>
     /\{r\.engagementOutreach && \(\s*<OutreachDeliveryBadges[\s\S]*outreach=\{r\.engagementOutreach\}/,
   );
 });
+
+test("festival pages persist an optional UTM campaign for all festival email kinds", () => {
+  assert.match(source, /async function saveFestivalUtmCampaign/);
+  assert.match(source, /requireServerActionAuth/);
+  assert.match(source, /normalizeFestivalUtmCampaign/);
+  assert.match(
+    source,
+    /data: \{ festivalUtmCampaign \}/,
+  );
+  assert.match(source, /name="festivalUtmCampaign"/);
+  assert.match(source, /Festival UTM campaign saved\./);
+
+  const send = readFileSync(
+    new URL("../lib/sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  assert.ok(
+    (send.match(/festivalUtmCampaign/g)?.length ?? 0) >= 5,
+  );
+  assert.match(
+    send,
+    /show\.isFestival \? show\.festivalUtmCampaign : null/,
+  );
+  assert.match(
+    send,
+    /parent\.show\.isFestival[\s\S]*parent\.show\.festivalUtmCampaign/,
+  );
+
+  const migration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260731013000_festival_utm_campaign/migration.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(migration, /^BEGIN;\n/);
+  assert.match(migration, /ADD COLUMN "festivalUtmCampaign" TEXT/);
+  assert.doesNotMatch(migration, /"isFestival" = true/);
+  assert.match(migration, /BETWEEN 1 AND 200/);
+  assert.match(migration, /\nCOMMIT;\s*$/);
+});
