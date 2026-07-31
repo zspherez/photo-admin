@@ -94,6 +94,10 @@ import {
   type FestivalBulkConfirmationCandidate,
 } from "@/components/festival-bulk-outreach-form";
 import { OutreachDeliveryBadges } from "@/components/outreach-delivery-badges";
+import {
+  FESTIVAL_UTM_CAMPAIGN_MAX_LENGTH,
+  normalizeFestivalUtmCampaign,
+} from "@/lib/festivalUtm";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -114,6 +118,7 @@ const getFestivalDetails = cache(async (showId: string) =>
       ticketUrl: true,
       isFestival: true,
       festivalNycStatus: true,
+      festivalUtmCampaign: true,
       eventName: true,
       syncStatus: true,
       dismissedAt: true,
@@ -710,6 +715,42 @@ async function queueFestivalManagerResearch(formData: FormData) {
   redirect(destination);
 }
 
+async function saveFestivalUtmCampaign(formData: FormData) {
+  "use server";
+  await requireServerActionAuth(formData.get("returnTo") ?? "/festivals");
+  const showId = String(formData.get("showId") ?? "").trim();
+  const filter = parseFestivalFilter(formData.get("filter"));
+  const genre = parseFestivalGenre(formData.get("genre"));
+  const listView = parseFestivalListView({
+    includeInternational: formData.get("includeInternational"),
+    dismissed: formData.get("dismissed"),
+  });
+  if (!showId) redirect(festivalListPath(listView));
+
+  let destination: string;
+  try {
+    const festivalUtmCampaign = normalizeFestivalUtmCampaign(
+      formData.get("festivalUtmCampaign"),
+    );
+    const updated = await db.show.updateMany({
+      where: { id: showId, isFestival: true },
+      data: { festivalUtmCampaign },
+    });
+    if (updated.count !== 1) throw new Error("Festival not found");
+    refreshWorkflowViews(formData.get("returnTo"), []);
+    destination = bulkResultHref(showId, filter, genre, listView, {
+      utm_saved: "1",
+    });
+  } catch (error) {
+    destination = bulkResultHref(showId, filter, genre, listView, {
+      error: (
+        error instanceof Error ? error.message : "Unable to save UTM campaign"
+      ).slice(0, 180),
+    });
+  }
+  redirect(destination);
+}
+
 export default async function FestivalDetailPage({
   params,
   searchParams,
@@ -745,6 +786,7 @@ export default async function FestivalDetailPage({
     followup_scheduled?: SearchParamValue;
     includeInternational?: SearchParamValue;
     dismissed?: SearchParamValue;
+    utm_saved?: SearchParamValue;
   }>;
 }) {
   const { showId } = await params;
@@ -778,6 +820,7 @@ export default async function FestivalDetailPage({
     queueArtists: firstSearchParam(sp.queue_artists),
     queueFailed: firstSearchParam(sp.queue_failed),
     queueSkipped: firstSearchParam(sp.queue_skipped),
+    utmSaved: firstSearchParam(sp.utm_saved),
   };
   const now = new Date();
   const weekend = isWeekendET();
@@ -1113,7 +1156,58 @@ export default async function FestivalDetailPage({
         </div>
       </div>
 
+      <Card className="mt-4">
+        <form
+          action={saveFestivalUtmCampaign}
+          className="flex flex-wrap items-end gap-3 p-4"
+        >
+          <input type="hidden" name="showId" value={showId} />
+          <input type="hidden" name="filter" value={filter} />
+          <input type="hidden" name="genre" value={genreFilter} />
+          <input type="hidden" name="returnTo" value={returnTo} />
+          {listView.includeInternational && (
+            <input type="hidden" name="includeInternational" value="1" />
+          )}
+          {listView.dismissed && (
+            <input type="hidden" name="dismissed" value="1" />
+          )}
+          <div className="min-w-64 flex-1">
+            <label
+              htmlFor="festival-utm-campaign"
+              className="text-sm font-medium"
+            >
+              Festival UTM campaign
+            </label>
+            <input
+              id="festival-utm-campaign"
+              name="festivalUtmCampaign"
+              defaultValue={festival.festivalUtmCampaign ?? ""}
+              maxLength={FESTIVAL_UTM_CAMPAIGN_MAX_LENGTH}
+              placeholder="experts-only-2026"
+              className="mt-1 block min-h-11 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-base placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none sm:min-h-9 sm:text-sm dark:border-zinc-800 dark:bg-zinc-950 dark:placeholder:text-zinc-600"
+            />
+            <p className="mt-1 text-xs text-zinc-500">
+              Overrides utm_campaign on links in newly prepared emails for
+              this festival. Leave blank to use the global original or
+              follow-up campaign.
+            </p>
+          </div>
+          <PendingSubmitButton
+            variant="secondary"
+            size="sm"
+            pendingLabel="Saving campaign…"
+          >
+            Save campaign
+          </PendingSubmitButton>
+        </form>
+      </Card>
+
       <div className="mt-4 space-y-2">
+        {notices.utmSaved && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Festival UTM campaign saved.
+          </div>
+        )}
         {!festivalActive && (
           <div
             role="alert"

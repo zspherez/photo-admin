@@ -700,6 +700,7 @@ model Show {
   isFestival                Boolean                       @default(false)
   /// inside_nyc, outside_nyc, or unknown for festival eligibility.
   festivalNycStatus         String?
+  festivalUtmCampaign       String?
   eventName                 String?
   source                    String?
   /// Provider status; blocked is retained only for legacy compatibility.

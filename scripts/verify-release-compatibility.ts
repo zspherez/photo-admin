@@ -47,6 +47,7 @@ async function main(): Promise<void> {
     directOutreachNoteProbe,
     directOutreachProvenanceProbe,
     festivalGeographyProbe,
+    festivalUtmCampaignProbe,
     outreachKindProbe,
     outreachDispatchIdentityConstraintProbe,
     outreachAttemptProbe,
@@ -142,6 +143,13 @@ async function main(): Promise<void> {
         ],
       },
       take: 1,
+    }),
+    db.show.findMany({
+      take: 1,
+      select: {
+        id: true,
+        festivalUtmCampaign: true,
+      },
     }),
     db.outreach.findMany({
       take: 1,
@@ -787,6 +795,7 @@ async function main(): Promise<void> {
           contactExportSnapshotProbe,
           contactResearchDirectOutreachProbe,
           directOutreachProvenanceProbe,
+          festivalUtmCampaignProbe,
           outreachKindProbe,
           outreachDispatchIdentityConstraintProbe,
           outreachCoveredArtistProbe,
@@ -884,6 +893,7 @@ async function main(): Promise<void> {
         "ContactResearchCandidate_status_check",
         "ContactResearchDirectOutreachProposal",
         "Contact.agentDirectOutreachProvenance",
+        "Show.festivalUtmCampaign",
         "ContactAuditRequest",
         "ContactExportSnapshot",
         "ContactAuditRun",
