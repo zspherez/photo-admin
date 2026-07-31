@@ -66,3 +66,24 @@ test("outreach sent date and follow-up controls stay right aligned", () => {
     /className="ml-auto flex shrink-0 flex-col items-end gap-1\.5"/,
   );
 });
+
+test("outreach email center shows a recent click stream without client metadata", () => {
+  const outreach = source("app/outreach/page.tsx");
+  const webhook = source("app/api/resend/webhook/route.ts");
+  const migration = source(
+    "prisma/migrations/20260731155000_outreach_click_stream/migration.sql",
+  );
+  assert.match(outreach, /Recent link clicks/);
+  assert.match(outreach, /type: "email\.clicked"/);
+  assert.match(outreach, /correlationStatus: "matched"/);
+  assert.match(outreach, /outreachClickLabel/);
+  assert.match(outreach, /providerCreatedAt\.toLocaleString/);
+  assert.match(webhook, /resendClickMetadata/);
+  assert.doesNotMatch(webhook, /ipAddress|userAgent/);
+  assert.match(migration, /^BEGIN;\n/);
+  assert.match(migration, /ADD COLUMN "clickedLink" TEXT/);
+  assert.match(migration, /ResendWebhookEvent_click_metadata_check/);
+  assert.match(migration, /email\.clicked/);
+  assert.match(migration, /"clickedLink" IS NOT NULL/);
+  assert.match(migration, /\nCOMMIT;\s*$/);
+});

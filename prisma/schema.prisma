@@ -973,6 +973,9 @@ model ResendWebhookEvent {
   providerMessageId String?
   recipientEmails   String[]             @default([])
   providerCreatedAt DateTime
+  clickedLink       String?
+  clickUtmCampaign  String?
+  clickUtmContent   String?
   outreachId        String?
   outreach          Outreach?            @relation(fields: [outreachId], references: [id], onDelete: SetNull)
   attemptId         String?
@@ -984,6 +987,7 @@ model ResendWebhookEvent {
   processedAt       DateTime             @default(now())
 
   @@index([outreachId, providerCreatedAt])
+  @@index([type, providerCreatedAt])
   @@index([attemptId, providerCreatedAt])
   @@index([arbitraryEmailId, providerCreatedAt])
 }

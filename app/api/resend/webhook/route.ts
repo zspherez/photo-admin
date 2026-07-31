@@ -15,6 +15,7 @@ import {
   arbitraryEmailWebhookRecipientImpact,
   arbitraryEmailWebhookConflict,
 } from "@/lib/arbitraryEmail";
+import { resendClickMetadata } from "@/lib/resendClick";
 
 interface ResendEvent {
   type: string;
@@ -216,6 +217,10 @@ async function processEvent(
           const arbitraryEmailId = findArbitraryEmailId(parsed);
           const messageId = parsed.data.email_id ?? null;
           const providerCreatedAt = eventDate(parsed);
+          const clickMetadata = resendClickMetadata(
+            parsed.type,
+            parsed.data.click,
+          );
           const impactedRecipients =
             arbitraryEmailWebhookImpactedRecipients(parsed.data);
 
@@ -298,6 +303,7 @@ async function processEvent(
                   providerMessageId: messageId,
                   recipientEmails: impactedRecipients,
                   providerCreatedAt,
+                  ...clickMetadata,
                   correlationStatus: "conflict",
                   correlationError: conflict ?? "arbitrary email not found",
                 },
@@ -316,6 +322,7 @@ async function processEvent(
                 providerMessageId: messageId,
                 recipientEmails: impactedRecipients,
                 providerCreatedAt,
+                ...clickMetadata,
                 arbitraryEmailId: arbitraryEmail.id,
                 correlationStatus: "matched",
               },
@@ -464,6 +471,7 @@ async function processEvent(
               providerMessageId: messageId,
               recipientEmails: impactedRecipients,
               providerCreatedAt,
+              ...clickMetadata,
               outreachId: matchedAttempt?.outreachId ?? null,
               attemptId: matchedAttempt?.id ?? null,
               correlationStatus: correlation.status,

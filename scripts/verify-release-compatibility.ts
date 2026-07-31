@@ -539,6 +539,9 @@ async function main(): Promise<void> {
       take: 1,
       select: {
         arbitraryEmailId: true,
+        clickedLink: true,
+        clickUtmCampaign: true,
+        clickUtmContent: true,
       },
     }),
     db.emailTemplate.findMany({
@@ -917,6 +920,7 @@ async function main(): Promise<void> {
         "OutreachCoveredArtist",
         "Outreach_dispatch_recipient_identity_check",
         "ResendWebhookEvent.arbitraryEmailId",
+        "ResendWebhookEvent click metadata",
         "EmailTemplate.purpose",
         "EmailTemplate_canonical_purpose_default_check",
         "EmailTemplate canonical write rollback probe",
