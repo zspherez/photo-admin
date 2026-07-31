@@ -31,6 +31,7 @@ import {
   hasDirectOutreachNote,
   isDirectOutreachOnly,
 } from "@/lib/contactDisplay";
+import { outreachClickLabel } from "@/lib/outreachClickStream";
 import { EmailBulkSelection } from "@/components/email-bulk-selection";
 import { updateOutreachEmailVisibilityAction } from "@/app/outreach/actions";
 
@@ -184,6 +185,7 @@ export default async function OutreachLogPage({
     totalClicked,
     totalFailed,
     dismissedCount,
+    recentClicks,
   ] = await Promise.all([
     db.outreach.count({ where }),
     db.outreach.count({ where: { dismissedAt: null } }),
@@ -201,6 +203,34 @@ export default async function OutreachLogPage({
       where: { dismissedAt: null, status: "failed" },
     }),
     db.outreach.count({ where: { dismissedAt: { not: null } } }),
+    db.resendWebhookEvent.findMany({
+      where: {
+        type: "email.clicked",
+        correlationStatus: "matched",
+        clickedLink: { not: null },
+        outreachId: { not: null },
+      },
+      orderBy: [{ providerCreatedAt: "desc" }, { eventId: "desc" }],
+      take: 50,
+      select: {
+        eventId: true,
+        providerCreatedAt: true,
+        clickedLink: true,
+        clickUtmCampaign: true,
+        clickUtmContent: true,
+        outreach: {
+          select: {
+            kind: true,
+            artist: {
+              select: { name: true, customName: true },
+            },
+            show: {
+              select: { isFestival: true },
+            },
+          },
+        },
+      },
+    }),
   ]);
   const pagination = getPagination(
     filteredTotal,
@@ -337,6 +367,62 @@ export default async function OutreachLogPage({
           </Card>
         ))}
       </div>
+
+      <Card className="mt-6">
+        <div className="border-b border-zinc-100 px-4 py-3 dark:border-zinc-900">
+          <h2 className="text-sm font-semibold">Recent link clicks</h2>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            Latest tracked outreach link clicks. New webhook events appear
+            here as they arrive.
+          </p>
+        </div>
+        {recentClicks.length === 0 ? (
+          <p className="px-4 py-6 text-sm text-zinc-500">
+            No tracked link clicks yet.
+          </p>
+        ) : (
+          <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
+            {recentClicks.flatMap((click) => {
+              if (!click.clickedLink || !click.outreach) return [];
+              const label = outreachClickLabel({
+                artistName: click.outreach.artist.name,
+                artistCustomName: click.outreach.artist.customName,
+                isFestival: click.outreach.show.isFestival,
+                utmCampaign: click.clickUtmCampaign,
+                utmContent: click.clickUtmContent,
+              });
+              return [
+                <li
+                  key={click.eventId}
+                  className="flex items-center justify-between gap-4 px-4 py-2.5 text-sm"
+                >
+                  <a
+                    href={click.clickedLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="min-w-0 truncate font-medium hover:underline"
+                    title={`${click.outreach.kind === "follow_up" ? "Follow-up" : "Original"} outreach · ${click.clickedLink}`}
+                  >
+                    {label} ↗
+                  </a>
+                  <time
+                    dateTime={click.providerCreatedAt.toISOString()}
+                    className="shrink-0 text-xs text-zinc-500"
+                  >
+                    {click.providerCreatedAt.toLocaleString("en-US", {
+                      timeZone: appConfig.timeZone,
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </time>
+                </li>,
+              ];
+            })}
+          </ul>
+        )}
+      </Card>
 
       <Card className="mt-6 p-3">
         <form className="flex gap-2" action="/outreach" method="get">

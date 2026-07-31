@@ -45,3 +45,10 @@ test("webhook transaction lock is first and retries conflicts with backoff", () 
   );
   assert.match(source, /timeout: 15_000/);
 });
+
+test("webhook event rows persist sanitized click metadata in every correlation path", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(source, /resendClickMetadata\(\s*parsed\.type,\s*parsed\.data\.click/);
+  assert.ok((source.match(/\.\.\.clickMetadata/g)?.length ?? 0) >= 3);
+  assert.doesNotMatch(source, /ipAddress|userAgent/);
+});
