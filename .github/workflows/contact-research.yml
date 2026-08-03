@@ -6,7 +6,18 @@ on:
     - cron: "*/10 * * * *"
     # Refresh artist/show eligibility hourly, then drain resulting work.
     - cron: "23 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      import_festival_contacts:
+        description: Import FESTIVAL_CONTACTS_IMPORT_GZIP_BASE64 into review
+        required: false
+        default: false
+        type: boolean
+      import_dry_run:
+        description: Validate and summarize without writing candidates
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -23,7 +34,73 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  import:
+    name: Import festival contact candidates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Import encrypted festival contact CSV
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.import_festival_contacts }}
+        shell: bash
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          FESTIVAL_CONTACTS_IMPORT_GZIP_BASE64: ${{ secrets.FESTIVAL_CONTACTS_IMPORT_GZIP_BASE64 }}
+          IMPORT_DRY_RUN: ${{ inputs.import_dry_run }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APP_BASE_URL}" || -z "${FESTIVAL_CONTACTS_IMPORT_GZIP_BASE64}" ]]; then
+            echo "::error::APP_BASE_URL and FESTIVAL_CONTACTS_IMPORT_GZIP_BASE64 are required"
+            exit 1
+          fi
+          oidc_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="?"
+          if [[ "${oidc_url}" == *"?"* ]]; then separator="&"; fi
+          oidc_token="$(
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              --header "Accept: application/json" \
+              "${oidc_url}${separator}audience=photo-admin-contact-research" |
+              jq -er '.value | select(type == "string" and length > 0)'
+          )"
+          echo "::add-mask::${oidc_token}"
+          jq -cn \
+            --arg gzipBase64 "${FESTIVAL_CONTACTS_IMPORT_GZIP_BASE64}" \
+            --argjson dryRun "${IMPORT_DRY_RUN}" \
+            '{ gzipBase64: $gzipBase64, dryRun: $dryRun }' \
+            > "${RUNNER_TEMP}/festival-contact-import.json"
+          response="$(
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --connect-timeout 15 \
+              --max-time 120 \
+              --request POST \
+              --header "Authorization: Bearer ${oidc_token}" \
+              --header "Content-Type: application/json" \
+              --data-binary "@${RUNNER_TEMP}/festival-contact-import.json" \
+              "${APP_BASE_URL%/}/api/contact-research/import-festival-contacts"
+          )"
+          printf '%s' "${response}" |
+            jq -e '{
+              rows,
+              rowsWithoutEmail,
+              invalidEmails,
+              unmatchedArtists,
+              ambiguousArtists,
+              intentionallySkippedArtists,
+              exactActiveMatches,
+              existingCandidates,
+              createdCandidates,
+              reviewJobs,
+              dryRun
+            }'
+
   prepare:
+    needs: import
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.import_festival_contacts }}
     runs-on: ubuntu-latest
     outputs:
       claimable: ${{ steps.queue.outputs.claimable }}
