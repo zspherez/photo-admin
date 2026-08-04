@@ -3,6 +3,7 @@ import { gzipSync } from "node:zlib";
 import test from "node:test";
 import {
   decodeFestivalContactImportPayload,
+  festivalContactRowEmails,
   parseFestivalContactCsv,
   planFestivalContactImport,
 } from "./festivalContactImport";
@@ -21,12 +22,22 @@ test("festival contact CSV parser handles quoted commas and gzip payloads", () =
   );
 });
 
+test("festival contact rows split and deduplicate semicolon-separated emails", () => {
+  assert.deepEqual(
+    festivalContactRowEmails(
+      "first@example.com; second@example.com; first@example.com",
+    ),
+    ["first@example.com", "second@example.com"],
+  );
+});
+
 test("festival contact import skips exact matches and plans new/conflicting candidates", () => {
   const rows = parseFestivalContactCsv(
     [
       HEADER,
       "Festival,Aug 1,Fri,Artist,existing@example.com,Website,https://example.com,N,high,Exact,",
       "Festival,Aug 1,Fri,Artist,new@example.com,Website,https://example.com,N,medium,New,",
+      "Festival,Aug 1,Fri,Artist,new@example.com; second@example.com,Website,https://example.com,N,high,Multiple,",
       "Festival,Aug 1,Fri,Unknown,unknown@example.com,Website,https://example.com,N,high,Unknown,",
       "Festival,Aug 1,Fri,Artist,,none-found,,N,none-found,None,",
     ].join("\n"),
@@ -49,10 +60,13 @@ test("festival contact import skips exact matches and plans new/conflicting cand
     true,
   );
   assert.equal(plan.summary.exactActiveMatches, 1);
-  assert.equal(plan.summary.createdCandidates, 1);
+  assert.equal(plan.summary.createdCandidates, 2);
   assert.equal(plan.summary.unmatchedArtists, 1);
   assert.equal(plan.summary.rowsWithoutEmail, 1);
-  assert.equal(plan.candidates[0].normalizedEmail, "new@example.com");
+  assert.deepEqual(
+    plan.candidates.map((candidate) => candidate.normalizedEmail).sort(),
+    ["new@example.com", "second@example.com"],
+  );
 });
 
 test("festival contact import respects intentional skips and prior candidate decisions", () => {
