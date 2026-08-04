@@ -36,6 +36,7 @@ test("confirmation groups selected artists by the exact server grouping key", ()
           recipients: ["manager@example.com"],
           primaryRecipientEmail: "manager@example.com",
           recipientDeliveryMode: "individual_threads",
+          immutableDeliveryMode: false,
           selectedByDefault: false,
         },
         {
@@ -46,6 +47,7 @@ test("confirmation groups selected artists by the exact server grouping key", ()
           recipients: ["manager@example.com"],
           primaryRecipientEmail: "manager@example.com",
           recipientDeliveryMode: "individual_threads",
+          immutableDeliveryMode: false,
           selectedByDefault: false,
         },
         {
@@ -56,6 +58,7 @@ test("confirmation groups selected artists by the exact server grouping key", ()
           recipients: ["manager@example.com", "team@example.com"],
           primaryRecipientEmail: "manager@example.com",
           recipientDeliveryMode: "individual_threads",
+          immutableDeliveryMode: false,
           selectedByDefault: false,
         },
       ],
@@ -68,6 +71,8 @@ test("confirmation groups selected artists by the exact server grouping key", ()
         artistNames: ["Artist A", "Artist B"],
         recipients: ["manager@example.com"],
         primaryRecipientEmail: "manager@example.com",
+        recipientDeliveryMode: "individual_threads",
+        immutableDeliveryMode: false,
       },
       {
         groupKey: "contact:contact-c",
@@ -75,6 +80,8 @@ test("confirmation groups selected artists by the exact server grouping key", ()
         artistNames: ["Artist C"],
         recipients: ["manager@example.com", "team@example.com"],
         primaryRecipientEmail: "manager@example.com",
+        recipientDeliveryMode: "individual_threads",
+        immutableDeliveryMode: false,
       },
     ],
   );

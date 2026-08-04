@@ -16,6 +16,11 @@ test("recipient delivery migration preserves existing rows as separate threads",
     /"recipientDeliveryMode" TEXT NOT NULL DEFAULT 'individual_threads'/,
   );
   assert.match(migration, /"primaryRecipientEmail" TEXT/);
+  assert.match(migration, /"providerMessageIds" TEXT\[\]/);
+  assert.match(
+    migration,
+    /SET "recipientDeliveryMode" = 'legacy_multi_to'[\s\S]*cardinality\("recipientEmails"\) > 1[\s\S]*"OutreachSendAttempt"[\s\S]*"providerRequest" IS NOT NULL/,
+  );
   assert.match(migration, /Outreach_recipient_delivery_mode_check/);
   assert.match(
     migration,

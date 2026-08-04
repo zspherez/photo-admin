@@ -868,6 +868,7 @@ model Outreach {
   status                     String
   error                      String?
   providerMessageId          String?
+  providerMessageIds         String[]              @default([])
   idempotencyKey             String                @unique @default(dbgenerated("('outreach/'::text || md5(((random())::text || (clock_timestamp())::text)))"))
   attemptCount               Int                   @default(0)
   claimedAt                  DateTime?
@@ -926,6 +927,7 @@ model OutreachSendAttempt {
   /// Stable SHA-256 fingerprint of the Resend API credential; never the secret key.
   providerCredentialScope String?
   providerMessageId       String?              @unique
+  providerMessageIds      String[]              @default([])
   firstAttemptAt          DateTime?
   lastAttemptAt           DateTime?
   attemptCount            Int                  @default(0)

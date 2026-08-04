@@ -148,6 +148,9 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
   assert.match(form, /Keep recipients on one email thread/);
   assert.match(form, /<b>To:<\/b>/);
   assert.match(form, /<b>CC:<\/b>/);
+  assert.match(form, /selected\.testSend/);
+  assert.match(form, /selected\.providerLayouts/);
+  assert.match(form, /Test override is active; this is the resolved provider layout/);
   assert.match(
     send,
     /eligibility\.mode === "new" && normalizedSubjectOverride/,

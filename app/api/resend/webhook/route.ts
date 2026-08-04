@@ -6,6 +6,7 @@ import {
   canBindResendWebhookProviderMessage,
   correlateResendWebhookAttempt,
   getResendWebhookFailurePolicy,
+  parseResendRequestBatchSnapshot,
   shouldMirrorResendAttempt,
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
@@ -110,6 +111,15 @@ function findAttemptId(evt: ResendEvent): string | null {
     findTag(evt, "outreach_attempt_id") ??
     findHeader(evt, "x-outreach-attempt-id")
   );
+}
+
+function findMessageIndex(evt: ResendEvent): number | null {
+  const value =
+    findTag(evt, "outreach_message_index") ??
+    findHeader(evt, "x-outreach-message-index");
+  if (!value || !/^\d+$/.test(value)) return null;
+  const index = Number(value);
+  return Number.isSafeInteger(index) ? index : null;
 }
 
 function findArbitraryEmailId(evt: ResendEvent): string | null {
@@ -241,8 +251,13 @@ async function processEvent(
                   })
                 : Promise.resolve(null),
               messageId
-                ? tx.outreachSendAttempt.findUnique({
-                    where: { providerMessageId: messageId },
+                ? tx.outreachSendAttempt.findFirst({
+                    where: {
+                      OR: [
+                        { providerMessageId: messageId },
+                        { providerMessageIds: { has: messageId } },
+                      ],
+                    },
                     select: { id: true },
                   })
                 : Promise.resolve(null),
@@ -382,8 +397,13 @@ async function processEvent(
                   })
                 : Promise.resolve(null),
               messageId
-                ? tx.outreachSendAttempt.findUnique({
-                    where: { providerMessageId: messageId },
+                ? tx.outreachSendAttempt.findFirst({
+                    where: {
+                      OR: [
+                        { providerMessageId: messageId },
+                        { providerMessageIds: { has: messageId } },
+                      ],
+                    },
                   })
                 : Promise.resolve(null),
               !attemptId && outreachId
@@ -438,27 +458,65 @@ async function processEvent(
             correlation.bindProviderMessageId &&
             messageId
           ) {
-            await tx.outreachSendAttempt.updateMany({
-              where: {
-                id: correlation.attempt.id,
-                providerMessageId: null,
-              },
-              data: { providerMessageId: messageId },
-            });
-            const rebound = await tx.outreachSendAttempt.findUnique({
-              where: { id: correlation.attempt.id },
-            });
-            if (!rebound || rebound.providerMessageId !== messageId) {
+            const expectedRequests = parseResendRequestBatchSnapshot(
+              correlation.attempt.providerRequest,
+            )?.requests.length;
+            const messageIndex = findMessageIndex(parsed);
+            if (
+              expectedRequests &&
+              expectedRequests > 1 &&
+              messageIndex === null
+            ) {
               correlation = {
                 status: "conflict",
-                reason: "provider message could not be bound to the immutable attempt",
+                reason:
+                  "batched provider message is missing its immutable message index",
               };
             } else {
-              correlation = {
-                status: "matched",
-                attempt: rebound,
-                bindProviderMessageId: false,
-              };
+              const providerMessageIds = [
+                ...(correlation.attempt.providerMessageIds ?? []),
+              ];
+              if (
+                expectedRequests &&
+                messageIndex !== null &&
+                messageIndex < expectedRequests
+              ) {
+                while (providerMessageIds.length < expectedRequests) {
+                  providerMessageIds.push("");
+                }
+                providerMessageIds[messageIndex] = messageId;
+              } else if (!providerMessageIds.includes(messageId)) {
+                providerMessageIds.push(messageId);
+              }
+              await tx.outreachSendAttempt.update({
+                where: { id: correlation.attempt.id },
+                data: {
+                  providerMessageIds,
+                  ...(expectedRequests === 1
+                    ? { providerMessageId: messageId }
+                    : {}),
+                },
+              });
+              const rebound = await tx.outreachSendAttempt.findUnique({
+                where: { id: correlation.attempt.id },
+              });
+              if (
+                !rebound ||
+                (!rebound.providerMessageIds.includes(messageId) &&
+                  rebound.providerMessageId !== messageId)
+              ) {
+                correlation = {
+                  status: "conflict",
+                  reason:
+                    "provider message could not be bound to the immutable attempt",
+                };
+              } else {
+                correlation = {
+                  status: "matched",
+                  attempt: rebound,
+                  bindProviderMessageId: false,
+                };
+              }
             }
           }
 
@@ -517,25 +575,46 @@ async function processEvent(
           });
           const mirror =
             !!outreach && shouldMirrorResendAttempt(outreach, attempt);
+          const expectedProviderMessages =
+            parseResendRequestBatchSnapshot(attempt.providerRequest)?.requests
+              .length ?? 1;
+          const providerMessageIds = Array.from(
+            new Set([
+              ...attempt.providerMessageIds.filter(Boolean),
+              ...(attempt.providerMessageId
+                ? [attempt.providerMessageId]
+                : []),
+            ]),
+          );
+          const providerAcceptanceComplete =
+            providerMessageIds.length === expectedProviderMessages;
+          const primaryProviderMessageId =
+            attempt.providerMessageId ?? providerMessageIds[0] ?? null;
           const mirrorDeliveryProblem =
             mirror && failurePolicy.mirrorOutreachFailure;
           const hadDeliveryFailure = attempt.status === "delivery_failed";
 
-          if (attempt.providerMessageId) {
+          if (providerAcceptanceComplete && primaryProviderMessageId) {
             const acceptedAt = earlier(attempt.acceptedAt, providerCreatedAt);
             await tx.outreachSendAttempt.update({
               where: { id: attempt.id },
               data: {
-                status: hadDeliveryFailure ? attempt.status : "accepted",
+                status: hadDeliveryFailure
+                  ? attempt.status
+                  : providerAcceptanceComplete
+                    ? "accepted"
+                    : attempt.status,
                 acceptedAt,
                 error: hadDeliveryFailure ? attempt.error : null,
                 failureDisposition: hadDeliveryFailure
                   ? attempt.failureDisposition
                   : null,
                 nextAttemptAt: null,
+                providerMessageId: primaryProviderMessageId,
+                providerMessageIds,
               },
             });
-            if (mirror && outreach) {
+            if (providerAcceptanceComplete && mirror && outreach) {
               await tx.outreach.update({
                 where: { id: outreach.id },
                 data: {
@@ -545,7 +624,8 @@ async function processEvent(
                       ? "test"
                       : "sent",
                   error: hadDeliveryFailure ? outreach.error : null,
-                  providerMessageId: attempt.providerMessageId,
+                  providerMessageId: primaryProviderMessageId,
+                  providerMessageIds,
                   sentAt: earlier(outreach.sentAt, acceptedAt),
                   scheduledFor: null,
                   nextAttemptAt: null,
@@ -567,7 +647,8 @@ async function processEvent(
               data: {
                 status: "test",
                 error: null,
-                providerMessageId: attempt.providerMessageId,
+                providerMessageId: primaryProviderMessageId,
+                providerMessageIds,
                 sentAt:
                   outreach.sentAt ??
                   attempt.acceptedAt ??
@@ -586,16 +667,26 @@ async function processEvent(
               await tx.outreachSendAttempt.update({
                 where: { id: attempt.id },
                 data: {
-                  status: hadDeliveryFailure ? attempt.status : "accepted",
-                  error: hadDeliveryFailure ? attempt.error : null,
+                  status: hadDeliveryFailure
+                    ? attempt.status
+                    : providerAcceptanceComplete
+                      ? "accepted"
+                      : attempt.status,
+                  error:
+                    hadDeliveryFailure || !providerAcceptanceComplete
+                      ? attempt.error
+                      : null,
                   acceptedAt,
-                  failureDisposition: hadDeliveryFailure
-                    ? attempt.failureDisposition
-                    : null,
-                  nextAttemptAt: null,
+                  failureDisposition:
+                    hadDeliveryFailure || !providerAcceptanceComplete
+                      ? attempt.failureDisposition
+                      : null,
+                  nextAttemptAt: providerAcceptanceComplete
+                    ? null
+                    : attempt.nextAttemptAt,
                 },
               });
-              if (mirror && outreach) {
+              if (providerAcceptanceComplete && mirror && outreach) {
                 await tx.outreach.update({
                   where: { id: outreach.id },
                   data: {
@@ -605,7 +696,8 @@ async function processEvent(
                         ? "test"
                         : "sent",
                     error: hadDeliveryFailure ? outreach.error : null,
-                    providerMessageId: attempt.providerMessageId,
+                    providerMessageId: primaryProviderMessageId,
+                    providerMessageIds,
                     sentAt: earlier(outreach.sentAt, acceptedAt),
                     scheduledFor: null,
                     nextAttemptAt: null,
@@ -620,17 +712,27 @@ async function processEvent(
               await tx.outreachSendAttempt.update({
                 where: { id: attempt.id },
                 data: {
-                  status: hadDeliveryFailure ? attempt.status : "accepted",
+                  status: hadDeliveryFailure
+                    ? attempt.status
+                    : providerAcceptanceComplete
+                      ? "accepted"
+                      : attempt.status,
                   acceptedAt: attempt.acceptedAt ?? providerCreatedAt,
                   deliveredAt: earlier(attempt.deliveredAt, providerCreatedAt),
-                  error: hadDeliveryFailure ? attempt.error : null,
-                  failureDisposition: hadDeliveryFailure
-                    ? attempt.failureDisposition
-                    : null,
-                  nextAttemptAt: null,
+                  error:
+                    hadDeliveryFailure || !providerAcceptanceComplete
+                      ? attempt.error
+                      : null,
+                  failureDisposition:
+                    hadDeliveryFailure || !providerAcceptanceComplete
+                      ? attempt.failureDisposition
+                      : null,
+                  nextAttemptAt: providerAcceptanceComplete
+                    ? null
+                    : attempt.nextAttemptAt,
                 },
               });
-              if (mirror && outreach) {
+              if (providerAcceptanceComplete && mirror && outreach) {
                 await tx.outreach.update({
                   where: { id: outreach.id },
                   data: {
@@ -639,7 +741,8 @@ async function processEvent(
                       : attempt.testSend
                         ? "test"
                         : "sent",
-                    providerMessageId: attempt.providerMessageId,
+                    providerMessageId: primaryProviderMessageId,
+                    providerMessageIds,
                     sentAt: outreach.sentAt ?? providerCreatedAt,
                     deliveredAt: earlier(outreach.deliveredAt, providerCreatedAt),
                     error: hadDeliveryFailure ? outreach.error : null,

@@ -100,7 +100,7 @@ import {
 } from "@/lib/festivalUtm";
 import {
   DEFAULT_RECIPIENT_DELIVERY_MODE,
-  isRecipientDeliveryMode,
+  isSelectableRecipientDeliveryMode,
 } from "@/lib/recipientDelivery";
 
 export const dynamic = "force-dynamic";
@@ -373,7 +373,7 @@ async function bulkSend(formData: FormData) {
     )
   );
   const requestedDeliveryMode = formData.get("recipientDeliveryMode");
-  const recipientDeliveryMode = isRecipientDeliveryMode(
+  const recipientDeliveryMode = isSelectableRecipientDeliveryMode(
     requestedDeliveryMode,
   )
     ? requestedDeliveryMode
@@ -399,7 +399,6 @@ async function bulkSend(formData: FormData) {
       showId,
       contactId,
       festivalAllContacts: true,
-      recipientDeliveryMode,
     })),
     now
   );
@@ -414,6 +413,11 @@ async function bulkSend(formData: FormData) {
     return [
       {
         ...target,
+        recipientDeliveryMode:
+          result.mode === "retry"
+            ? result.recipientDeliveryMode ??
+              DEFAULT_RECIPIENT_DELIVERY_MODE
+            : recipientDeliveryMode,
         email:
           !result.fullTeamSend &&
           recipients.length === 1 &&
@@ -476,7 +480,8 @@ async function bulkSend(formData: FormData) {
                     showId,
                     contactId: group.contactId,
                     festivalAllContacts: true,
-                    recipientDeliveryMode,
+                    recipientDeliveryMode:
+                      group.recipientDeliveryMode,
                   },
                   scheduledFor,
                 )
@@ -484,7 +489,8 @@ async function bulkSend(formData: FormData) {
                   showId,
                   contactId: group.contactId,
                   festivalAllContacts: true,
-                  recipientDeliveryMode,
+                  recipientDeliveryMode:
+                    group.recipientDeliveryMode,
                 });
         return { group, result };
       } catch (error) {
@@ -1070,6 +1076,7 @@ export default async function FestivalDetailPage({
               recipientDeliveryMode:
                 row.sendability.recipientDeliveryMode ??
                 DEFAULT_RECIPIENT_DELIVERY_MODE,
+              immutableDeliveryMode: row.sendability.mode === "retry",
               selectedByDefault: filter === "unsent",
             },
           ];

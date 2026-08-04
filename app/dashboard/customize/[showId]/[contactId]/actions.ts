@@ -35,7 +35,7 @@ import {
   captureTrajectoryAction,
   trajectoryActionResultHref,
 } from "@/lib/trajectoryActionError";
-import { isRecipientDeliveryMode } from "@/lib/recipientDelivery";
+import { isSelectableRecipientDeliveryMode } from "@/lib/recipientDelivery";
 
 export interface CustomizeActionState {
   error: string | null;
@@ -86,7 +86,7 @@ export async function sendCustom(
   const recipientDeliveryModeValue = String(
     formData.get("recipientDeliveryMode") ?? "",
   );
-  if (!isRecipientDeliveryMode(recipientDeliveryModeValue)) {
+  if (!isSelectableRecipientDeliveryMode(recipientDeliveryModeValue)) {
     return actionError(selectedContactId, "Unknown recipient delivery mode");
   }
   const intent = String(formData.get("intent") ?? "send");

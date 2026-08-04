@@ -31,6 +31,8 @@ export interface CustomizeRecipientOption {
   primaryRecipientEmail: string | null;
   toRecipients: string[];
   ccRecipients: string[];
+  providerLayouts: Array<{ to: string[]; cc: string[] }>;
+  testSend: boolean;
   subject: string | null;
   html: string | null;
   contentLocked: boolean;
@@ -95,21 +97,21 @@ export function CustomizeForm({
         ? selected.email
         : selected?.primaryRecipientEmail ?? selected?.recipients[0] ?? null
       : null;
-  const previewLayout = selected
-    ? contentLocked ||
-      selected.toRecipients.some(
-        (email) => !selected.recipients.includes(email),
-      )
-      ? {
-          to: selected.toRecipients,
-          cc: selected.ccRecipients,
-        }
-      : recipientDeliveryLayout(
-          selected.recipients,
-          primaryRecipientEmail,
-          recipientDeliveryMode,
-        )
-    : { to: [], cc: [] };
+  const previewLayouts = selected
+    ? contentLocked || selected.testSend
+      ? selected.providerLayouts.length > 0
+        ? selected.providerLayouts
+        : [{ to: selected.toRecipients, cc: selected.ccRecipients }]
+      : recipientDeliveryMode === "individual_threads"
+        ? selected.recipients.map((email) => ({ to: [email], cc: [] }))
+        : [
+            recipientDeliveryLayout(
+              selected.recipients,
+              primaryRecipientEmail,
+              recipientDeliveryMode,
+            ),
+          ]
+    : [];
 
   return (
     <form action={formAction} className="space-y-4">
@@ -200,12 +202,24 @@ export function CustomizeForm({
         )}
         {selected?.eligible && selected.recipients.length > 1 && (
           <div className="mt-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs dark:bg-zinc-900">
-            <p>
-              <b>To:</b> {previewLayout.to.join(", ") || "—"}
-            </p>
-            <p className="mt-1">
-              <b>CC:</b> {previewLayout.cc.join(", ") || "—"}
-            </p>
+            {previewLayouts.map((layout, index) => (
+              <div key={`${layout.to.join(",")}:${index}`} className={index ? "mt-2" : ""}>
+                {previewLayouts.length > 1 && (
+                  <p className="font-medium">Message {index + 1}</p>
+                )}
+                <p>
+                  <b>To:</b> {layout.to.join(", ") || "—"}
+                </p>
+                <p className="mt-1">
+                  <b>CC:</b> {layout.cc.join(", ") || "—"}
+                </p>
+              </div>
+            ))}
+            {selected.testSend && (
+              <p className="mt-1 text-amber-700 dark:text-amber-300">
+                Test override is active; this is the resolved provider layout.
+              </p>
+            )}
           </div>
         )}
       </div>

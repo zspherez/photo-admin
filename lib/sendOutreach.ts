@@ -25,22 +25,25 @@ import {
   RESEND_CONFIGURATION_ERROR,
   buildResendDeliveryPolicy,
   canRetryResendRequest,
-  compareResendRequestToPolicy,
+  compareResendRequestBatchToPolicy,
   getResendConfigurationError,
   getResendCredentialScope,
   getResendDeliverySettingsSnapshot,
   getResendSubmissionCredential,
   hashAttachmentContent,
+  hashResendRequestBatchSnapshot,
   hashResendRequestSnapshot,
   normalizeEmails,
-  parseResendRequestSnapshot,
-  prepareResendRequest,
-  sendPreparedEmailViaResend,
+  parseResendRequestBatchSnapshot,
+  prepareResendRequestBatch,
+  sendPreparedEmailBatchViaResend,
   type ResendAttachmentBlob,
   type ResendDeliveryPolicy,
   type ResendFailureDisposition,
   type ResendPreparationDisposition,
   type ResendRequestSnapshot,
+  type ResendRequestBatchSnapshot,
+  type SendResult,
   type ResendSubmissionCredential,
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
@@ -116,6 +119,7 @@ export interface FollowUpParentOutreachProof {
   parentOutreachId: string | null;
   idempotencyKey: string;
   providerMessageId: string | null;
+  providerMessageIds?: string[];
 }
 
 export interface FollowUpParentAttemptProof {
@@ -124,13 +128,14 @@ export interface FollowUpParentAttemptProof {
   idempotencyKey: string;
   testSend: boolean | null;
   providerMessageId: string | null;
+  providerMessageIds?: string[];
   acceptedAt: Date | null;
 }
 
 export function isConclusiveRealOutreachAcceptance(
   outreach: Pick<
     FollowUpParentOutreachProof,
-    "id" | "idempotencyKey" | "providerMessageId"
+    "id" | "idempotencyKey" | "providerMessageId" | "providerMessageIds"
   >,
   attempt: FollowUpParentAttemptProof | null | undefined,
 ): boolean {
@@ -142,6 +147,10 @@ export function isConclusiveRealOutreachAcceptance(
     outreach.providerMessageId !== null &&
     attempt.providerMessageId !== null &&
     outreach.providerMessageId === attempt.providerMessageId &&
+    sameOrderedStrings(
+      outreach.providerMessageIds ?? [],
+      attempt.providerMessageIds ?? [],
+    ) &&
     attempt.acceptedAt !== null &&
     ["accepted", "delivery_failed"].includes(attempt.status)
   );
@@ -176,6 +185,14 @@ export function followUpParentBlockingReason(
   ) {
     return "Original outreach has no matching provider acceptance";
   }
+  if (
+    !sameOrderedStrings(
+      parent.providerMessageIds ?? [],
+      attempt.providerMessageIds ?? [],
+    )
+  ) {
+    return "Original outreach provider message set does not match";
+  }
   if (!attempt.acceptedAt) {
     return "Original outreach provider acceptance is not conclusive";
   }
@@ -201,6 +218,8 @@ export interface FollowUpEligibility {
   primaryRecipientEmail?: string | null;
   toRecipients?: string[];
   ccRecipients?: string[];
+  providerLayouts?: Array<{ to: string[]; cc: string[] }>;
+  testSend?: boolean;
   followUpOutreachId?: string;
   followUpStatus?: string;
   nextAttemptAt?: Date;
@@ -321,6 +340,7 @@ interface StoredAttempt {
   testSend: boolean | null;
   providerCredentialScope: string | null;
   providerMessageId: string | null;
+  providerMessageIds?: string[];
   firstAttemptAt: Date | null;
   lastAttemptAt: Date | null;
   attemptCount: number;
@@ -410,11 +430,11 @@ type SendingClaimResult =
 type StartedAttempt =
   | {
       kind: "ready";
-      request: NonNullable<ReturnType<typeof parseResendRequestSnapshot>>;
+      requestBatch: ResendRequestBatchSnapshot;
       requestHash: string;
       testSend: boolean;
       attachmentBlobs: ResendAttachmentBlob[];
-      result: Awaited<ReturnType<typeof sendPreparedEmailViaResend>>;
+      result: Awaited<ReturnType<typeof sendPreparedEmailBatchViaResend>>;
     }
   | CompletedResult;
 
@@ -844,6 +864,7 @@ export function isNonBlockingLegacyUnknownAttempt(
         | "providerRequest"
         | "requestHash"
         | "providerMessageId"
+        | "providerMessageIds"
         | "attemptCount"
         | "bouncedAt"
         | "complainedAt"
@@ -859,6 +880,7 @@ export function isNonBlockingLegacyUnknownAttempt(
   ) {
     return (
       (attempt.providerMessageId === null &&
+        !(attempt.providerMessageIds ?? []).some(Boolean) &&
         attempt.attemptCount === 0 &&
         attempt.bouncedAt === null &&
         attempt.complainedAt === null) ||
@@ -890,13 +912,19 @@ export function isProviderAcceptanceUnresolvedAttempt(
     StoredAttempt,
     | "status"
     | "providerMessageId"
+    | "providerMessageIds"
     | "providerCredentialScope"
     | "firstAttemptAt"
     | "attemptCount"
     | "failureDisposition"
   >,
 ): boolean {
-  if (attempt.providerMessageId) return false;
+  if (
+    attempt.providerMessageId ||
+    (attempt.providerMessageIds ?? []).some(Boolean)
+  ) {
+    return false;
+  }
   if (
     attempt.status === "sending" ||
     attempt.failureDisposition === "in_flight" ||
@@ -944,12 +972,18 @@ export function isDefinitivelyUnsentOutreachAttempt(
     | "status"
     | "providerCredentialScope"
     | "providerMessageId"
+    | "providerMessageIds"
     | "firstAttemptAt"
     | "attemptCount"
     | "failureDisposition"
   >,
 ): boolean {
-  if (attempt.providerMessageId) return false;
+  if (
+    attempt.providerMessageId ||
+    (attempt.providerMessageIds ?? []).some(Boolean)
+  ) {
+    return false;
+  }
   if (attempt.status === "prepared") {
     return attempt.firstAttemptAt === null && attempt.attemptCount === 0;
   }
@@ -979,6 +1013,7 @@ export function isDefinitiveConfigurationRejection(
         StoredAttempt,
         | "status"
         | "providerMessageId"
+        | "providerMessageIds"
         | "firstAttemptAt"
         | "attemptCount"
         | "failureDisposition"
@@ -989,6 +1024,7 @@ export function isDefinitiveConfigurationRejection(
   return (
     !!attempt &&
     attempt.providerMessageId === null &&
+    !(attempt.providerMessageIds ?? []).some(Boolean) &&
     attempt.firstAttemptAt !== null &&
     attempt.attemptCount > 0 &&
     attempt.failureDisposition === "configuration" &&
@@ -1244,6 +1280,7 @@ export type OutreachDeliveryPolicyDecision =
       fullTeamSend: boolean;
       festivalAllContactsSend: boolean;
       policy: ResendDeliveryPolicy;
+      requestBatch: ResendRequestBatchSnapshot | null;
       request: ResendRequestSnapshot | null;
     }
   | {
@@ -1251,6 +1288,22 @@ export type OutreachDeliveryPolicyDecision =
       state: "cancelled" | "manual_review" | "configuration";
       error: string;
     };
+
+function resolvedProviderLayouts(
+  decision: Extract<OutreachDeliveryPolicyDecision, { ok: true }>,
+): Array<{ to: string[]; cc: string[] }> {
+  if (
+    decision.policy.testSend ||
+    decision.recipientDeliveryMode === "cc_thread" ||
+    decision.recipientDeliveryMode === "legacy_multi_to"
+  ) {
+    return [{ to: decision.policy.to, cc: decision.policy.cc }];
+  }
+  return decision.currentRecipients.map((email) => ({
+    to: [email],
+    cc: [],
+  }));
+}
 
 function deliveryPolicyConfigurationError(error: string): boolean {
   return (
@@ -1370,9 +1423,10 @@ export function evaluateOutreachDeliveryPolicy({
       ? stored.recipientDeliveryMode
       : DEFAULT_RECIPIENT_DELIVERY_MODE
     : requestedRecipientDeliveryMode ?? DEFAULT_RECIPIENT_DELIVERY_MODE;
-  const parsedRequest = attempt
-    ? parseResendRequestSnapshot(attempt.providerRequest)
+  const parsedRequestBatch = attempt
+    ? parseResendRequestBatchSnapshot(attempt.providerRequest)
     : null;
+  const parsedRequest = parsedRequestBatch?.requests[0] ?? null;
   const resolved = buildResendDeliveryPolicy({
     from: from ?? (configurationError ? parsedRequest?.from : undefined),
     intendedRecipients,
@@ -1415,7 +1469,7 @@ export function evaluateOutreachDeliveryPolicy({
     }
   }
 
-  let request: ResendRequestSnapshot | null = null;
+  let requestBatch: ResendRequestBatchSnapshot | null = null;
   if (attempt) {
     if (!stored) {
       return {
@@ -1424,12 +1478,17 @@ export function evaluateOutreachDeliveryPolicy({
         error: "Immutable provider attempt has no outreach snapshot",
       };
     }
-    request = parsedRequest;
+    requestBatch = parsedRequestBatch;
     if (
-      !request ||
+      !requestBatch ||
       !attempt.requestHash ||
-      hashResendRequestSnapshot(request) !== attempt.requestHash ||
-      !requestIdentityMatches(stored, attempt, request)
+      (hashResendRequestBatchSnapshot(requestBatch) !== attempt.requestHash &&
+        !(
+          requestBatch.requests.length === 1 &&
+          hashResendRequestSnapshot(requestBatch.requests[0]) ===
+            attempt.requestHash
+        )) ||
+      !requestBatchIdentityMatches(stored, attempt, requestBatch)
     ) {
       return {
         ok: false,
@@ -1437,7 +1496,11 @@ export function evaluateOutreachDeliveryPolicy({
         error: "Stored Resend request failed its identity or integrity check",
       };
     }
-    if (request.html !== stored.finalHtml) {
+    if (
+      requestBatch.requests.some(
+        (request) => request.html !== stored.finalHtml,
+      )
+    ) {
       return {
         ok: false,
         state: "manual_review",
@@ -1452,10 +1515,11 @@ export function evaluateOutreachDeliveryPolicy({
           "Legacy provider attempt has no verified real/test classification",
       };
     }
-    const policyConflict = compareResendRequestToPolicy(
-      request,
+    const policyConflict = compareResendRequestBatchToPolicy(
+      requestBatch,
       attempt.testSend,
       resolved.policy,
+      recipientDeliveryMode,
     );
     if (policyConflict) {
       return {
@@ -1485,7 +1549,8 @@ export function evaluateOutreachDeliveryPolicy({
     fullTeamSend,
     festivalAllContactsSend,
     policy: resolved.policy,
-    request,
+    requestBatch,
+    request: requestBatch?.requests[0] ?? null,
   };
 }
 
@@ -1544,6 +1609,7 @@ function attemptIdFromKey(outreachId: string, idempotencyKey: string): string | 
 function resetDeliveryState() {
   return {
     providerMessageId: null,
+    providerMessageIds: [],
     sentAt: null,
     deliveredAt: null,
     firstOpenedAt: null,
@@ -1562,11 +1628,13 @@ export function getAcceptedDeliveryFailureOutreachState(
   error: string,
   providerMessageId: string,
   sentAt: Date,
+  providerMessageIds: string[] = [providerMessageId],
 ) {
   return {
     status: testSend ? "test" : "failed",
     error: testSend ? null : error,
     providerMessageId,
+    providerMessageIds,
     sentAt,
     scheduledFor: null,
     nextAttemptAt: null,
@@ -1620,6 +1688,8 @@ export interface OutreachSendability {
   primaryRecipientEmail?: string | null;
   toRecipients?: string[];
   ccRecipients?: string[];
+  providerLayouts?: Array<{ to: string[]; cc: string[] }>;
+  testSend?: boolean;
   fullTeamSend: boolean;
   festivalAllContactsSend?: boolean;
   blockingOutreachId?: string;
@@ -1627,20 +1697,26 @@ export interface OutreachSendability {
   blockingNextAttemptAt?: Date;
 }
 
-function requestIdentityMatches(
+function requestBatchIdentityMatches(
   outreach: { id: string; idempotencyKey: string },
   attempt: { id: string; idempotencyKey: string },
-  request: NonNullable<ReturnType<typeof parseResendRequestSnapshot>>,
+  batch: ResendRequestBatchSnapshot,
 ): boolean {
-  const tags = new Map(request.tags.map((tag) => [tag.name, tag.value]));
-  return (
-    request.idempotencyKey === attempt.idempotencyKey &&
-    attempt.idempotencyKey === outreach.idempotencyKey &&
-    request.headers["X-Outreach-Id"] === outreach.id &&
-    request.headers["X-Outreach-Attempt-Id"] === attempt.id &&
-    tags.get("outreach_id") === outreach.id &&
-    tags.get("outreach_attempt_id") === attempt.id
-  );
+  if (attempt.idempotencyKey !== outreach.idempotencyKey) return false;
+  return batch.requests.every((request, index) => {
+    const tags = new Map(request.tags.map((tag) => [tag.name, tag.value]));
+    return (
+      request.idempotencyKey ===
+        `${attempt.idempotencyKey}/message/${index}` ||
+      (batch.requests.length === 1 &&
+        request.idempotencyKey === attempt.idempotencyKey)
+    ) && (
+      request.headers["X-Outreach-Id"] === outreach.id &&
+      request.headers["X-Outreach-Attempt-Id"] === attempt.id &&
+      tags.get("outreach_id") === outreach.id &&
+      tags.get("outreach_attempt_id") === attempt.id
+    );
+  });
 }
 
 interface LockedPolicyOutreach extends DeliveryPolicySnapshot {
@@ -1784,7 +1860,9 @@ async function evaluateLockedOutreachDeliveryPolicy(
       : contact
         ? activeContactRecipientEmails([contact])
         : []);
-  const storedRequest = parseResendRequestSnapshot(attempt.providerRequest);
+  const storedRequestBatch = parseResendRequestBatchSnapshot(
+    attempt.providerRequest,
+  );
   const policyEmails = normalizeEmails([
     ...intendedRecipients,
     ...(outreach.expectedRecipientIdentity
@@ -1792,10 +1870,11 @@ async function evaluateLockedOutreachDeliveryPolicy(
       : []),
     ...bccEmails,
     ...(testOverride ? [testOverride] : []),
-    ...(storedRequest?.to ?? []),
-    ...(storedRequest?.cc ?? []),
-    ...(storedRequest?.bcc ?? []),
-    ...(storedRequest?.replyTo ?? []),
+    ...(storedRequestBatch?.requests.flatMap((request) => request.to) ?? []),
+    ...(storedRequestBatch?.requests.flatMap((request) => request.cc) ?? []),
+    ...(storedRequestBatch?.requests.flatMap((request) => request.bcc) ?? []),
+    ...(storedRequestBatch?.requests.flatMap((request) => request.replyTo) ??
+      []),
   ]);
   await acquireOutreachRecipientPolicyLocks(tx, policyEmails);
   const identityError = outreach.expectedRecipientIdentity
@@ -1869,6 +1948,8 @@ function blockedSendability(
     primaryRecipientEmail?: string | null;
     toRecipients?: string[];
     ccRecipients?: string[];
+    providerLayouts?: Array<{ to: string[]; cc: string[] }>;
+    testSend?: boolean;
     fullTeamSend?: boolean;
     festivalAllContactsSend?: boolean;
     outreachId?: string;
@@ -1888,6 +1969,8 @@ function blockedSendability(
     primaryRecipientEmail: details.primaryRecipientEmail ?? null,
     toRecipients: details.toRecipients ?? [],
     ccRecipients: details.ccRecipients ?? [],
+    providerLayouts: details.providerLayouts ?? [],
+    testSend: details.testSend ?? false,
     fullTeamSend: details.fullTeamSend ?? false,
     festivalAllContactsSend:
       details.festivalAllContactsSend ?? false,
@@ -2101,6 +2184,8 @@ export async function getOutreachSendabilityBatch(
       primaryRecipientEmail: initialPolicy.primaryRecipientEmail,
       toRecipients: initialPolicy.policy.to,
       ccRecipients: initialPolicy.policy.cc,
+      providerLayouts: resolvedProviderLayouts(initialPolicy),
+      testSend: initialPolicy.policy.testSend,
       fullTeamSend: initialPolicy.fullTeamSend,
       festivalAllContactsSend:
         initialPolicy.festivalAllContactsSend,
@@ -2388,6 +2473,8 @@ export async function getOutreachSendabilityBatch(
       primaryRecipientEmail: currentPolicy.primaryRecipientEmail,
       toRecipients: currentPolicy.policy.to,
       ccRecipients: currentPolicy.policy.cc,
+      providerLayouts: resolvedProviderLayouts(currentPolicy),
+      testSend: currentPolicy.policy.testSend,
       fullTeamSend: currentPolicy.fullTeamSend,
       festivalAllContactsSend:
         currentPolicy.festivalAllContactsSend,
@@ -2414,6 +2501,8 @@ function followUpResult(
     primaryRecipientEmail?: string | null;
     toRecipients?: string[];
     ccRecipients?: string[];
+    providerLayouts?: Array<{ to: string[]; cc: string[] }>;
+    testSend?: boolean;
     fullTeamSend?: boolean;
     contactId?: string | null;
   } = {},
@@ -2430,6 +2519,8 @@ function followUpResult(
     primaryRecipientEmail: details.primaryRecipientEmail ?? null,
     toRecipients: details.toRecipients ?? [],
     ccRecipients: details.ccRecipients ?? [],
+    providerLayouts: details.providerLayouts ?? [],
+    testSend: details.testSend ?? false,
     fullTeamSend: details.fullTeamSend ?? false,
     ...(details.contactId ? { contactId: details.contactId } : {}),
     ...(details.followUpOutreachId
@@ -2459,6 +2550,7 @@ export async function getFollowUpEligibilityBatch(
         parentOutreachId: true,
         idempotencyKey: true,
         providerMessageId: true,
+        providerMessageIds: true,
         showId: true,
         artistId: true,
         contactId: true,
@@ -2484,6 +2576,7 @@ export async function getFollowUpEligibilityBatch(
             parentOutreachId: true,
             idempotencyKey: true,
             providerMessageId: true,
+            providerMessageIds: true,
             showId: true,
             artistId: true,
             contactId: true,
@@ -2664,7 +2757,9 @@ export async function getFollowUpEligibilityBatch(
       child &&
       isConclusiveRealOutreachAcceptance(child, childAttempt)
     ) {
-      const request = parseResendRequestSnapshot(childAttempt?.providerRequest);
+      const requestBatch = parseResendRequestBatchSnapshot(
+        childAttempt?.providerRequest,
+      );
       const deliveryMode = isRecipientDeliveryMode(
         child.recipientDeliveryMode,
       )
@@ -2682,8 +2777,14 @@ export async function getFollowUpEligibilityBatch(
         recipients: child.recipientEmails,
         recipientDeliveryMode: deliveryMode,
         primaryRecipientEmail: child.primaryRecipientEmail,
-        toRecipients: request?.to ?? layout.to,
-        ccRecipients: request?.cc ?? layout.cc,
+        toRecipients: requestBatch?.requests[0]?.to ?? layout.to,
+        ccRecipients: requestBatch?.requests[0]?.cc ?? layout.cc,
+        providerLayouts:
+          requestBatch?.requests.map((request) => ({
+            to: request.to,
+            cc: request.cc,
+          })) ?? [layout],
+        testSend: childAttempt?.testSend ?? false,
       });
     }
     if (child?.status === "sent") {
@@ -2702,12 +2803,14 @@ export async function getFollowUpEligibilityBatch(
             ? child.recipientDeliveryMode
             : DEFAULT_RECIPIENT_DELIVERY_MODE,
           primaryRecipientEmail: child.primaryRecipientEmail,
-          toRecipients:
-            parseResendRequestSnapshot(childAttempt?.providerRequest)?.to ??
-            [],
-          ccRecipients:
-            parseResendRequestSnapshot(childAttempt?.providerRequest)?.cc ??
-            [],
+          providerLayouts:
+            parseResendRequestBatchSnapshot(
+              childAttempt?.providerRequest,
+            )?.requests.map((request) => ({
+              to: request.to,
+              cc: request.cc,
+            })) ?? [],
+          testSend: childAttempt?.testSend ?? false,
         },
       );
     }
@@ -2746,6 +2849,14 @@ export async function getFollowUpEligibilityBatch(
           primaryRecipientEmail: child.primaryRecipientEmail,
           toRecipients: layout.to,
           ccRecipients: layout.cc,
+          providerLayouts:
+            deliveryMode === "individual_threads"
+              ? child.recipientEmails.map((email) => ({
+                  to: [email],
+                  cc: [],
+                }))
+              : [layout],
+          testSend: childAttempt?.testSend ?? false,
         },
       );
     }
@@ -2884,7 +2995,9 @@ export async function getFollowUpEligibilityBatch(
             ? child.recipientDeliveryMode
             : DEFAULT_RECIPIENT_DELIVERY_MODE
           : isRecipientDeliveryMode(parent.recipientDeliveryMode)
-            ? parent.recipientDeliveryMode
+            ? parent.recipientDeliveryMode === "legacy_multi_to"
+              ? DEFAULT_RECIPIENT_DELIVERY_MODE
+              : parent.recipientDeliveryMode
             : DEFAULT_RECIPIENT_DELIVERY_MODE,
       preserveFestivalAllContactsSend: true,
     });
@@ -2902,6 +3015,8 @@ export async function getFollowUpEligibilityBatch(
       primaryRecipientEmail: policy.primaryRecipientEmail,
       toRecipients: policy.policy.to,
       ccRecipients: policy.policy.cc,
+      providerLayouts: resolvedProviderLayouts(policy),
+      testSend: policy.policy.testSend,
       fullTeamSend: policy.fullTeamSend,
       followUpOutreachId: child?.id,
       followUpStatus: child?.status,
@@ -3460,7 +3575,11 @@ async function markPolicyCancelled(
     );
   }
   await tx.outreachSendAttempt.updateMany({
-    where: { id: attempt.id, providerMessageId: null },
+    where: {
+      id: attempt.id,
+      providerMessageId: null,
+      providerMessageIds: { equals: [] },
+    },
     data: {
       status: "cancelled",
       error,
@@ -3494,6 +3613,7 @@ async function retireDefinitiveConfigurationAttempt(
     where: {
       id: attempt.id,
       providerMessageId: null,
+      providerMessageIds: { equals: [] },
       failureDisposition: "configuration",
       firstAttemptAt: { not: null },
       attemptCount: { gt: 0 },
@@ -3705,6 +3825,7 @@ async function finishAlreadyAccepted(
           error,
           attempt.providerMessageId,
           attempt.acceptedAt ?? new Date(),
+          attempt.providerMessageIds ?? [attempt.providerMessageId],
         ),
       });
       return {
@@ -3730,6 +3851,8 @@ async function finishAlreadyAccepted(
       status: attempt.testSend ? "test" : "sent",
       error: null,
       providerMessageId: attempt.providerMessageId,
+      providerMessageIds:
+        attempt.providerMessageIds ?? [attempt.providerMessageId],
       sentAt: attempt.acceptedAt ?? new Date(),
       scheduledFor: null,
       nextAttemptAt: null,
@@ -3822,6 +3945,7 @@ async function preparedFollowUpBlockingReason(
       parentOutreachId: true,
       idempotencyKey: true,
       providerMessageId: true,
+      providerMessageIds: true,
       showId: true,
       artistId: true,
       contactId: true,
@@ -4862,7 +4986,7 @@ async function ensureAttempt(outreachInput: ClaimedOutreach): Promise<AttemptRes
     );
   }
 
-  const prepared = await prepareResendRequest({
+  const prepared = await prepareResendRequestBatch({
     to: outreach.recipientEmails,
     recipientDeliveryMode:
       outreach.recipientDeliveryMode as RecipientDeliveryMode,
@@ -4994,7 +5118,8 @@ async function ensureAttempt(outreachInput: ClaimedOutreach): Promise<AttemptRes
           outreachId: outreach.id,
           status: "prepared",
           idempotencyKey: outreach.idempotencyKey,
-          providerRequest: prepared.request as unknown as Prisma.InputJsonValue,
+          providerRequest:
+            prepared.requestBatch as unknown as Prisma.InputJsonValue,
           requestHash: prepared.requestHash,
           testSend: prepared.testSend,
         },
@@ -5031,6 +5156,24 @@ async function recoverUncertainProviderTransaction(
     }
     if (attempt.providerMessageId) {
       return finishAlreadyAccepted(tx, outreach, attempt);
+    }
+    const expectedMessages =
+      parseResendRequestBatchSnapshot(attempt.providerRequest)?.requests
+        .length ?? 1;
+    const acceptedMessageIds = (attempt.providerMessageIds ?? []).filter(
+      Boolean,
+    );
+    if (acceptedMessageIds.length === expectedMessages) {
+      const accepted = await tx.outreachSendAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          providerMessageId: acceptedMessageIds[0],
+          providerMessageIds: acceptedMessageIds,
+          status: "accepted",
+          acceptedAt: attempt.acceptedAt ?? new Date(),
+        },
+      });
+      return finishAlreadyAccepted(tx, outreach, accepted);
     }
     return markProviderAcceptanceUncertain(
       tx,
@@ -5163,7 +5306,7 @@ async function claimAttemptForSending(
                   attempt.id,
                 );
           }
-          if (!policy.request || !attempt.requestHash) {
+          if (!policy.requestBatch || !attempt.requestHash) {
             return markManualReview(
               tx,
               current.id,
@@ -5411,7 +5554,7 @@ async function submitClaimedAttempt(
                 : "uncertain",
             );
           }
-          if (!policy.request || !attempt.requestHash) {
+          if (!policy.requestBatch || !attempt.requestHash) {
             return markManualReview(
               tx,
               current.id,
@@ -5429,13 +5572,17 @@ async function submitClaimedAttempt(
           }
 
           const attachmentRows =
-            policy.request.attachments.length === 0
+            policy.requestBatch.requests.every(
+              (request) => request.attachments.length === 0,
+            )
               ? []
               : await tx.outreachAttachmentBlob.findMany({
                   where: {
                     sha256: {
-                      in: policy.request.attachments.map(
-                        (attachment) => attachment.contentSha256,
+                      in: policy.requestBatch.requests.flatMap((request) =>
+                        request.attachments.map(
+                          (attachment) => attachment.contentSha256,
+                        ),
                       ),
                     },
                   },
@@ -5444,7 +5591,9 @@ async function submitClaimedAttempt(
             attachmentRows.map((blob) => [blob.sha256, blob]),
           );
           const attachmentBlobs: ResendAttachmentBlob[] = [];
-          for (const attachment of policy.request.attachments) {
+          for (const attachment of policy.requestBatch.requests.flatMap(
+            (request) => request.attachments,
+          )) {
             const blob = blobsByHash.get(attachment.contentSha256);
             if (
               !blob ||
@@ -5483,15 +5632,16 @@ async function submitClaimedAttempt(
           // Policy row/advisory locks remain held until the provider call
           // returns, so a suppression cannot commit and be acknowledged first.
           providerSubmissionStarted = true;
-          const result = await sendPreparedEmailViaResend(
-            policy.request,
+          const result = await sendPreparedEmailBatchViaResend(
+            policy.requestBatch,
             attempt.requestHash,
             attachmentBlobs,
             submissionCredential,
+            attempt.providerMessageIds ?? [],
           );
           return {
             kind: "ready",
-            request: policy.request,
+            requestBatch: policy.requestBatch,
             requestHash: attempt.requestHash,
             testSend: attempt.testSend,
             attachmentBlobs,
@@ -5564,7 +5714,7 @@ async function finishClaimedSend(
   outreach: ClaimedOutreach,
   attemptId: string,
   testSend: boolean,
-  result: Awaited<ReturnType<typeof sendPreparedEmailViaResend>>,
+  batchResult: Awaited<ReturnType<typeof sendPreparedEmailBatchViaResend>>,
   warnings: string[],
 ): Promise<SendOutreachOutput> {
   const completedAt = new Date();
@@ -5585,17 +5735,27 @@ async function finishClaimedSend(
       };
     }
 
-    const providerOwner = result.providerMessageId
-      ? await tx.outreachSendAttempt.findUnique({
-          where: { providerMessageId: result.providerMessageId },
-          select: { id: true },
-        })
-      : null;
+    const providerMessageIds = batchResult.results.map(
+      (result, index) =>
+        result.providerMessageId ??
+        attempt.providerMessageIds?.[index] ??
+        "",
+    );
+    const returnedProviderIds = providerMessageIds.filter(Boolean);
+    const providerOwners =
+      returnedProviderIds.length === 0
+        ? []
+        : await tx.outreachSendAttempt.findMany({
+            where: {
+              OR: [
+                { providerMessageId: { in: returnedProviderIds } },
+                { providerMessageIds: { hasSome: returnedProviderIds } },
+              ],
+            },
+            select: { id: true },
+          });
     if (
-      (providerOwner && providerOwner.id !== attempt.id) ||
-      (result.providerMessageId &&
-        attempt.providerMessageId &&
-        result.providerMessageId !== attempt.providerMessageId)
+      providerOwners.some((owner) => owner.id !== attempt.id)
     ) {
       const error =
         "Resend returned a provider message ID that contradicts the immutable attempt";
@@ -5621,9 +5781,40 @@ async function finishClaimedSend(
       return { ok: false, outreachId: current.id, error, ...outputMetadata };
     }
 
+    const failedResults = batchResult.results.filter(
+      (result) => result.providerMessageId === null,
+    );
+    const result =
+      failedResults[0] ??
+      ({
+        providerMessageId: providerMessageIds[0] ?? null,
+        error: null,
+        failureDisposition: null,
+      } satisfies SendResult);
+    const allRequestsAccepted =
+      failedResults.length === 0 &&
+      providerMessageIds.every(Boolean);
     const providerMessageId =
-      attempt.providerMessageId ?? result.providerMessageId;
-    if (providerMessageId) {
+      attempt.providerMessageId ??
+      (allRequestsAccepted ? providerMessageIds[0] : null) ??
+      result.providerMessageId;
+    if (providerMessageIds.length > 0) {
+      await tx.outreachSendAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          ...(providerMessageId ? { providerMessageId } : {}),
+          providerMessageIds,
+        },
+      });
+      await tx.outreach.updateMany({
+        where: { id: current.id, idempotencyKey: attempt.idempotencyKey },
+        data: {
+          ...(providerMessageId ? { providerMessageId } : {}),
+          providerMessageIds,
+        },
+      });
+    }
+    if (allRequestsAccepted && providerMessageId) {
       if (attempt.status === "delivery_failed") {
         const error =
           attempt.error ??
@@ -5636,6 +5827,7 @@ async function finishClaimedSend(
             failureDisposition: null,
             nextAttemptAt: null,
             providerMessageId,
+            providerMessageIds,
             acceptedAt: attempt.acceptedAt ?? completedAt,
           },
         });
@@ -5646,6 +5838,7 @@ async function finishClaimedSend(
             error,
             providerMessageId,
             attempt.acceptedAt ?? completedAt,
+            providerMessageIds,
           ),
         });
         return { ok: false, outreachId: current.id, error, ...outputMetadata };
@@ -5658,6 +5851,7 @@ async function finishClaimedSend(
           failureDisposition: null,
           nextAttemptAt: null,
           providerMessageId,
+          providerMessageIds,
           acceptedAt: attempt.acceptedAt ?? completedAt,
         },
       });
@@ -5667,6 +5861,7 @@ async function finishClaimedSend(
           status: testSend ? "test" : "sent",
           error: null,
           providerMessageId,
+          providerMessageIds,
           sentAt: attempt.acceptedAt ?? completedAt,
           scheduledFor: null,
           nextAttemptAt: null,
@@ -7078,7 +7273,8 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
     }
 
     const immutableRequest = attempt?.providerRequest
-      ? parseResendRequestSnapshot(attempt.providerRequest)
+      ? parseResendRequestBatchSnapshot(attempt.providerRequest)?.requests[0] ??
+        null
       : null;
     const trustedTemplate = schedulingTimeTemplateProvenance(
       outreach.createdAt,

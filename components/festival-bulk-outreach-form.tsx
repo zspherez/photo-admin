@@ -16,6 +16,7 @@ export interface FestivalBulkConfirmationCandidate {
   recipients: string[];
   primaryRecipientEmail: string | null;
   recipientDeliveryMode: RecipientDeliveryMode;
+  immutableDeliveryMode: boolean;
   selectedByDefault: boolean;
 }
 
@@ -25,6 +26,8 @@ interface ConfirmationGroup {
   artistNames: string[];
   recipients: string[];
   primaryRecipientEmail: string | null;
+  recipientDeliveryMode: RecipientDeliveryMode;
+  immutableDeliveryMode: boolean;
 }
 
 export function buildFestivalConfirmationGroups(
@@ -45,6 +48,8 @@ export function buildFestivalConfirmationGroups(
         artistNames: [candidate.artistName],
         recipients: candidate.recipients,
         primaryRecipientEmail: candidate.primaryRecipientEmail,
+        recipientDeliveryMode: candidate.recipientDeliveryMode,
+        immutableDeliveryMode: candidate.immutableDeliveryMode,
       });
     }
   }
@@ -117,7 +122,7 @@ export function FestivalBulkOutreachForm({
     return buildFestivalConfirmationGroups(candidates, selectedIds);
   }, [candidates, selectedIds]);
   const hasMultipleRecipientGroup = confirmationGroups.some(
-    (group) => group.recipients.length > 1,
+    (group) => group.recipients.length > 1 && !group.immutableDeliveryMode,
   );
 
   const selectAll = () => {
@@ -142,6 +147,7 @@ export function FestivalBulkOutreachForm({
       candidates.some(
         (candidate) =>
           selected.has(candidate.contactId) &&
+          !candidate.immutableDeliveryMode &&
           candidate.recipientDeliveryMode === "cc_thread",
       )
         ? "cc_thread"
@@ -259,25 +265,48 @@ export function FestivalBulkOutreachForm({
                     const layout = recipientDeliveryLayout(
                       group.recipients,
                       group.primaryRecipientEmail,
-                      recipientDeliveryMode,
+                      group.immutableDeliveryMode
+                        ? group.recipientDeliveryMode
+                        : recipientDeliveryMode,
                     );
-                    const providerLayout = testOverride
-                      ? { to: [testOverride], cc: [] }
-                      : layout;
+                    const effectiveMode = group.immutableDeliveryMode
+                      ? group.recipientDeliveryMode
+                      : recipientDeliveryMode;
+                    const providerLayouts = testOverride
+                      ? [{ to: [testOverride], cc: [] }]
+                      : effectiveMode === "individual_threads"
+                        ? group.recipients.map((email) => ({
+                            to: [email],
+                            cc: [],
+                          }))
+                        : [layout];
                     return (
                       <tr key={group.groupKey}>
                         <td className="break-all px-3 py-2">
-                          {providerLayout.to.join(", ")}
+                          {providerLayouts.map((providerLayout, index) => (
+                            <div key={`${providerLayout.to.join(",")}:${index}`}>
+                              {providerLayouts.length > 1
+                                ? `Message ${index + 1}: `
+                                : ""}
+                              {providerLayout.to.join(", ")}
+                            </div>
+                          ))}
                         </td>
                         <td className="break-all px-3 py-2">
-                          {providerLayout.cc.join(", ") || "—"}
+                          {providerLayouts.map((providerLayout, index) => (
+                            <div key={`${providerLayout.cc.join(",")}:${index}`}>
+                              {providerLayout.cc.join(", ") || "—"}
+                            </div>
+                          ))}
                         </td>
                         <td className="px-3 py-2">
                           {group.artistNames.join(", ")}
                         </td>
                         <td className="px-3 py-2 font-medium">
                           {group.recipients.length > 1
-                            ? recipientDeliveryMode === "cc_thread"
+                            ? group.immutableDeliveryMode
+                              ? "Immutable retry"
+                              : recipientDeliveryMode === "cc_thread"
                               ? "One thread"
                               : "Separate threads"
                             : group.artistNames.length > 1

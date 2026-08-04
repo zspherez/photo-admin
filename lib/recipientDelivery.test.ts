@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   isRecipientDeliveryMode,
+  isSelectableRecipientDeliveryMode,
   recipientDeliveryLayout,
 } from "./recipientDelivery";
 
@@ -33,4 +34,6 @@ test("CC delivery keeps the primary recipient on To", () => {
   );
   assert.equal(isRecipientDeliveryMode("cc_thread"), true);
   assert.equal(isRecipientDeliveryMode("unknown"), false);
+  assert.equal(isRecipientDeliveryMode("legacy_multi_to"), true);
+  assert.equal(isSelectableRecipientDeliveryMode("legacy_multi_to"), false);
 });

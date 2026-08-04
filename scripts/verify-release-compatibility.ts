@@ -184,6 +184,7 @@ async function main(): Promise<void> {
         festivalAllContactsSend: true,
         recipientDeliveryMode: true,
         primaryRecipientEmail: true,
+        providerMessageIds: true,
         dismissedAt: true,
         trajectoryRecommendationId: true,
       },
@@ -205,7 +206,10 @@ async function main(): Promise<void> {
           AND constraint_row."contype" = 'c'
       `,
     ),
-    db.outreachSendAttempt.count({ take: 1 }),
+    db.outreachSendAttempt.findMany({
+      take: 1,
+      select: { id: true, providerMessageIds: true },
+    }),
     db.outreachCoveredArtist.findMany({
       take: 1,
       select: {
@@ -950,6 +954,8 @@ async function main(): Promise<void> {
         "Outreach.festivalAllContactsSend",
         "Outreach.recipientDeliveryMode",
         "Outreach.primaryRecipientEmail",
+        "Outreach.providerMessageIds",
+        "OutreachSendAttempt.providerMessageIds",
         "OutreachCoveredArtist",
         "Outreach_dispatch_recipient_identity_check",
         "ResendWebhookEvent.arbitraryEmailId",

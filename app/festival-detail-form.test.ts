@@ -229,7 +229,7 @@ test("festival individual outreach snapshots all active management contacts", ()
 
 test("festival confirmation submits the optional immutable CC delivery mode", () => {
   assert.match(source, /recipientDeliveryMode/);
-  assert.match(source, /isRecipientDeliveryMode/);
+  assert.match(source, /isSelectableRecipientDeliveryMode/);
   assert.match(
     source,
     /festivalAllContacts: true,[\s\S]*recipientDeliveryMode/,

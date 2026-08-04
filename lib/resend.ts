@@ -114,6 +114,11 @@ export interface ResendRequestSnapshot {
   attachments: ResendAttachmentSnapshot[];
 }
 
+export interface ResendRequestBatchSnapshot {
+  version: 1;
+  requests: ResendRequestSnapshot[];
+}
+
 export interface PrepareResendRequestArgs {
   to: string[];
   recipientDeliveryMode?: RecipientDeliveryMode;
@@ -152,6 +157,22 @@ export type PrepareResendRequestResult =
       preparationDisposition: ResendPreparationDisposition;
     };
 
+export type PrepareResendRequestBatchResult =
+  | {
+      ok: true;
+      requestBatch: ResendRequestBatchSnapshot;
+      requestHash: string;
+      testSend: boolean;
+      intendedRecipients: string[];
+      attachmentBlobs: ResendAttachmentBlob[];
+      warnings: string[];
+    }
+  | {
+      ok: false;
+      error: string;
+      preparationDisposition: ResendPreparationDisposition;
+    };
+
 export type ResendFailureDisposition =
   | "configuration"
   | "in_flight"
@@ -164,6 +185,10 @@ export interface SendResult {
   providerMessageId: string | null;
   error: string | null;
   failureDisposition: ResendFailureDisposition | null;
+}
+
+export interface SendBatchResult {
+  results: SendResult[];
 }
 
 function normalizeMailboxAddress(value: string): string | null {
@@ -466,6 +491,7 @@ export function compareResendRequestToPolicy(
       ? "test mode is now enabled"
       : "test mode is now disabled";
   }
+
   if (!sameStrings(request.to, policy.to)) {
     return "recipient or test-override policy changed";
   }
@@ -475,6 +501,40 @@ export function compareResendRequestToPolicy(
     return "stored reply-to fields are not allowed by current policy";
   }
   if (request.subject !== policy.subject) return "test-mode subject policy changed";
+  return null;
+}
+
+export function compareResendRequestBatchToPolicy(
+  batch: ResendRequestBatchSnapshot,
+  testSend: boolean,
+  policy: ResendDeliveryPolicy,
+  deliveryMode: RecipientDeliveryMode,
+): string | null {
+  const expectedLayouts =
+    policy.testSend ||
+    deliveryMode === "cc_thread" ||
+    deliveryMode === "legacy_multi_to"
+      ? [{ to: policy.to, cc: policy.cc }]
+      : policy.intendedRecipients.map((email) => ({ to: [email], cc: [] }));
+  if (batch.requests.length !== expectedLayouts.length) {
+    return "provider request count changed";
+  }
+  for (const [index, request] of batch.requests.entries()) {
+    const layout = expectedLayouts[index];
+    const conflict = compareResendRequestToPolicy(
+      request,
+      testSend,
+      {
+        ...policy,
+        to: layout.to,
+        cc: layout.cc,
+        bcc: policy.bcc.filter(
+          (email) => !layout.to.includes(email) && !layout.cc.includes(email),
+        ),
+      },
+    );
+    if (conflict) return `provider request ${index + 1}: ${conflict}`;
+  }
   return null;
 }
 
@@ -552,6 +612,7 @@ export async function prepareResendRequest({
       preparationDisposition: "permanent",
     };
   }
+
   const { policy } = resolvedPolicy;
 
   const request: ResendRequestSnapshot = {
@@ -584,6 +645,111 @@ export async function prepareResendRequest({
     attachmentBlobs: [],
     warnings: [],
   };
+}
+
+export async function prepareResendRequestBatch({
+  to,
+  recipientDeliveryMode = DEFAULT_RECIPIENT_DELIVERY_MODE,
+  primaryRecipientEmail,
+  subject,
+  html,
+  outreachId,
+  attemptId,
+  idempotencyKey,
+}: PrepareResendRequestArgs): Promise<PrepareResendRequestBatchResult> {
+  const { from, testOverride, bccEmails } =
+    await getResendDeliverySettingsSnapshot();
+  const candidates = normalizeEmails([
+    ...to,
+    ...bccEmails,
+    ...(testOverride ? [testOverride] : []),
+  ]);
+  const suppressed =
+    candidates.length === 0
+      ? []
+      : await db.emailSuppression.findMany({
+          where: { normalizedEmail: { in: candidates } },
+          select: { normalizedEmail: true },
+        });
+  const resolvedPolicy = buildResendDeliveryPolicy({
+    from,
+    intendedRecipients: to,
+    subject,
+    testOverride,
+    bccEmails,
+    suppressedEmails: suppressed.map((row) => row.normalizedEmail),
+    recipientDeliveryMode,
+    primaryRecipientEmail,
+  });
+  if (!resolvedPolicy.ok) {
+    return { ...resolvedPolicy, preparationDisposition: "permanent" };
+  }
+  const { policy } = resolvedPolicy;
+  const requestBatch = buildResendRequestBatchSnapshot({
+    policy,
+    recipientDeliveryMode,
+    html,
+    outreachId,
+    attemptId,
+    idempotencyKey,
+  });
+  return {
+    ok: true,
+    requestBatch,
+    requestHash: hashResendRequestBatchSnapshot(requestBatch),
+    testSend: policy.testSend,
+    intendedRecipients: policy.intendedRecipients,
+    attachmentBlobs: [],
+    warnings: [],
+  };
+}
+
+export function buildResendRequestBatchSnapshot({
+  policy,
+  recipientDeliveryMode,
+  html,
+  outreachId,
+  attemptId,
+  idempotencyKey,
+}: {
+  policy: ResendDeliveryPolicy;
+  recipientDeliveryMode: RecipientDeliveryMode;
+  html: string;
+  outreachId: string;
+  attemptId: string;
+  idempotencyKey: string;
+}): ResendRequestBatchSnapshot {
+  const layouts =
+    policy.testSend ||
+    recipientDeliveryMode === "cc_thread" ||
+    recipientDeliveryMode === "legacy_multi_to"
+      ? [{ to: policy.to, cc: policy.cc }]
+      : policy.intendedRecipients.map((email) => ({ to: [email], cc: [] }));
+  const requests = layouts.map((layout, index): ResendRequestSnapshot => ({
+    version: 1,
+    idempotencyKey: `${idempotencyKey}/message/${index}`,
+    from: policy.from,
+    to: layout.to,
+    cc: layout.cc,
+    bcc: policy.bcc.filter(
+      (email) => !layout.to.includes(email) && !layout.cc.includes(email),
+    ),
+    replyTo: [],
+    subject: policy.subject,
+    html,
+    headers: {
+      "X-Outreach-Id": outreachId,
+      "X-Outreach-Attempt-Id": attemptId,
+      "X-Outreach-Message-Index": String(index),
+    },
+    tags: [
+      { name: "outreach_id", value: outreachId },
+      { name: "outreach_attempt_id", value: attemptId },
+      { name: "outreach_message_index", value: String(index) },
+    ],
+    attachments: [],
+  }));
+  return { version: 1, requests };
 }
 
 export async function prepareArbitraryResendRequest({
@@ -641,6 +807,12 @@ function stableJson(value: unknown): string {
 
 export function hashResendRequestSnapshot(request: ResendRequestSnapshot): string {
   return createHash("sha256").update(stableJson(request)).digest("hex");
+}
+
+export function hashResendRequestBatchSnapshot(
+  batch: ResendRequestBatchSnapshot,
+): string {
+  return createHash("sha256").update(stableJson(batch)).digest("hex");
 }
 
 export function hashAttachmentContent(
@@ -765,6 +937,28 @@ export function parseResendRequestSnapshot(value: unknown): ResendRequestSnapsho
   };
 }
 
+export function parseResendRequestBatchSnapshot(
+  value: unknown,
+): ResendRequestBatchSnapshot | null {
+  const legacy = parseResendRequestSnapshot(value);
+  if (legacy) return { version: 1, requests: [legacy] };
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["version", "requests"]) ||
+    value.version !== 1 ||
+    !Array.isArray(value.requests) ||
+    value.requests.length === 0
+  ) {
+    return null;
+  }
+  const requests = value.requests.map(parseResendRequestSnapshot);
+  return requests.every(
+    (request): request is ResendRequestSnapshot => request !== null,
+  )
+    ? { version: 1, requests }
+    : null;
+}
+
 export function canRetryResendRequest(
   firstAttemptAt: Date | null,
   now: Date = new Date(),
@@ -854,6 +1048,7 @@ export async function sendPreparedEmailViaResend(
       failureDisposition: "policy",
     };
   }
+
   const blobsByHash = new Map(attachmentBlobs.map((blob) => [blob.sha256, blob]));
   const resolvedAttachments = [];
   for (const attachment of request.attachments) {
@@ -961,13 +1156,59 @@ export async function sendPreparedEmailViaResend(
   }
 }
 
+export async function sendPreparedEmailBatchViaResend(
+  batch: ResendRequestBatchSnapshot,
+  expectedHash: string,
+  attachmentBlobs: ResendAttachmentBlob[],
+  submissionCredential: ResendSubmissionCredential | null,
+  knownProviderMessageIds: readonly string[] = [],
+  sendRequest: typeof sendPreparedEmailViaResend =
+    sendPreparedEmailViaResend,
+): Promise<SendBatchResult> {
+  if (
+    hashResendRequestBatchSnapshot(batch) !== expectedHash &&
+    !(
+      batch.requests.length === 1 &&
+      hashResendRequestSnapshot(batch.requests[0]) === expectedHash
+    )
+  ) {
+    return {
+      results: batch.requests.map(() => ({
+        providerMessageId: null,
+        error: "Stored Resend request batch failed its integrity check",
+        failureDisposition: "policy" as const,
+      })),
+    };
+  }
+  return {
+    results: await Promise.all(
+      batch.requests.map((request, index) =>
+        knownProviderMessageIds[index]
+          ? Promise.resolve({
+              providerMessageId: knownProviderMessageIds[index],
+              error: null,
+              failureDisposition: null,
+            })
+          : sendRequest(
+              request,
+              hashResendRequestSnapshot(request),
+              attachmentBlobs,
+              submissionCredential,
+            ),
+      ),
+    ),
+  };
+}
+
 export interface ResendAttemptIdentity {
   id: string;
   outreachId: string;
   providerMessageId: string | null;
+  providerMessageIds?: string[];
   status?: string;
   testSend?: boolean | null;
   providerCredentialScope?: string | null;
+  providerRequest?: unknown;
 }
 
 export interface ResendCorrelationClaims {
@@ -1031,22 +1272,34 @@ export function shouldMirrorResendAttempt(
   outreach: {
     idempotencyKey: string;
     providerMessageId: string | null;
+    providerMessageIds?: string[];
     status?: string;
   },
   attempt: {
     idempotencyKey: string;
     providerMessageId: string | null;
+    providerMessageIds?: string[];
   },
 ): boolean {
   if (
     outreach.idempotencyKey !== attempt.idempotencyKey ||
-    !attempt.providerMessageId
+    (!attempt.providerMessageId &&
+      (attempt.providerMessageIds?.length ?? 0) === 0)
   ) {
     return false;
   }
+  const attemptIds = new Set([
+    ...(attempt.providerMessageId ? [attempt.providerMessageId] : []),
+    ...(attempt.providerMessageIds ?? []).filter(Boolean),
+  ]);
+  const outreachIds = new Set([
+    ...(outreach.providerMessageId ? [outreach.providerMessageId] : []),
+    ...(outreach.providerMessageIds ?? []).filter(Boolean),
+  ]);
   return (
-    outreach.providerMessageId === null ||
-    outreach.providerMessageId === attempt.providerMessageId
+    outreachIds.size === 0 ||
+    (outreachIds.size === attemptIds.size &&
+      [...attemptIds].every((id) => outreachIds.has(id)))
   );
 }
 
@@ -1100,10 +1353,18 @@ export function correlateResendWebhookAttempt(
   if (claims.outreachId && claims.outreachId !== attempt.outreachId) {
     return { status: "conflict", reason: "outreach tag contradicts matched attempt" };
   }
+  const knownProviderIds = new Set([
+    ...(attempt.providerMessageId ? [attempt.providerMessageId] : []),
+    ...(attempt.providerMessageIds ?? []).filter(Boolean),
+  ]);
+  const expectedProviderMessages =
+    parseResendRequestBatchSnapshot(attempt.providerRequest)?.requests.length ??
+    1;
   if (
     claims.providerMessageId &&
-    attempt.providerMessageId &&
-    claims.providerMessageId !== attempt.providerMessageId
+    knownProviderIds.size > 0 &&
+    knownProviderIds.size >= expectedProviderMessages &&
+    !knownProviderIds.has(claims.providerMessageId)
   ) {
     return {
       status: "conflict",
@@ -1115,6 +1376,7 @@ export function correlateResendWebhookAttempt(
     status: "matched",
     attempt,
     bindProviderMessageId:
-      !!claims.providerMessageId && attempt.providerMessageId === null,
+      !!claims.providerMessageId &&
+      !knownProviderIds.has(claims.providerMessageId),
   };
 }

@@ -85,6 +85,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
       "festivalAllContactsSend",
       "recipientDeliveryMode",
       "primaryRecipientEmail",
+      "providerMessageIds",
       "dismissedAt",
       "trajectoryRecommendationId",
     ],

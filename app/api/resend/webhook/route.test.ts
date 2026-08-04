@@ -52,3 +52,12 @@ test("webhook event rows persist sanitized click metadata in every correlation p
   assert.ok((source.match(/\.\.\.clickMetadata/g)?.length ?? 0) >= 3);
   assert.doesNotMatch(source, /ipAddress|userAgent/);
 });
+
+test("webhooks correlate every message in an immutable outreach batch", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(source, /providerMessageIds: \{ has: messageId \}/);
+  assert.match(source, /findMessageIndex\(parsed\)/);
+  assert.match(source, /providerMessageIds\[messageIndex\] = messageId/);
+  assert.match(source, /providerAcceptanceComplete/);
+  assert.match(source, /providerMessageIds,/);
+});

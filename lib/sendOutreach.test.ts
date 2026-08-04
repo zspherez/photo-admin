@@ -1193,6 +1193,7 @@ test("accepted test-delivery failures stay reusable while real failures remain f
       status: "test",
       error: null,
       providerMessageId: "message-test",
+      providerMessageIds: ["message-test"],
       sentAt: acceptedAt,
       scheduledFor: null,
       nextAttemptAt: null,
@@ -1217,7 +1218,10 @@ test("attachment preparation completes before an immutable provider attempt is p
     "utf8",
   );
   const ensureStart = source.indexOf("async function ensureAttempt");
-  const preparation = source.indexOf("prepareResendRequest({", ensureStart);
+  const preparation = source.indexOf(
+    "prepareResendRequestBatch({",
+    ensureStart,
+  );
   const failureRelease = source.indexOf(
     "prepared.preparationDisposition",
     preparation,
@@ -1431,8 +1435,42 @@ test("new follow-ups inherit delivery mode while attempted retries keep the chil
   );
   assert.match(
     source,
-    /prepareResendRequest\(\{[\s\S]*recipientDeliveryMode:[\s\S]{0,100}outreach\.recipientDeliveryMode[\s\S]*primaryRecipientEmail: outreach\.primaryRecipientEmail/,
+    /prepareResendRequestBatch\(\{/,
   );
+  assert.match(source, /recipientDeliveryMode:[\s\S]{0,100}outreach\.recipientDeliveryMode/);
+  assert.match(source, /primaryRecipientEmail: outreach\.primaryRecipientEmail/);
+});
+
+test("individual-thread delivery persists every provider message identity and retries only missing requests", () => {
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /prepareResendRequestBatch/);
+  assert.match(source, /sendPreparedEmailBatchViaResend/);
+  assert.match(
+    source,
+    /attempt\.providerMessageIds \?\? \[\]/,
+  );
+  assert.match(
+    source,
+    /providerMessageIds,/,
+  );
+  assert.match(source, /status: testSend \? "test" : "sent"/);
+});
+
+test("partially accepted recipient batches are never treated as definitively unsent", () => {
+  const partial = {
+    status: "request_failed",
+    providerCredentialScope: CREDENTIAL_SCOPE,
+    providerMessageId: null,
+    providerMessageIds: ["message-first", ""],
+    firstAttemptAt: NOW,
+    attemptCount: 1,
+    failureDisposition: "configuration",
+  };
+  assert.equal(isDefinitivelyUnsentOutreachAttempt(partial), false);
+  assert.equal(isDefinitiveConfigurationRejection(partial), false);
 });
 
 test("follow-up recipient snapshots can include multiple unmarked current contacts", () => {
@@ -2021,9 +2059,9 @@ test("sending transition revalidates and holds policy locks through provider sub
   const providerRevalidation = submission.indexOf(
     "evaluateLockedOutreachDeliveryPolicy(",
   );
-  const provider = submission.indexOf("sendPreparedEmailViaResend(");
+  const provider = submission.indexOf("sendPreparedEmailBatchViaResend(");
   assert.ok(revalidation >= 0 && revalidation < sending);
-  assert.equal(claim.includes("sendPreparedEmailViaResend("), false);
+  assert.equal(claim.includes("sendPreparedEmailBatchViaResend("), false);
   assert.ok(providerRevalidation >= 0 && providerRevalidation < provider);
   assert.match(
     claim,
@@ -2035,7 +2073,7 @@ test("sending transition revalidates and holds policy locks through provider sub
   );
   assert.match(
     submission,
-    /sendPreparedEmailViaResend\([\s\S]*attachmentBlobs,\s+submissionCredential/,
+    /sendPreparedEmailBatchViaResend\([\s\S]*attachmentBlobs,\s+submissionCredential/,
   );
   assert.match(
     submission,
