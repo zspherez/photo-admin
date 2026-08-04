@@ -43,7 +43,10 @@ import {
   type ResendRequestSnapshot,
   type ResendSubmissionCredential,
 } from "@/lib/resend";
-import { ensureSentMailCopyQueued } from "@/lib/sentMailCopy";
+import {
+  canRefreshSentMailboxTargetBeforeSubmission,
+  ensureSentMailCopyQueued,
+} from "@/lib/sentMailCopy";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
 import {
   customizeRecipientIdentity,
@@ -5019,6 +5022,16 @@ async function claimAttemptForSending(
           const claimedAttempt = await tx.outreachSendAttempt.update({
             where: { id: attempt.id },
             data: {
+              ...(canRefreshSentMailboxTargetBeforeSubmission(attempt)
+                ? {
+                    sentMailboxCopyRequested:
+                      policy.policy.sentMailCopyRequested,
+                    sentMailboxTargetScope:
+                      policy.policy.sentMailboxTargetScope,
+                    sentMailboxCopyConfigurationError:
+                      policy.policy.sentMailboxCopyConfigurationError,
+                  }
+                : {}),
               status: "sending",
               nextAttemptAt: null,
               lastAttemptAt: now,

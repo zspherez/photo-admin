@@ -1840,6 +1840,29 @@ test("delivery policy revalidation detects membership and immutable request drif
   if (clean.ok) assert.equal(clean.request?.idempotencyKey, "outreach/outreach-1/attempt-1");
 });
 
+test("outreach refreshes Sent targets in the locked claim before submission", () => {
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  const claim = source.slice(
+    source.indexOf("async function claimAttemptForSending"),
+    source.indexOf("async function restoreUnsubmittedClaimFailure"),
+  );
+  assert.match(
+    claim,
+    /evaluateLockedOutreachDeliveryPolicy[\s\S]*canRefreshSentMailboxTargetBeforeSubmission\(attempt\)[\s\S]*sentMailboxTargetScope:\s+policy\.policy\.sentMailboxTargetScope[\s\S]*status: "sending"/,
+  );
+  assert.ok(
+    claim.indexOf("evaluateLockedOutreachDeliveryPolicy") <
+      claim.indexOf("canRefreshSentMailboxTargetBeforeSubmission(attempt)"),
+  );
+  assert.ok(
+    source.indexOf("canRefreshSentMailboxTargetBeforeSubmission(attempt)") <
+      source.indexOf("async function submitClaimedAttempt"),
+  );
+});
+
 test("recipient policy advisory locks serialize send claims and suppressions", async () => {
   assert.deepEqual(
     outreachRecipientPolicyLockEmails([

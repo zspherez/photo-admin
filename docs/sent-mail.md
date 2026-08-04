@@ -75,5 +75,9 @@ mailbox mapping. Password rotation does not change the scope. Account, host, or
 mailbox changes do; pending copies remain visibly retryable and are never
 redirected to the new target.
 
+When Resend conclusively rejects a request without accepting it, a later retry
+refreshes the target from the then-current locked settings. Once provider
+acceptance is possible or confirmed, the prior target remains immutable.
+
 The IMAP password remains in server-side environment configuration. Message
 content and credentials are not written to application logs.

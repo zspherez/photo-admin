@@ -23,7 +23,10 @@ import {
   type ResendDeliverySettingsSnapshot,
   type SendResult,
 } from "@/lib/resend";
-import { ensureSentMailCopyQueued } from "@/lib/sentMailCopy";
+import {
+  canRefreshSentMailboxTargetBeforeSubmission,
+  ensureSentMailCopyQueued,
+} from "@/lib/sentMailCopy";
 import {
   OUTREACH_CLAIM_TIMEOUT_MS,
   OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
@@ -908,6 +911,24 @@ async function bindScheduledArbitraryCredentialScope(
           await tx.arbitraryEmail.update({
             where: { id },
             data: {
+              ...(canRefreshSentMailboxTargetBeforeSubmission(stored)
+                ? {
+                    sentMailboxCopyRequested:
+                      stored.testSend === false &&
+                      deliverySettings.sentMailCopyRequested === true,
+                    sentMailboxTargetScope:
+                      stored.testSend === false &&
+                      deliverySettings.sentMailCopyRequested === true
+                        ? (deliverySettings.sentMailboxTargetScope ?? null)
+                        : null,
+                    sentMailboxCopyConfigurationError:
+                      stored.testSend === false &&
+                      deliverySettings.sentMailCopyRequested === true
+                        ? (deliverySettings.sentMailCopyConfigurationError ??
+                          null)
+                        : null,
+                  }
+                : {}),
               status: "sending",
               providerCredentialScope:
                 stored.providerCredentialScope ?? submissionCredential.scope,
@@ -1071,6 +1092,11 @@ async function submitScheduledArbitraryEmail(
               },
             });
             return { ok: false, id, error };
+          }
+          if (!currentPolicy.ok) {
+            throw new Error(
+              "Arbitrary email delivery policy changed after validation",
+            );
           }
 
           const submissionCredential = getResendSubmissionCredential(

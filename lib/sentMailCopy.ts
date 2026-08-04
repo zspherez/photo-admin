@@ -50,6 +50,22 @@ export interface SentMailCopyDispatchResult {
   error?: string;
 }
 
+export function canRefreshSentMailboxTargetBeforeSubmission(state: {
+  status: string;
+  providerMessageId: string | null;
+  firstAttemptAt: Date | null;
+  attemptCount: number;
+  failureDisposition: string | null;
+}): boolean {
+  if (state.providerMessageId) return false;
+  if (state.firstAttemptAt === null && state.attemptCount === 0) {
+    return state.status === "prepared" || state.status === "queued";
+  }
+  return ["configuration", "retryable", "permanent", "policy"].includes(
+    state.failureDisposition ?? "",
+  );
+}
+
 type SentMailCopyTransaction = Pick<
   Prisma.TransactionClient,
   "sentMailCopy"

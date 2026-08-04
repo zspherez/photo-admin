@@ -357,6 +357,7 @@ const REAL_SETTINGS: ResendDeliverySettingsSnapshot = {
 };
 
 const SENT_TARGET_SCOPE = `sent-mail:target-sha256:${"c".repeat(64)}`;
+const SENT_TARGET_SCOPE_B = `sent-mail:target-sha256:${"d".repeat(64)}`;
 const MISCONFIGURED_SENT_SETTINGS: ResendDeliverySettingsSnapshot = {
   ...REAL_SETTINGS,
   sentMailCopyRequested: true,
@@ -394,13 +395,14 @@ test("immediate arbitrary delivery succeeds when Sent archival is misconfigured"
   );
 });
 
-test("scheduled arbitrary retries submit despite Sent archival misconfiguration", async () => {
+test("proven-unsent arbitrary retries refresh the Sent target before acceptance", async () => {
   const database = new MemoryArbitraryEmailDatabase();
   const now = { value: new Date("2026-07-20T20:00:00.000Z") };
+  const settings = { ...MISCONFIGURED_SENT_SETTINGS };
   let submissions = 0;
   const deps = dependencies(
     database,
-    MISCONFIGURED_SENT_SETTINGS,
+    settings,
     async () => {
       submissions += 1;
       return submissions === 1
@@ -429,6 +431,8 @@ test("scheduled arbitrary retries submit despite Sent archival misconfiguration"
   now.value = new Date("2026-07-20T20:01:01.000Z");
   const first = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
   assert.equal(first.retryScheduled, true);
+  assert.equal(database.record?.sentMailboxTargetScope, SENT_TARGET_SCOPE);
+  settings.sentMailboxTargetScope = SENT_TARGET_SCOPE_B;
   now.value = first.nextAttemptAt ?? new Date("2026-07-20T20:02:01.000Z");
   const second = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
   assert.equal(second.ok, true);
@@ -436,8 +440,9 @@ test("scheduled arbitrary retries submit despite Sent archival misconfiguration"
   assert.equal(database.sentMailCopyRecord?.status, "retry_scheduled");
   assert.equal(
     database.sentMailCopyRecord?.targetScope,
-    SENT_TARGET_SCOPE,
+    SENT_TARGET_SCOPE_B,
   );
+  assert.equal(database.record?.sentMailboxTargetScope, SENT_TARGET_SCOPE_B);
 });
 
 test("a suppression that wins the recipient lock blocks the stale real request", async () => {
@@ -762,7 +767,10 @@ test("scheduled retries retain their committed credential scope", async () => {
 test("credential rotation after an in-flight scheduled attempt fails closed", async () => {
   const database = new MemoryArbitraryEmailDatabase();
   const now = { value: new Date("2026-07-20T12:00:00.000Z") };
-  const settings = { ...REAL_SETTINGS, apiKey: "re_initial_scope" };
+  const settings = {
+    ...MISCONFIGURED_SENT_SETTINGS,
+    apiKey: "re_initial_scope",
+  };
   let submissions = 0;
   const deps = dependencies(database, settings, async () => {
     submissions += 1;
@@ -784,8 +792,10 @@ test("credential rotation after an in-flight scheduled attempt fails closed", as
   const first = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
   assert.equal(first.retryScheduled, true);
   const originalScope = database.record?.providerCredentialScope;
+  const originalSentTarget = database.record?.sentMailboxTargetScope;
 
   settings.apiKey = "re_rotated_scope";
+  settings.sentMailboxTargetScope = SENT_TARGET_SCOPE_B;
   now.value = new Date("2026-07-20T13:01:01.000Z");
   const rotated = await dispatchScheduledArbitraryEmailWithDependencies(
     id,
@@ -795,6 +805,7 @@ test("credential rotation after an in-flight scheduled attempt fails closed", as
   assert.equal(submissions, 1);
   assert.equal(database.record?.status, "manual_review");
   assert.equal(database.record?.providerCredentialScope, originalScope);
+  assert.equal(database.record?.sentMailboxTargetScope, originalSentTarget);
   assert.match(String(database.record?.error), /credential scope changed/i);
 });
 

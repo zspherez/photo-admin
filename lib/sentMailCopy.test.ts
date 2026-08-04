@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import {
   appendSentMailCopy,
   buildSentMailCopyMime,
+  canRefreshSentMailboxTargetBeforeSubmission,
   ensureSentMailCopyQueued,
   type SentMailImapClient,
 } from "./sentMailCopy";
@@ -120,6 +121,7 @@ test("Sent target scope excludes passwords and binds account and mailbox identit
     ...ENV,
     SENT_MAIL_IMAP_PASSWORD: "rotated-password",
   });
+
   const normalizedUsername = getSentMailTarget(null, {
     ...ENV,
     SENT_MAIL_IMAP_USERNAME: "  sender@example.com  ",
@@ -164,6 +166,74 @@ test("Sent target scope excludes passwords and binds account and mailbox identit
       false,
     );
   }
+});
+
+test("Sent target refresh is limited to proven-unsent pre-acceptance states", () => {
+  const base = {
+    status: "sending",
+    providerMessageId: null,
+    firstAttemptAt: new Date("2026-08-04T16:00:00.000Z"),
+    attemptCount: 1,
+    failureDisposition: null,
+  };
+  assert.equal(
+    canRefreshSentMailboxTargetBeforeSubmission({
+      ...base,
+      status: "prepared",
+      firstAttemptAt: null,
+      attemptCount: 0,
+    }),
+    true,
+  );
+  assert.equal(
+    canRefreshSentMailboxTargetBeforeSubmission({
+      ...base,
+      status: "queued",
+      firstAttemptAt: null,
+      attemptCount: 0,
+    }),
+    true,
+  );
+  for (const failureDisposition of [
+    "configuration",
+    "retryable",
+    "permanent",
+    "policy",
+  ]) {
+    assert.equal(
+      canRefreshSentMailboxTargetBeforeSubmission({
+        ...base,
+        failureDisposition,
+      }),
+      true,
+    );
+  }
+  for (const failureDisposition of ["in_flight", "uncertain", null]) {
+    assert.equal(
+      canRefreshSentMailboxTargetBeforeSubmission({
+        ...base,
+        failureDisposition,
+      }),
+      false,
+    );
+  }
+  assert.equal(
+    canRefreshSentMailboxTargetBeforeSubmission({
+      ...base,
+      status: "sending",
+      firstAttemptAt: null,
+      attemptCount: 0,
+    }),
+    false,
+  );
+  assert.equal(
+    canRefreshSentMailboxTargetBeforeSubmission({
+      ...base,
+      providerMessageId: "accepted-message",
+      failureDisposition: "retryable",
+    }),
+    false,
+  );
 });
 
 test("Sent copy MIME preserves immutable recipients, content, and attachments", async () => {
@@ -461,4 +531,18 @@ test("Sent copy persistence constrains one immutable source and retry state", ()
   assert.match(scopeMigration, /targetScope" IS DISTINCT FROM OLD\."targetScope/);
   assert.match(scopeMigration, /sentMailboxCopyConfigurationError/);
   assert.match(scopeMigration, /COMMIT;\s*$/);
+
+  const refreshMigration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260804181500_sent_mail_retry_target_refresh/migration.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(refreshMigration, /^BEGIN;/);
+  assert.match(refreshMigration, /failureDisposition" IN/);
+  assert.match(refreshMigration, /status" IN \('prepared', 'queued'\)/);
+  assert.doesNotMatch(refreshMigration, /'in_flight'|'uncertain'/);
+  assert.match(refreshMigration, /possible provider acceptance/);
+  assert.match(refreshMigration, /COMMIT;\s*$/);
 });
