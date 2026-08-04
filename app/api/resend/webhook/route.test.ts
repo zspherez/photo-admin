@@ -82,6 +82,10 @@ test("same-index webhook ID conflicts preserve immutable identity and stop retri
     source,
     /if \(correlation\.status === "matched"\) \{[\s\S]*providerMessageIds,[\s\S]*providerRequestResults:/,
   );
+  assert.match(source, /conflictedAttempt = attempt/);
+  assert.match(source, /eventAttempt = matchedAttempt \?\? conflictedAttempt/);
+  assert.match(source, /outreachId: eventAttempt\?\.outreachId/);
+  assert.match(source, /attemptId: eventAttempt\?\.id/);
 });
 
 test("individual-mode BCC opens, clicks, and failures record without aggregate mutation", () => {
@@ -90,10 +94,36 @@ test("individual-mode BCC opens, clicks, and failures record without aggregate m
     "auxiliary outreach recipient webhook recorded without aggregate mutation",
   );
   assert.ok(auxiliaryGuard >= 0);
-  assert.ok(auxiliaryGuard < source.indexOf("applySuppression(", auxiliaryGuard));
+  const suppression = source.lastIndexOf("applySuppression(", auxiliaryGuard);
+  assert.ok(suppression >= 0 && suppression < auxiliaryGuard);
   assert.ok(auxiliaryGuard < source.indexOf('case "email.opened"', auxiliaryGuard));
   assert.ok(auxiliaryGuard < source.indexOf('case "email.clicked"', auxiliaryGuard));
   assert.ok(auxiliaryGuard < source.indexOf('case "email.failed"', auxiliaryGuard));
+});
+
+test("BCC-only bounce and complaint events suppress before skipping aggregates", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  const auxiliaryGuard = source.indexOf(
+    "auxiliary outreach recipient webhook recorded without aggregate mutation",
+  );
+  const suppression = source.lastIndexOf("applySuppression(", auxiliaryGuard);
+  assert.ok(suppression >= 0 && suppression < auxiliaryGuard);
+  assert.match(source, /failurePolicy\.applySuppression/);
+  assert.match(source, /parsed\.type !== "email\.bounced"/);
+  assert.match(source, /parsed\.type !== "email\.complained"/);
+});
+
+test("provider identity quarantine remains sticky after later valid batch webhooks", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(source, /isProviderMessageIdConflictError\(attempt\.error\)/);
+  assert.match(
+    source,
+    /provider identity conflict remains quarantined pending explicit resolution/,
+  );
+  const stickyGuard = source.indexOf(
+    "provider identity conflict remains quarantined pending explicit resolution",
+  );
+  assert.ok(stickyGuard < source.indexOf("providerAcceptanceComplete", stickyGuard));
 });
 
 test("partial accepted delivery failures preserve unresolved batch retry state", () => {

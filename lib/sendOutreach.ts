@@ -33,6 +33,7 @@ import {
   hashAttachmentContent,
   hashResendRequestBatchSnapshot,
   hashResendRequestSnapshot,
+  isProviderMessageIdConflictError,
   normalizeEmails,
   parseResendRequestBatchSnapshot,
   parseResendRequestResultSnapshot,
@@ -3901,6 +3902,20 @@ async function finishAlreadyAccepted(
   if (!attempt.providerMessageId) {
     throw new Error("Accepted attempt has no provider message ID");
   }
+  if (
+    attempt.status === "manual_review" &&
+    attempt.failureDisposition === "policy" &&
+    isProviderMessageIdConflictError(attempt.error)
+  ) {
+    return {
+      kind: "complete",
+      result: {
+        ok: false,
+        outreachId: outreach.id,
+        error: attempt.error ?? "Provider identity conflict requires review",
+      },
+    };
+  }
   const deliveryState = await tx.outreach.findUnique({
     where: { id: outreach.id },
     select: { deliveredAt: true },
@@ -5861,6 +5876,18 @@ async function finishClaimedSend(
         ok: false,
         outreachId: outreach.id,
         error: "Provider attempt disappeared before completion",
+        ...outputMetadata,
+      };
+    }
+    if (
+      attempt.status === "manual_review" &&
+      attempt.failureDisposition === "policy" &&
+      isProviderMessageIdConflictError(attempt.error)
+    ) {
+      return {
+        ok: false,
+        outreachId: current.id,
+        error: attempt.error ?? "Provider identity conflict requires review",
         ...outputMetadata,
       };
     }

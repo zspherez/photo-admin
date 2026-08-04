@@ -25,6 +25,7 @@ import {
   hashResendRequestSnapshot,
   hashResendRequestBatchSnapshot,
   isValidResendSender,
+  isProviderMessageIdConflictError,
   outreachWebhookRecipientImpact,
   markResendRequestDeliveryFailure,
   mergeResendRequestResults,
@@ -771,6 +772,12 @@ test("same-index webhook provider conflicts preserve the original immutable ID",
         "Provider message ID conflict for request 1: message-original != message-conflict",
     },
   );
+  assert.equal(
+    isProviderMessageIdConflictError(
+      "Provider message ID conflict for request 1: original != conflict",
+    ),
+    true,
+  );
   assert.deepEqual(
     bindProviderMessageIdAtIndex(["message-original", ""], 2, 0, "message-original"),
     {
@@ -1112,6 +1119,32 @@ test("webhook correlation rejects contradictory provider and attempt identities"
       status: "matched",
       attempt: batchAttempt,
       bindProviderMessageId: false,
+    },
+  );
+  const completeBatchAttempt = {
+    ...batchAttempt,
+    providerRequest: {
+      version: 1,
+      requests: [
+        { ...REQUEST, idempotencyKey: "batch/message/0" },
+        { ...REQUEST, idempotencyKey: "batch/message/1" },
+      ],
+    },
+  };
+  assert.deepEqual(
+    correlateResendWebhookAttempt(
+      {
+        attemptId: completeBatchAttempt.id,
+        outreachId: completeBatchAttempt.outreachId,
+        providerMessageId: "message-conflict",
+      },
+      completeBatchAttempt,
+      null,
+    ),
+    {
+      status: "matched",
+      attempt: completeBatchAttempt,
+      bindProviderMessageId: true,
     },
   );
   const partialBatchAttempt = {

@@ -7,6 +7,7 @@ import {
   canBindResendWebhookProviderMessage,
   correlateResendWebhookAttempt,
   getResendWebhookFailurePolicy,
+  isProviderMessageIdConflictError,
   markResendRequestDeliveryFailure,
   outreachWebhookRecipientImpact,
   parseResendRequestBatchSnapshot,
@@ -442,6 +443,7 @@ async function processEvent(
             messageAttempt,
             outreachAttempt,
           );
+          let conflictedAttempt: typeof taggedAttempt = null;
           let quarantinedAttemptEvent =
             correlation.status !== "matched" && taggedLegacyAttempt !== null;
 
@@ -503,6 +505,7 @@ async function processEvent(
                       nextAttemptAt: null,
                     },
                   });
+                  conflictedAttempt = attempt;
                   const outreach = await tx.outreach.findUnique({
                     where: { id: attempt.outreachId },
                     select: { id: true, idempotencyKey: true },
@@ -579,6 +582,7 @@ async function processEvent(
 
           const matchedAttempt =
             correlation.status === "matched" ? correlation.attempt : null;
+          const eventAttempt = matchedAttempt ?? conflictedAttempt;
           const matchedRequestBatch = matchedAttempt
             ? parseResendRequestBatchSnapshot(matchedAttempt.providerRequest)
             : null;
@@ -606,8 +610,8 @@ async function processEvent(
               recipientEmails: impactedRecipients,
               providerCreatedAt,
               ...clickMetadata,
-              outreachId: matchedAttempt?.outreachId ?? null,
-              attemptId: matchedAttempt?.id ?? null,
+              outreachId: eventAttempt?.outreachId ?? null,
+              attemptId: eventAttempt?.id ?? null,
               correlationStatus: correlation.status,
               correlationError:
                 correlation.status === "matched" ? null : correlation.reason,
@@ -620,6 +624,15 @@ async function processEvent(
                 ? { status: "legacy_unknown" }
                 : matchedAttempt,
             );
+          if (failurePolicy.applySuppression) {
+            await applySuppression(
+              tx,
+              eventId,
+              parsed,
+              providerCreatedAt,
+              impactedRecipients,
+            );
+          }
           if (
             correlation.status === "matched" &&
             outreachRecipientImpact &&
@@ -629,15 +642,6 @@ async function processEvent(
               note:
                 "auxiliary outreach recipient webhook recorded without aggregate mutation",
             };
-          }
-          if (failurePolicy.applySuppression) {
-            await applySuppression(
-              tx,
-              eventId,
-              parsed,
-              providerCreatedAt,
-              impactedRecipients,
-            );
           }
 
           if (correlation.status !== "matched") {
@@ -656,6 +660,16 @@ async function processEvent(
             where: { id: correlation.attempt.id },
           });
           if (!attempt) return { note: "matched attempt disappeared" };
+          if (
+            attempt.status === "manual_review" &&
+            attempt.failureDisposition === "policy" &&
+            isProviderMessageIdConflictError(attempt.error)
+          ) {
+            return {
+              note:
+                "provider identity conflict remains quarantined pending explicit resolution",
+            };
+          }
           const outreach = await tx.outreach.findUnique({
             where: { id: attempt.outreachId },
           });

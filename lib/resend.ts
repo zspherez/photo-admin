@@ -35,6 +35,16 @@ class DeadlineResend extends Resend {
       : deadlineSignal;
     return super.fetchRequest<T>(path, { ...requestOptions, signal });
   }
+
+}
+
+export const PROVIDER_MESSAGE_ID_CONFLICT_PREFIX =
+  "Provider message ID conflict for request ";
+
+export function isProviderMessageIdConflictError(
+  error: string | null | undefined,
+): boolean {
+  return error?.startsWith(PROVIDER_MESSAGE_ID_CONFLICT_PREFIX) ?? false;
 }
 
 export function getResendConfigurationError(
@@ -335,7 +345,7 @@ export function mergeResendRequestResults(
         result.providerMessageId !== previous.providerMessageId
       ) {
         conflict ??=
-          `Provider message ID conflict for request ${index + 1}: ` +
+          `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
           `${previous.providerMessageId} != ${result.providerMessageId}`;
       }
       return previous;
@@ -396,7 +406,7 @@ export function bindProviderMessageIdAtIndex(
     return {
       providerMessageIds,
       conflict:
-        `Provider message ID conflict for request ${index + 1}: ` +
+        `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
         `${existing} != ${providerMessageId}`,
     };
   }
@@ -1593,10 +1603,13 @@ export function correlateResendWebhookAttempt(
   const expectedProviderMessages =
     parseResendRequestBatchSnapshot(attempt.providerRequest)?.requests.length ??
     1;
+  const canResolveIndexedBatchConflict =
+    expectedProviderMessages > 1 && taggedAttempt?.id === attempt.id;
   if (
     claims.providerMessageId &&
     knownProviderIds.size > 0 &&
     knownProviderIds.size >= expectedProviderMessages &&
+    !canResolveIndexedBatchConflict &&
     !knownProviderIds.has(claims.providerMessageId)
   ) {
     return {

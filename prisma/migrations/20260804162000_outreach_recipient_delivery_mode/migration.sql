@@ -12,6 +12,7 @@ ADD COLUMN "providerRequestResults" JSONB;
 DELETE FROM "OutreachSendAttempt" AS attempt
 USING "Outreach" AS outreach
 WHERE attempt."outreachId" = outreach."id"
+  AND attempt."idempotencyKey" = outreach."idempotencyKey"
   AND cardinality(outreach."recipientEmails") > 1
   AND attempt."status" = 'prepared'
   AND attempt."providerRequest" IS NOT NULL
@@ -26,6 +27,7 @@ WHERE cardinality("recipientEmails") > 1
     SELECT 1
     FROM "OutreachSendAttempt" AS attempt
     WHERE attempt."outreachId" = "Outreach"."id"
+      AND attempt."idempotencyKey" = "Outreach"."idempotencyKey"
       AND attempt."providerRequest" IS NOT NULL
       AND (
         attempt."providerMessageId" IS NOT NULL

@@ -20,11 +20,11 @@ test("recipient delivery migration preserves existing rows as separate threads",
   assert.match(migration, /"providerRequestResults" JSONB/);
   assert.match(
     migration,
-    /DELETE FROM "OutreachSendAttempt"[\s\S]*"status" = 'prepared'[\s\S]*"firstAttemptAt" IS NULL[\s\S]*"attemptCount" = 0/,
+    /DELETE FROM "OutreachSendAttempt"[\s\S]*attempt\."idempotencyKey" = outreach\."idempotencyKey"[\s\S]*"status" = 'prepared'[\s\S]*"firstAttemptAt" IS NULL[\s\S]*"attemptCount" = 0/,
   );
   assert.match(
     migration,
-    /SET "recipientDeliveryMode" = 'legacy_multi_to'[\s\S]*"providerRequest" IS NOT NULL[\s\S]*"firstAttemptAt" IS NOT NULL[\s\S]*"attemptCount" > 0/,
+    /SET "recipientDeliveryMode" = 'legacy_multi_to'[\s\S]*attempt\."idempotencyKey" = "Outreach"\."idempotencyKey"[\s\S]*"providerRequest" IS NOT NULL[\s\S]*"firstAttemptAt" IS NOT NULL[\s\S]*"attemptCount" > 0/,
   );
   assert.doesNotMatch(
     migration,
@@ -34,5 +34,24 @@ test("recipient delivery migration preserves existing rows as separate threads",
   assert.match(
     migration,
     /'cc_thread'[\s\S]*"primaryRecipientEmail" = ANY\("recipientEmails"\)/,
+  );
+});
+
+test("historical submitted attempts cannot make a current prepared snapshot legacy", () => {
+  const preparedRetirement = migration.slice(
+    migration.indexOf('DELETE FROM "OutreachSendAttempt"'),
+    migration.indexOf('UPDATE "Outreach"'),
+  );
+  const legacyClassification = migration.slice(
+    migration.indexOf('UPDATE "Outreach"'),
+    migration.indexOf('ALTER TABLE "Outreach"', migration.indexOf('UPDATE "Outreach"')),
+  );
+  assert.match(
+    preparedRetirement,
+    /attempt\."idempotencyKey" = outreach\."idempotencyKey"/,
+  );
+  assert.match(
+    legacyClassification,
+    /attempt\."idempotencyKey" = "Outreach"\."idempotencyKey"/,
   );
 });
