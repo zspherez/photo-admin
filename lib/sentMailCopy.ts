@@ -347,6 +347,19 @@ function retryAt(attemptCount: number, now: Date): Date {
   return new Date(now.getTime() + delay);
 }
 
+export function sentMailCopyFailureState(
+  attemptCount: number,
+  now: Date,
+) {
+  const terminal = attemptCount >= SENT_MAIL_COPY_MAX_ATTEMPTS;
+  return {
+    terminal,
+    status: terminal ? "manual_review" : "retry_scheduled",
+    retryScheduled: !terminal,
+    nextAttemptAt: retryAt(attemptCount, now),
+  } as const;
+}
+
 function operationalError(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
   if (
@@ -550,13 +563,13 @@ export async function dispatchSentMailCopy(
   });
   const configuration = getSentMailImapConfiguration(mailboxSetting?.value);
   if (!configuration.ok) {
-    const nextAttemptAt = retryAt(claim.attemptCount, now);
+    const failure = sentMailCopyFailureState(claim.attemptCount, now);
     await db.sentMailCopy.updateMany({
       where: { id, status: "copying", claimToken: claim.claimToken },
       data: {
-        status: "retry_scheduled",
+        status: failure.status,
         error: configuration.error,
-        nextAttemptAt,
+        nextAttemptAt: failure.nextAttemptAt,
         claimedAt: null,
         claimToken: null,
       },
@@ -565,20 +578,20 @@ export async function dispatchSentMailCopy(
       id,
       ok: false,
       error: configuration.error,
-      retryScheduled: true,
-      nextAttemptAt,
+      retryScheduled: failure.retryScheduled,
+      nextAttemptAt: failure.nextAttemptAt,
     };
   }
   if (configuration.config.targetScope !== loaded.row.targetScope) {
-    const nextAttemptAt = retryAt(claim.attemptCount, now);
+    const failure = sentMailCopyFailureState(claim.attemptCount, now);
     const error =
       "Current IMAP mailbox target does not match the immutable target captured at acceptance";
     await db.sentMailCopy.updateMany({
       where: { id, status: "copying", claimToken: claim.claimToken },
       data: {
-        status: "retry_scheduled",
+        status: failure.status,
         error,
-        nextAttemptAt,
+        nextAttemptAt: failure.nextAttemptAt,
         claimedAt: null,
         claimToken: null,
       },
@@ -587,8 +600,8 @@ export async function dispatchSentMailCopy(
       id,
       ok: false,
       error,
-      retryScheduled: true,
-      nextAttemptAt,
+      retryScheduled: failure.retryScheduled,
+      nextAttemptAt: failure.nextAttemptAt,
     };
   }
 
@@ -654,15 +667,14 @@ export async function dispatchSentMailCopy(
     }
     return { id, ok: true };
   } catch (cause) {
-    const terminal = claim.attemptCount >= SENT_MAIL_COPY_MAX_ATTEMPTS;
-    const nextAttemptAt = retryAt(claim.attemptCount, now);
+    const failure = sentMailCopyFailureState(claim.attemptCount, now);
     const error = operationalError(cause);
     await db.sentMailCopy.updateMany({
       where: { id, status: "copying", claimToken: claim.claimToken },
       data: {
-        status: terminal ? "manual_review" : "retry_scheduled",
+        status: failure.status,
         error,
-        nextAttemptAt,
+        nextAttemptAt: failure.nextAttemptAt,
         claimedAt: null,
         claimToken: null,
       },
@@ -671,8 +683,8 @@ export async function dispatchSentMailCopy(
       id,
       ok: false,
       error,
-      retryScheduled: !terminal,
-      nextAttemptAt,
+      retryScheduled: failure.retryScheduled,
+      nextAttemptAt: failure.nextAttemptAt,
     };
   }
 }

@@ -134,6 +134,23 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
   );
 }
 
+function sentMailboxCopyStateForLockedSettings(
+  testSend: boolean,
+  settings: ResendDeliverySettingsSnapshot,
+) {
+  const requested =
+    !testSend && settings.sentMailCopyRequested === true;
+  return {
+    sentMailboxCopyRequested: requested,
+    sentMailboxTargetScope: requested
+      ? (settings.sentMailboxTargetScope ?? null)
+      : null,
+    sentMailboxCopyConfigurationError: requested
+      ? (settings.sentMailCopyConfigurationError ?? null)
+      : null,
+  };
+}
+
 function sameQueuedSnapshot(
   stored: {
     recipientEmails: string[];
@@ -180,6 +197,8 @@ async function persistTransactionFailure(
     data: {
       status: providerSubmissionStarted ? "manual_review" : "failed",
       error: message,
+      claimedAt: null,
+      claimToken: null,
     },
   });
   return message;
@@ -289,6 +308,75 @@ export async function queueArbitraryEmail(
   );
 }
 
+async function bindImmediateArbitrarySentMailboxTarget(
+  id: string,
+  dependencies: SendArbitraryEmailDependencies,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  for (let transactionAttempt = 0; transactionAttempt < 4; transactionAttempt += 1) {
+    try {
+      return await dependencies.database.$transaction(
+        async (tx) => {
+          await tx.$queryRaw<Array<{ id: string }>>(
+            Prisma.sql`
+              SELECT "id"
+              FROM "ArbitraryEmail"
+              WHERE "id" = ${id}
+              FOR UPDATE
+            `,
+          );
+          const stored = await tx.arbitraryEmail.findUnique({ where: { id } });
+          if (
+            !stored ||
+            stored.status !== "sending" ||
+            stored.providerMessageId !== null ||
+            stored.firstAttemptAt !== null ||
+            stored.attemptCount !== 0 ||
+            stored.claimedAt !== null ||
+            stored.claimToken !== null ||
+            typeof stored.testSend !== "boolean"
+          ) {
+            return {
+              ok: false as const,
+              error:
+                "Arbitrary email changed before its Sent mailbox target was bound",
+            };
+          }
+          const deliverySettings = await dependencies.getDeliverySettings(tx);
+          await tx.arbitraryEmail.update({
+            where: { id },
+            data: {
+              ...sentMailboxCopyStateForLockedSettings(
+                stored.testSend,
+                deliverySettings,
+              ),
+              claimedAt: dependencies.now(),
+              claimToken: randomUUID(),
+            },
+          });
+          return { ok: true as const };
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+          maxWait: 10_000,
+          timeout: OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
+        },
+      );
+    } catch (error) {
+      if (
+        transactionAttempt < 3 &&
+        isRetryableTransactionError(error)
+      ) {
+        continue;
+      }
+      return {
+        ok: false,
+        error: `Sent mailbox target binding failed: ${errorMessage(error)}`,
+      };
+    }
+  }
+  return { ok: false, error: "Unable to bind Sent mailbox target" };
+}
+
 export async function sendArbitraryEmailWithDependencies(
   input: ArbitraryEmailInput,
   dependencies: SendArbitraryEmailDependencies,
@@ -343,6 +431,19 @@ export async function sendArbitraryEmailWithDependencies(
         prepared.sentMailboxCopyConfigurationError,
     },
   });
+  const sentMailboxBinding =
+    await bindImmediateArbitrarySentMailboxTarget(id, dependencies);
+  if (!sentMailboxBinding.ok) {
+    return {
+      ok: false,
+      error: await persistTransactionFailure(
+        dependencies.database,
+        id,
+        false,
+        new Error(sentMailboxBinding.error),
+      ),
+    };
+  }
 
   for (let transactionAttempt = 0; transactionAttempt < 4; transactionAttempt += 1) {
     let providerSubmissionStarted = false;
@@ -358,7 +459,12 @@ export async function sendArbitraryEmailWithDependencies(
           `,
         );
         const stored = await tx.arbitraryEmail.findUnique({ where: { id } });
-        if (!stored || stored.status !== "sending") {
+        if (
+          !stored ||
+          stored.status !== "sending" ||
+          stored.claimedAt === null ||
+          stored.claimToken === null
+        ) {
           return {
             ok: false,
             error: "Arbitrary email changed before provider submission",
@@ -377,7 +483,12 @@ export async function sendArbitraryEmailWithDependencies(
             "Stored Resend request failed its identity or integrity check";
           await tx.arbitraryEmail.update({
             where: { id },
-            data: { status: "failed", error },
+            data: {
+              status: "failed",
+              error,
+              claimedAt: null,
+              claimToken: null,
+            },
           });
           return { ok: false, error };
         }
@@ -434,7 +545,12 @@ export async function sendArbitraryEmailWithDependencies(
             : `Current send policy conflicts with the immutable request: ${policyError}`;
           await tx.arbitraryEmail.update({
             where: { id },
-            data: { status: "failed", error },
+            data: {
+              status: "failed",
+              error,
+              claimedAt: null,
+              claimToken: null,
+            },
           });
           return { ok: false, error };
         }
@@ -447,7 +563,12 @@ export async function sendArbitraryEmailWithDependencies(
             "Current send configuration blocks this immutable request: Resend submission credential is unavailable";
           await tx.arbitraryEmail.update({
             where: { id },
-            data: { status: "failed", error },
+            data: {
+              status: "failed",
+              error,
+              claimedAt: null,
+              claimToken: null,
+            },
           });
           return { ok: false, error };
         }
@@ -468,6 +589,8 @@ export async function sendArbitraryEmailWithDependencies(
               providerMessageId: submission.providerMessageId,
               sentAt: completedAt,
               error: null,
+              claimedAt: null,
+              claimToken: null,
             },
           });
           await ensureSentMailCopyQueued(tx, {
@@ -488,6 +611,8 @@ export async function sendArbitraryEmailWithDependencies(
           data: {
             status: sendFailureStatus(submission),
             error,
+            claimedAt: null,
+            claimToken: null,
           },
         });
         return { ok: false, error };
@@ -912,22 +1037,10 @@ async function bindScheduledArbitraryCredentialScope(
             where: { id },
             data: {
               ...(canRefreshSentMailboxTargetBeforeSubmission(stored)
-                ? {
-                    sentMailboxCopyRequested:
-                      stored.testSend === false &&
-                      deliverySettings.sentMailCopyRequested === true,
-                    sentMailboxTargetScope:
-                      stored.testSend === false &&
-                      deliverySettings.sentMailCopyRequested === true
-                        ? (deliverySettings.sentMailboxTargetScope ?? null)
-                        : null,
-                    sentMailboxCopyConfigurationError:
-                      stored.testSend === false &&
-                      deliverySettings.sentMailCopyRequested === true
-                        ? (deliverySettings.sentMailCopyConfigurationError ??
-                          null)
-                        : null,
-                  }
+                ? sentMailboxCopyStateForLockedSettings(
+                    stored.testSend,
+                    deliverySettings,
+                  )
                 : {}),
               status: "sending",
               providerCredentialScope:

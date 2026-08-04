@@ -10,6 +10,8 @@ import {
   ensureSentMailCopyQueued,
   hasSentMailCopyAttemptBudget,
   SENT_MAIL_COPY_DEADLINE_ERROR,
+  SENT_MAIL_COPY_MAX_ATTEMPTS,
+  sentMailCopyFailureState,
   sentMailCopyDeadlineReleaseData,
   type SentMailCopyBatchDependencies,
   type SentMailImapClient,
@@ -488,6 +490,37 @@ test("deadline deferral releases the claim without consuming an attempt", () => 
   });
 });
 
+test("configuration, mismatch, and thrown failures share the bounded retry cap", () => {
+  const now = new Date("2026-08-04T17:50:00.000Z");
+  assert.deepEqual(
+    sentMailCopyFailureState(SENT_MAIL_COPY_MAX_ATTEMPTS - 1, now),
+    {
+      terminal: false,
+      status: "retry_scheduled",
+      retryScheduled: true,
+      nextAttemptAt: new Date("2026-08-04T18:50:00.000Z"),
+    },
+  );
+  assert.deepEqual(sentMailCopyFailureState(SENT_MAIL_COPY_MAX_ATTEMPTS, now), {
+    terminal: true,
+    status: "manual_review",
+    retryScheduled: false,
+    nextAttemptAt: new Date("2026-08-04T18:50:00.000Z"),
+  });
+  const source = readFileSync(
+    new URL("./sentMailCopy.ts", import.meta.url),
+    "utf8",
+  );
+  assert.equal(
+    (
+      source.match(
+        /sentMailCopyFailureState\(claim\.attemptCount, now\)/g,
+      ) ?? []
+    ).length,
+    3,
+  );
+});
+
 test("queueing excludes test or disabled sends and upserts one real source", async () => {
   const calls: unknown[] = [];
   const tx = {
@@ -589,14 +622,6 @@ test("all accepted outbound and reconciliation paths enqueue Sent copies", () =>
     (webhook.match(/sentMailboxCopyConfigurationError/g) ?? []).length >= 2,
   );
   assert.match(cron, /dispatchDueSentMailCopies\(/);
-  assert.match(
-    sentCopy,
-    /!configuration\.ok[\s\S]*status: "retry_scheduled"[\s\S]*retryScheduled: true/,
-  );
-  assert.match(
-    sentCopy,
-    /configuration\.config\.targetScope !== loaded\.row\.targetScope[\s\S]*does not match the immutable target[\s\S]*status: "retry_scheduled"/,
-  );
   assert.ok(
     sentCopy.indexOf(
       "configuration.config.targetScope !== loaded.row.targetScope",
@@ -647,4 +672,19 @@ test("Sent copy persistence constrains one immutable source and retry state", ()
   assert.doesNotMatch(refreshMigration, /'in_flight'|'uncertain'/);
   assert.match(refreshMigration, /possible provider acceptance/);
   assert.match(refreshMigration, /COMMIT;\s*$/);
+
+  const immediateMigration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260804193000_immediate_arbitrary_sent_target/migration.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(immediateMigration, /^BEGIN;/);
+  assert.match(
+    immediateMigration,
+    /status" = 'sending'[\s\S]*claimedAt" IS NULL[\s\S]*claimToken" IS NULL/,
+  );
+  assert.match(immediateMigration, /possible provider acceptance/);
+  assert.match(immediateMigration, /COMMIT;\s*$/);
 });

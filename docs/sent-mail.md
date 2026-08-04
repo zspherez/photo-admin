@@ -78,6 +78,8 @@ redirected to the new target.
 When Resend conclusively rejects a request without accepting it, a later retry
 refreshes the target from the then-current locked settings. Once provider
 acceptance is possible or confirmed, the prior target remains immutable.
+Immediate arbitrary sends also bind this archival state from the locked
+settings snapshot immediately before their first provider submission.
 
 The scheduled-outreach endpoint always drains outbound work first. Sent-copy
 work uses only the remaining route deadline, does not start an IMAP attempt

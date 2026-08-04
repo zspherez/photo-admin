@@ -395,6 +395,41 @@ test("immediate arbitrary delivery succeeds when Sent archival is misconfigured"
   );
 });
 
+test("immediate arbitrary delivery binds the locked current Sent target", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  const currentSettings = {
+    ...MISCONFIGURED_SENT_SETTINGS,
+    sentMailboxTargetScope: SENT_TARGET_SCOPE_B,
+  };
+  let submissions = 0;
+  const result = await sendArbitraryEmailWithDependencies(
+    INPUT,
+    dependencies(
+      database,
+      currentSettings,
+      async () => {
+        submissions += 1;
+        return {
+          providerMessageId: "message-immediate-target-race",
+          error: null,
+          failureDisposition: null,
+        };
+      },
+      MISCONFIGURED_SENT_SETTINGS,
+    ),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(submissions, 1);
+  assert.equal(database.record?.sentMailboxTargetScope, SENT_TARGET_SCOPE_B);
+  assert.equal(database.record?.claimedAt, null);
+  assert.equal(database.record?.claimToken, null);
+  assert.equal(
+    database.sentMailCopyRecord?.targetScope,
+    SENT_TARGET_SCOPE_B,
+  );
+});
+
 test("proven-unsent arbitrary retries refresh the Sent target before acceptance", async () => {
   const database = new MemoryArbitraryEmailDatabase();
   const now = { value: new Date("2026-07-20T20:00:00.000Z") };
