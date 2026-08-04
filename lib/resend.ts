@@ -401,17 +401,48 @@ export function bindProviderMessageIdAtIndex(
   while (providerMessageIds.length < requestCount) {
     providerMessageIds.push("");
   }
-  const existing = providerMessageIds[index];
-  if (existing && existing !== providerMessageId) {
-    return {
-      providerMessageIds,
-      conflict:
-        `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
-        `${existing} != ${providerMessageId}`,
-    };
-  }
+  const conflict = validateProviderMessageIndex(
+    providerMessageIds,
+    requestCount,
+    index,
+    providerMessageId,
+  );
+  if (conflict) return { providerMessageIds, conflict };
+  const existing = current[index];
   providerMessageIds[index] = existing || providerMessageId;
   return { providerMessageIds, conflict: null };
+}
+
+export function validateProviderMessageIndex(
+  current: readonly string[],
+  requestCount: number,
+  index: number | null,
+  providerMessageId: string,
+): string | null {
+  if (index === null || index < 0 || index >= requestCount) {
+    return (
+      `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${
+        index === null ? "unknown" : index + 1
+      }: message index is outside the immutable request batch`
+    );
+  }
+  const knownIndex = current.findIndex(
+    (candidate) => candidate === providerMessageId,
+  );
+  if (knownIndex >= 0 && knownIndex !== index) {
+    return (
+      `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
+      `${providerMessageId} already belongs to request ${knownIndex + 1}`
+    );
+  }
+  const existing = current[index];
+  if (existing && existing !== providerMessageId) {
+    return (
+      `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
+      `${existing} != ${providerMessageId}`
+    );
+  }
+  return null;
 }
 
 function normalizeMailboxAddress(value: string): string | null {
@@ -1541,8 +1572,7 @@ export function shouldMirrorResendAttempt(
   ]);
   return (
     outreachIds.size === 0 ||
-    (outreachIds.size === attemptIds.size &&
-      [...attemptIds].every((id) => outreachIds.has(id)))
+    [...outreachIds].every((id) => attemptIds.has(id))
   );
 }
 

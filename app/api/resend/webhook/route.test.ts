@@ -58,6 +58,7 @@ test("webhooks correlate every message in an immutable outreach batch", () => {
   assert.match(source, /providerMessageIds: \{ has: messageId \}/);
   assert.match(source, /findMessageIndex\(parsed\)/);
   assert.match(source, /bindProviderMessageIdAtIndex/);
+  assert.match(source, /validateProviderMessageIndex/);
   assert.match(source, /providerAcceptanceComplete/);
   assert.match(source, /providerMessageIds,/);
   assert.match(source, /outreachWebhookRecipientImpact/);
@@ -72,7 +73,7 @@ test("same-index webhook ID conflicts preserve immutable identity and stop retri
   assert.match(source, /bindProviderMessageIdAtIndex/);
   assert.match(
     source,
-    /if \(binding\.conflict\)[\s\S]*status: "manual_review"[\s\S]*failureDisposition: "policy"[\s\S]*nextAttemptAt: null/,
+    /quarantineProviderIdentityConflict[\s\S]*status: "manual_review"[\s\S]*failureDisposition: "policy"[\s\S]*nextAttemptAt: null/,
   );
   assert.match(
     source,
@@ -86,6 +87,21 @@ test("same-index webhook ID conflicts preserve immutable identity and stop retri
   assert.match(source, /eventAttempt = matchedAttempt \?\? conflictedAttempt/);
   assert.match(source, /outreachId: eventAttempt\?\.outreachId/);
   assert.match(source, /attemptId: eventAttempt\?\.id/);
+});
+
+test("every batch webhook validates index bounds and existing slot ownership", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  const validation = source.indexOf("validateProviderMessageIndex(");
+  const binding = source.indexOf("bindProviderMessageIdAtIndex(");
+  assert.ok(validation >= 0 && validation < binding);
+  assert.match(
+    source,
+    /correlation\.status === "matched" && messageId[\s\S]*expectedRequests > 1[\s\S]*validateProviderMessageIndex/,
+  );
+  assert.match(
+    source,
+    /quarantineProviderIdentityConflict\(\s*correlation\.attempt\.id,\s*conflict/,
+  );
 });
 
 test("individual-mode BCC opens, clicks, and failures record without aggregate mutation", () => {
@@ -167,6 +183,14 @@ test("webhook completion merges delivery observed before final batch acceptance"
   );
   assert.match(
     source,
-    /deliveredAt: earlier\(\s*earlier\(\s*outreach\.deliveredAt,\s*attempt\.deliveredAt \?\? providerCreatedAt/,
+    /deliveredAt: earlier\(\s*outreach\.deliveredAt,\s*deliveredAt/,
+  );
+  assert.match(
+    source,
+    /const acceptedAt = earlier\(\s*earlier\(\s*attempt\.acceptedAt,\s*attempt\.deliveredAt \?\? providerCreatedAt/,
+  );
+  assert.match(
+    source,
+    /sentAt: earlier\(\s*earlier\(outreach\.sentAt, acceptedAt\),\s*attempt\.deliveredAt \?\? acceptedAt/,
   );
 });

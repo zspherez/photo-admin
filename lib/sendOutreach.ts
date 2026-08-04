@@ -3924,6 +3924,10 @@ async function finishAlreadyAccepted(
     deliveryState?.deliveredAt ?? null,
     attempt.deliveredAt,
   );
+  const sentAt =
+    earliestDeliveryDate(attempt.acceptedAt ?? new Date(), deliveredAt) ??
+    attempt.acceptedAt ??
+    new Date();
   if (attempt.testSend === null) {
     return markManualReview(
       tx,
@@ -3954,7 +3958,7 @@ async function finishAlreadyAccepted(
             true,
             error,
             attempt.providerMessageId,
-            attempt.acceptedAt ?? new Date(),
+            sentAt,
             attempt.providerMessageIds ?? [attempt.providerMessageId],
           ),
           bouncedAt: attempt.bouncedAt,
@@ -3982,7 +3986,7 @@ async function finishAlreadyAccepted(
       error: null,
       failureDisposition: null,
       nextAttemptAt: null,
-      acceptedAt: attempt.acceptedAt ?? new Date(),
+      acceptedAt: sentAt,
     },
   });
   await tx.outreach.updateMany({
@@ -3993,7 +3997,7 @@ async function finishAlreadyAccepted(
       providerMessageId: attempt.providerMessageId,
       providerMessageIds:
         attempt.providerMessageIds ?? [attempt.providerMessageId],
-      sentAt: attempt.acceptedAt ?? new Date(),
+      sentAt,
       deliveredAt,
       scheduledFor: null,
       nextAttemptAt: null,
@@ -5895,6 +5899,11 @@ async function finishClaimedSend(
       current.deliveredAt,
       attempt.deliveredAt,
     );
+    const sentAt =
+      earliestDeliveryDate(
+        attempt.acceptedAt ?? completedAt,
+        deliveredAt,
+      ) ?? attempt.acceptedAt ?? completedAt;
 
     const mergedRequestResults = mergeResendRequestResults(
       parseResendRequestResultSnapshot(
@@ -6027,7 +6036,7 @@ async function finishClaimedSend(
             nextAttemptAt: null,
             providerMessageId,
             providerMessageIds,
-            acceptedAt: attempt.acceptedAt ?? completedAt,
+            acceptedAt: sentAt,
           },
         });
         await tx.outreach.updateMany({
@@ -6037,7 +6046,7 @@ async function finishClaimedSend(
               testSend,
               error,
               providerMessageId,
-              attempt.acceptedAt ?? completedAt,
+              sentAt,
               providerMessageIds,
             ),
             bouncedAt: attempt.bouncedAt,
@@ -6056,7 +6065,7 @@ async function finishClaimedSend(
           nextAttemptAt: null,
           providerMessageId,
           providerMessageIds,
-          acceptedAt: attempt.acceptedAt ?? completedAt,
+          acceptedAt: sentAt,
         },
       });
       await tx.outreach.updateMany({
@@ -6066,7 +6075,7 @@ async function finishClaimedSend(
           error: null,
           providerMessageId,
           providerMessageIds,
-          sentAt: attempt.acceptedAt ?? completedAt,
+          sentAt,
           deliveredAt,
           scheduledFor: null,
           nextAttemptAt: null,

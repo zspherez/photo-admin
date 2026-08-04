@@ -34,6 +34,7 @@ import {
   sendPreparedEmailViaResend,
   sendPreparedEmailBatchViaResend,
   summarizeResendRequestResults,
+  validateProviderMessageIndex,
   shouldMirrorResendAttempt,
   type ResendRequestSnapshot,
 } from "./resend";
@@ -772,6 +773,24 @@ test("same-index webhook provider conflicts preserve the original immutable ID",
         "Provider message ID conflict for request 1: message-original != message-conflict",
     },
   );
+  assert.match(
+    validateProviderMessageIndex(
+      ["message-first", "message-second"],
+      2,
+      2,
+      "message-out-of-range",
+    ) ?? "",
+    /outside the immutable request batch/,
+  );
+  assert.match(
+    validateProviderMessageIndex(
+      ["message-first", "message-second"],
+      2,
+      1,
+      "message-first",
+    ) ?? "",
+    /already belongs to request 1/,
+  );
   assert.equal(
     isProviderMessageIdConflictError(
       "Provider message ID conflict for request 1: original != conflict",
@@ -1315,6 +1334,34 @@ test("late provider acceptance mirrors only the current immutable identity", () 
         attempt,
       ),
       true,
+    );
+    assert.equal(
+      shouldMirrorResendAttempt(
+        {
+          idempotencyKey: attempt.idempotencyKey,
+          providerMessageId: "message-1",
+          providerMessageIds: ["message-1"],
+        },
+        {
+          ...attempt,
+          providerMessageIds: ["message-1", "message-2"],
+        },
+      ),
+      true,
+    );
+    assert.equal(
+      shouldMirrorResendAttempt(
+        {
+          idempotencyKey: attempt.idempotencyKey,
+          providerMessageId: "message-conflict",
+          providerMessageIds: ["message-conflict"],
+        },
+        {
+          ...attempt,
+          providerMessageIds: ["message-1", "message-2"],
+        },
+      ),
+      false,
     );
   }
   assert.equal(

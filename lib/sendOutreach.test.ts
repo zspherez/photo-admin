@@ -1234,6 +1234,7 @@ test("batch recovery and finalization preserve the earliest delivered timestamp"
     /finishClaimedSend[\s\S]*earliestDeliveryDate\(\s*current\.deliveredAt,\s*attempt\.deliveredAt/,
   );
   assert.ok((source.match(/deliveredAt,/g)?.length ?? 0) >= 4);
+  assert.ok((source.match(/acceptedAt: sentAt/g)?.length ?? 0) >= 2);
 });
 
 test("attachment preparation completes before an immutable provider attempt is persisted", () => {

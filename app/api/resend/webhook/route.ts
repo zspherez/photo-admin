@@ -14,6 +14,7 @@ import {
   parseResendRequestResultSnapshot,
   resendRequestResultsAreResolved,
   shouldMirrorResendAttempt,
+  validateProviderMessageIndex,
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
 import {
@@ -446,6 +447,38 @@ async function processEvent(
           let conflictedAttempt: typeof taggedAttempt = null;
           let quarantinedAttemptEvent =
             correlation.status !== "matched" && taggedLegacyAttempt !== null;
+          const quarantineProviderIdentityConflict = async (
+            attemptId: string,
+            error: string,
+          ) => {
+            const attempt = await tx.outreachSendAttempt.update({
+              where: { id: attemptId },
+              data: {
+                status: "manual_review",
+                error,
+                failureDisposition: "policy",
+                nextAttemptAt: null,
+              },
+            });
+            conflictedAttempt = attempt;
+            const outreach = await tx.outreach.findUnique({
+              where: { id: attempt.outreachId },
+              select: { id: true, idempotencyKey: true },
+            });
+            if (outreach?.idempotencyKey === attempt.idempotencyKey) {
+              await tx.outreach.update({
+                where: { id: outreach.id },
+                data: {
+                  status: "manual_review",
+                  error,
+                  nextAttemptAt: null,
+                  claimedAt: null,
+                  claimToken: null,
+                },
+              });
+            }
+            correlation = { status: "conflict", reason: error };
+          };
 
           if (
             correlation.status === "matched" &&
@@ -458,6 +491,26 @@ async function processEvent(
               reason:
                 "provider message cannot be bound to a quarantined legacy attempt",
             };
+          }
+
+          if (correlation.status === "matched" && messageId) {
+            const expectedRequests = parseResendRequestBatchSnapshot(
+              correlation.attempt.providerRequest,
+            )?.requests.length;
+            if (expectedRequests && expectedRequests > 1) {
+              const conflict = validateProviderMessageIndex(
+                correlation.attempt.providerMessageIds ?? [],
+                expectedRequests,
+                findMessageIndex(parsed),
+                messageId,
+              );
+              if (conflict) {
+                await quarantineProviderIdentityConflict(
+                  correlation.attempt.id,
+                  conflict,
+                );
+              }
+            }
           }
 
           if (
@@ -496,36 +549,10 @@ async function processEvent(
                 );
                 providerMessageIds = binding.providerMessageIds;
                 if (binding.conflict) {
-                  const attempt = await tx.outreachSendAttempt.update({
-                    where: { id: correlation.attempt.id },
-                    data: {
-                      status: "manual_review",
-                      error: binding.conflict,
-                      failureDisposition: "policy",
-                      nextAttemptAt: null,
-                    },
-                  });
-                  conflictedAttempt = attempt;
-                  const outreach = await tx.outreach.findUnique({
-                    where: { id: attempt.outreachId },
-                    select: { id: true, idempotencyKey: true },
-                  });
-                  if (outreach?.idempotencyKey === attempt.idempotencyKey) {
-                    await tx.outreach.update({
-                      where: { id: outreach.id },
-                      data: {
-                        status: "manual_review",
-                        error: binding.conflict,
-                        nextAttemptAt: null,
-                        claimedAt: null,
-                        claimToken: null,
-                      },
-                    });
-                  }
-                  correlation = {
-                    status: "conflict",
-                    reason: binding.conflict,
-                  };
+                  await quarantineProviderIdentityConflict(
+                    correlation.attempt.id,
+                    binding.conflict,
+                  );
                 }
               } else if (!providerMessageIds.includes(messageId)) {
                 providerMessageIds.push(messageId);
@@ -744,7 +771,13 @@ async function processEvent(
           };
 
           if (providerAcceptanceComplete && primaryProviderMessageId) {
-            const acceptedAt = earlier(attempt.acceptedAt, providerCreatedAt);
+            const acceptedAt = earlier(
+              earlier(
+                attempt.acceptedAt,
+                attempt.deliveredAt ?? providerCreatedAt,
+              ),
+              providerCreatedAt,
+            );
             await tx.outreachSendAttempt.update({
               where: { id: attempt.id },
               data: {
@@ -767,7 +800,10 @@ async function processEvent(
                   error: completedError,
                   providerMessageId: primaryProviderMessageId,
                   providerMessageIds,
-                  sentAt: earlier(outreach.sentAt, acceptedAt),
+                  sentAt: earlier(
+                    earlier(outreach.sentAt, acceptedAt),
+                    attempt.deliveredAt ?? acceptedAt,
+                  ),
                   ...(attempt.deliveredAt
                     ? {
                         deliveredAt: earlier(
@@ -814,10 +850,13 @@ async function processEvent(
                 error: null,
                 providerMessageId: primaryProviderMessageId,
                 providerMessageIds,
-                sentAt:
-                  outreach.sentAt ??
-                  attempt.acceptedAt ??
-                  providerCreatedAt,
+                sentAt: earlier(
+                  earlier(
+                    outreach.sentAt,
+                    attempt.acceptedAt ?? providerCreatedAt,
+                  ),
+                  attempt.deliveredAt ?? providerCreatedAt,
+                ),
                 ...(attempt.deliveredAt
                   ? {
                       deliveredAt: earlier(
@@ -836,7 +875,13 @@ async function processEvent(
 
           switch (parsed.type) {
             case "email.sent": {
-              const acceptedAt = earlier(attempt.acceptedAt, providerCreatedAt);
+              const acceptedAt = earlier(
+                earlier(
+                  attempt.acceptedAt,
+                  attempt.deliveredAt ?? providerCreatedAt,
+                ),
+                providerCreatedAt,
+              );
               await tx.outreachSendAttempt.update({
                 where: { id: attempt.id },
                 data: {
@@ -870,7 +915,10 @@ async function processEvent(
                     error: completedError,
                     providerMessageId: primaryProviderMessageId,
                     providerMessageIds,
-                    sentAt: earlier(outreach.sentAt, acceptedAt),
+                    sentAt: earlier(
+                      earlier(outreach.sentAt, acceptedAt),
+                      attempt.deliveredAt ?? acceptedAt,
+                    ),
                     ...(attempt.deliveredAt
                       ? {
                           deliveredAt: earlier(
@@ -889,6 +937,11 @@ async function processEvent(
               break;
             }
             case "email.delivered": {
+              const deliveredAt = earlier(
+                attempt.deliveredAt,
+                providerCreatedAt,
+              );
+              const acceptedAt = earlier(attempt.acceptedAt, deliveredAt);
               await tx.outreachSendAttempt.update({
                 where: { id: attempt.id },
                 data: {
@@ -899,8 +952,8 @@ async function processEvent(
                     : providerAcceptanceComplete
                       ? "accepted"
                       : attempt.status,
-                  acceptedAt: attempt.acceptedAt ?? providerCreatedAt,
-                  deliveredAt: earlier(attempt.deliveredAt, providerCreatedAt),
+                  acceptedAt,
+                  deliveredAt,
                   error:
                     hadDeliveryFailure
                       ? completedError
@@ -922,13 +975,13 @@ async function processEvent(
                     status: completedOutreachStatus,
                     providerMessageId: primaryProviderMessageId,
                     providerMessageIds,
-                    sentAt: outreach.sentAt ?? providerCreatedAt,
+                    sentAt: earlier(
+                      earlier(outreach.sentAt, acceptedAt),
+                      deliveredAt,
+                    ),
                     deliveredAt: earlier(
-                      earlier(
-                        outreach.deliveredAt,
-                        attempt.deliveredAt ?? providerCreatedAt,
-                      ),
-                      providerCreatedAt,
+                      outreach.deliveredAt,
+                      deliveredAt,
                     ),
                     error: completedError,
                     scheduledFor: null,
