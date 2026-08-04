@@ -49,13 +49,29 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /contactProbe,\s*contactExportSnapshotProbe,\s*directOutreachNoteProbe,\s*directOutreachProvenanceProbe,\s*festivalGeographyProbe,\s*festivalUtmCampaignProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*outreachAttemptProbe,\s*outreachCoveredArtistProbe/,
+    /contactProbe,\s*contactExportSnapshotProbe,\s*directOutreachNoteProbe,\s*directOutreachProvenanceProbe,\s*festivalGeographyProbe,\s*festivalUtmCampaignProbe,\s*contactFullTeamConstraintProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*outreachAttemptProbe,\s*outreachCoveredArtistProbe/,
   );
   assert.deepEqual(
     selectedScalarFields(source, "show"),
     ["id", "festivalUtmCampaign"],
   );
   assert.match(source, /db\.contactExportSnapshot\.findMany/);
+  assert.ok(
+    selectedScalarFields(source, "contactExportSnapshot").includes(
+      "formatVersion",
+    ),
+  );
+  assert.ok(
+    selectedScalarFields(source, "contactExportSnapshot").includes("headers"),
+  );
+  assert.match(
+    source,
+    /table_row\."relname" = 'Contact'[\s\S]*Contact_isFullTeam_retired_check/,
+  );
+  assert.match(
+    source,
+    /contactFullTeamConstraintProbe\.some\([\s\S]*constraint\.validated/,
+  );
   assert.deepEqual(
     selectedScalarFields(source, "outreach"),
     [
@@ -139,7 +155,7 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(
     source,
-    /\[\s*contactResearchJobProbe,\s*artistCustomNameProbe,\s*contactResearchCandidateProbe,\s*contactResearchCandidateStatusConstraintProbe,\s*contactExportSnapshotProbe,\s*contactResearchDirectOutreachProbe,\s*directOutreachProvenanceProbe,\s*festivalUtmCampaignProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*outreachCoveredArtistProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditRosterSnapshotProbe,\s*contactAuditRosterEntryProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*contactAuditArtistDecisionProbe,\s*contactAuditDecisionContactProbe,\s*contactAuditRosterConstraintProbe,\s*contactAuditRosterIndexProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*emailTemplateConstraintProbe,\s*emailTemplateCanonicalWriteProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryFeedbackEventProbe,\s*trajectoryShowOutcomeProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*trajectoryFeedbackTriggerProbe,\s*trajectoryFeedbackIndexProbe,\s*\]\.every\(Array\.isArray\)/,
+    /\[\s*contactResearchJobProbe,\s*artistCustomNameProbe,\s*contactResearchCandidateProbe,\s*contactResearchCandidateStatusConstraintProbe,\s*contactExportSnapshotProbe,\s*contactResearchDirectOutreachProbe,\s*directOutreachProvenanceProbe,\s*festivalUtmCampaignProbe,\s*contactFullTeamConstraintProbe,\s*outreachKindProbe,\s*outreachDispatchIdentityConstraintProbe,\s*outreachCoveredArtistProbe,\s*artistResearchSkipProbe,\s*agentRuleSetProbe,\s*contactAuditRequestProbe,\s*contactAuditRunProbe,\s*contactAuditRosterSnapshotProbe,\s*contactAuditRosterEntryProbe,\s*contactAuditJobProbe,\s*contactAuditAlternativeProbe,\s*contactAuditArtistDecisionProbe,\s*contactAuditDecisionContactProbe,\s*contactAuditRosterConstraintProbe,\s*contactAuditRosterIndexProbe,\s*arbitraryEmailProbe,\s*resendWebhookArbitraryEmailProbe,\s*emailTemplateProbe,\s*emailTemplateConstraintProbe,\s*emailTemplateCanonicalWriteProbe,\s*dashboardShowSnapshotProbe,\s*dashboardShowSnapshotMemberProbe,\s*trajectoryModelRunProbe,\s*trajectoryRunArtistProbe,\s*trajectoryRecommendationProbe,\s*trajectoryImportIssueProbe,\s*trajectoryFeedbackEventProbe,\s*trajectoryShowOutcomeProbe,\s*trajectoryConstraintProbe,\s*trajectoryReadyIndexProbe,\s*trajectoryFeedbackTriggerProbe,\s*trajectoryFeedbackIndexProbe,\s*\]\.every\(Array\.isArray\)/,
   );
   assert.match(
     source,
@@ -513,6 +529,8 @@ test("release probe exercises all release-critical runtime schema surfaces", () 
   );
   assert.match(source, /"ResendWebhookEvent click metadata"/);
   assert.match(source, /"Show\.festivalUtmCampaign"/);
+  assert.match(source, /"Contact\.isFullTeam retired"/);
+  assert.match(source, /"ContactExportSnapshot\.headers"/);
   assert.match(
     source,
     /trajectoryFeedbackTriggerProbe\.length === 5[\s\S]*trigger\.enabled === "O"/,

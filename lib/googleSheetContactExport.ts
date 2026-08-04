@@ -5,9 +5,11 @@ import { db } from "@/lib/db";
 import {
   buildContactSnapshot,
   CONTACT_SNAPSHOT_HEADERS,
+  CONTACT_SNAPSHOT_VISIBLE_HEADERS,
   contactSnapshotDigest,
   contactSnapshotGoogleRows,
   parseStoredContactSnapshotRows,
+  parseStoredContactSnapshotHeaders,
   readCanonicalContactRows,
   type CanonicalContactSnapshot,
   type ContactSnapshotRow,
@@ -45,6 +47,8 @@ interface ContactExportSnapshotRecord {
   sheetTabName: string;
   sheetUrl: string | null;
   requestedByRole: string;
+  formatVersion: 1 | 2;
+  headers: Prisma.JsonValue;
   canonicalRows: Prisma.JsonValue;
   error: string | null;
   startedAt: Date;
@@ -198,18 +202,33 @@ function completedSummary(
 function snapshotFromRecord(
   record: ContactExportSnapshotRecord,
 ): CanonicalContactSnapshot {
-  const rows = parseStoredContactSnapshotRows(record.canonicalRows);
+  const headers = parseStoredContactSnapshotHeaders(record.headers);
+  const rows = parseStoredContactSnapshotRows(record.canonicalRows, headers);
   if (
     rows.length !== record.contactCount ||
-    contactSnapshotDigest(rows) !== record.contentSha256
+    contactSnapshotDigest(
+      rows,
+      headers,
+      record.formatVersion,
+    ) !== record.contentSha256
   ) {
     throw new ContactExportError(
       "Stored contact snapshot content failed integrity verification",
     );
   }
   const timestamp = record.startedAt.toISOString();
+  const timestampIndex = headers.indexOf("snapshot_timestamp");
+  const snapshotIdIndex = headers.indexOf("snapshot_id");
+  if (timestampIndex < 0 || snapshotIdIndex < 0) {
+    throw new ContactExportError(
+      "Stored contact snapshot metadata headers are missing",
+    );
+  }
   for (const row of rows) {
-    if (row[0] !== timestamp || row[1] !== record.id) {
+    if (
+      row[timestampIndex] !== timestamp ||
+      row[snapshotIdIndex] !== record.id
+    ) {
       throw new ContactExportError(
         "Stored contact snapshot metadata failed integrity verification",
       );
@@ -218,7 +237,8 @@ function snapshotFromRecord(
   return {
     id: record.id,
     timestamp: record.startedAt,
-    headers: CONTACT_SNAPSHOT_HEADERS,
+    formatVersion: record.formatVersion,
+    headers,
     rows,
     contactCount: record.contactCount,
     contentSha256: record.contentSha256,
@@ -287,6 +307,9 @@ async function prepareContactExportSnapshot(
           spreadsheetId,
           sheetTabName: contactSnapshotTabName(now, snapshot.id),
           requestedByRole,
+          formatVersion: snapshot.formatVersion,
+          headers:
+            snapshot.headers as unknown as Prisma.InputJsonValue,
           canonicalRows:
             snapshot.rows as unknown as Prisma.InputJsonValue,
           startedAt: now,
@@ -310,7 +333,9 @@ async function assertSnapshotTabOwnership(
   try {
     const response = await client.spreadsheets.values.get({
       spreadsheetId,
-      range: `${quoteSheetTitle(title)}!A1:B2`,
+      range: `${quoteSheetTitle(title)}!A1:${columnLetter(
+        snapshot.headers.length,
+      )}2`,
       majorDimension: "ROWS",
       valueRenderOption: "UNFORMATTED_VALUE",
     });
@@ -318,11 +343,16 @@ async function assertSnapshotTabOwnership(
     if (rows.length === 0) return;
     const header = rows[0] ?? [];
     const firstContact = rows[1] ?? [];
+    const timestampIndex = snapshot.headers.indexOf("snapshot_timestamp");
+    const snapshotIdIndex = snapshot.headers.indexOf("snapshot_id");
     const headerOwned =
-      header[0] === CONTACT_SNAPSHOT_HEADERS[0] &&
-      header[1] === CONTACT_SNAPSHOT_HEADERS[1];
+      timestampIndex >= 0 &&
+      snapshotIdIndex >= 0 &&
+      header[timestampIndex] === "snapshot_timestamp" &&
+      header[snapshotIdIndex] === "snapshot_id";
     const contentOwned =
-      firstContact.length === 0 || firstContact[1] === snapshot.id;
+      firstContact.length === 0 ||
+      firstContact[snapshotIdIndex] === snapshot.id;
     if (!headerOwned || !contentOwned) {
       throw new ContactExportError(
         "Google Sheets snapshot tab title is already owned by another export",
@@ -343,13 +373,15 @@ async function resizeSnapshotTab(
   currentRows: number,
   currentColumns: number,
   requiredRows: number,
+  requiredColumns: number,
 ): Promise<void> {
   if (
     currentRows >= requiredRows &&
-    currentColumns >= CONTACT_SNAPSHOT_HEADERS.length
+    currentColumns >= requiredColumns
   ) {
     return;
   }
+
   try {
     await client.spreadsheets.batchUpdate({
       spreadsheetId,
@@ -363,7 +395,7 @@ async function resizeSnapshotTab(
                   rowCount: Math.max(currentRows, requiredRows),
                   columnCount: Math.max(
                     currentColumns,
-                    CONTACT_SNAPSHOT_HEADERS.length,
+                    requiredColumns,
                   ),
                 },
               },
@@ -377,6 +409,63 @@ async function resizeSnapshotTab(
   } catch {
     throw new ContactExportError(
       "Google Sheets snapshot tab could not be resized",
+    );
+  }
+}
+
+function snapshotHeaderIsVisible(header: string): boolean {
+  const normalized =
+    header === "direct_outreach_note" ? "direct_outreach" : header;
+  return (CONTACT_SNAPSHOT_VISIBLE_HEADERS as readonly string[]).includes(
+    normalized,
+  );
+}
+
+async function configureSnapshotColumnVisibility(
+  client: sheets_v4.Sheets,
+  spreadsheetId: string,
+  sheetTabId: number,
+  headers: readonly string[],
+): Promise<void> {
+  const ranges: Array<{
+    startIndex: number;
+    endIndex: number;
+    hiddenByUser: boolean;
+  }> = [];
+  for (let index = 0; index < headers.length; index += 1) {
+    const hiddenByUser = !snapshotHeaderIsVisible(headers[index]);
+    const previous = ranges.at(-1);
+    if (previous && previous.hiddenByUser === hiddenByUser) {
+      previous.endIndex = index + 1;
+    } else {
+      ranges.push({
+        startIndex: index,
+        endIndex: index + 1,
+        hiddenByUser,
+      });
+    }
+  }
+  try {
+    await client.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: ranges.map((range) => ({
+          updateDimensionProperties: {
+            range: {
+              sheetId: sheetTabId,
+              dimension: "COLUMNS",
+              startIndex: range.startIndex,
+              endIndex: range.endIndex,
+            },
+            properties: { hiddenByUser: range.hiddenByUser },
+            fields: "hiddenByUser",
+          },
+        })),
+      },
+    });
+  } catch {
+    throw new ContactExportError(
+      "Google Sheets snapshot column visibility could not be configured",
     );
   }
 }
@@ -427,6 +516,7 @@ async function findOrCreateSnapshotTab(
       existing?.properties?.gridProperties?.rowCount ?? 0,
       existing?.properties?.gridProperties?.columnCount ?? 0,
       snapshot.contactCount + 1,
+      snapshot.headers.length,
     );
     return existingId;
   }
@@ -447,7 +537,7 @@ async function findOrCreateSnapshotTab(
                 title,
                 gridProperties: {
                   rowCount: Math.max(snapshot.contactCount + 1, 1),
-                  columnCount: CONTACT_SNAPSHOT_HEADERS.length,
+                  columnCount: snapshot.headers.length,
                 },
               },
             },
@@ -470,30 +560,50 @@ async function findOrCreateSnapshotTab(
   }
 }
 
-function rowRange(title: string, startRow: number, rowCount: number): string {
+function columnLetter(columnCount: number): string {
+  let value = columnCount;
+  let result = "";
+  while (value > 0) {
+    value -= 1;
+    result = String.fromCharCode(65 + (value % 26)) + result;
+    value = Math.floor(value / 26);
+  }
+  return result;
+}
+
+function rowRange(
+  title: string,
+  startRow: number,
+  rowCount: number,
+  columnCount: number,
+): string {
   const endRow = startRow + rowCount - 1;
-  return `${quoteSheetTitle(title)}!A${startRow}:S${endRow}`;
+  return `${quoteSheetTitle(title)}!A${startRow}:${columnLetter(columnCount)}${endRow}`;
 }
 
 async function writeSnapshotRows(
   client: sheets_v4.Sheets,
   spreadsheetId: string,
   title: string,
-  rows: readonly ContactSnapshotRow[],
+  snapshot: CanonicalContactSnapshot,
 ): Promise<void> {
-  const googleRows = contactSnapshotGoogleRows(rows);
+  const googleRows = contactSnapshotGoogleRows(
+    snapshot.rows,
+    snapshot.headers,
+  );
+  const endColumn = columnLetter(snapshot.headers.length);
   try {
     await client.spreadsheets.values.clear({
       spreadsheetId,
-      range: `${quoteSheetTitle(title)}!A:S`,
+      range: `${quoteSheetTitle(title)}!A:${endColumn}`,
     });
     await client.spreadsheets.values.update({
       spreadsheetId,
-      range: rowRange(title, 1, 1),
+      range: rowRange(title, 1, 1, snapshot.headers.length),
       valueInputOption: "RAW",
       requestBody: {
         majorDimension: "ROWS",
-        values: [[...CONTACT_SNAPSHOT_HEADERS]],
+        values: [[...snapshot.headers]],
       },
     });
     for (
@@ -504,7 +614,12 @@ async function writeSnapshotRows(
       const batch = googleRows.slice(offset, offset + EXPORT_WRITE_BATCH_ROWS);
       await client.spreadsheets.values.update({
         spreadsheetId,
-        range: rowRange(title, offset + 2, batch.length),
+        range: rowRange(
+          title,
+          offset + 2,
+          batch.length,
+          snapshot.headers.length,
+        ),
         valueInputOption: "RAW",
         requestBody: {
           majorDimension: "ROWS",
@@ -528,15 +643,15 @@ async function verifySnapshotWrite(
   try {
     const headerResponse = await client.spreadsheets.values.get({
       spreadsheetId,
-      range: rowRange(title, 1, 1),
+      range: rowRange(title, 1, 1, snapshot.headers.length),
       majorDimension: "ROWS",
       valueRenderOption: "UNFORMATTED_VALUE",
     });
     const header = headerResponse.data.values?.[0] ?? [];
     if (
-      header.length !== CONTACT_SNAPSHOT_HEADERS.length ||
+      header.length !== snapshot.headers.length ||
       header.some(
-        (value, index) => value !== CONTACT_SNAPSHOT_HEADERS[index],
+        (value, index) => value !== snapshot.headers[index],
       )
     ) {
       throw new ContactExportError(
@@ -544,7 +659,10 @@ async function verifySnapshotWrite(
       );
     }
 
-    const expectedRows = contactSnapshotGoogleRows(snapshot.rows);
+    const expectedRows = contactSnapshotGoogleRows(
+      snapshot.rows,
+      snapshot.headers,
+    );
     for (
       let offset = 0;
       offset < expectedRows.length;
@@ -556,7 +674,12 @@ async function verifySnapshotWrite(
       );
       const response = await client.spreadsheets.values.get({
         spreadsheetId,
-        range: rowRange(title, offset + 2, expectedBatch.length),
+        range: rowRange(
+          title,
+          offset + 2,
+          expectedBatch.length,
+          snapshot.headers.length,
+        ),
         majorDimension: "ROWS",
         valueRenderOption: "UNFORMATTED_VALUE",
       });
@@ -570,7 +693,7 @@ async function verifySnapshotWrite(
         const actualRow = actualBatch[rowIndex] ?? [];
         for (
           let columnIndex = 0;
-          columnIndex < CONTACT_SNAPSHOT_HEADERS.length;
+          columnIndex < snapshot.headers.length;
           columnIndex += 1
         ) {
           const expectedValue = expectedRow[columnIndex] ?? "";
@@ -603,11 +726,17 @@ export async function writeContactSnapshotToGoogleSheet(
     snapshot,
     null,
   );
+  await configureSnapshotColumnVisibility(
+    client,
+    destination.spreadsheetId,
+    sheetTabId,
+    snapshot.headers,
+  );
   await writeSnapshotRows(
     client,
     destination.spreadsheetId,
     destination.sheetTabName,
-    snapshot.rows,
+    snapshot,
   );
   await verifySnapshotWrite(
     client,
@@ -694,11 +823,17 @@ export async function exportGoogleContactSnapshot(
             data: { sheetTabId },
           });
         });
+        await configureSnapshotColumnVisibility(
+          client,
+          destination.spreadsheetId,
+          sheetTabId,
+          snapshot.headers,
+        );
         await writeSnapshotRows(
           client,
           destination.spreadsheetId,
           destination.sheetTabName,
-          snapshot.rows,
+          snapshot,
         );
         await verifySnapshotWrite(
           client,

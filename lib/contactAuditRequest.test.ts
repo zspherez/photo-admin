@@ -815,7 +815,10 @@ test("each claimed target receives the same complete artist roster with exactly 
       claimed[1].contactRoster.contacts[1].directOutreachNote,
       "@manager-two"
     );
-    assert.equal(claimed[1].contactRoster.contacts[1].isFullTeam, true);
+    assert.equal(
+      "isFullTeam" in claimed[1].contactRoster.contacts[1],
+      false,
+    );
   } finally {
     mutableDb.$transaction = originalTransaction;
   }

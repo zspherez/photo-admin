@@ -83,13 +83,11 @@ function recipientLabel(contact: {
   email: string | null;
   name: string | null;
   role: string | null;
-  isFullTeam: boolean;
 }): string {
   const email = normalizeEmail(contact.email ?? "") ?? "No valid email";
   const identity = contact.name ? `${contact.name} <${email}>` : email;
   const details = [
     contact.role?.trim() || null,
-    contact.isFullTeam ? "Full team marker" : null,
   ].filter((value): value is string => !!value);
   return details.length ? `${identity} · ${details.join(" · ")}` : identity;
 }
@@ -217,7 +215,6 @@ export default async function CustomizePage({
       name: true,
       role: true,
       state: true,
-      isFullTeam: true,
       createdAt: true,
       updatedAt: true,
     },
@@ -339,7 +336,6 @@ export default async function CustomizePage({
             followUpEligibility && followUpEligibility.recipients.length > 0
               ? followUpEligibility.recipients
               : (storedFollowUp?.recipientEmails ?? []),
-          isFullTeam: candidate.isFullTeam,
           subject: content?.subject ?? null,
           html: content?.html ?? null,
           contentLocked:
@@ -401,7 +397,6 @@ export default async function CustomizePage({
           validRetrySnapshot?.recipientEmails ??
           sendability?.recipients ??
           [],
-        isFullTeam: candidate.isFullTeam,
         subject: content?.subject ?? null,
         html: content?.html ?? null,
         contentLocked: sendability?.mode === "retry",
@@ -427,7 +422,6 @@ export default async function CustomizePage({
           ? "This is a direct-outreach contact with no email action."
           : "This contact has no valid email action.",
       recipients: [],
-      isFullTeam: contact.isFullTeam,
       subject: null,
       html: null,
       contentLocked: false,

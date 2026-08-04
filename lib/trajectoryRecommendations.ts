@@ -73,7 +73,6 @@ interface ContactRecord {
   phone: string | null;
   directOutreachNote: string | null;
   state: "active" | "quarantined";
-  isFullTeam: boolean;
   name: string | null;
 }
 
@@ -359,14 +358,13 @@ const DEFAULT_STORE: TrajectoryRecommendationStore = {
                 name: true,
                 customName: true,
                 contacts: {
-                  orderBy: [{ isFullTeam: "desc" }, { id: "asc" }],
+                  orderBy: [{ id: "asc" }],
                   select: {
                     id: true,
                     email: true,
                     phone: true,
                     directOutreachNote: true,
                     state: true,
-                    isFullTeam: true,
                     name: true,
                   },
                 },

@@ -23,7 +23,6 @@ export interface CustomizeRecipientOption {
   mode: "new" | "retry" | null;
   reason: string | null;
   recipients: string[];
-  isFullTeam: boolean;
   subject: string | null;
   html: string | null;
   contentLocked: boolean;
@@ -129,9 +128,6 @@ export function CustomizeForm({
                   selected.recipients.length === 1 ? "" : "s"
                 }: ${selected.recipients.join(", ")}.`
               : `This email will be sent only to ${selected.email}.`}
-            {selected.isFullTeam && !isRetry && !followUpMode
-              ? " This contact is marked full team, but Customize sends only to the selected address."
-              : ""}
           </p>
         )}
       </div>

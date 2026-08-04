@@ -988,7 +988,6 @@ export default async function ArtistPage({
                           Direct outreach
                         </Badge>
                       )}
-                      {c.isFullTeam && <Badge tone="accent" size="xs">Full team</Badge>}
                     </div>
                   </div>
                   <DirectOutreachProvenance

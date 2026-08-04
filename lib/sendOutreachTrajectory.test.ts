@@ -186,7 +186,6 @@ test("new follow-ups rebind to current active recipients while retries remain im
   assert.match(eligibility, /currentFollowUpRecipientEmails/);
   assert.match(eligibility, /mode === "retry" \? child\?\.contactId : parent\.contactId/);
   assert.match(eligibility, /requestedRecipientEmails: currentRecipients/);
-  assert.match(eligibility, /allowUnmarkedFullTeamSend: true/);
   assert.doesNotMatch(
     eligibility,
     /Shared festival manager coverage changed after the original send/,
