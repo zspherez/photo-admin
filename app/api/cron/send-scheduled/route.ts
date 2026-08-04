@@ -11,6 +11,8 @@ import {
   getOutreachRecoveryCutoff,
   OUTREACH_CLAIM_TIMEOUT_MS,
   SCHEDULED_DISPATCH_MAX_ROWS,
+  SCHEDULED_DISPATCH_ROUTE_TIMEOUT_MS,
+  SCHEDULED_DISPATCH_TRANSACTION_RESPONSE_MARGIN_MS,
   type ScheduledDispatchDisposition,
   shouldContinueScheduledDispatch,
 } from "@/lib/schedule";
@@ -182,6 +184,13 @@ export async function GET(request: NextRequest) {
 
   const sentMailCopies = await dispatchDueSentMailCopies(
     Math.min(5, Math.max(1, SCHEDULED_DISPATCH_MAX_ROWS - results.length)),
+    new Date(),
+    {
+      deadlineAtMs:
+        startedAt +
+        SCHEDULED_DISPATCH_ROUTE_TIMEOUT_MS -
+        SCHEDULED_DISPATCH_TRANSACTION_RESPONSE_MARGIN_MS,
+    },
   ).catch((error) => [
     {
       id: "sent-mail-copy-dispatcher",

@@ -79,5 +79,10 @@ When Resend conclusively rejects a request without accepting it, a later retry
 refreshes the target from the then-current locked settings. Once provider
 acceptance is possible or confirmed, the prior target remains immutable.
 
+The scheduled-outreach endpoint always drains outbound work first. Sent-copy
+work uses only the remaining route deadline, does not start an IMAP attempt
+without a safe time budget, and closes timed-out connections early enough to
+release the durable claim before the route exits.
+
 The IMAP password remains in server-side environment configuration. Message
 content and credentials are not written to application logs.

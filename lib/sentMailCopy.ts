@@ -18,6 +18,9 @@ import {
 
 export const SENT_MAIL_COPY_CLAIM_TIMEOUT_MS = 2 * 60 * 1000;
 export const SENT_MAIL_COPY_MAX_ATTEMPTS = 8;
+export const SENT_MAIL_COPY_MIN_START_BUDGET_MS = 25_000;
+export const SENT_MAIL_COPY_DEADLINE_ERROR =
+  "IMAP Sent copy exceeded the dispatcher deadline";
 const SENT_MAIL_COPY_RETRY_BASE_MS = 60 * 1000;
 const SENT_MAIL_COPY_RETRY_MAX_MS = 60 * 60 * 1000;
 
@@ -48,6 +51,23 @@ export interface SentMailCopyDispatchResult {
   retryScheduled?: boolean;
   nextAttemptAt?: Date;
   error?: string;
+}
+
+export interface SentMailCopyDispatchOptions {
+  deadlineAtMs?: number;
+  minimumStartBudgetMs?: number;
+  nowMs?: () => number;
+}
+
+export function hasSentMailCopyAttemptBudget(
+  options: SentMailCopyDispatchOptions,
+): boolean {
+  if (options.deadlineAtMs === undefined) return true;
+  const nowMs = options.nowMs ?? Date.now;
+  return (
+    options.deadlineAtMs - nowMs() >=
+    (options.minimumStartBudgetMs ?? SENT_MAIL_COPY_MIN_START_BUDGET_MS)
+  );
 }
 
 export function canRefreshSentMailboxTargetBeforeSubmission(state: {
@@ -242,6 +262,7 @@ export async function appendSentMailCopy(
   createClient: (
     config: SentMailImapConfiguration,
   ) => SentMailImapClient = defaultImapClient,
+  options: Pick<SentMailCopyDispatchOptions, "deadlineAtMs" | "nowMs"> = {},
 ): Promise<SentMailAppendResult> {
   if (config.targetScope !== expectedTargetScope) {
     throw new Error(
@@ -250,6 +271,17 @@ export async function appendSentMailCopy(
   }
   const client = createClient(config);
   let lock: { release(): void } | null = null;
+  let deadlineExpired = false;
+  let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  if (options.deadlineAtMs !== undefined) {
+    const remainingMs =
+      options.deadlineAtMs - (options.nowMs ?? Date.now)();
+    if (remainingMs <= 0) throw new Error(SENT_MAIL_COPY_DEADLINE_ERROR);
+    deadlineTimer = setTimeout(() => {
+      deadlineExpired = true;
+      client.close();
+    }, remainingMs);
+  }
   try {
     await client.connect();
     const mailboxes = await client.list();
@@ -291,13 +323,19 @@ export async function appendSentMailCopy(
       uidValidity: appended.uidValidity ?? null,
       alreadyPresent: false,
     };
+  } catch (error) {
+    if (deadlineExpired) throw new Error(SENT_MAIL_COPY_DEADLINE_ERROR);
+    throw error;
   } finally {
     lock?.release();
-    if (client.usable) {
+    if (deadlineExpired) {
+      client.close();
+    } else if (client.usable) {
       await client.logout().catch(() => client.close());
     } else {
       client.close();
     }
+    if (deadlineTimer) clearTimeout(deadlineTimer);
   }
 }
 
@@ -314,7 +352,8 @@ function operationalError(error: unknown): string {
   if (
     message === "Configured Sent mailbox was not found" ||
     message.startsWith("IMAP server did not advertise a Sent mailbox") ||
-    message === "IMAP server did not confirm APPEND"
+    message === "IMAP server did not confirm APPEND" ||
+    message === SENT_MAIL_COPY_DEADLINE_ERROR
   ) {
     return message;
   }
@@ -382,6 +421,42 @@ async function claimSentMailCopy(
   );
 }
 
+export function sentMailCopyDeadlineReleaseData(now: Date) {
+  return {
+    status: "retry_scheduled",
+    error: "Sent copy deferred because the dispatcher deadline is near",
+    nextAttemptAt: now,
+    claimedAt: null,
+    claimToken: null,
+    attemptCount: { decrement: 1 },
+  } as const;
+}
+
+async function releaseSentMailCopyClaimForDeadline(
+  id: string,
+  claimToken: string,
+  now: Date,
+): Promise<SentMailCopyDispatchResult> {
+  const released = await db.sentMailCopy.updateMany({
+    where: { id, status: "copying", claimToken },
+    data: sentMailCopyDeadlineReleaseData(now),
+  });
+  if (released.count !== 1) {
+    return {
+      id,
+      ok: false,
+      error: "Sent copy claim changed while deferring for the deadline",
+    };
+  }
+  return {
+    id,
+    ok: true,
+    skipped: true,
+    retryScheduled: true,
+    nextAttemptAt: now,
+  };
+}
+
 async function loadSentMailCopyMessage(id: string) {
   const row = await db.sentMailCopy.findUnique({
     where: { id },
@@ -444,9 +519,16 @@ async function loadSentMailCopyMessage(id: string) {
 export async function dispatchSentMailCopy(
   id: string,
   now: Date = new Date(),
+  options: SentMailCopyDispatchOptions = {},
 ): Promise<SentMailCopyDispatchResult> {
+  if (!hasSentMailCopyAttemptBudget(options)) {
+    return { id, ok: true, skipped: true };
+  }
   const claim = await claimSentMailCopy(id, now);
   if (!claim.ok) return claim.result;
+  if (!hasSentMailCopyAttemptBudget(options)) {
+    return releaseSentMailCopyClaimForDeadline(id, claim.claimToken, now);
+  }
 
   const loaded = await loadSentMailCopyMessage(id);
   if (!loaded.ok) {
@@ -535,6 +617,9 @@ export async function dispatchSentMailCopy(
     return { id, ok: false, error };
   }
 
+  if (!hasSentMailCopyAttemptBudget(options)) {
+    return releaseSentMailCopyClaimForDeadline(id, claim.claimToken, now);
+  }
   try {
     const appended = await appendSentMailCopy(
       configuration.config,
@@ -542,6 +627,8 @@ export async function dispatchSentMailCopy(
       id,
       rawMessage,
       loaded.acceptedAt,
+      defaultImapClient,
+      options,
     );
     const completedAt = new Date();
     const completed = await db.sentMailCopy.updateMany({
@@ -590,31 +677,68 @@ export async function dispatchSentMailCopy(
   }
 }
 
+export interface SentMailCopyBatchDependencies {
+  findDue: (
+    limit: number,
+    now: Date,
+  ) => Promise<Array<{ id: string }>>;
+  dispatch: typeof dispatchSentMailCopy;
+}
+
+const DEFAULT_BATCH_DEPENDENCIES: SentMailCopyBatchDependencies = {
+  findDue: async (limit, now) => {
+    const staleBefore = new Date(
+      now.getTime() - SENT_MAIL_COPY_CLAIM_TIMEOUT_MS,
+    );
+    return db.sentMailCopy.findMany({
+      where: {
+        OR: [
+          {
+            status: { in: ["pending", "retry_scheduled"] },
+            nextAttemptAt: { lte: now },
+          },
+          {
+            status: "copying",
+            claimedAt: { lte: staleBefore },
+          },
+        ],
+      },
+      select: { id: true },
+      orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      take: Math.max(1, Math.min(limit, 10)),
+    });
+  },
+  dispatch: dispatchSentMailCopy,
+};
+
+export async function dispatchDueSentMailCopiesWithDependencies(
+  limit = 5,
+  now: Date = new Date(),
+  options: SentMailCopyDispatchOptions = {},
+  dependencies: SentMailCopyBatchDependencies,
+): Promise<SentMailCopyDispatchResult[]> {
+  if (!hasSentMailCopyAttemptBudget(options)) return [];
+  const rows = await dependencies.findDue(limit, now);
+  const results: SentMailCopyDispatchResult[] = [];
+  for (const row of rows) {
+    if (!hasSentMailCopyAttemptBudget(options)) break;
+    const dispatchNow = new Date((options.nowMs ?? Date.now)());
+    results.push(
+      await dependencies.dispatch(row.id, dispatchNow, options),
+    );
+  }
+  return results;
+}
+
 export async function dispatchDueSentMailCopies(
   limit = 5,
   now: Date = new Date(),
+  options: SentMailCopyDispatchOptions = {},
 ): Promise<SentMailCopyDispatchResult[]> {
-  const staleBefore = new Date(now.getTime() - SENT_MAIL_COPY_CLAIM_TIMEOUT_MS);
-  const rows = await db.sentMailCopy.findMany({
-    where: {
-      OR: [
-        {
-          status: { in: ["pending", "retry_scheduled"] },
-          nextAttemptAt: { lte: now },
-        },
-        {
-          status: "copying",
-          claimedAt: { lte: staleBefore },
-        },
-      ],
-    },
-    select: { id: true },
-    orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-    take: Math.max(1, Math.min(limit, 10)),
-  });
-  const results: SentMailCopyDispatchResult[] = [];
-  for (const row of rows) {
-    results.push(await dispatchSentMailCopy(row.id, now));
-  }
-  return results;
+  return dispatchDueSentMailCopiesWithDependencies(
+    limit,
+    now,
+    options,
+    DEFAULT_BATCH_DEPENDENCIES,
+  );
 }

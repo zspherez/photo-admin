@@ -6,7 +6,12 @@ import {
   appendSentMailCopy,
   buildSentMailCopyMime,
   canRefreshSentMailboxTargetBeforeSubmission,
+  dispatchDueSentMailCopiesWithDependencies,
   ensureSentMailCopyQueued,
+  hasSentMailCopyAttemptBudget,
+  SENT_MAIL_COPY_DEADLINE_ERROR,
+  sentMailCopyDeadlineReleaseData,
+  type SentMailCopyBatchDependencies,
   type SentMailImapClient,
 } from "./sentMailCopy";
 import {
@@ -384,6 +389,103 @@ test("IMAP append searches the Sent mailbox first and is recovery-idempotent", a
     /does not match the immutable target/,
   );
   assert.equal(created, false);
+});
+
+test("IMAP deadline closes an unreachable connection before the route budget", async () => {
+  let rejectConnect: ((error: Error) => void) | null = null;
+  let closed = false;
+  const client: SentMailImapClient = {
+    usable: false,
+    connect: async () => {
+      client.usable = true;
+      return new Promise<void>((_resolve, reject) => {
+        rejectConnect = reject;
+      });
+    },
+    list: async () => [],
+    getMailboxLock: async () => ({ release() {} }),
+    search: async () => [],
+    append: async () => false,
+    logout: async () => {},
+    close: () => {
+      closed = true;
+      client.usable = false;
+      rejectConnect?.(new Error("connection closed"));
+    },
+  };
+  const startedAt = Date.now();
+  await assert.rejects(
+    appendSentMailCopy(
+      CONFIG,
+      CONFIG.targetScope,
+      "deadline-copy",
+      Buffer.from("message"),
+      new Date(),
+      () => client,
+      { deadlineAtMs: startedAt + 25 },
+    ),
+    new RegExp(SENT_MAIL_COPY_DEADLINE_ERROR),
+  );
+  assert.equal(closed, true);
+  assert.ok(Date.now() - startedAt < 1_000);
+});
+
+test("Sent-copy batches stop before starting work without enough budget", async () => {
+  let clock = 0;
+  let queried = 0;
+  const started: string[] = [];
+  const dependencies: SentMailCopyBatchDependencies = {
+    findDue: async () => {
+      queried += 1;
+      return ["one", "two", "three", "four"].map((id) => ({ id }));
+    },
+    dispatch: async (id) => {
+      started.push(id);
+      clock += 10_000;
+      return { id, ok: true };
+    },
+  };
+  const options = {
+    deadlineAtMs: 30_000,
+    minimumStartBudgetMs: 15_000,
+    nowMs: () => clock,
+  };
+  assert.equal(hasSentMailCopyAttemptBudget(options), true);
+  const results = await dispatchDueSentMailCopiesWithDependencies(
+    5,
+    new Date(0),
+    options,
+    dependencies,
+  );
+  assert.equal(queried, 1);
+  assert.deepEqual(started, ["one", "two"]);
+  assert.equal(results.length, 2);
+
+  clock = 20_000;
+  queried = 0;
+  assert.equal(hasSentMailCopyAttemptBudget(options), false);
+  assert.deepEqual(
+    await dispatchDueSentMailCopiesWithDependencies(
+      5,
+      new Date(0),
+      options,
+      dependencies,
+    ),
+    [],
+  );
+  assert.equal(queried, 0);
+});
+
+test("deadline deferral releases the claim without consuming an attempt", () => {
+  const now = new Date("2026-08-04T17:45:00.000Z");
+  assert.deepEqual(sentMailCopyDeadlineReleaseData(now), {
+    status: "retry_scheduled",
+    error: "Sent copy deferred because the dispatcher deadline is near",
+    nextAttemptAt: now,
+    claimedAt: null,
+    claimToken: null,
+    attemptCount: { decrement: 1 },
+  });
 });
 
 test("queueing excludes test or disabled sends and upserts one real source", async () => {
