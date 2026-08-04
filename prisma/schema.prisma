@@ -928,6 +928,7 @@ model OutreachSendAttempt {
   providerCredentialScope String?
   providerMessageId       String?              @unique
   providerMessageIds      String[]              @default([])
+  providerRequestResults  Json?
   firstAttemptAt          DateTime?
   lastAttemptAt           DateTime?
   attemptCount            Int                  @default(0)

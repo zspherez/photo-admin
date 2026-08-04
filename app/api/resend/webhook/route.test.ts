@@ -60,4 +60,21 @@ test("webhooks correlate every message in an immutable outreach batch", () => {
   assert.match(source, /providerMessageIds\[messageIndex\] = messageId/);
   assert.match(source, /providerAcceptanceComplete/);
   assert.match(source, /providerMessageIds,/);
+  assert.match(source, /outreachWebhookRecipientImpact/);
+  assert.match(
+    source,
+    /auxiliary outreach recipient webhook recorded without aggregate mutation/,
+  );
+});
+
+test("individual-mode BCC opens, clicks, and failures record without aggregate mutation", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  const auxiliaryGuard = source.indexOf(
+    "auxiliary outreach recipient webhook recorded without aggregate mutation",
+  );
+  assert.ok(auxiliaryGuard >= 0);
+  assert.ok(auxiliaryGuard < source.indexOf("applySuppression(", auxiliaryGuard));
+  assert.ok(auxiliaryGuard < source.indexOf('case "email.opened"', auxiliaryGuard));
+  assert.ok(auxiliaryGuard < source.indexOf('case "email.clicked"', auxiliaryGuard));
+  assert.ok(auxiliaryGuard < source.indexOf('case "email.failed"', auxiliaryGuard));
 });

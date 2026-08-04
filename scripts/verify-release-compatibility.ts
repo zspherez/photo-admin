@@ -208,7 +208,11 @@ async function main(): Promise<void> {
     ),
     db.outreachSendAttempt.findMany({
       take: 1,
-      select: { id: true, providerMessageIds: true },
+      select: {
+        id: true,
+        providerMessageIds: true,
+        providerRequestResults: true,
+      },
     }),
     db.outreachCoveredArtist.findMany({
       take: 1,
@@ -956,6 +960,7 @@ async function main(): Promise<void> {
         "Outreach.primaryRecipientEmail",
         "Outreach.providerMessageIds",
         "OutreachSendAttempt.providerMessageIds",
+        "OutreachSendAttempt.providerRequestResults",
         "OutreachCoveredArtist",
         "Outreach_dispatch_recipient_identity_check",
         "ResendWebhookEvent.arbitraryEmailId",

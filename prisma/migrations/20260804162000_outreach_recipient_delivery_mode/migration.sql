@@ -6,7 +6,8 @@ ADD COLUMN "primaryRecipientEmail" TEXT,
 ADD COLUMN "providerMessageIds" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
 
 ALTER TABLE "OutreachSendAttempt"
-ADD COLUMN "providerMessageIds" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
+ADD COLUMN "providerMessageIds" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+ADD COLUMN "providerRequestResults" JSONB;
 
 UPDATE "Outreach"
 SET "recipientDeliveryMode" = 'legacy_multi_to'

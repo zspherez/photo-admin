@@ -6,7 +6,9 @@ import {
   canBindResendWebhookProviderMessage,
   correlateResendWebhookAttempt,
   getResendWebhookFailurePolicy,
+  outreachWebhookRecipientImpact,
   parseResendRequestBatchSnapshot,
+  parseResendRequestResultSnapshot,
   shouldMirrorResendAttempt,
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
@@ -492,6 +494,22 @@ async function processEvent(
                 where: { id: correlation.attempt.id },
                 data: {
                   providerMessageIds,
+                  providerRequestResults:
+                    expectedRequests && messageIndex !== null
+                      ? (parseResendRequestResultSnapshot(
+                          correlation.attempt.providerRequestResults,
+                          expectedRequests,
+                          providerMessageIds,
+                        ).map((result, index) =>
+                          index === messageIndex
+                            ? {
+                                providerMessageId: messageId,
+                                error: null,
+                                failureDisposition: null,
+                              }
+                            : result,
+                        ) as Prisma.InputJsonValue)
+                      : undefined,
                   ...(expectedRequests === 1
                     ? { providerMessageId: messageId }
                     : {}),
@@ -522,6 +540,25 @@ async function processEvent(
 
           const matchedAttempt =
             correlation.status === "matched" ? correlation.attempt : null;
+          const matchedRequestBatch = matchedAttempt
+            ? parseResendRequestBatchSnapshot(matchedAttempt.providerRequest)
+            : null;
+          const matchedMessageIndex =
+            findMessageIndex(parsed) ??
+            (messageId
+              ? (matchedAttempt?.providerMessageIds ?? []).indexOf(messageId)
+              : -1);
+          const matchedRequest =
+            matchedRequestBatch?.requests[
+              matchedMessageIndex >= 0
+                ? matchedMessageIndex
+                : matchedRequestBatch.requests.length === 1
+                  ? 0
+                  : -1
+            ] ?? null;
+          const outreachRecipientImpact = matchedRequest
+            ? outreachWebhookRecipientImpact(matchedRequest, parsed.data)
+            : null;
           await tx.resendWebhookEvent.create({
             data: {
               eventId,
@@ -544,6 +581,16 @@ async function processEvent(
                 ? { status: "legacy_unknown" }
                 : matchedAttempt,
             );
+          if (
+            correlation.status === "matched" &&
+            outreachRecipientImpact &&
+            !outreachRecipientImpact.affectsAggregate
+          ) {
+            return {
+              note:
+                "auxiliary outreach recipient webhook recorded without aggregate mutation",
+            };
+          }
           if (failurePolicy.applySuppression) {
             await applySuppression(
               tx,

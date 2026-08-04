@@ -23,9 +23,11 @@ import {
   hashResendRequestSnapshot,
   hashResendRequestBatchSnapshot,
   isValidResendSender,
+  outreachWebhookRecipientImpact,
   parseResendRequestSnapshot,
   sendPreparedEmailViaResend,
   sendPreparedEmailBatchViaResend,
+  summarizeResendRequestResults,
   shouldMirrorResendAttempt,
   type ResendRequestSnapshot,
 } from "./resend";
@@ -435,7 +437,14 @@ test("batch retries skip provider calls for already accepted message identities"
     hashResendRequestBatchSnapshot(batch),
     [],
     null,
-    ["message-existing", ""],
+    [
+      {
+        providerMessageId: "message-existing",
+        error: null,
+        failureDisposition: null,
+      },
+      null,
+    ],
     async (request) => {
       calls.push(request.to[0]);
       return {
@@ -452,6 +461,115 @@ test("batch retries skip provider calls for already accepted message identities"
   );
 });
 
+test("mixed batch outcomes preserve accepted indexes and let uncertainty dominate", async () => {
+  const summary = summarizeResendRequestResults([
+    {
+      providerMessageId: null,
+      error: "invalid recipient",
+      failureDisposition: "permanent",
+    },
+    {
+      providerMessageId: null,
+      error: "connection reset",
+      failureDisposition: "uncertain",
+    },
+    {
+      providerMessageId: "message-accepted",
+      error: null,
+      failureDisposition: null,
+    },
+    {
+      providerMessageId: null,
+      error: "rate limited",
+      failureDisposition: "retryable",
+    },
+  ]);
+  assert.equal(summary.failureDisposition, "uncertain");
+  assert.match(summary.error ?? "", /message 2: connection reset/);
+  assert.equal(
+    summarizeResendRequestResults([
+      {
+        providerMessageId: null,
+        error: "invalid recipient",
+        failureDisposition: "permanent",
+      },
+      {
+        providerMessageId: null,
+        error: "rate limited",
+        failureDisposition: "retryable",
+      },
+    ]).failureDisposition,
+    "retryable",
+  );
+
+  const policy = buildResendDeliveryPolicy({
+    from: REQUEST.from,
+    intendedRecipients: [
+      "permanent@example.com",
+      "uncertain@example.com",
+      "accepted@example.com",
+      "retryable@example.com",
+    ],
+    subject: REQUEST.subject,
+    testOverride: null,
+    bccEmails: [],
+    suppressedEmails: [],
+    recipientDeliveryMode: "individual_threads",
+  });
+  assert.equal(policy.ok, true);
+  if (!policy.ok) return;
+  const batch = buildResendRequestBatchSnapshot({
+    policy: policy.policy,
+    recipientDeliveryMode: "individual_threads",
+    html: REQUEST.html,
+    outreachId: "outreach-mixed",
+    attemptId: "attempt-mixed",
+    idempotencyKey: "outreach/outreach-mixed/attempt-mixed",
+  });
+  const prior = [
+    {
+      providerMessageId: "message-accepted",
+      error: null,
+      failureDisposition: null,
+    },
+    {
+      providerMessageId: null,
+      error: "invalid recipient",
+      failureDisposition: "permanent" as const,
+    },
+    {
+      providerMessageId: null,
+      error: "rate limited",
+      failureDisposition: "retryable" as const,
+    },
+    {
+      providerMessageId: null,
+      error: "connection reset",
+      failureDisposition: "uncertain" as const,
+    },
+  ];
+  const calls: string[] = [];
+  const retried = await sendPreparedEmailBatchViaResend(
+    batch,
+    hashResendRequestBatchSnapshot(batch),
+    [],
+    null,
+    prior,
+    async (request) => {
+      calls.push(request.to[0]);
+      return {
+        providerMessageId: "message-retried",
+        error: null,
+        failureDisposition: null,
+      };
+    },
+  );
+  assert.deepEqual(calls, ["retryable@example.com"]);
+  assert.deepEqual(retried.results.slice(0, 2), prior.slice(0, 2));
+  assert.equal(retried.results[2].providerMessageId, "message-retried");
+  assert.deepEqual(retried.results[3], prior[3]);
+});
+
 test("test override matching an intended recipient still resolves to one provider request", () => {
   const resolved = buildResendDeliveryPolicy({
     from: REQUEST.from,
@@ -462,6 +580,7 @@ test("test override matching an intended recipient still resolves to one provide
     suppressedEmails: [],
     recipientDeliveryMode: "individual_threads",
   });
+
   assert.equal(resolved.ok, true);
   if (!resolved.ok) return;
   assert.equal(resolved.policy.testSend, true);
@@ -477,6 +596,34 @@ test("test override matching an intended recipient still resolves to one provide
   assert.equal(batch.requests.length, 1);
   assert.deepEqual(batch.requests[0].to, ["first@example.com"]);
   assert.deepEqual(batch.requests[0].cc, []);
+});
+
+test("individual-thread BCC-only webhooks never affect outreach aggregates", () => {
+  const request = {
+    ...REQUEST,
+    to: ["manager@example.com"],
+    cc: [],
+    bcc: ["audit@example.com"],
+  };
+  for (const fields of [
+    { to: [], cc: [], bcc: ["audit@example.com"] },
+    { bcc: ["AUDIT@example.com"] },
+  ]) {
+    assert.deepEqual(outreachWebhookRecipientImpact(request, fields), {
+      impactedRecipients: ["audit@example.com"],
+      affectsAggregate: false,
+    });
+  }
+  assert.deepEqual(
+    outreachWebhookRecipientImpact(request, {
+      to: ["manager@example.com"],
+      bcc: ["audit@example.com"],
+    }),
+    {
+      impactedRecipients: ["audit@example.com", "manager@example.com"],
+      affectsAggregate: true,
+    },
+  );
 });
 
 test("arbitrary multi-recipient delivery keeps recipients on To and audit copies on BCC", () => {

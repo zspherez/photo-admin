@@ -135,6 +135,19 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
   assert.match(actions, /scheduleFollowUp\(/);
   assert.match(actions, /sendFollowUp\(/);
   assert.match(actions, /recipientDeliveryMode: recipientDeliveryModeValue/);
+  assert.match(actions, /isRecipientDeliveryMode\(recipientDeliveryModeValue\)/);
+  assert.match(
+    actions,
+    /immutableRetryDeliveryMode !== null[\s\S]*recipientDeliveryModeValue !== immutableRetryDeliveryMode/,
+  );
+  assert.match(
+    actions,
+    /recipientDeliveryModeValue === "legacy_multi_to"[\s\S]*immutableRetryDeliveryMode !== "legacy_multi_to"/,
+  );
+  assert.match(
+    actions,
+    /Legacy multi-recipient delivery is allowed only for its immutable retry/,
+  );
   assert.match(form, /followUpMode/);
   assert.match(
     form,

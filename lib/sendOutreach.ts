@@ -35,15 +35,16 @@ import {
   hashResendRequestSnapshot,
   normalizeEmails,
   parseResendRequestBatchSnapshot,
+  parseResendRequestResultSnapshot,
   prepareResendRequestBatch,
   sendPreparedEmailBatchViaResend,
+  summarizeResendRequestResults,
   type ResendAttachmentBlob,
   type ResendDeliveryPolicy,
   type ResendFailureDisposition,
   type ResendPreparationDisposition,
   type ResendRequestSnapshot,
   type ResendRequestBatchSnapshot,
-  type SendResult,
   type ResendSubmissionCredential,
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
@@ -341,6 +342,7 @@ interface StoredAttempt {
   providerCredentialScope: string | null;
   providerMessageId: string | null;
   providerMessageIds?: string[];
+  providerRequestResults?: Prisma.JsonValue | null;
   firstAttemptAt: Date | null;
   lastAttemptAt: Date | null;
   attemptCount: number;
@@ -864,6 +866,7 @@ export function isNonBlockingLegacyUnknownAttempt(
         | "providerRequest"
         | "requestHash"
         | "providerMessageId"
+        | "providerRequestResults"
         | "providerMessageIds"
         | "attemptCount"
         | "bouncedAt"
@@ -907,21 +910,53 @@ function hasProviderSubmissionMarker(
   );
 }
 
+function requestResultEntries(
+  value: Prisma.JsonValue | null | undefined,
+): Array<Record<string, Prisma.JsonValue>> {
+  return Array.isArray(value)
+    ? value.filter(
+        (entry): entry is Record<string, Prisma.JsonValue> =>
+          !!entry && typeof entry === "object" && !Array.isArray(entry),
+      )
+    : [];
+}
+
+function hasAcceptedRequestResult(
+  value: Prisma.JsonValue | null | undefined,
+): boolean {
+  return requestResultEntries(value).some(
+    (entry) => typeof entry.providerMessageId === "string",
+  );
+}
+
+function hasUncertainRequestResult(
+  value: Prisma.JsonValue | null | undefined,
+): boolean {
+  return requestResultEntries(value).some(
+    (entry) =>
+      entry.failureDisposition === "uncertain" ||
+      entry.failureDisposition === "in_flight",
+  );
+}
+
 export function isProviderAcceptanceUnresolvedAttempt(
   attempt: Pick<
     StoredAttempt,
     | "status"
     | "providerMessageId"
     | "providerMessageIds"
+    | "providerRequestResults"
     | "providerCredentialScope"
     | "firstAttemptAt"
     | "attemptCount"
     | "failureDisposition"
   >,
 ): boolean {
+  if (hasUncertainRequestResult(attempt.providerRequestResults)) return true;
   if (
     attempt.providerMessageId ||
-    (attempt.providerMessageIds ?? []).some(Boolean)
+    (attempt.providerMessageIds ?? []).some(Boolean) ||
+    hasAcceptedRequestResult(attempt.providerRequestResults)
   ) {
     return false;
   }
@@ -973,6 +1008,7 @@ export function isDefinitivelyUnsentOutreachAttempt(
     | "providerCredentialScope"
     | "providerMessageId"
     | "providerMessageIds"
+    | "providerRequestResults"
     | "firstAttemptAt"
     | "attemptCount"
     | "failureDisposition"
@@ -980,7 +1016,9 @@ export function isDefinitivelyUnsentOutreachAttempt(
 ): boolean {
   if (
     attempt.providerMessageId ||
-    (attempt.providerMessageIds ?? []).some(Boolean)
+    (attempt.providerMessageIds ?? []).some(Boolean) ||
+    hasAcceptedRequestResult(attempt.providerRequestResults) ||
+    hasUncertainRequestResult(attempt.providerRequestResults)
   ) {
     return false;
   }
@@ -1014,6 +1052,7 @@ export function isDefinitiveConfigurationRejection(
         | "status"
         | "providerMessageId"
         | "providerMessageIds"
+        | "providerRequestResults"
         | "firstAttemptAt"
         | "attemptCount"
         | "failureDisposition"
@@ -1025,6 +1064,8 @@ export function isDefinitiveConfigurationRejection(
     !!attempt &&
     attempt.providerMessageId === null &&
     !(attempt.providerMessageIds ?? []).some(Boolean) &&
+    !hasAcceptedRequestResult(attempt.providerRequestResults) &&
+    !hasUncertainRequestResult(attempt.providerRequestResults) &&
     attempt.firstAttemptAt !== null &&
     attempt.attemptCount > 0 &&
     attempt.failureDisposition === "configuration" &&
@@ -1041,6 +1082,7 @@ export function evaluateAttemptRetryEligibility(
     StoredAttempt,
     | "status"
     | "providerMessageId"
+    | "providerRequestResults"
     | "providerRequest"
     | "requestHash"
     | "providerCredentialScope"
@@ -1052,6 +1094,9 @@ export function evaluateAttemptRetryEligibility(
   now: Date = new Date(),
   currentCredentialScope?: string | null,
 ): AttemptRetryDecision {
+  if (hasUncertainRequestResult(attempt.providerRequestResults)) {
+    return { ok: false, state: "manual_review", error: MANUAL_REVIEW_UNCERTAIN };
+  }
   if (attempt.providerMessageId) {
     return {
       ok: false,
@@ -5637,7 +5682,11 @@ async function submitClaimedAttempt(
             attempt.requestHash,
             attachmentBlobs,
             submissionCredential,
-            attempt.providerMessageIds ?? [],
+            parseResendRequestResultSnapshot(
+              attempt.providerRequestResults,
+              policy.requestBatch.requests.length,
+              attempt.providerMessageIds ?? [],
+            ),
           );
           return {
             kind: "ready",
@@ -5741,6 +5790,9 @@ async function finishClaimedSend(
         attempt.providerMessageIds?.[index] ??
         "",
     );
+    const aggregateResult = summarizeResendRequestResults(
+      batchResult.results,
+    );
     const returnedProviderIds = providerMessageIds.filter(Boolean);
     const providerOwners =
       returnedProviderIds.length === 0
@@ -5784,13 +5836,7 @@ async function finishClaimedSend(
     const failedResults = batchResult.results.filter(
       (result) => result.providerMessageId === null,
     );
-    const result =
-      failedResults[0] ??
-      ({
-        providerMessageId: providerMessageIds[0] ?? null,
-        error: null,
-        failureDisposition: null,
-      } satisfies SendResult);
+    const result = aggregateResult;
     const allRequestsAccepted =
       failedResults.length === 0 &&
       providerMessageIds.every(Boolean);
@@ -5804,6 +5850,8 @@ async function finishClaimedSend(
         data: {
           ...(providerMessageId ? { providerMessageId } : {}),
           providerMessageIds,
+          providerRequestResults:
+            batchResult.results as unknown as Prisma.InputJsonValue,
         },
       });
       await tx.outreach.updateMany({

@@ -1457,6 +1457,8 @@ test("individual-thread delivery persists every provider message identity and re
     /providerMessageIds,/,
   );
   assert.match(source, /status: testSend \? "test" : "sent"/);
+  assert.match(source, /summarizeResendRequestResults/);
+  assert.match(source, /providerRequestResults:/);
 });
 
 test("partially accepted recipient batches are never treated as definitively unsent", () => {
@@ -1471,6 +1473,26 @@ test("partially accepted recipient batches are never treated as definitively uns
   };
   assert.equal(isDefinitivelyUnsentOutreachAttempt(partial), false);
   assert.equal(isDefinitiveConfigurationRejection(partial), false);
+  assert.equal(
+    isDefinitivelyUnsentOutreachAttempt({
+      ...partial,
+      providerMessageIds: [],
+      failureDisposition: "permanent",
+      providerRequestResults: [
+        {
+          providerMessageId: null,
+          error: "invalid recipient",
+          failureDisposition: "permanent",
+        },
+        {
+          providerMessageId: null,
+          error: "connection reset",
+          failureDisposition: "uncertain",
+        },
+      ],
+    }),
+    false,
+  );
 });
 
 test("follow-up recipient snapshots can include multiple unmarked current contacts", () => {

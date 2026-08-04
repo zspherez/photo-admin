@@ -35,7 +35,10 @@ import {
   captureTrajectoryAction,
   trajectoryActionResultHref,
 } from "@/lib/trajectoryActionError";
-import { isSelectableRecipientDeliveryMode } from "@/lib/recipientDelivery";
+import {
+  isRecipientDeliveryMode,
+  isSelectableRecipientDeliveryMode,
+} from "@/lib/recipientDelivery";
 
 export interface CustomizeActionState {
   error: string | null;
@@ -86,7 +89,7 @@ export async function sendCustom(
   const recipientDeliveryModeValue = String(
     formData.get("recipientDeliveryMode") ?? "",
   );
-  if (!isSelectableRecipientDeliveryMode(recipientDeliveryModeValue)) {
+  if (!isRecipientDeliveryMode(recipientDeliveryModeValue)) {
     return actionError(selectedContactId, "Unknown recipient delivery mode");
   }
   const intent = String(formData.get("intent") ?? "send");
@@ -205,6 +208,7 @@ export async function sendCustom(
     return actionError(selectedContactId, identityError);
   }
 
+  let immutableRetryDeliveryMode: string | null = null;
   if (context.parentOutreachId) {
     const [eligibility] = await getFollowUpEligibilityBatch([
       context.parentOutreachId,
@@ -214,6 +218,10 @@ export async function sendCustom(
         selectedContactId,
         eligibility?.reason ?? "Follow-up is unavailable",
       );
+    }
+    if (eligibility.mode === "retry") {
+      immutableRetryDeliveryMode =
+        eligibility.recipientDeliveryMode ?? null;
     }
   } else {
     const [sendability] = await getOutreachSendabilityBatch([
@@ -225,6 +233,34 @@ export async function sendCustom(
         sendability?.reason ?? "Email outreach is unavailable",
       );
     }
+    if (sendability.mode === "retry") {
+      immutableRetryDeliveryMode =
+        sendability.recipientDeliveryMode ?? null;
+    }
+  }
+  if (
+    immutableRetryDeliveryMode !== null &&
+    recipientDeliveryModeValue !== immutableRetryDeliveryMode
+  ) {
+    return actionError(
+      selectedContactId,
+      "An immutable retry must use its original recipient delivery mode",
+    );
+  }
+  if (
+    recipientDeliveryModeValue === "legacy_multi_to" &&
+    immutableRetryDeliveryMode !== "legacy_multi_to"
+  ) {
+    return actionError(
+      selectedContactId,
+      "Legacy multi-recipient delivery is allowed only for its immutable retry",
+    );
+  }
+  if (
+    recipientDeliveryModeValue !== "legacy_multi_to" &&
+    !isSelectableRecipientDeliveryMode(recipientDeliveryModeValue)
+  ) {
+    return actionError(selectedContactId, "Unknown recipient delivery mode");
   }
 
   const capturedResult = await captureTrajectoryAction(returnTo, () =>

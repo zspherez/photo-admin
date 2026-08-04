@@ -191,6 +191,126 @@ export interface SendBatchResult {
   results: SendResult[];
 }
 
+export interface ResendWebhookRecipientFields {
+  to?: unknown;
+  cc?: unknown;
+  bcc?: unknown;
+}
+
+function webhookStringRecipients(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+export function outreachWebhookRecipientImpact(
+  request: ResendRequestSnapshot,
+  fields: ResendWebhookRecipientFields,
+): { impactedRecipients: string[]; affectsAggregate: boolean } {
+  const impactedRecipients = normalizeEmails([
+    ...webhookStringRecipients(fields.to),
+    ...webhookStringRecipients(fields.cc),
+    ...webhookStringRecipients(fields.bcc),
+  ]);
+  const intended = new Set(normalizeEmails([...request.to, ...request.cc]));
+  return {
+    impactedRecipients,
+    affectsAggregate: impactedRecipients.some((email) => intended.has(email)),
+  };
+}
+
+export type ResendRequestResultSnapshot = Array<SendResult | null>;
+
+export function parseResendRequestResultSnapshot(
+  value: unknown,
+  requestCount: number,
+  providerMessageIds: readonly string[] = [],
+): ResendRequestResultSnapshot {
+  if (
+    Array.isArray(value) &&
+    value.length === requestCount &&
+    value.every(
+      (entry) =>
+        entry === null ||
+        (isRecord(entry) &&
+          (entry.providerMessageId === null ||
+            typeof entry.providerMessageId === "string") &&
+          (entry.error === null || typeof entry.error === "string") &&
+          (entry.failureDisposition === null ||
+            [
+              "configuration",
+              "in_flight",
+              "retryable",
+              "permanent",
+              "uncertain",
+              "policy",
+            ].includes(String(entry.failureDisposition)))),
+    )
+  ) {
+    return value.map((entry) =>
+      entry === null
+        ? null
+        : {
+            providerMessageId: entry.providerMessageId as string | null,
+            error: entry.error as string | null,
+            failureDisposition:
+              entry.failureDisposition as ResendFailureDisposition | null,
+          },
+    );
+  }
+  return Array.from({ length: requestCount }, (_, index) =>
+    providerMessageIds[index]
+      ? {
+          providerMessageId: providerMessageIds[index],
+          error: null,
+          failureDisposition: null,
+        }
+      : null,
+  );
+}
+
+export function summarizeResendRequestResults(
+  results: readonly SendResult[],
+): SendResult {
+  const failures = results
+    .map((result, index) => ({ ...result, index }))
+    .filter((result) => result.providerMessageId === null);
+  if (failures.length === 0) {
+    return {
+      providerMessageId: results[0]?.providerMessageId ?? null,
+      error: null,
+      failureDisposition: null,
+    };
+  }
+  const priority: ResendFailureDisposition[] = [
+    "uncertain",
+    "in_flight",
+    "policy",
+    "retryable",
+    "configuration",
+    "permanent",
+  ];
+  const failureDisposition =
+    priority.find((candidate) =>
+      failures.some((failure) => failure.failureDisposition === candidate),
+    ) ?? "uncertain";
+  const matching = failures.filter(
+    (failure) => failure.failureDisposition === failureDisposition,
+  );
+  return {
+    providerMessageId: null,
+    error: matching
+      .map(
+        (failure) =>
+          `message ${failure.index + 1}: ${
+            failure.error ?? "provider request failed"
+          }`,
+      )
+      .join(" | "),
+    failureDisposition,
+  };
+}
+
 function normalizeMailboxAddress(value: string): string | null {
   const normalized = value.trim().toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : null;
@@ -1161,7 +1281,7 @@ export async function sendPreparedEmailBatchViaResend(
   expectedHash: string,
   attachmentBlobs: ResendAttachmentBlob[],
   submissionCredential: ResendSubmissionCredential | null,
-  knownProviderMessageIds: readonly string[] = [],
+  priorResults: readonly (SendResult | null)[] = [],
   sendRequest: typeof sendPreparedEmailViaResend =
     sendPreparedEmailViaResend,
 ): Promise<SendBatchResult> {
@@ -1183,12 +1303,11 @@ export async function sendPreparedEmailBatchViaResend(
   return {
     results: await Promise.all(
       batch.requests.map((request, index) =>
-        knownProviderMessageIds[index]
-          ? Promise.resolve({
-              providerMessageId: knownProviderMessageIds[index],
-              error: null,
-              failureDisposition: null,
-            })
+        priorResults[index]?.providerMessageId ||
+        ["permanent", "policy", "uncertain"].includes(
+          priorResults[index]?.failureDisposition ?? "",
+        )
+          ? Promise.resolve(priorResults[index]!)
           : sendRequest(
               request,
               hashResendRequestSnapshot(request),
@@ -1209,6 +1328,7 @@ export interface ResendAttemptIdentity {
   testSend?: boolean | null;
   providerCredentialScope?: string | null;
   providerRequest?: unknown;
+  providerRequestResults?: unknown;
 }
 
 export interface ResendCorrelationClaims {
