@@ -177,7 +177,6 @@ export interface ContactAuditRosterPayload {
     role: string | null;
     source: string | null;
     notes: string | null;
-    isFullTeam: boolean | null;
   }>;
 }
 
@@ -468,7 +467,6 @@ export function buildContactAuditRosterPayload(job: {
         role: entry.snapshotRole,
         source: entry.snapshotSource,
         notes: entry.snapshotNotes,
-        isFullTeam: entry.snapshotIsFullTeam,
       })),
     };
   }
@@ -488,7 +486,6 @@ export function buildContactAuditRosterPayload(job: {
         role: job.snapshotRole,
         source: job.snapshotSource,
         notes: job.snapshotNotes,
-        isFullTeam: job.snapshotIsFullTeam,
       },
     ],
   };
@@ -1034,7 +1031,6 @@ export async function prepareContactAudit(
         role: true,
         source: true,
         notes: true,
-        isFullTeam: true,
         artist: { select: { name: true } },
       },
     });
@@ -1091,7 +1087,7 @@ export async function prepareContactAudit(
             snapshotRole: contact.role,
             snapshotSource: contact.source,
             snapshotNotes: contact.notes,
-            snapshotIsFullTeam: contact.isFullTeam,
+            snapshotIsFullTeam: false,
             createdAt: now,
           };
         }),
@@ -1114,7 +1110,7 @@ export async function prepareContactAudit(
             snapshotRole: contact.role,
             snapshotSource: contact.source,
             snapshotNotes: contact.notes,
-            snapshotIsFullTeam: contact.isFullTeam,
+            snapshotIsFullTeam: false,
           };
         }),
       });
@@ -1346,9 +1342,6 @@ export async function claimContactAuditJobs(
               role: job.snapshotRole,
               source: job.snapshotSource,
               notes: job.snapshotNotes,
-              isFullTeam:
-                contactRoster.contacts.find((contact) => contact.isTarget)
-                  ?.isFullTeam ?? null,
             },
             contactRoster,
           },
@@ -1581,7 +1574,6 @@ type ResolutionContact = {
   role: string | null;
   source: string | null;
   notes: string | null;
-  isFullTeam: boolean;
   state: "active" | "quarantined";
   updatedAt: Date;
   artist: { name: string };

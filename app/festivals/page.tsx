@@ -68,7 +68,6 @@ async function loadFestivals(now: Date) {
                   email: true,
                   phone: true,
                   state: true,
-                  isFullTeam: true,
                 },
               },
             },

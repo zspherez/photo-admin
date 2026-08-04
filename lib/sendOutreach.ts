@@ -364,7 +364,7 @@ interface ClaimedOutreach {
     artistId: string;
     email: string | null;
     state: "active" | "quarantined";
-    isFullTeam: boolean;
+    isFullTeam?: boolean;
   } | null;
 }
 
@@ -1164,7 +1164,7 @@ export interface DeliveryPolicyContact {
   artistId: string;
   email: string | null;
   state: "active" | "quarantined";
-  isFullTeam: boolean;
+  isFullTeam?: boolean;
 }
 
 export interface DeliveryPolicySnapshot {
@@ -1251,7 +1251,6 @@ export function evaluateOutreachDeliveryPolicy({
   requestedFullTeamSend,
   requestedFestivalAllContactsSend,
   requestedRecipientEmails,
-  allowUnmarkedFullTeamSend = false,
   preserveFestivalAllContactsSend = false,
 }: EvaluateOutreachDeliveryPolicyInput): OutreachDeliveryPolicyDecision {
   if (showSyncStatus === null) {
@@ -1315,7 +1314,7 @@ export function evaluateOutreachDeliveryPolicy({
       ? normalizeEmails([...requestedRecipientEmails]).length > 1
       : requestedFestivalAllContactsSend
       ? festivalAllContactsSend
-      : requestedFullTeamSend ?? contact.isFullTeam);
+      : requestedFullTeamSend ?? false);
   if (festivalAllContactsSend && !fullTeamSend) {
     return {
       ok: false,
@@ -1323,21 +1322,6 @@ export function evaluateOutreachDeliveryPolicy({
       error: "Festival all-contacts mode requires an all-recipient snapshot",
     };
   }
-  if (
-    fullTeamSend &&
-    !contact.isFullTeam &&
-    !festivalAllContactsSend &&
-    !allowUnmarkedFullTeamSend
-  ) {
-    return {
-      ok: false,
-      state: stored ? "manual_review" : "cancelled",
-      error: stored
-        ? "Current full-team contact marker conflicts with the verified outreach snapshot"
-        : "Selected contact is not eligible for full-team outreach",
-    };
-  }
-
   const intendedRecipients = requestedRecipientEmails
     ? normalizeEmails([...requestedRecipientEmails])
     : fullTeamSend
@@ -1722,7 +1706,6 @@ async function evaluateLockedOutreachDeliveryPolicy(
         "artistId",
         "email",
         "state",
-        "isFullTeam",
         "updatedAt"
       FROM "Contact"
       WHERE "artistId" IN (${Prisma.join(coveredArtistIds)})
@@ -1816,7 +1799,6 @@ async function evaluateLockedOutreachDeliveryPolicy(
       ),
       requestedRecipientEmails:
         currentFollowUpRecipients ?? undefined,
-      allowUnmarkedFullTeamSend: outreach.kind === "follow_up",
       preserveFestivalAllContactsSend: outreach.kind === "follow_up",
     }),
     submissionCredential: getResendSubmissionCredential(
@@ -1884,7 +1866,6 @@ export async function getOutreachSendabilityBatch(
         artistId: true,
         email: true,
         state: true,
-        isFullTeam: true,
       },
     }),
     getResendDeliverySettingsSnapshot(),
@@ -1907,7 +1888,6 @@ export async function getOutreachSendabilityBatch(
             artistId: true,
             email: true,
             state: true,
-            isFullTeam: true,
           },
         });
   const contactsByArtist = new Map<string, DeliveryPolicyContact[]>();
@@ -1924,8 +1904,7 @@ export async function getOutreachSendabilityBatch(
     ...inputs.flatMap((input) => {
       const contact = targetById.get(input.contactId);
       if (!contact) return [];
-      return input.festivalAllContacts ||
-        (!input.singleRecipient && contact.isFullTeam)
+      return input.festivalAllContacts
         ? emailsByArtist.get(contact.artistId) ?? []
         : contact.state === "active" && contact.email
           ? [contact.email]
@@ -2044,7 +2023,7 @@ export async function getOutreachSendabilityBatch(
       return blockedSendability(input, initialPolicy.error, {
         artistId: contact.artistId,
         fullTeamSend:
-          input.festivalAllContacts || contact.isFullTeam,
+          input.festivalAllContacts === true,
         festivalAllContactsSend:
           input.festivalAllContacts === true &&
           activeContactRecipientEmails(artistContacts).length > 1,
@@ -2485,7 +2464,6 @@ export async function getFollowUpEligibilityBatch(
         artistId: true,
         email: true,
         state: true,
-        isFullTeam: true,
         updatedAt: true,
       },
     }),
@@ -2759,7 +2737,6 @@ export async function getFollowUpEligibilityBatch(
       suppressedEmails,
       allowMissingFrom: mode === "new",
       requestedRecipientEmails: currentRecipients,
-      allowUnmarkedFullTeamSend: true,
       preserveFestivalAllContactsSend: true,
     });
     if (!policy.ok) {
@@ -3221,7 +3198,7 @@ function claimedOutreach(
       artistId: string;
       email: string | null;
       state: "active" | "quarantined";
-      isFullTeam: boolean;
+      isFullTeam?: boolean;
     } | null;
   },
   attempt: StoredAttempt | null,
@@ -3756,7 +3733,6 @@ async function preparedDeliveryPolicyBlockingReason(
         "artistId",
         "email",
         "state",
-        "isFullTeam",
         "updatedAt"
       FROM "Contact"
       WHERE "artistId" IN (${Prisma.join(prep.coveredArtistIds)})
@@ -3836,7 +3812,6 @@ async function preparedDeliveryPolicyBlockingReason(
       prep.festivalAllContactsSend,
     requestedRecipientEmails:
       currentFollowUpRecipients ?? undefined,
-    allowUnmarkedFullTeamSend: prep.kind === "follow_up",
     preserveFestivalAllContactsSend: prep.kind === "follow_up",
   });
   if (!decision.ok) return decision.error;
@@ -6665,7 +6640,6 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
             artistId: true,
             email: true,
             state: true,
-            isFullTeam: true,
           },
         },
         template: {
@@ -6942,7 +6916,6 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
             artistId: true,
             email: true,
             state: true,
-            isFullTeam: true,
           },
         },
       },

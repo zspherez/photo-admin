@@ -77,12 +77,20 @@ test("Google export creates one tab, writes bounded RAW batches, and verifies", 
     spreadsheets: {
       get: async () => ({ data: { sheets: [] } }),
       batchUpdate: async (request: Record<string, unknown>) => {
-        addSheetCount++;
         batchUpdates.push(request);
+        const requests = (
+          request.requestBody as { requests?: Array<Record<string, unknown>> }
+        ).requests ?? [];
+        if (requests.some((entry) => "addSheet" in entry)) {
+          addSheetCount++;
+          return {
+            data: {
+              replies: [{ addSheet: { properties: { sheetId: 321 } } }],
+            },
+          };
+        }
         return {
-          data: {
-            replies: [{ addSheet: { properties: { sheetId: 321 } } }],
-          },
+          data: { replies: [] },
         };
       },
       values: {
@@ -95,10 +103,10 @@ test("Google export creates one tab, writes bounded RAW batches, and verifies", 
           return { data: {} };
         },
         get: async ({ range }: { range: string }) => {
-          if (range.endsWith(":S1")) {
+          if (range.endsWith(":Z1")) {
             return { data: { values: [[...CONTACT_SNAPSHOT_HEADERS]] } };
           }
-          const match = /!A(\d+):S(\d+)$/.exec(range);
+          const match = /!A(\d+):Z(\d+)$/.exec(range);
           assert.ok(match);
           const start = Number(match[1]);
           const end = Number(match[2]);
@@ -122,10 +130,15 @@ test("Google export creates one tab, writes bounded RAW batches, and verifies", 
   );
 
   assert.equal(addSheetCount, 1);
+  const addSheetUpdate = batchUpdates.find((update) =>
+    (
+      update.requestBody as { requests: Array<Record<string, unknown>> }
+    ).requests.some((entry) => "addSheet" in entry),
+  )!;
   assert.deepEqual(
     (
       (
-        batchUpdates[0].requestBody as {
+        addSheetUpdate.requestBody as {
           requests: Array<{
             addSheet: {
               properties: {
@@ -144,6 +157,39 @@ test("Google export creates one tab, writes bounded RAW batches, and verifies", 
       columnCount: CONTACT_SNAPSHOT_HEADERS.length,
     },
   );
+  const visibilityUpdate = batchUpdates.find((update) =>
+    (
+      update.requestBody as { requests: Array<Record<string, unknown>> }
+    ).requests.some((entry) => "updateDimensionProperties" in entry),
+  );
+  assert.ok(visibilityUpdate);
+  const visibilityRequests = (
+    visibilityUpdate.requestBody as {
+      requests: Array<{
+        updateDimensionProperties: {
+          range: { startIndex: number; endIndex: number };
+          properties: { hiddenByUser: boolean };
+        };
+      }>;
+    }
+  ).requests;
+  assert.deepEqual(
+    visibilityRequests.map((request) => ({
+      startIndex:
+        request.updateDimensionProperties.range.startIndex,
+      endIndex: request.updateDimensionProperties.range.endIndex,
+      hidden:
+        request.updateDimensionProperties.properties.hiddenByUser,
+    })),
+    [
+      { startIndex: 0, endIndex: 9, hidden: false },
+      {
+        startIndex: 9,
+        endIndex: CONTACT_SNAPSHOT_HEADERS.length,
+        hidden: true,
+      },
+    ],
+  );
   assert.equal(clearCount, 1);
   assert.equal(updates.length, 4);
   assert.ok(
@@ -159,7 +205,7 @@ test("Google export creates one tab, writes bounded RAW batches, and verifies", 
   );
   assert.deepEqual(dataBatchSizes, [250, 250, 1]);
   const firstDataBatch = updates[1].requestBody as { values: string[][] };
-  assert.equal(firstDataBatch.values[0][6], "'=unsafe");
+  assert.equal(firstDataBatch.values[0][1], "'=unsafe");
   assert.deepEqual(result, {
     sheetTabId: 321,
     sheetUrl:
@@ -190,21 +236,18 @@ test("retry reuses only the deterministic snapshot tab", async () => {
         },
       }),
       batchUpdate: async () => {
-        addSheetCount++;
+        addSheetCount += 0;
         return { data: {} };
       },
       values: {
         clear: async () => ({ data: {} }),
         update: async () => ({ data: {} }),
         get: async ({ range }: { range: string }) => {
-          if (range.endsWith("!A1:B2")) {
+          if (range.endsWith("!A1:Z2")) {
             return {
               data: {
                 values: [
-                  [
-                    CONTACT_SNAPSHOT_HEADERS[0],
-                    CONTACT_SNAPSHOT_HEADERS[1],
-                  ],
+                  [...CONTACT_SNAPSHOT_HEADERS],
                 ],
               },
             };
@@ -243,7 +286,7 @@ test("verification rejects corrupted snapshot cell content", async () => {
         clear: async () => ({ data: {} }),
         update: async () => ({ data: {} }),
         get: async ({ range }: { range: string }) =>
-          range.endsWith(":S1")
+          range.endsWith(":Z1")
             ? { data: { values: [[...CONTACT_SNAPSHOT_HEADERS]] } }
             : { data: { values: rows } },
       },

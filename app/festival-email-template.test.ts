@@ -295,7 +295,6 @@ test("grouped festival follow-ups preserve coverage and use current shared recip
   );
   assert.match(send, /currentFollowUpRecipientEmails/);
   assert.match(send, /requestedRecipientEmails: currentRecipients/);
-  assert.match(send, /allowUnmarkedFullTeamSend: true/);
   assert.match(
     send,
     /expectedRecipientIdentity =\s*customizeRecipientIdentity\(selectedContact\)/,

@@ -33,7 +33,7 @@ interface ContactAuditTarget {
   role: string | null;
   source: string | null;
   notes: string | null;
-  isFullTeam: boolean;
+  isFullTeam?: boolean;
 }
 
 interface ContactAuditResolutionTarget extends ContactAuditSnapshot {
@@ -58,9 +58,7 @@ export function contactStillMatchesAuditSnapshot(
     contact.name === job.snapshotName &&
     contact.role === job.snapshotRole &&
     contact.source === job.snapshotSource &&
-    contact.notes === job.snapshotNotes &&
-    (job.snapshotIsFullTeam === null ||
-      contact.isFullTeam === job.snapshotIsFullTeam)
+    contact.notes === job.snapshotNotes
   );
 }
 

@@ -1518,7 +1518,7 @@ test("a direct-only contact cannot trigger full-team email fanout", () => {
   );
 });
 
-test("customized outreach selects one address even from a full-team marker", () => {
+test("normal outreach selects one address regardless of retired marker data", () => {
   const teamContact = {
     id: "contact-1",
     artistId: "artist-1",
@@ -1553,7 +1553,7 @@ test("customized outreach selects one address even from a full-team marker", () 
     assert.deepEqual(customized.policy.to, ["manager@example.com"]);
   }
 
-  const ordinaryBulk = evaluateOutreachDeliveryPolicy(
+  const ordinary = evaluateOutreachDeliveryPolicy(
     deliveryPolicyFixture({
       contact: teamContact,
       artistContacts,
@@ -1562,13 +1562,10 @@ test("customized outreach selects one address even from a full-team marker", () 
       bccEmails: [],
     }),
   );
-  assert.equal(ordinaryBulk.ok, true);
-  if (ordinaryBulk.ok) {
-    assert.deepEqual(ordinaryBulk.currentRecipients, [
-      "agent@example.com",
-      "manager@example.com",
-    ]);
-    assert.equal(ordinaryBulk.fullTeamSend, true);
+  assert.equal(ordinary.ok, true);
+  if (ordinary.ok) {
+    assert.deepEqual(ordinary.currentRecipients, ["manager@example.com"]);
+    assert.equal(ordinary.fullTeamSend, false);
   }
 });
 

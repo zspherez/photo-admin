@@ -368,6 +368,8 @@ model ContactExportSnapshot {
   sheetTabName    String
   sheetUrl        String?
   requestedByRole String
+  formatVersion   Int
+  headers         Json
   canonicalRows   Json
   error           String?
   startedAt       DateTime @default(now())
@@ -517,6 +519,7 @@ model ContactAuditJob {
   @@index([contactId])
   @@index([artistId])
   @@index([rosterSnapshotId])
+  @@index([resolvedContactId])
 }
 
 model ContactAuditAlternative {

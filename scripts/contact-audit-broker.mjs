@@ -53,7 +53,6 @@ const rosterContactSchema = z
     role: nullableString,
     source: nullableString,
     notes: nullableString,
-    isFullTeam: z.boolean().nullable(),
   })
   .strict();
 const claimJobSchema = z
@@ -82,7 +81,6 @@ const claimJobSchema = z
         role: nullableString,
         source: nullableString,
         notes: nullableString,
-        isFullTeam: z.boolean().nullable(),
       })
       .strict(),
     contactRoster: z

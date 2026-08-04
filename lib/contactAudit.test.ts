@@ -394,7 +394,6 @@ test("Somma-like jobs expose the complete immutable roster with one target and a
     role: null,
     source: "manual",
     notes: "Use the full management team.",
-    isFullTeam: true,
   });
 
   const laterCurrentContact = {
@@ -584,7 +583,6 @@ test("resolution snapshot matching rejects every mutable target-field change and
     { role: "legacy-role" },
     { source: "manual" },
     { notes: "Changed by Sheet sync" },
-    { isFullTeam: false },
   ]) {
     assert.equal(
       contactStillMatchesAuditSnapshot(snapshot, {
@@ -618,7 +616,6 @@ test("resolution refuses snapshotted database changes without mutating the targe
   try {
     for (const change of [
       { notes: "Changed after audit" },
-      { isFullTeam: false },
       { name: "Changed by Sheet sync", source: "sheet" },
     ]) {
     let contactUpdates = 0;

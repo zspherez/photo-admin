@@ -48,7 +48,7 @@ function rosterEntryMatchesContact(
     role: string | null;
     source: string | null;
     notes: string | null;
-    isFullTeam: boolean;
+    isFullTeam?: boolean;
   },
 ): boolean {
   return (
@@ -59,8 +59,7 @@ function rosterEntryMatchesContact(
     contact.name === entry.snapshotName &&
     contact.role === entry.snapshotRole &&
     contact.source === entry.snapshotSource &&
-    contact.notes === entry.snapshotNotes &&
-    contact.isFullTeam === entry.snapshotIsFullTeam
+    contact.notes === entry.snapshotNotes
   );
 }
 

@@ -48,7 +48,6 @@ interface ArtistData {
     directOutreachNote: string | null;
     role: string | null;
     customPrice: string | null;
-    isFullTeam: boolean;
     state: "active";
   }[];
   actionContacts: {
@@ -325,7 +324,6 @@ function ArtistModal({
                             Direct outreach
                           </Badge>
                         )}
-                        {c.isFullTeam && <Badge tone="accent" size="xs">Full team</Badge>}
                       </div>
                     </li>
                   ))}

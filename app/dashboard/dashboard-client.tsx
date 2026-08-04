@@ -1289,14 +1289,6 @@ export function DashboardClient({
                                 Direct outreach
                               </Badge>
                             )}
-                            {emailContact?.isFullTeam && (
-                              <Badge
-                                tone="accent"
-                                title="Email goes to the artist's full management team"
-                              >
-                                Full team
-                              </Badge>
-                            )}
                           </>
                         )}
                         {!contact && artist.workflowEligible && (

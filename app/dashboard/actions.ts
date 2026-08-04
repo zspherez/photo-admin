@@ -213,7 +213,6 @@ export async function queueForNextDispatchAction(formData: FormData) {
       email: true,
       phone: true,
       state: true,
-      isFullTeam: true,
     },
   });
   const defaultContact = pickEmailContact(artistContacts);

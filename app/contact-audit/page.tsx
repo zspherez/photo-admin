@@ -103,7 +103,6 @@ function rosterContactChanged(
     role: string | null;
     source: string | null;
     notes: string | null;
-    isFullTeam: boolean;
   },
 ): boolean {
   return (
@@ -113,8 +112,7 @@ function rosterContactChanged(
     snapshot.snapshotName !== current.name ||
     snapshot.snapshotRole !== current.role ||
     snapshot.snapshotSource !== current.source ||
-    snapshot.snapshotNotes !== current.notes ||
-    snapshot.snapshotIsFullTeam !== current.isFullTeam
+    snapshot.snapshotNotes !== current.notes
   );
 }
 
@@ -359,7 +357,6 @@ export default async function ContactAuditPage({
             source: true,
             notes: true,
             state: true,
-            isFullTeam: true,
           },
         })
       : [];

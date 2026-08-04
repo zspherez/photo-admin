@@ -148,7 +148,6 @@ const getFestivalDetails = cache(async (showId: string) =>
                   name: true,
                   role: true,
                   state: true,
-                  isFullTeam: true,
                 },
               },
             },
@@ -306,7 +305,6 @@ async function festivalBulkCandidates(
                   email: true,
                   phone: true,
                   state: true,
-                  isFullTeam: true,
                 },
               },
             },
@@ -558,7 +556,6 @@ async function queueFestivalOutreach(formData: FormData) {
                   name: true,
                   role: true,
                   state: true,
-                  isFullTeam: true,
                 },
               },
             },
@@ -1476,7 +1473,6 @@ export default async function FestivalDetailPage({
                       {r.genres.slice(0, 2).map((g) => (
                         <Badge key={g} tone="muted" size="xs">{g}</Badge>
                       ))}
-                      {r.contact?.isFullTeam && <Badge tone="accent">Full team</Badge>}
                       {r.displayContact &&
                         hasDirectOutreachNote(r.displayContact) && (
                           <Badge tone="warning">Direct outreach</Badge>

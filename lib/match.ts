@@ -87,7 +87,6 @@ export interface MatchedShow {
       name: string | null;
       customPrice: string | null;
       state: "active" | "quarantined";
-      isFullTeam: boolean;
     }[];
   }[];
   otherArtists: { id: string; name: string }[];
@@ -367,7 +366,6 @@ const CONTACT_SELECT = {
   name: true,
   customPrice: true,
   state: true,
-  isFullTeam: true,
 } satisfies Prisma.ContactSelect;
 
 const PLAYLIST_SELECT = {
@@ -471,7 +469,6 @@ async function hydrateDashboardShowRows(
       name: contact.name,
       customPrice: contact.customPrice,
       state: contact.state,
-      isFullTeam: contact.isFullTeam,
     });
     contactsByArtist.set(contact.artistId, rows);
   }

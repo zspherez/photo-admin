@@ -109,7 +109,6 @@ test("audit broker isolates credentials and submits only audit results", async (
                       role: "management",
                       source: "manual",
                       notes: null,
-                      isFullTeam: false,
                     },
                     contactRoster: {
                       snapshotId: "roster-1",
@@ -127,7 +126,6 @@ test("audit broker isolates credentials and submits only audit results", async (
                           role: "management",
                           source: "manual",
                           notes: null,
-                          isFullTeam: false,
                         },
                         {
                           rosterEntryId: "entry-2",
@@ -140,7 +138,6 @@ test("audit broker isolates credentials and submits only audit results", async (
                           role: "legacy",
                           source: "sheet",
                           notes: "Full team contact.",
-                          isFullTeam: true,
                         },
                       ],
                     },
@@ -221,7 +218,6 @@ test("audit broker isolates credentials and submits only audit results", async (
           role: "management",
           source: "manual",
           notes: null,
-          isFullTeam: false,
         },
         contactRoster: {
           snapshotId: "roster-1",
@@ -239,7 +235,6 @@ test("audit broker isolates credentials and submits only audit results", async (
               role: "management",
               source: "manual",
               notes: null,
-              isFullTeam: false,
             },
             {
               rosterEntryId: "entry-2",
@@ -252,7 +247,6 @@ test("audit broker isolates credentials and submits only audit results", async (
               role: "legacy",
               source: "sheet",
               notes: "Full team contact.",
-              isFullTeam: true,
             },
           ],
         },

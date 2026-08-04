@@ -48,6 +48,7 @@ async function main(): Promise<void> {
     directOutreachProvenanceProbe,
     festivalGeographyProbe,
     festivalUtmCampaignProbe,
+    contactFullTeamConstraintProbe,
     outreachKindProbe,
     outreachDispatchIdentityConstraintProbe,
     outreachAttemptProbe,
@@ -105,6 +106,8 @@ async function main(): Promise<void> {
         sheetTabName: true,
         sheetUrl: true,
         requestedByRole: true,
+        formatVersion: true,
+        headers: true,
         canonicalRows: true,
         error: true,
         startedAt: true,
@@ -151,6 +154,23 @@ async function main(): Promise<void> {
         festivalUtmCampaign: true,
       },
     }),
+    db.$queryRaw<Array<{ constraintName: string; validated: boolean }>>(
+      Prisma.sql`
+        SELECT
+          constraint_row."conname" AS "constraintName",
+          constraint_row."convalidated" AS "validated"
+        FROM pg_constraint AS constraint_row
+        JOIN pg_class AS table_row
+          ON table_row.oid = constraint_row."conrelid"
+        JOIN pg_namespace AS namespace_row
+          ON namespace_row.oid = table_row."relnamespace"
+        WHERE namespace_row."nspname" = current_schema()
+          AND table_row."relname" = 'Contact'
+          AND constraint_row."conname" =
+            'Contact_isFullTeam_retired_check'
+          AND constraint_row."contype" = 'c'
+      `,
+    ),
     db.outreach.findMany({
       take: 1,
       select: {
@@ -799,6 +819,7 @@ async function main(): Promise<void> {
           contactResearchDirectOutreachProbe,
           directOutreachProvenanceProbe,
           festivalUtmCampaignProbe,
+          contactFullTeamConstraintProbe,
           outreachKindProbe,
           outreachDispatchIdentityConstraintProbe,
           outreachCoveredArtistProbe,
@@ -841,6 +862,12 @@ async function main(): Promise<void> {
             constraint.constraintDefinition.includes("approved") &&
             constraint.constraintDefinition.includes("rejected") &&
             constraint.constraintDefinition.includes("superseded"),
+        ) &&
+        contactFullTeamConstraintProbe.some(
+          (constraint) =>
+            constraint.constraintName ===
+              "Contact_isFullTeam_retired_check" &&
+            constraint.validated,
         ) &&
         emailTemplateConstraintProbe.some(
           (constraint) =>
@@ -897,6 +924,8 @@ async function main(): Promise<void> {
         "ContactResearchDirectOutreachProposal",
         "Contact.agentDirectOutreachProvenance",
         "Show.festivalUtmCampaign",
+        "Contact.isFullTeam retired",
+        "ContactExportSnapshot.headers",
         "ContactAuditRequest",
         "ContactExportSnapshot",
         "ContactAuditRun",

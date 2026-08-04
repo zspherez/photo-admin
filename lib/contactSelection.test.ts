@@ -34,30 +34,20 @@ const contacts = [
   },
 ];
 
-test("email selection prefers an email-bearing full-team contact", () => {
-  assert.equal(pickEmailContact(contacts)?.id, "full-team");
-  assert.equal(
-    pickEmailContact(contacts.filter((contact) => !contact.isFullTeam))?.id,
-    "manager"
-  );
+test("email selection uses the first active email without marker semantics", () => {
+  assert.equal(pickEmailContact(contacts)?.id, "manager");
   assert.equal(pickEmailContact([contacts[0]]), null);
 });
 
-test("multiple active email contacts require selection without a full-team marker", () => {
+test("multiple active email contacts always require explicit selection", () => {
   const managerContacts = contacts.filter(
     (contact) => contact.id !== "phone-only",
   );
 
   assert.equal(
-    emailContactsRequireSelection(
-      managerContacts.map((contact) => ({
-        ...contact,
-        isFullTeam: false,
-      })),
-    ),
+    emailContactsRequireSelection(managerContacts),
     true,
   );
-  assert.equal(emailContactsRequireSelection(managerContacts), false);
   assert.equal(
     emailContactsRequireSelection([
       managerContacts[0],
@@ -67,9 +57,9 @@ test("multiple active email contacts require selection without a full-team marke
   );
 });
 
-test("phone selection preserves SMS when the email contact has no phone", () => {
+test("phone selection prefers the selected email contact when it has a phone", () => {
   const emailContact = pickEmailContact(contacts);
-  assert.equal(pickPhoneContact(contacts, emailContact)?.id, "phone-only");
+  assert.equal(pickPhoneContact(contacts, emailContact)?.id, "manager");
   assert.equal(
     pickPhoneContact(
       contacts,
