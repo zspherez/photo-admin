@@ -14,6 +14,7 @@ import {
   parseProfessionalContactSubmission,
   PROFESSIONAL_CONTACT_OIDC_AUDIENCE,
   PROFESSIONAL_CONTACT_WORKFLOW_REF,
+  requeueProfessionalContactJob,
   submitProfessionalContactResult,
 } from "./professionalContactResearch";
 
@@ -50,6 +51,14 @@ const validProvenance = {
       url: "https://ledpresents.com/team/jane-doe",
       contentSha256: "a".repeat(64),
       observedEmails: ["jane.doe@ledpresents.com"],
+      observedDomains: ["ledpresents.com"],
+      emailAssociations: [
+        {
+          email: "jane.doe@ledpresents.com",
+          excerptSha256: "b".repeat(64),
+          contentTokens: ["jane", "doe", "founder"],
+        },
+      ],
       contentTokens: ["led", "presents", "jane", "doe", "founder"],
     },
   ],
@@ -235,8 +244,11 @@ test("queue claims use a lease, increment attempts, and snapshot only request sc
         updates.push(data);
         return {};
       },
-      findMany: async () => [
-        {
+      findMany: async (args: {
+        select: { candidates: { take: number } };
+      }) => {
+        assert.equal(args.select.candidates.take, 20);
+        return [{
           id: "job-1",
           requestId: "request-1",
           personName: "Jane Doe",
@@ -248,8 +260,15 @@ test("queue claims use a lease, increment attempts, and snapshot only request sc
             notes: "Founders",
             personNames: ["Jane Doe"],
           },
-        },
-      ],
+          candidates: [
+            {
+              id: "candidate-rejected",
+              email: "jane.doe@ledpresents.com",
+              decision: { action: "rejected" },
+            },
+          ],
+        }];
+      },
     },
     professionalContactEvent: {
       create: async ({ data }: { data: unknown }) => {
@@ -272,6 +291,13 @@ test("queue claims use a lease, increment attempts, and snapshot only request sc
   assert.match(claim.provenanceToken, /^[0-9a-f-]{36}$/);
   assert.notEqual(claim.provenanceToken, claim.claimToken);
   assert.equal(claim.policy.noAutomaticOutreach, true);
+  assert.deepEqual(claim.priorCandidates, [
+    {
+      candidateId: "candidate-rejected",
+      email: "jane.doe@ledpresents.com",
+      reviewedState: "rejected",
+    },
+  ]);
   assert.equal(updates.length, 1);
   assert.equal(events.length, 1);
 });
@@ -360,6 +386,106 @@ test("result submission requires the current lease and is idempotent", async () 
   );
   assert.equal(stale.accepted, false);
   assert.equal(stale.status, "conflict");
+});
+
+test("duplicate-only result keeps the claim active for revised or exhausted submission", async () => {
+  const now = new Date("2026-08-04T18:00:00.000Z");
+  const state = {
+    status: "claimed" as string,
+    claimToken: validSubmission.claimToken,
+    claimProvenanceToken,
+    claimExpiresAt: new Date("2026-08-04T19:00:00.000Z"),
+    resultFingerprint: null as string | null,
+  };
+  let jobUpdates = 0;
+  const tx = {
+    professionalContactJob: {
+      findUnique: async () => ({
+        id: "job-1",
+        requestId: "request-1",
+        personName: "Jane Doe",
+        attemptCount: 2,
+        ...state,
+        request: {
+          organizationName: "LED Presents",
+          website: "https://ledpresents.com/",
+        },
+      }),
+      update: async ({ data }: { data: Record<string, unknown> }) => {
+        jobUpdates += 1;
+        Object.assign(state, data);
+        return {};
+      },
+    },
+    professionalContactCandidate: {
+      findMany: async () => [
+        { normalizedEmail: "jane.doe@ledpresents.com" },
+      ],
+    },
+    professionalContactEvent: { create: async () => ({}) },
+  };
+  const duplicate = await submitProfessionalContactResult(
+    "job-1",
+    validSubmission,
+    now,
+    transactionRunner(tx),
+  );
+  assert.deepEqual(duplicate, {
+    accepted: false,
+    status: "duplicate_candidates",
+    idempotent: false,
+  });
+  assert.equal(state.status, "claimed");
+  assert.equal(jobUpdates, 0);
+
+  const exhausted = await submitProfessionalContactResult(
+    "job-1",
+    {
+      outcome: "exhausted",
+      claimToken: validSubmission.claimToken,
+      notes:
+        "The official team and contact pages were checked; the only supported named address was already recorded and rejected.",
+      candidates: [],
+      provenance: validProvenance,
+    },
+    now,
+    transactionRunner(tx),
+  );
+  assert.equal(exhausted.accepted, true);
+  assert.equal(exhausted.status, "exhausted");
+  assert.equal(state.status, "exhausted");
+  assert.equal(jobUpdates, 1);
+});
+
+test("requeue preserves rejected candidates for the next bounded claim", async () => {
+  const updates: Record<string, unknown>[] = [];
+  const tx = {
+    professionalContactJob: {
+      findUnique: async () => ({
+        id: "job-1",
+        requestId: "request-1",
+        status: "completed",
+        agentNotes: "Prior attempt",
+        candidates: [
+          { decision: { action: "rejected" } },
+        ],
+      }),
+      update: async ({ data }: { data: Record<string, unknown> }) => {
+        updates.push(data);
+        return {};
+      },
+    },
+    professionalContactEvent: { create: async () => ({}) },
+  };
+  assert.equal(
+    await requeueProfessionalContactJob("job-1", transactionRunner(tx)),
+    true,
+  );
+  assert.equal(updates[0]?.status, "pending");
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(updates[0] ?? {}, "candidates"),
+    false,
+  );
 });
 
 test("human decisions are immutable and repeated same decisions are idempotent", async () => {

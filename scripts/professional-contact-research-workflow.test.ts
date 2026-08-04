@@ -44,8 +44,13 @@ test("professional contact agent has only narrow tools and privacy constraints",
   assert.match(agent, /domain-pattern inference only as a last resort/i);
   assert.match(agent, /human review/i);
   assert.match(agent, /Every submitted source URL must first be opened with `fetch`/);
-  assert.match(agent, /exact email must appear in the fetched page content/);
+  assert.match(
+    agent,
+    /exact email and the claimed person's name must appear together/,
+  );
   assert.match(agent, /two to five `patternExamples`/);
+  assert.match(agent, /`priorCandidates` lists at most 20/);
+  assert.match(agent, /A `422` with code `duplicate_candidates` leaves the claim active/);
   assert.match(agent, /Do not inspect files or environment variables, call curl/);
   assert.match(runner, /professional-contact-research-broker\.mjs/);
   assert.match(runner, /professional-contact-research-agent-tool/);

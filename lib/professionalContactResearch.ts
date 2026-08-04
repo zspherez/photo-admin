@@ -658,6 +658,15 @@ export async function claimProfessionalContactJobs(
             personNames: true,
           },
         },
+        candidates: {
+          orderBy: { createdAt: "desc" },
+          take: 20,
+          select: {
+            id: true,
+            email: true,
+            decision: { select: { action: true } },
+          },
+        },
       },
     });
     const byId = new Map(jobs.map((job) => [job.id, job]));
@@ -688,6 +697,11 @@ export async function claimProfessionalContactJobs(
         attemptCount: job.attemptCount,
         personName: job.personName,
         request: job.request,
+        priorCandidates: job.candidates.map((candidate) => ({
+          candidateId: candidate.id,
+          email: candidate.email,
+          reviewedState: candidate.decision?.action ?? "pending",
+        })),
         policy: {
           professionalBusinessOnly: true,
           noPrivateOrPersonalAddresses: true,

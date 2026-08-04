@@ -33,12 +33,19 @@ export async function POST(
   try {
     const result = await submitProfessionalContactResult(jobId, value);
     if (!result.accepted) {
+      if (result.status === "duplicate_candidates") {
+        return NextResponse.json(
+          {
+            error:
+              "all submitted candidates already exist; revise the result or submit exhaustion",
+            code: "duplicate_candidates",
+          },
+          { status: 422 },
+        );
+      }
       return NextResponse.json(
         {
-          error:
-            result.status === "duplicate_candidates"
-              ? "submission contains no new candidates"
-              : "claim is stale or no longer owned",
+          error: "claim is stale or no longer owned",
         },
         { status: 409 },
       );

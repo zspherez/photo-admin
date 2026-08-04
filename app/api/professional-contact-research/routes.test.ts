@@ -41,3 +41,13 @@ test("claim handler fails closed without or with an invalid bearer token", async
     assert.deepEqual(await response.json(), { error: "unauthorized" });
   }
 });
+
+test("duplicate-only results are distinct from stale claims", () => {
+  const source = readFileSync(
+    new URL("./[jobId]/result/route.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /code: "duplicate_candidates"/);
+  assert.match(source, /\{ status: 422 \}/);
+  assert.match(source, /claim is stale or no longer owned[\s\S]*status: 409/);
+});

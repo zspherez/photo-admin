@@ -159,9 +159,15 @@ async function photoAdminRequest(path, body) {
     data = { error: "invalid response" };
   }
   if (!response.ok) {
+    const code =
+      data &&
+      typeof data === "object" &&
+      typeof data.code === "string"
+        ? ` ${data.code}`
+        : "";
     throw new PhotoAdminRequestError(
       response.status,
-      `photo-admin returned ${response.status}: ${
+      `photo-admin returned ${response.status}${code}: ${
         typeof data.error === "string" ? data.error : "request failed"
       }`,
     );
@@ -206,6 +212,60 @@ function contentTokens(result) {
   ).slice(0, 5_000);
 }
 
+function observedDomains(result, observedEmails) {
+  const domains = new Set(
+    observedEmails.map((email) => email.split("@").at(-1)).filter(Boolean),
+  );
+  for (const link of Array.isArray(result.links) ? result.links : []) {
+    try {
+      if (typeof link.url === "string" && link.url.startsWith("https://")) {
+        domains.add(new URL(link.url).hostname.toLowerCase().replace(/^www\./, ""));
+      }
+    } catch {
+      // Ignore malformed links returned by untrusted pages.
+    }
+  }
+  const textDomains =
+    String(result.text ?? "")
+      .toLowerCase()
+      .match(/(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}/g) ?? [];
+  textDomains.forEach((domain) => domains.add(domain.replace(/^www\./, "")));
+  return [...domains].slice(0, 100);
+}
+
+function emailAssociations(result, observedEmails) {
+  const haystack = `${result.title ?? ""}\n${result.text ?? ""}`;
+  const normalizedHaystack = haystack.toLowerCase();
+  return observedEmails.map((email) => {
+    const excerpts = [];
+    let offset = 0;
+    while (offset < normalizedHaystack.length) {
+      const index = normalizedHaystack.indexOf(email, offset);
+      if (index < 0) break;
+      excerpts.push(
+        haystack.slice(Math.max(0, index - 120), index + email.length + 120),
+      );
+      offset = index + email.length;
+    }
+    for (const link of Array.isArray(result.links) ? result.links : []) {
+      if (
+        typeof link.url === "string" &&
+        link.url.toLowerCase().startsWith(`mailto:${email}`)
+      ) {
+        excerpts.push(`${link.label ?? ""} ${email}`);
+      }
+    }
+    const excerpt = excerpts.join("\n").slice(0, 2_000);
+    return {
+      email,
+      excerptSha256: createHash("sha256").update(excerpt).digest("hex"),
+      contentTokens: Array.from(
+        new Set(normalizedIdentityTokens(excerpt)),
+      ).slice(0, 500),
+    };
+  });
+}
+
 function recordSearch(state, query, results) {
   if (state.searches.length >= 20) {
     throw new BrokerConflictError("search limit reached for this claim");
@@ -237,9 +297,12 @@ function recordFetch(state, result) {
       ),
     ),
   );
+  const associations = emailAssociations(result, observedEmails);
   state.fetchedSources.set(url, {
     url,
     observedEmails,
+    observedDomains: observedDomains(result, observedEmails),
+    emailAssociations: associations,
     contentTokens: contentTokens(result),
     contentSha256: createHash("sha256")
       .update(
@@ -259,6 +322,7 @@ function brokerProvenance(state, submission) {
     throw new BrokerConflictError("claim provenance is unavailable");
   }
   const relevantEmails = new Set();
+  const relevantDomains = new Set();
   const relevantTokens = new Set([
     ...normalizedIdentityTokens(state.claimContext.personName),
     ...normalizedIdentityTokens(state.claimContext.organizationName),
@@ -267,6 +331,7 @@ function brokerProvenance(state, submission) {
   if (submission.outcome === "candidates") {
     for (const candidate of submission.candidates) {
       relevantEmails.add(candidate.email.toLowerCase());
+      relevantDomains.add(candidate.email.toLowerCase().split("@").at(-1));
       normalizedIdentityTokens(candidate.roleTitle).forEach((token) =>
         relevantTokens.add(token),
       );
@@ -275,6 +340,7 @@ function brokerProvenance(state, submission) {
       );
       for (const example of candidate.patternExamples) {
         relevantEmails.add(example.email.toLowerCase());
+        relevantDomains.add(example.email.toLowerCase().split("@").at(-1));
         normalizedIdentityTokens(example.personName).forEach((token) =>
           relevantTokens.add(token),
         );
@@ -299,6 +365,24 @@ function brokerProvenance(state, submission) {
         observedEmails: source.observedEmails.filter((email) =>
           relevantEmails.has(email),
         ),
+        observedDomains: source.observedDomains.filter((domain) =>
+          [...relevantDomains].some(
+            (relevant) =>
+              relevant &&
+              (domain === relevant ||
+                domain.endsWith(`.${relevant}`) ||
+                relevant.endsWith(`.${domain}`)),
+          ),
+        ),
+        emailAssociations: source.emailAssociations
+          .filter((association) => relevantEmails.has(association.email))
+          .map((association) => ({
+            email: association.email,
+            excerptSha256: association.excerptSha256,
+            contentTokens: association.contentTokens.filter((token) =>
+              relevantTokens.has(token),
+            ),
+          })),
         contentTokens: source.contentTokens.filter((token) =>
           relevantTokens.has(token),
         ),

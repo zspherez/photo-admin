@@ -34,6 +34,11 @@ Do not inspect files or environment variables, call curl, use general shell
 commands, or make any other network request. The runner already claimed the
 single job in the prompt. Never call `claim`.
 
+`priorCandidates` lists at most 20 previously recorded addresses and their
+reviewed state. Do not resubmit them as new candidates. If every defensible
+address was already recorded, submit exhaustion with the checked sources and
+the duplicate-only outcome instead of looping.
+
 ## Research order and evidence
 
 1. Official organization website: leadership, team, staff, contact, press, and biography pages.
@@ -49,9 +54,19 @@ URLs.
 
 Every submitted source URL must first be opened with `fetch`. Search snippets
 and invented citations are never sufficient. For a directly published
-candidate, the exact email must appear in the fetched page content. The broker
-records claim-bound search/fetch provenance and rejects sources or addresses
-that were not actually observed.
+candidate, the exact email and the claimed person's name must appear together
+in the same fetched excerpt or structured mail link. A staff directory that
+lists the claimed person and another employee's email does not establish an
+association. The broker records claim-bound search/fetch provenance and rejects
+sources or addresses that were not actually observed.
+
+When the request includes an official website, the email must use that domain,
+a controlled subdomain, or an alternate domain explicitly documented by a
+fetched page on the official website. An unrelated agency or directory merely
+mentioning the organization cannot establish its business domain. Without a
+submitted website, include at least two fetched pages on a lexically matching
+organization domain: one with the person/email association and a separate page
+establishing the organization identity.
 
 Confidence:
 
@@ -63,7 +78,8 @@ For domain-pattern inference, require a published organization-domain pattern
 supported by public addresses, set `discoveryMethod` to `domain_pattern`,
 `confidence` to `low`, and provide `patternEvidence` plus its listed
 `patternEvidenceUrl`. Provide two to five `patternExamples`, each with the
-published named person's email and name from that fetched source. All examples
+published named person's email and name locally associated in that fetched
+source. All examples
 must use the same organization business domain and establish one consistent
 name pattern that the candidate follows. Never present inference as verified.
 
@@ -82,3 +98,8 @@ Always call `validate-result` before the single final submission. A `409` means
 the claim is stale; do not overwrite it. A `500` means persistence failed; do
 not probe with synthetic or simplified data. Every non-stale session must end
 with exactly one successful candidates or exhausted submission.
+
+A `422` with code `duplicate_candidates` leaves the claim active. It is not a
+stale or completed result. Submit a genuinely new supported candidate, or call
+`submit-exhausted` with substantive notes explaining that the supported
+addresses were already recorded.
