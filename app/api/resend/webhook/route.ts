@@ -717,6 +717,22 @@ async function processEvent(
                   providerMessageId: primaryProviderMessageId,
                   providerMessageIds,
                   sentAt: earlier(outreach.sentAt, acceptedAt),
+                  ...(hadDeliveryFailure && attempt.bouncedAt
+                    ? {
+                        bouncedAt: earlier(
+                          outreach.bouncedAt,
+                          attempt.bouncedAt,
+                        ),
+                      }
+                    : {}),
+                  ...(hadDeliveryFailure && attempt.complainedAt
+                    ? {
+                        complainedAt: earlier(
+                          outreach.complainedAt,
+                          attempt.complainedAt,
+                        ),
+                      }
+                    : {}),
                   scheduledFor: null,
                   nextAttemptAt: null,
                   claimedAt: null,
@@ -912,9 +928,10 @@ async function processEvent(
                   status: deliveryFailure.resolved
                     ? "delivery_failed"
                     : attempt.status,
-                  bouncedAt: deliveryFailure.resolved
-                    ? earlier(attempt.bouncedAt, providerCreatedAt)
-                    : attempt.bouncedAt,
+                  bouncedAt: earlier(
+                    attempt.bouncedAt,
+                    providerCreatedAt,
+                  ),
                   error: deliveryFailure.resolved ? error : attempt.error,
                   failureDisposition: deliveryFailure.resolved
                     ? null
@@ -951,9 +968,10 @@ async function processEvent(
                   status: deliveryFailure.resolved
                     ? "delivery_failed"
                     : attempt.status,
-                  complainedAt: deliveryFailure.resolved
-                    ? earlier(attempt.complainedAt, providerCreatedAt)
-                    : attempt.complainedAt,
+                  complainedAt: earlier(
+                    attempt.complainedAt,
+                    providerCreatedAt,
+                  ),
                   error: deliveryFailure.resolved ? error : attempt.error,
                   failureDisposition: deliveryFailure.resolved
                     ? null

@@ -693,10 +693,24 @@ export function compareResendRequestBatchToPolicy(
   if (batch.requests.length !== expectedLayouts.length) {
     return "provider request count changed";
   }
-  for (const [index, request] of batch.requests.entries()) {
+  const requests =
+    deliveryMode === "individual_threads" && !policy.testSend
+      ? expectedLayouts.map((layout) =>
+          batch.requests.find(
+            (request) =>
+              request.to.length === 1 &&
+              request.to[0] === layout.to[0] &&
+              request.cc.length === 0,
+          ),
+        )
+      : batch.requests;
+  if (requests.some((request) => !request)) {
+    return "individual recipient request identity changed";
+  }
+  for (const [index, request] of requests.entries()) {
     const layout = expectedLayouts[index];
     const conflict = compareResendRequestToPolicy(
-      request,
+      request!,
       testSend,
       {
         ...policy,

@@ -31,6 +31,7 @@ import {
   isNonBlockingLegacyUnknownAttempt,
   isProviderAcceptanceUnresolvedAttempt,
   recipientSnapshotConflict,
+  resolveFollowUpRecipientDeliveryMode,
   protectLegacyScheduledSnapshot,
   preparedTemplatePurposeBlockingReason,
   schedulingTimeTemplateProvenance,
@@ -1376,6 +1377,16 @@ test("full-team recipient snapshots exclude quarantined and direct-only contacts
     ]),
     ["active@example.com"],
   );
+  assert.deepEqual(
+    activeContactRecipientEmails([
+      { email: "z@example.com", state: "active" },
+      { email: "a@example.com", state: "active" },
+    ]),
+    activeContactRecipientEmails([
+      { email: "a@example.com", state: "active" },
+      { email: "z@example.com", state: "active" },
+    ]),
+  );
 });
 
 test("follow-ups use every current active email and shared coverage uses the intersection", () => {
@@ -1427,7 +1438,7 @@ test("new follow-ups inherit delivery mode while attempted retries keep the chil
   );
   assert.match(
     source,
-    /overrides\.recipientDeliveryMode \?\?[\s\S]*eligibility\.recipientDeliveryMode/,
+    /resolveFollowUpRecipientDeliveryMode\(\s*eligibility,\s*overrides\.recipientDeliveryMode/,
   );
   assert.match(
     source,
@@ -1439,6 +1450,27 @@ test("new follow-ups inherit delivery mode while attempted retries keep the chil
   );
   assert.match(source, /recipientDeliveryMode:[\s\S]{0,100}outreach\.recipientDeliveryMode/);
   assert.match(source, /primaryRecipientEmail: outreach\.primaryRecipientEmail/);
+});
+
+test("stale legacy follow-up overrides cannot escape current eligibility", () => {
+  assert.deepEqual(
+    resolveFollowUpRecipientDeliveryMode(
+      { mode: "new", recipientDeliveryMode: "individual_threads" },
+      "legacy_multi_to",
+    ),
+    {
+      ok: false,
+      error:
+        "Legacy multi-recipient delivery is allowed only for the current immutable retry",
+    },
+  );
+  assert.deepEqual(
+    resolveFollowUpRecipientDeliveryMode(
+      { mode: "retry", recipientDeliveryMode: "legacy_multi_to" },
+      "legacy_multi_to",
+    ),
+    { ok: true, recipientDeliveryMode: "legacy_multi_to" },
+  );
 });
 
 test("individual-thread delivery persists every provider message identity and retries only missing requests", () => {

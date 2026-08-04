@@ -91,4 +91,20 @@ test("partial accepted delivery failures preserve unresolved batch retry state",
     source,
     /nextAttemptAt: deliveryFailure\.resolved[\s\S]*null[\s\S]*attempt\.nextAttemptAt/,
   );
+  assert.match(
+    source,
+    /bouncedAt: earlier\(\s*attempt\.bouncedAt,\s*providerCreatedAt/,
+  );
+  assert.match(
+    source,
+    /complainedAt: earlier\(\s*attempt\.complainedAt,\s*providerCreatedAt/,
+  );
+  assert.match(
+    source,
+    /hadDeliveryFailure && attempt\.bouncedAt[\s\S]*outreach\.bouncedAt/,
+  );
+  assert.match(
+    source,
+    /hadDeliveryFailure && attempt\.complainedAt[\s\S]*outreach\.complainedAt/,
+  );
 });

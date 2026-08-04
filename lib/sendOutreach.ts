@@ -227,6 +227,44 @@ export interface FollowUpEligibility {
   nextAttemptAt?: Date;
 }
 
+export function resolveFollowUpRecipientDeliveryMode(
+  eligibility: Pick<FollowUpEligibility, "mode" | "recipientDeliveryMode">,
+  override?: RecipientDeliveryMode,
+):
+  | { ok: true; recipientDeliveryMode: RecipientDeliveryMode }
+  | { ok: false; error: string } {
+  if (
+    override === "legacy_multi_to" &&
+    !(
+      eligibility.mode === "retry" &&
+      eligibility.recipientDeliveryMode === "legacy_multi_to"
+    )
+  ) {
+    return {
+      ok: false,
+      error:
+        "Legacy multi-recipient delivery is allowed only for the current immutable retry",
+    };
+  }
+  if (
+    eligibility.mode === "retry" &&
+    override &&
+    override !== eligibility.recipientDeliveryMode
+  ) {
+    return {
+      ok: false,
+      error: "Immutable follow-up retry delivery mode changed during preparation",
+    };
+  }
+  return {
+    ok: true,
+    recipientDeliveryMode:
+      override ??
+      eligibility.recipientDeliveryMode ??
+      DEFAULT_RECIPIENT_DELIVERY_MODE,
+  };
+}
+
 interface PreparedOutreach {
   kind: OutreachKindValue;
   parentOutreachId: string | null;
@@ -590,8 +628,10 @@ export function currentFollowUpRecipientEmails(
         ),
       ),
   );
-  return [...emailSets[0]].filter((email) =>
-    emailSets.every((emails) => emails.has(email)),
+  return normalizeEmails(
+    [...emailSets[0]].filter((email) =>
+      emailSets.every((emails) => emails.has(email)),
+    ),
   );
 }
 
@@ -2073,6 +2113,7 @@ export async function getOutreachSendabilityBatch(
       ? []
       : await db.contact.findMany({
           where: { artistId: { in: artistIds } },
+          orderBy: { id: "asc" },
           select: {
             id: true,
             artistId: true,
@@ -2695,6 +2736,7 @@ export async function getFollowUpEligibilityBatch(
     }),
     db.contact.findMany({
       where: { artistId: { in: artistIds } },
+      orderBy: { id: "asc" },
       select: {
         id: true,
         artistId: true,
@@ -3446,10 +3488,12 @@ async function prepareFollowUpOutreach(
   const normalizedHtmlOverride = normalizeLegacyRateTemplateHtml(
     overrides.htmlOverride?.trim() ?? "",
   );
-  const recipientDeliveryMode =
-    overrides.recipientDeliveryMode ??
-    eligibility.recipientDeliveryMode ??
-    DEFAULT_RECIPIENT_DELIVERY_MODE;
+  const deliveryMode = resolveFollowUpRecipientDeliveryMode(
+    eligibility,
+    overrides.recipientDeliveryMode,
+  );
+  if (!deliveryMode.ok) return { error: deliveryMode.error };
+  const recipientDeliveryMode = deliveryMode.recipientDeliveryMode;
   const primaryRecipientEmail =
     recipientDeliveryMode === "cc_thread"
       ? eligibility.recipients.includes(expectedRecipientIdentity.normalizedEmail)
@@ -3873,13 +3917,17 @@ async function finishAlreadyAccepted(
           id: outreach.id,
           idempotencyKey: attempt.idempotencyKey,
         },
-        data: getAcceptedDeliveryFailureOutreachState(
-          true,
-          error,
-          attempt.providerMessageId,
-          attempt.acceptedAt ?? new Date(),
-          attempt.providerMessageIds ?? [attempt.providerMessageId],
-        ),
+        data: {
+          ...getAcceptedDeliveryFailureOutreachState(
+            true,
+            error,
+            attempt.providerMessageId,
+            attempt.acceptedAt ?? new Date(),
+            attempt.providerMessageIds ?? [attempt.providerMessageId],
+          ),
+          bouncedAt: attempt.bouncedAt,
+          complainedAt: attempt.complainedAt,
+        },
       });
       return {
         kind: "complete",
@@ -5901,13 +5949,17 @@ async function finishClaimedSend(
         });
         await tx.outreach.updateMany({
           where: { id: current.id, idempotencyKey: attempt.idempotencyKey },
-          data: getAcceptedDeliveryFailureOutreachState(
-            testSend,
-            error,
-            providerMessageId,
-            attempt.acceptedAt ?? completedAt,
-            providerMessageIds,
-          ),
+          data: {
+            ...getAcceptedDeliveryFailureOutreachState(
+              testSend,
+              error,
+              providerMessageId,
+              attempt.acceptedAt ?? completedAt,
+              providerMessageIds,
+            ),
+            bouncedAt: attempt.bouncedAt,
+            complainedAt: attempt.complainedAt,
+          },
         });
         return { ok: false, outreachId: current.id, error, ...outputMetadata };
       }

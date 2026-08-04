@@ -14,6 +14,7 @@ import {
   canRetryResendRequest,
   classifyResendProviderError,
   compareResendRequestToPolicy,
+  compareResendRequestBatchToPolicy,
   correlateResendWebhookAttempt,
   getResendConfigurationError,
   getResendCredentialScope,
@@ -426,6 +427,37 @@ test("batch retries skip provider calls for already accepted message identities"
     bccEmails: [],
     suppressedEmails: [],
     recipientDeliveryMode: "individual_threads",
+  });
+
+  test("individual retry policy compares requests by recipient identity, not row order", () => {
+    const policy = buildResendDeliveryPolicy({
+      from: REQUEST.from,
+      intendedRecipients: ["first@example.com", "second@example.com"],
+      subject: REQUEST.subject,
+      testOverride: null,
+      bccEmails: [],
+      suppressedEmails: [],
+      recipientDeliveryMode: "individual_threads",
+    });
+    assert.equal(policy.ok, true);
+    if (!policy.ok) return;
+    const batch = buildResendRequestBatchSnapshot({
+      policy: policy.policy,
+      recipientDeliveryMode: "individual_threads",
+      html: REQUEST.html,
+      outreachId: "outreach-reversed",
+      attemptId: "attempt-reversed",
+      idempotencyKey: "outreach/outreach-reversed/attempt-reversed",
+    });
+    assert.equal(
+      compareResendRequestBatchToPolicy(
+        { ...batch, requests: [...batch.requests].reverse() },
+        false,
+        policy.policy,
+        "individual_threads",
+      ),
+      null,
+    );
   });
   assert.equal(policy.ok, true);
   if (!policy.ok) return;
