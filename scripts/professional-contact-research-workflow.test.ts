@@ -50,6 +50,7 @@ test("professional contact agent has only narrow tools and privacy constraints",
   );
   assert.match(agent, /block containing multiple distinct people or multiple emails is/);
   assert.match(agent, /fetched ownership\/control statement on the official website/);
+  assert.match(agent, /ownership phrase must directly name the[\s\S]*submitted organization as the domain owner/);
   assert.match(
     agent,
     /independent authoritative[\s\S]*company profile or government record/,

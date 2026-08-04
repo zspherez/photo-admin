@@ -387,6 +387,24 @@ test("result submission requires the current lease and is idempotent", async () 
   );
   assert.equal(stale.accepted, false);
   assert.equal(stale.status, "conflict");
+
+  state.claimToken = "33333333-3333-4333-8333-333333333333";
+  state.claimExpiresAt = new Date("2026-08-04T20:00:00.000Z");
+  const oldWorker = await submitProfessionalContactResult(
+    "job-1",
+    {
+      ...validSubmission,
+      claimToken: "22222222-2222-4222-8222-222222222222",
+      provenance: { fabricated: true },
+    },
+    now,
+    transactionRunner(tx),
+  );
+  assert.deepEqual(oldWorker, {
+    accepted: false,
+    status: "conflict",
+    idempotent: false,
+  });
 });
 
 test("duplicate-only result keeps the claim active for revised or exhausted submission", async () => {

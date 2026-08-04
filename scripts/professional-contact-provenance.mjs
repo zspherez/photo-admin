@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   canonicalPublicHttpsUrl,
+  normalizedEntityTokens,
   normalizedIdentityTokens,
 } from "../lib/professionalContactProvenance.mjs";
 
@@ -167,7 +168,7 @@ function primaryEntityTokens(result, url) {
   const titlePrimary = String(result.title ?? "")
     .split(/\s+[|—–]\s+/)[0]
     .replace(/\s+-\s+LinkedIn$/i, "");
-  const titleTokens = normalizedIdentityTokens(titlePrimary).filter(
+  const titleTokens = normalizedEntityTokens(titlePrimary).filter(
     (token) =>
       !new Set([
         "facebook",
@@ -176,7 +177,7 @@ function primaryEntityTokens(result, url) {
         "twitter",
       ]).has(token),
   );
-  const slugTokens = normalizedIdentityTokens(
+  const slugTokens = normalizedEntityTokens(
     linkedInSlug?.replace(/[-_]+/g, " ") ?? "",
   );
   return Array.from(
@@ -184,23 +185,46 @@ function primaryEntityTokens(result, url) {
   ).slice(0, 50);
 }
 
-export function ownershipStatement(source, domain, organizationName) {
-  const ownershipPattern =
-    /\b(?:official (?:website|(?:email )?domain|site)|(?:our|company|organization) (?:website|domain)|we (?:use|own|operate|control)|owned by|operated by|controlled by|website\s*:)/i;
-  const organizationTokens = normalizedIdentityTokens(organizationName);
-  const matches = source.blocks.filter(
-    (block) =>
-      block.text.toLowerCase().includes(domain.toLowerCase()) &&
-      ownershipPattern.test(block.text) &&
-      organizationTokens.every((token) =>
-        block.contentTokens.includes(token),
-      ),
+export function ownershipStatement(source, domain) {
+  const escapedDomain = domain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const entityPatterns = [
+    new RegExp(
+      `^(.{1,100}?)\\s+(?:official\\s+)?(?:email\\s+)?(?:website|domain|site)\\s*[:=-]?\\s*${escapedDomain}\\b`,
+      "i",
+    ),
+    new RegExp(
+      `^(.{1,100}?)\\s+(?:uses|owns|operates|controls)\\s+(?:the\\s+)?(?:email\\s+)?(?:website|domain|site)?\\s*[:=-]?\\s*${escapedDomain}\\b`,
+      "i",
+    ),
+    new RegExp(
+      `^(?:official\\s+)?(?:email\\s+)?(?:website|domain|site)\\s+(?:for|of)\\s+(.{1,100}?)\\s*[:=-]\\s*${escapedDomain}\\b`,
+      "i",
+    ),
+  ];
+  const matches = source.blocks.flatMap((block) =>
+    block.text
+      .split(/\s*(?:\||•|·|;|—|–|\s-\s)\s*/u)
+      .flatMap((segment) => {
+        if (!segment.toLowerCase().includes(domain.toLowerCase())) return [];
+        for (const pattern of entityPatterns) {
+          const match = segment.trim().match(pattern);
+          if (!match) continue;
+          const entityTokens = normalizedEntityTokens(match[1]);
+          if (entityTokens.length === 0) return [];
+          return [{
+            block,
+            entityTokens,
+          }];
+        }
+        return [];
+      }),
   );
   if (matches.length !== 1) return null;
   return {
     domain,
-    blockSha256: matches[0].blockSha256,
-    contentTokens: matches[0].contentTokens,
+    blockSha256: matches[0].block.blockSha256,
+    entityTokens: matches[0].entityTokens,
+    contentTokens: matches[0].block.contentTokens,
   };
 }
 

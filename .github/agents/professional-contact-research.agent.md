@@ -66,7 +66,9 @@ When the request includes an official website, the email must use that domain,
 a controlled subdomain, or an alternate domain explicitly documented by a
 fetched ownership/control statement on the official website. A bare link or an
 unrelated agency or directory merely mentioning the organization cannot
-establish its business domain. Without a submitted website, include the
+establish its business domain. The ownership phrase must directly name the
+submitted organization as the domain owner; a partner's “official website”
+line does not transfer ownership. Without a submitted website, include the
 person/email source on the candidate domain plus an independent authoritative
 company profile or government record that explicitly identifies that domain
 as the organization's website/domain. The authoritative profile's primary

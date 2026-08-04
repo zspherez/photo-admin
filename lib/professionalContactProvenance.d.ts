@@ -9,6 +9,7 @@ export function canonicalPublicHttpsUrl(
   field?: string,
 ): string;
 export function normalizedIdentityTokens(value: unknown): string[];
+export function normalizedEntityTokens(value: unknown): string[];
 export function emailPatternMatches(
   personName: string,
   email: string,

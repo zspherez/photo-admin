@@ -323,15 +323,13 @@ function brokerProvenance(state, submission) {
           const statement = ownershipStatement(
             source,
             domain,
-            state.claimContext.organizationName,
           );
           if (!statement) return [];
           return [{
             domain: statement.domain,
             blockSha256: statement.blockSha256,
-            contentTokens: statement.contentTokens.filter((token) =>
-              relevantTokens.has(token),
-            ),
+            entityTokens: [...statement.entityTokens],
+            contentTokens: [...statement.contentTokens],
           }];
         }),
         contentTokens: source.contentTokens.filter((token) =>

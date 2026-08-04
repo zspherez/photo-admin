@@ -152,8 +152,23 @@ test("domain links require an explicit contextual ownership statement", () => {
     blocks: ["LED Presents works with agency.com for selected events."],
   });
   assert.equal(
-    ownershipStatement(linked, "agency.com", "LED Presents"),
+    ownershipStatement(linked, "agency.com"),
     null,
+  );
+  const partner = buildFetchedSourceRecord({
+    url: "https://ledpresents.com/partners",
+    title: "LED Presents Partners",
+    text:
+      "LED Presents partners with Agency — Agency official website: agency.com",
+    emails: [],
+    links: [{ label: "Agency", url: "https://agency.com/" }],
+    blocks: [
+      "LED Presents partners with Agency — Agency official website: agency.com",
+    ],
+  });
+  assert.deepEqual(
+    ownershipStatement(partner, "agency.com")?.entityTokens,
+    ["agency"],
   );
   const official = buildFetchedSourceRecord({
     url: "https://ledpresents.com/contact",
@@ -164,7 +179,7 @@ test("domain links require an explicit contextual ownership statement", () => {
     blocks: ["LED Presents official email domain: ledmail.com"],
   });
   assert.ok(
-    ownershipStatement(official, "ledmail.com", "LED Presents"),
+    ownershipStatement(official, "ledmail.com"),
   );
 });
 
@@ -209,6 +224,19 @@ test("authoritative profile identity requires matching slug and primary title", 
   });
   assert.deepEqual(extraEntity.primaryEntityTokens, [
     "agency",
+    "led",
+    "presents",
+  ]);
+
+  const singleCharacterEntity = buildFetchedSourceRecord({
+    ...agency,
+    url: "https://www.linkedin.com/company/x-led-presents",
+    title: "X LED Presents | LinkedIn",
+    text: "X LED Presents Website: xledpresents.com",
+    blocks: ["X LED Presents Website: xledpresents.com"],
+  });
+  assert.deepEqual(singleCharacterEntity.primaryEntityTokens, [
+    "x",
     "led",
     "presents",
   ]);
@@ -260,7 +288,6 @@ test("broker preserves extra primary entity tokens through submission validation
   const agencyOwnership = ownershipStatement(
     agencyProfile,
     "agency.com",
-    "LED Presents",
   );
   assert.ok(agencyOwnership);
 
@@ -337,7 +364,6 @@ test("broker preserves extra primary entity tokens through submission validation
   const exactOwnership = ownershipStatement(
     exactProfile,
     "ledpresents.com",
-    "LED Presents",
   );
   assert.ok(exactOwnership);
   assert.deepEqual(

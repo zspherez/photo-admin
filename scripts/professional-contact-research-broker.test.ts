@@ -23,6 +23,7 @@ test("professional contact broker binds fetched provenance to its hidden claim t
     broker,
     /primaryEntityTokens:\s*claimBoundPrimaryEntityTokens\(source\)\.filter/,
   );
+  assert.match(broker, /entityTokens: \[\.\.\.statement\.entityTokens\]/);
   assert.match(broker, /contentTokens/);
   assert.match(broker, /state\.claim\.provenanceToken/);
   assert.match(broker, /delete publicJob\.provenanceToken/);

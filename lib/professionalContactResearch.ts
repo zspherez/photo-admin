@@ -1075,6 +1075,26 @@ export async function submitProfessionalContactResult(
       },
     });
     if (!job) return { accepted: false, status: "conflict", idempotent: false };
+    const rawClaimToken =
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      typeof Reflect.get(value, "claimToken") === "string"
+        ? String(Reflect.get(value, "claimToken"))
+        : null;
+    const activeClaim =
+      job.status === "claimed" &&
+      job.claimToken === rawClaimToken &&
+      !!job.claimExpiresAt &&
+      job.claimExpiresAt > now &&
+      !!job.claimProvenanceToken;
+    const possibleIdempotentReplay =
+      job.claimToken === rawClaimToken &&
+      !!job.resultFingerprint &&
+      (job.status === "review" || job.status === "exhausted");
+    if (!activeClaim && !possibleIdempotentReplay) {
+      return { accepted: false, status: "conflict", idempotent: false };
+    }
     const submission = parseProfessionalContactSubmission(value, {
       personName: job.personName,
       organizationName: job.request.organizationName,
@@ -1094,22 +1114,16 @@ export async function submitProfessionalContactResult(
     );
     const fingerprint = submissionFingerprint(submission);
     if (
-      job.claimToken === submission.claimToken &&
-      job.resultFingerprint === fingerprint &&
-      (job.status === "review" || job.status === "exhausted")
+      possibleIdempotentReplay &&
+      job.resultFingerprint === fingerprint
     ) {
       return {
         accepted: true,
-        status: job.status,
+        status: job.status === "review" ? "review" : "exhausted",
         idempotent: true,
       };
     }
-    if (
-      job.status !== "claimed" ||
-      job.claimToken !== submission.claimToken ||
-      !job.claimExpiresAt ||
-      job.claimExpiresAt <= now
-    ) {
+    if (!activeClaim) {
       return { accepted: false, status: "conflict", idempotent: false };
     }
     if (submission.outcome === "candidates") {

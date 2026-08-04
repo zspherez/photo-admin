@@ -50,4 +50,5 @@ test("duplicate-only results are distinct from stale claims", () => {
   assert.match(source, /code: "duplicate_candidates"/);
   assert.match(source, /\{ status: 422 \}/);
   assert.match(source, /claim is stale or no longer owned[\s\S]*status: 409/);
+  assert.doesNotMatch(source, /parseProfessionalContactSubmission/);
 });

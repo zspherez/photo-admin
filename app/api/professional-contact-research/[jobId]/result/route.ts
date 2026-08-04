@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   isValidProfessionalContactAuthorization,
-  parseProfessionalContactSubmission,
   submitProfessionalContactResult,
 } from "@/lib/professionalContactResearch";
 
@@ -23,10 +22,9 @@ export async function POST(
   let value: unknown;
   try {
     value = await request.json();
-    parseProfessionalContactSubmission(value);
-  } catch (error) {
+  } catch {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : String(error) },
+      { error: "invalid JSON body" },
       { status: 400 },
     );
   }
