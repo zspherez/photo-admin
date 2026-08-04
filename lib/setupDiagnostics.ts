@@ -8,6 +8,7 @@ import { getAuthConfiguration } from "@/lib/auth";
 import {
   resolveContactAuditTrustConfig,
   resolveContactResearchTrustConfig,
+  resolveProfessionalContactResearchTrustConfig,
   resolveRepositoryIdentity,
 } from "@/lib/appConfig";
 import {
@@ -176,6 +177,17 @@ export function runSetupDiagnostics(
     required.push({
       key: "CONTACT_AUDIT_WORKFLOW_REF",
       label: "Contact audit OIDC trust override",
+      status: trust ? "ok" : "invalid",
+      detail: trust
+        ? "resolves to a valid trusted workflow ref"
+        : "must reference a .yml/.yaml workflow under <repository>/.github/workflows/ on refs/heads/main",
+    });
+  }
+  if (!isBlank(env.PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_REF)) {
+    const trust = resolveProfessionalContactResearchTrustConfig(env);
+    required.push({
+      key: "PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_REF",
+      label: "Professional contact research OIDC trust override",
       status: trust ? "ok" : "invalid",
       detail: trust
         ? "resolves to a valid trusted workflow ref"

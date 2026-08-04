@@ -137,6 +137,19 @@ test("fails closed when CONTACT_RESEARCH_WORKFLOW_REF is set but malformed", () 
   assert.equal(report.ok, false);
 });
 
+test("fails closed when PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_REF is malformed", () => {
+  const report = runSetupDiagnostics({
+    ...VALID_CORE_ENV,
+    PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_REF: "totally-invalid",
+  });
+  const item = report.required.find(
+    (entry) =>
+      entry.key === "PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_REF",
+  );
+  assert.equal(item?.status, "invalid");
+  assert.equal(report.ok, false);
+});
+
 test("optional integrations are reported but never affect the overall ok status", () => {
   const report = runSetupDiagnostics(VALID_CORE_ENV);
   assert.equal(report.ok, true);

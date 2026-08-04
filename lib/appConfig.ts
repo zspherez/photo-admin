@@ -76,6 +76,8 @@ const DEFAULT_OUTREACH_DISPATCH: OutreachDispatchConfig = {
 export const WORKFLOW_TRUSTED_BRANCH_REF = "refs/heads/main";
 export const CONTACT_RESEARCH_WORKFLOW_FILE = "contact-research.yml";
 export const CONTACT_AUDIT_WORKFLOW_FILE = "contact-audit.yml";
+export const PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_FILE =
+  "professional-contact-research.yml";
 
 const GITHUB_REPOSITORY_SLUG_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const WORKFLOW_FILE_NAME_PATTERN = /^[A-Za-z0-9_.-]+\.(?:yml|yaml)$/;
@@ -93,6 +95,7 @@ export interface ForkIdentityEnvironment {
   readonly REPOSITORY_SLUG?: string;
   readonly CONTACT_RESEARCH_WORKFLOW_REF?: string;
   readonly CONTACT_AUDIT_WORKFLOW_REF?: string;
+  readonly PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_REF?: string;
   readonly [key: string]: string | undefined;
 }
 
@@ -174,6 +177,18 @@ export function resolveContactAuditTrustConfig(
     repository,
     env.CONTACT_AUDIT_WORKFLOW_REF,
     CONTACT_AUDIT_WORKFLOW_FILE,
+  );
+}
+
+export function resolveProfessionalContactResearchTrustConfig(
+  env: ForkIdentityEnvironment = process.env,
+): WorkflowTrustConfig | null {
+  const repository = resolveRepositoryIdentity(env);
+  if (!repository) return null;
+  return resolveWorkflowTrustConfig(
+    repository,
+    env.PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_REF,
+    PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_FILE,
   );
 }
 

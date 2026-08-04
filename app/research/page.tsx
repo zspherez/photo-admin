@@ -621,6 +621,9 @@ export default async function ContactResearchPage({
           </p>
         </div>
         <div className="mobile-action-grid flex flex-wrap gap-2 sm:w-auto">
+          <LinkButton href="/professional-contacts" variant="secondary">
+            Find any professional
+          </LinkButton>
           <LinkButton
             href={WORKFLOW_URL}
             target="_blank"

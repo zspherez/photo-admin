@@ -1,0 +1,93 @@
+name: Research professional contacts
+
+on:
+  schedule:
+    - cron: "7,17,27,37,47,57 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  copilot-requests: write
+  id-token: write
+
+concurrency:
+  group: photo-admin-professional-contact-research
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      claimable: ${{ steps.queue.outputs.claimable }}
+      workers: ${{ steps.queue.outputs.workers }}
+    steps:
+      - name: Inspect professional contact queue
+        id: queue
+        shell: bash
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APP_BASE_URL}" ]]; then
+            echo "::error::APP_BASE_URL repository secret is required"
+            exit 1
+          fi
+          oidc_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="?"
+          if [[ "${oidc_url}" == *"?"* ]]; then separator="&"; fi
+          oidc_token="$(
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              --header "Accept: application/json" \
+              "${oidc_url}${separator}audience=photo-admin-professional-contact-research" |
+              jq -er '.value | select(type == "string" and length > 0)'
+          )"
+          echo "::add-mask::${oidc_token}"
+          claimable="$(
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --connect-timeout 15 \
+              --max-time 120 \
+              --request POST \
+              --header "Authorization: Bearer ${oidc_token}" \
+              --header "Content-Type: application/json" \
+              --data '{}' \
+              "${APP_BASE_URL%/}/api/professional-contact-research/prepare" |
+              jq -er '.claimable | select(type == "number" and . >= 0 and floor == .)'
+          )"
+          lane_count="${claimable}"
+          if (( lane_count > 5 )); then lane_count=5; fi
+          lanes="$(jq -cn --argjson count "${lane_count}" '[range(0; $count)]')"
+          echo "claimable=${claimable}" >> "${GITHUB_OUTPUT}"
+          echo "workers=${lanes}" >> "${GITHUB_OUTPUT}"
+
+  research:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.claimable != '0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJSON(needs.prepare.outputs.workers) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install worker dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install Copilot CLI
+        run: npm install --global @github/copilot@latest --no-audit --no-fund
+      - name: Drain professional contact queue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          PROFESSIONAL_CONTACT_RESEARCH_WORKERS: "2"
+        run: npm run professional-contact-research:agent
