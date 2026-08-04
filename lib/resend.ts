@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { Resend, type ErrorResponse } from "resend";
 import { db } from "@/lib/db";
 import { readGeneralDeliverySettingsInTransaction } from "@/lib/generalSettings";
@@ -20,6 +20,32 @@ export const RESEND_FULL_CONFIGURATION_ERROR =
   "Resend is unavailable because RESEND_API_KEY and RESEND_FROM_EMAIL are missing or blank";
 export const RESEND_PROVIDER_REQUEST_TIMEOUT_MS = 20_000;
 export const RESEND_CREDENTIAL_SCOPE_PREFIX = "resend:key-sha256:";
+export const RESEND_WEBHOOK_LOCK_CLASS = 1_380_273_301;
+
+export function resendProviderMessageLockKeys(
+  providerMessageIds: readonly string[],
+): string[] {
+  return Array.from(
+    new Set(providerMessageIds.filter(Boolean).map((id) => `message:${id}`)),
+  ).sort();
+}
+
+export async function acquireResendProviderMessageLocks(
+  tx: Prisma.TransactionClient,
+  providerMessageIds: readonly string[],
+): Promise<void> {
+  for (const key of resendProviderMessageLockKeys(providerMessageIds)) {
+    await tx.$queryRaw<Array<{ locked: number }>>(Prisma.sql`
+      SELECT 1 AS "locked"
+      FROM (
+        SELECT pg_advisory_xact_lock(
+          CAST(${RESEND_WEBHOOK_LOCK_CLASS} AS INTEGER),
+          CAST(hashtext(${key}) AS INTEGER)
+        )
+      ) AS "resendProviderMessageLock"
+    `);
+  }
+}
 
 let _client: Resend | null = null;
 let _clientApiKey: string | null = null;

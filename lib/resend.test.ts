@@ -31,6 +31,7 @@ import {
   markResendRequestDeliveryFailure,
   mergeResendRequestResults,
   resendRequestResultsAreResolved,
+  resendProviderMessageLockKeys,
   parseResendRequestSnapshot,
   sendPreparedEmailViaResend,
   sendPreparedEmailBatchViaResend,
@@ -822,6 +823,18 @@ test("duplicate provider IDs across immutable indexes are rejected", () => {
       "message-third",
     ]),
     null,
+  );
+});
+
+test("provider identity advisory locks are deterministic and deduplicated", () => {
+  assert.deepEqual(
+    resendProviderMessageLockKeys([
+      "message-z",
+      "message-a",
+      "message-z",
+      "",
+    ]),
+    ["message:message-a", "message:message-z"],
   );
 });
 

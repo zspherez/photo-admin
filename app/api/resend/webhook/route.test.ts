@@ -89,6 +89,23 @@ test("same-index webhook ID conflicts preserve immutable identity and stop retri
   assert.match(source, /attemptId: eventAttempt\?\.id/);
 });
 
+test("cross-attempt provider conflicts quarantine the tagged current attempt", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /correlation\.status === "conflict"[\s\S]*taggedAttempt[\s\S]*messageAttempt[\s\S]*taggedAttempt\.id !== messageAttempt\.id/,
+  );
+  assert.match(
+    source,
+    /quarantineProviderIdentityConflict\(\s*taggedAttempt\.id/,
+  );
+  assert.match(
+    source,
+    /already belongs to another attempt/,
+  );
+  assert.match(source, /eventAttempt = matchedAttempt \?\? conflictedAttempt/);
+});
+
 test("every batch webhook validates index bounds and existing slot ownership", () => {
   const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
   const validation = source.indexOf("validateProviderMessageIndex(");

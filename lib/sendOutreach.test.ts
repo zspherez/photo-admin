@@ -1531,6 +1531,22 @@ test("individual-thread delivery persists every provider message identity and re
   );
   assert.doesNotMatch(identityConflictBlock, /providerRequestResults:/);
   assert.doesNotMatch(identityConflictBlock, /providerMessageIds,/);
+  const providerLock = source.indexOf(
+    "acquireResendProviderMessageLocks(tx, returnedProviderIds)",
+  );
+  const ownerQuery = source.indexOf(
+    "const providerOwners",
+    providerLock,
+  );
+  const providerPersistence = source.indexOf(
+    "providerMessageIds,",
+    ownerQuery,
+  );
+  assert.ok(
+    providerLock >= 0 &&
+      providerLock < ownerQuery &&
+      ownerQuery < providerPersistence,
+  );
 });
 
 test("partially accepted recipient batches are never treated as definitively unsent", () => {

@@ -23,6 +23,7 @@ import {
 import { readEmailUtmSettingsSnapshot } from "@/lib/generalSettings";
 import {
   RESEND_CONFIGURATION_ERROR,
+  acquireResendProviderMessageLocks,
   buildResendDeliveryPolicy,
   canRetryResendRequest,
   compareResendRequestBatchToPolicy,
@@ -5951,6 +5952,7 @@ async function finishClaimedSend(
       return { ok: false, outreachId: current.id, error, ...outputMetadata };
     }
     const returnedProviderIds = providerMessageIds.filter(Boolean);
+    await acquireResendProviderMessageLocks(tx, returnedProviderIds);
     const providerOwners =
       returnedProviderIds.length === 0
         ? []

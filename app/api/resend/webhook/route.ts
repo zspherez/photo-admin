@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { Webhook, WebhookVerificationError } from "svix";
 import { db } from "@/lib/db";
 import {
+  RESEND_WEBHOOK_LOCK_CLASS,
+  PROVIDER_MESSAGE_ID_CONFLICT_PREFIX,
   bindProviderMessageIdAtIndex,
   canBindResendWebhookProviderMessage,
   correlateResendWebhookAttempt,
@@ -43,7 +45,7 @@ interface ResendEvent {
   };
 }
 
-export const RESEND_WEBHOOK_LOCK_CLASS = 1_380_273_301;
+export { RESEND_WEBHOOK_LOCK_CLASS } from "@/lib/resend";
 const RESEND_WEBHOOK_TRANSACTION_ATTEMPTS = 8;
 
 export function resendWebhookSerializationKeys(
@@ -480,6 +482,20 @@ async function processEvent(
             }
             correlation = { status: "conflict", reason: error };
           };
+
+          if (
+            correlation.status === "conflict" &&
+            taggedAttempt &&
+            messageAttempt &&
+            taggedAttempt.id !== messageAttempt.id &&
+            messageId
+          ) {
+            await quarantineProviderIdentityConflict(
+              taggedAttempt.id,
+              `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}tagged attempt: ` +
+                `${messageId} already belongs to another attempt`,
+            );
+          }
 
           if (
             correlation.status === "matched" &&
