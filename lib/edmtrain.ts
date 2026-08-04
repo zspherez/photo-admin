@@ -98,6 +98,19 @@ export interface EdmtrainEvent {
   };
 }
 
+export function dedupeProviderLineupRows<
+  T extends { showId: string; artistId: string },
+>(rows: readonly T[]): T[] {
+  const artistIdsByShow = new Map<string, Set<string>>();
+  return rows.filter((row) => {
+    const artistIds = artistIdsByShow.get(row.showId) ?? new Set<string>();
+    if (artistIds.has(row.artistId)) return false;
+    artistIds.add(row.artistId);
+    artistIdsByShow.set(row.showId, artistIds);
+    return true;
+  });
+}
+
 export function edmtrainEventGeography(event: EdmtrainEvent): {
   city: string;
   state: string | null;
@@ -654,21 +667,29 @@ async function reconcileEdmtrainSnapshots(
             data: { providerManaged: false },
           });
         }
-        const lineupRows = rows.flatMap(({ event }) => {
-          const showId = showIdByEvent.get(event.id);
-          if (!showId) throw new Error(`EDMTrain event was not persisted: ${event.id}`);
-          return event.artistList.map((artist) => {
-            const resolvedArtist = resolved.artistsByKey.get(String(artist.id));
-            if (!resolvedArtist) {
-              throw new Error(`EDMTrain artist was not resolved: ${artist.id}`);
+        const lineupRows = dedupeProviderLineupRows(
+          rows.flatMap(({ event }) => {
+            const showId = showIdByEvent.get(event.id);
+            if (!showId) {
+              throw new Error(`EDMTrain event was not persisted: ${event.id}`);
             }
-            return {
-              showId,
-              artistId: resolvedArtist.id,
-              headliner: false,
-            };
-          });
-        });
+            return event.artistList.map((artist) => {
+              const resolvedArtist = resolved.artistsByKey.get(
+                String(artist.id),
+              );
+              if (!resolvedArtist) {
+                throw new Error(
+                  `EDMTrain artist was not resolved: ${artist.id}`,
+                );
+              }
+              return {
+                showId,
+                artistId: resolvedArtist.id,
+                headliner: false,
+              };
+            });
+          }),
+        );
         for (const lineupChunk of chunkItems(lineupRows, 2_000)) {
           const values = Prisma.join(
             lineupChunk.map(
