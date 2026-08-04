@@ -26,6 +26,7 @@ import {
   buildResendDeliveryPolicy,
   canRetryResendRequest,
   compareResendRequestBatchToPolicy,
+  duplicateProviderMessageIdConflict,
   getResendConfigurationError,
   getResendCredentialScope,
   getResendDeliverySettingsSnapshot,
@@ -5923,8 +5924,11 @@ async function finishClaimedSend(
     const aggregateResult = summarizeResendRequestResults(
       requestResults,
     );
-    if (mergedRequestResults.conflict) {
-      const error = mergedRequestResults.conflict;
+    const providerIdentityConflict =
+      mergedRequestResults.conflict ??
+      duplicateProviderMessageIdConflict(providerMessageIds);
+    if (providerIdentityConflict) {
+      const error = providerIdentityConflict;
       await tx.outreachSendAttempt.update({
         where: { id: attempt.id },
         data: {
@@ -5932,9 +5936,6 @@ async function finishClaimedSend(
           error,
           failureDisposition: "policy",
           nextAttemptAt: null,
-          providerMessageIds,
-          providerRequestResults:
-            requestResults as unknown as Prisma.InputJsonValue,
         },
       });
       await tx.outreach.updateMany({

@@ -10,6 +10,7 @@ import {
   buildArbitraryResendDeliveryPolicy,
   bindProviderMessageIdAtIndex,
   buildResendRequestBatchSnapshot,
+  duplicateProviderMessageIdConflict,
   buildResendDeliveryPolicy,
   canBindResendWebhookProviderMessage,
   canRetryResendRequest,
@@ -803,6 +804,24 @@ test("same-index webhook provider conflicts preserve the original immutable ID",
       providerMessageIds: ["message-original", ""],
       conflict: null,
     },
+  );
+});
+
+test("duplicate provider IDs across immutable indexes are rejected", () => {
+  assert.equal(
+    duplicateProviderMessageIdConflict([
+      "message-duplicate",
+      "message-duplicate",
+    ]),
+    "Provider message ID conflict for request 2: message-duplicate already belongs to request 1",
+  );
+  assert.equal(
+    duplicateProviderMessageIdConflict([
+      "message-first",
+      "",
+      "message-third",
+    ]),
+    null,
   );
 });
 

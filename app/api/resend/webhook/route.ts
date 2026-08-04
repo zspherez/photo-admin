@@ -6,6 +6,7 @@ import {
   bindProviderMessageIdAtIndex,
   canBindResendWebhookProviderMessage,
   correlateResendWebhookAttempt,
+  duplicateProviderMessageIdConflict,
   getResendWebhookFailurePolicy,
   isProviderMessageIdConflictError,
   markResendRequestDeliveryFailure,
@@ -687,6 +688,25 @@ async function processEvent(
             where: { id: correlation.attempt.id },
           });
           if (!attempt) return { note: "matched attempt disappeared" };
+          const duplicateProviderIdentity =
+            duplicateProviderMessageIdConflict(attempt.providerMessageIds);
+          if (duplicateProviderIdentity) {
+            await quarantineProviderIdentityConflict(
+              attempt.id,
+              duplicateProviderIdentity,
+            );
+            await tx.resendWebhookEvent.update({
+              where: { eventId },
+              data: {
+                correlationStatus: "conflict",
+                correlationError: duplicateProviderIdentity,
+              },
+            });
+            return {
+              note:
+                "duplicate provider identity remains quarantined pending explicit resolution",
+            };
+          }
           if (
             attempt.status === "manual_review" &&
             attempt.failureDisposition === "policy" &&

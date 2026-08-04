@@ -1515,15 +1515,22 @@ test("individual-thread delivery persists every provider message identity and re
   assert.match(source, /status: testSend \? "test" : "sent"/);
   assert.match(source, /summarizeResendRequestResults/);
   assert.match(source, /providerRequestResults:/);
-  assert.match(source, /if \(mergedRequestResults\.conflict\)/);
+  assert.match(source, /if \(providerIdentityConflict\)/);
   assert.match(
     source,
-    /mergedRequestResults\.conflict[\s\S]*status: "manual_review"[\s\S]*failureDisposition: "policy"/,
+    /providerIdentityConflict[\s\S]*status: "manual_review"[\s\S]*failureDisposition: "policy"/,
   );
   assert.ok(
     (source.match(/isProviderMessageIdConflictError\(attempt\.error\)/g)
       ?.length ?? 0) >= 2,
   );
+  assert.match(source, /duplicateProviderMessageIdConflict\(providerMessageIds\)/);
+  const identityConflictBlock = source.slice(
+    source.indexOf("if (providerIdentityConflict)"),
+    source.indexOf("const returnedProviderIds"),
+  );
+  assert.doesNotMatch(identityConflictBlock, /providerRequestResults:/);
+  assert.doesNotMatch(identityConflictBlock, /providerMessageIds,/);
 });
 
 test("partially accepted recipient batches are never treated as definitively unsent", () => {

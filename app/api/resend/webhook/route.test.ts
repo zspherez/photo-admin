@@ -104,6 +104,30 @@ test("every batch webhook validates index bounds and existing slot ownership", (
   );
 });
 
+test("duplicate provider IDs across batch indexes are quarantined before finalization", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  const duplicateCheck = source.indexOf(
+    "duplicateProviderMessageIdConflict(attempt.providerMessageIds)",
+  );
+  const completion = source.indexOf(
+    "providerAcceptanceComplete",
+    duplicateCheck,
+  );
+  assert.ok(duplicateCheck >= 0 && duplicateCheck < completion);
+  assert.match(
+    source,
+    /duplicateProviderIdentity[\s\S]*quarantineProviderIdentityConflict/,
+  );
+  assert.match(
+    source,
+    /resendWebhookEvent\.update\([\s\S]*correlationStatus: "conflict"/,
+  );
+  assert.match(
+    source,
+    /duplicate provider identity remains quarantined pending explicit resolution/,
+  );
+});
+
 test("individual-mode BCC opens, clicks, and failures record without aggregate mutation", () => {
   const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
   const auxiliaryGuard = source.indexOf(

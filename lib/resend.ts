@@ -419,6 +419,8 @@ export function validateProviderMessageIndex(
   index: number | null,
   providerMessageId: string,
 ): string | null {
+  const duplicateConflict = duplicateProviderMessageIdConflict(current);
+  if (duplicateConflict) return duplicateConflict;
   if (index === null || index < 0 || index >= requestCount) {
     return (
       `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${
@@ -441,6 +443,24 @@ export function validateProviderMessageIndex(
       `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
       `${existing} != ${providerMessageId}`
     );
+  }
+  return null;
+}
+
+export function duplicateProviderMessageIdConflict(
+  providerMessageIds: readonly string[],
+): string | null {
+  const firstIndex = new Map<string, number>();
+  for (const [index, providerMessageId] of providerMessageIds.entries()) {
+    if (!providerMessageId) continue;
+    const priorIndex = firstIndex.get(providerMessageId);
+    if (priorIndex !== undefined) {
+      return (
+        `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
+        `${providerMessageId} already belongs to request ${priorIndex + 1}`
+      );
+    }
+    firstIndex.set(providerMessageId, index);
   }
   return null;
 }
