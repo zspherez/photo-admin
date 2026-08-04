@@ -285,6 +285,57 @@ test("retry policy detects suppression, test-mode, BCC, and sender changes", () 
   );
 });
 
+test("outreach CC mode uses one primary To recipient and snapshots CC on retries", () => {
+  const result = buildResendDeliveryPolicy({
+    from: REQUEST.from,
+    intendedRecipients: ["other@example.com", "primary@example.com"],
+    primaryRecipientEmail: "primary@example.com",
+    recipientDeliveryMode: "cc_thread",
+    subject: REQUEST.subject,
+    testOverride: null,
+    bccEmails: REQUEST.bcc,
+    suppressedEmails: [],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.policy.primaryIntendedRecipient, "primary@example.com");
+  assert.deepEqual(result.policy.to, ["primary@example.com"]);
+  assert.deepEqual(result.policy.cc, ["other@example.com"]);
+
+  const request = {
+    ...REQUEST,
+    to: result.policy.to,
+    cc: result.policy.cc,
+  };
+  assert.equal(compareResendRequestToPolicy(request, false, result.policy), null);
+  assert.match(
+    compareResendRequestToPolicy(
+      { ...request, cc: [] },
+      false,
+      result.policy,
+    ) ?? "",
+    /CC policy changed/,
+  );
+});
+
+test("CC mode reanchors To after suppressing the preferred primary", () => {
+  const result = buildResendDeliveryPolicy({
+    from: REQUEST.from,
+    intendedRecipients: ["other@example.com", "primary@example.com"],
+    primaryRecipientEmail: "primary@example.com",
+    recipientDeliveryMode: "cc_thread",
+    subject: REQUEST.subject,
+    testOverride: null,
+    bccEmails: [],
+    suppressedEmails: ["primary@example.com"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.policy.primaryIntendedRecipient, "other@example.com");
+  assert.deepEqual(result.policy.to, ["other@example.com"]);
+  assert.deepEqual(result.policy.cc, []);
+});
+
 test("arbitrary multi-recipient delivery keeps recipients on To and audit copies on BCC", () => {
   const result = buildArbitraryResendDeliveryPolicy({
     from: "Photo Admin <sender@example.com>",

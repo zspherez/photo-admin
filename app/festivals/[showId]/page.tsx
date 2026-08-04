@@ -98,6 +98,10 @@ import {
   FESTIVAL_UTM_CAMPAIGN_MAX_LENGTH,
   normalizeFestivalUtmCampaign,
 } from "@/lib/festivalUtm";
+import {
+  DEFAULT_RECIPIENT_DELIVERY_MODE,
+  isRecipientDeliveryMode,
+} from "@/lib/recipientDelivery";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -368,6 +372,12 @@ async function bulkSend(formData: FormData) {
         .filter(Boolean)
     )
   );
+  const requestedDeliveryMode = formData.get("recipientDeliveryMode");
+  const recipientDeliveryMode = isRecipientDeliveryMode(
+    requestedDeliveryMode,
+  )
+    ? requestedDeliveryMode
+    : DEFAULT_RECIPIENT_DELIVERY_MODE;
   const now = new Date();
   const candidates = await festivalBulkCandidates(showId, now);
   if (!candidates) {
@@ -389,6 +399,7 @@ async function bulkSend(formData: FormData) {
       showId,
       contactId,
       festivalAllContacts: true,
+      recipientDeliveryMode,
     })),
     now
   );
@@ -465,6 +476,7 @@ async function bulkSend(formData: FormData) {
                     showId,
                     contactId: group.contactId,
                     festivalAllContacts: true,
+                    recipientDeliveryMode,
                   },
                   scheduledFor,
                 )
@@ -472,6 +484,7 @@ async function bulkSend(formData: FormData) {
                   showId,
                   contactId: group.contactId,
                   festivalAllContacts: true,
+                  recipientDeliveryMode,
                 });
         return { group, result };
       } catch (error) {
@@ -1050,6 +1063,13 @@ export default async function FestivalDetailPage({
                 ? contactEmail
                 : `contact:${row.contact.id}`,
               emailLabel: recipients.join(", "),
+              recipients,
+              primaryRecipientEmail:
+                row.sendability.primaryRecipientEmail ??
+                contactEmail,
+              recipientDeliveryMode:
+                row.sendability.recipientDeliveryMode ??
+                DEFAULT_RECIPIENT_DELIVERY_MODE,
               selectedByDefault: filter === "unsent",
             },
           ];
@@ -1389,6 +1409,7 @@ export default async function FestivalDetailPage({
             returnTo,
           }}
           candidates={bulkConfirmationCandidates}
+          testOverride={testOverride}
         />
       )}
 

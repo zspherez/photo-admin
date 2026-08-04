@@ -67,6 +67,12 @@ import {
   type TrajectoryActionContext,
 } from "@/lib/trajectoryActiveRun";
 import { trajectoryActionErrorMessage } from "@/lib/trajectoryActionError";
+import {
+  DEFAULT_RECIPIENT_DELIVERY_MODE,
+  isRecipientDeliveryMode,
+  recipientDeliveryLayout,
+  type RecipientDeliveryMode,
+} from "@/lib/recipientDelivery";
 
 export { OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS } from "@/lib/schedule";
 
@@ -80,11 +86,13 @@ export interface SendOutreachInput {
   trajectoryContext?: TrajectoryActionContext;
   festivalCoveredArtistIds?: string[];
   festivalAllContacts?: boolean;
+  recipientDeliveryMode?: RecipientDeliveryMode;
 }
 
 export interface FollowUpContentOverrides {
   subjectOverride?: string;
   htmlOverride?: string;
+  recipientDeliveryMode?: RecipientDeliveryMode;
 }
 
 export type OutreachKindValue = "original" | "follow_up";
@@ -189,6 +197,10 @@ export interface FollowUpEligibility {
   reason: string | null;
   recipients: string[];
   fullTeamSend: boolean;
+  recipientDeliveryMode?: RecipientDeliveryMode;
+  primaryRecipientEmail?: string | null;
+  toRecipients?: string[];
+  ccRecipients?: string[];
   followUpOutreachId?: string;
   followUpStatus?: string;
   nextAttemptAt?: Date;
@@ -205,6 +217,8 @@ interface PreparedOutreach {
   templateId: string;
   templatePurpose: EmailTemplatePurpose;
   recipients: string[];
+  recipientDeliveryMode: RecipientDeliveryMode;
+  primaryRecipientEmail: string | null;
   fullTeamSend: boolean;
   festivalAllContactsSend: boolean;
   subject: string;
@@ -348,6 +362,8 @@ interface ClaimedOutreach {
   finalHtml: string;
   recipientEmails: string[];
   recipientSnapshotState: string;
+  recipientDeliveryMode?: string;
+  primaryRecipientEmail?: string | null;
   fullTeamSend: boolean;
   festivalAllContactsSend?: boolean;
   idempotencyKey: string;
@@ -1138,18 +1154,26 @@ export function recipientSnapshotConflict(
   stored: {
     recipientEmails: string[];
     recipientSnapshotState: string;
+    recipientDeliveryMode?: string;
+    primaryRecipientEmail?: string | null;
     fullTeamSend: boolean;
     festivalAllContactsSend?: boolean;
   },
   currentRecipients: string[],
   currentFullTeamSend: boolean,
   currentFestivalAllContactsSend = false,
+  currentRecipientDeliveryMode: RecipientDeliveryMode =
+    DEFAULT_RECIPIENT_DELIVERY_MODE,
+  currentPrimaryRecipientEmail: string | null = null,
 ): string | null {
   if (stored.recipientSnapshotState !== "verified") {
     return "Outreach recipient snapshot is unverified";
   }
   if (
     stored.fullTeamSend !== currentFullTeamSend ||
+    (stored.recipientDeliveryMode ?? DEFAULT_RECIPIENT_DELIVERY_MODE) !==
+      currentRecipientDeliveryMode ||
+    (stored.primaryRecipientEmail ?? null) !== currentPrimaryRecipientEmail ||
     (stored.festivalAllContactsSend ?? false) !==
       currentFestivalAllContactsSend ||
     !sameEmails(stored.recipientEmails, currentRecipients)
@@ -1172,6 +1196,8 @@ export interface DeliveryPolicySnapshot {
   idempotencyKey: string;
   recipientEmails: string[];
   recipientSnapshotState: string;
+  recipientDeliveryMode?: string;
+  primaryRecipientEmail?: string | null;
   fullTeamSend: boolean;
   festivalAllContactsSend?: boolean;
   finalHtml: string;
@@ -1204,6 +1230,7 @@ export interface EvaluateOutreachDeliveryPolicyInput {
   requestedFullTeamSend?: boolean;
   requestedFestivalAllContactsSend?: boolean;
   requestedRecipientEmails?: readonly string[];
+  requestedRecipientDeliveryMode?: RecipientDeliveryMode;
   allowUnmarkedFullTeamSend?: boolean;
   preserveFestivalAllContactsSend?: boolean;
 }
@@ -1212,6 +1239,8 @@ export type OutreachDeliveryPolicyDecision =
   | {
       ok: true;
       currentRecipients: string[];
+      recipientDeliveryMode: RecipientDeliveryMode;
+      primaryRecipientEmail: string | null;
       fullTeamSend: boolean;
       festivalAllContactsSend: boolean;
       policy: ResendDeliveryPolicy;
@@ -1251,6 +1280,7 @@ export function evaluateOutreachDeliveryPolicy({
   requestedFullTeamSend,
   requestedFestivalAllContactsSend,
   requestedRecipientEmails,
+  requestedRecipientDeliveryMode,
   preserveFestivalAllContactsSend = false,
 }: EvaluateOutreachDeliveryPolicyInput): OutreachDeliveryPolicyDecision {
   if (showSyncStatus === null) {
@@ -1335,6 +1365,11 @@ export function evaluateOutreachDeliveryPolicy({
     };
   }
 
+  const recipientDeliveryMode = stored
+    ? isRecipientDeliveryMode(stored.recipientDeliveryMode)
+      ? stored.recipientDeliveryMode
+      : DEFAULT_RECIPIENT_DELIVERY_MODE
+    : requestedRecipientDeliveryMode ?? DEFAULT_RECIPIENT_DELIVERY_MODE;
   const parsedRequest = attempt
     ? parseResendRequestSnapshot(attempt.providerRequest)
     : null;
@@ -1345,6 +1380,9 @@ export function evaluateOutreachDeliveryPolicy({
     testOverride,
     bccEmails,
     suppressedEmails,
+    recipientDeliveryMode,
+    primaryRecipientEmail:
+      stored?.primaryRecipientEmail ?? normalizeEmails([contact.email ?? ""])[0],
     allowMissingFrom: allowMissingFrom || !!configurationError,
   });
   if (!resolved.ok) {
@@ -1363,6 +1401,10 @@ export function evaluateOutreachDeliveryPolicy({
       resolved.policy.intendedRecipients,
       fullTeamSend,
       festivalAllContactsSend,
+      recipientDeliveryMode,
+      recipientDeliveryMode === "cc_thread"
+        ? resolved.policy.primaryIntendedRecipient
+        : null,
     );
     if (snapshotConflict) {
       return {
@@ -1435,6 +1477,11 @@ export function evaluateOutreachDeliveryPolicy({
   return {
     ok: true,
     currentRecipients: resolved.policy.intendedRecipients,
+    recipientDeliveryMode,
+    primaryRecipientEmail:
+      recipientDeliveryMode === "cc_thread"
+        ? resolved.policy.primaryIntendedRecipient
+        : null,
     fullTeamSend,
     festivalAllContactsSend,
     policy: resolved.policy,
@@ -1558,6 +1605,7 @@ export interface OutreachSendabilityInput {
   contactId: string;
   singleRecipient?: boolean;
   festivalAllContacts?: boolean;
+  recipientDeliveryMode?: RecipientDeliveryMode;
 }
 
 export interface OutreachSendability {
@@ -1568,6 +1616,10 @@ export interface OutreachSendability {
   mode: "new" | "retry" | null;
   reason: string | null;
   recipients: string[];
+  recipientDeliveryMode?: RecipientDeliveryMode;
+  primaryRecipientEmail?: string | null;
+  toRecipients?: string[];
+  ccRecipients?: string[];
   fullTeamSend: boolean;
   festivalAllContactsSend?: boolean;
   blockingOutreachId?: string;
@@ -1813,6 +1865,10 @@ function blockedSendability(
   details: {
     artistId?: string | null;
     recipients?: string[];
+    recipientDeliveryMode?: RecipientDeliveryMode;
+    primaryRecipientEmail?: string | null;
+    toRecipients?: string[];
+    ccRecipients?: string[];
     fullTeamSend?: boolean;
     festivalAllContactsSend?: boolean;
     outreachId?: string;
@@ -1827,6 +1883,11 @@ function blockedSendability(
     mode: null,
     reason,
     recipients: details.recipients ?? [],
+    recipientDeliveryMode:
+      details.recipientDeliveryMode ?? DEFAULT_RECIPIENT_DELIVERY_MODE,
+    primaryRecipientEmail: details.primaryRecipientEmail ?? null,
+    toRecipients: details.toRecipients ?? [],
+    ccRecipients: details.ccRecipients ?? [],
     fullTeamSend: details.fullTeamSend ?? false,
     festivalAllContactsSend:
       details.festivalAllContactsSend ?? false,
@@ -2018,6 +2079,7 @@ export async function getOutreachSendabilityBatch(
           ? true
           : undefined,
       requestedFestivalAllContactsSend: input.festivalAllContacts,
+      requestedRecipientDeliveryMode: input.recipientDeliveryMode,
     });
     if (!initialPolicy.ok) {
       return blockedSendability(input, initialPolicy.error, {
@@ -2035,6 +2097,10 @@ export async function getOutreachSendabilityBatch(
     const details = {
       artistId: contact.artistId,
       recipients,
+      recipientDeliveryMode: initialPolicy.recipientDeliveryMode,
+      primaryRecipientEmail: initialPolicy.primaryRecipientEmail,
+      toRecipients: initialPolicy.policy.to,
+      ccRecipients: initialPolicy.policy.cc,
       fullTeamSend: initialPolicy.fullTeamSend,
       festivalAllContactsSend:
         initialPolicy.festivalAllContactsSend,
@@ -2278,6 +2344,20 @@ export async function getOutreachSendabilityBatch(
         },
       );
     }
+    if (
+      input.recipientDeliveryMode &&
+      candidate.recipientDeliveryMode !== input.recipientDeliveryMode
+    ) {
+      return blockedSendability(
+        input,
+        "Existing retry uses a different recipient delivery mode",
+        {
+          ...details,
+          outreachId: candidate.id,
+          status: candidate.status,
+        },
+      );
+    }
     const currentPolicy = evaluateOutreachDeliveryPolicy({
       showSyncStatus: show.syncStatus,
       associationExists: true,
@@ -2304,6 +2384,10 @@ export async function getOutreachSendabilityBatch(
       ...input,
       ...details,
       recipients: currentPolicy.currentRecipients,
+      recipientDeliveryMode: currentPolicy.recipientDeliveryMode,
+      primaryRecipientEmail: currentPolicy.primaryRecipientEmail,
+      toRecipients: currentPolicy.policy.to,
+      ccRecipients: currentPolicy.policy.cc,
       fullTeamSend: currentPolicy.fullTeamSend,
       festivalAllContactsSend:
         currentPolicy.festivalAllContactsSend,
@@ -2326,6 +2410,10 @@ function followUpResult(
     followUpStatus?: string;
     nextAttemptAt?: Date | null;
     recipients?: string[];
+    recipientDeliveryMode?: RecipientDeliveryMode;
+    primaryRecipientEmail?: string | null;
+    toRecipients?: string[];
+    ccRecipients?: string[];
     fullTeamSend?: boolean;
     contactId?: string | null;
   } = {},
@@ -2337,6 +2425,11 @@ function followUpResult(
     mode: state === "eligible" ? (details.mode ?? "new") : null,
     reason,
     recipients: details.recipients ?? [],
+    recipientDeliveryMode:
+      details.recipientDeliveryMode ?? DEFAULT_RECIPIENT_DELIVERY_MODE,
+    primaryRecipientEmail: details.primaryRecipientEmail ?? null,
+    toRecipients: details.toRecipients ?? [],
+    ccRecipients: details.ccRecipients ?? [],
     fullTeamSend: details.fullTeamSend ?? false,
     ...(details.contactId ? { contactId: details.contactId } : {}),
     ...(details.followUpOutreachId
@@ -2370,6 +2463,8 @@ export async function getFollowUpEligibilityBatch(
         artistId: true,
         contactId: true,
         festivalAllContactsSend: true,
+        recipientDeliveryMode: true,
+        primaryRecipientEmail: true,
         expectedRecipientContactId: true,
         expectedRecipientArtistId: true,
         expectedRecipientEmail: true,
@@ -2393,6 +2488,8 @@ export async function getFollowUpEligibilityBatch(
             artistId: true,
             contactId: true,
             festivalAllContactsSend: true,
+            recipientDeliveryMode: true,
+            primaryRecipientEmail: true,
             expectedRecipientContactId: true,
             expectedRecipientArtistId: true,
             expectedRecipientEmail: true,
@@ -2567,10 +2664,26 @@ export async function getFollowUpEligibilityBatch(
       child &&
       isConclusiveRealOutreachAcceptance(child, childAttempt)
     ) {
+      const request = parseResendRequestSnapshot(childAttempt?.providerRequest);
+      const deliveryMode = isRecipientDeliveryMode(
+        child.recipientDeliveryMode,
+      )
+        ? child.recipientDeliveryMode
+        : DEFAULT_RECIPIENT_DELIVERY_MODE;
+      const layout = recipientDeliveryLayout(
+        child.recipientEmails,
+        child.primaryRecipientEmail,
+        deliveryMode,
+      );
       return followUpResult(parent.id, "sent", "Follow-up already sent", {
         contactId: child.contactId,
         followUpOutreachId: child.id,
         followUpStatus: child.status,
+        recipients: child.recipientEmails,
+        recipientDeliveryMode: deliveryMode,
+        primaryRecipientEmail: child.primaryRecipientEmail,
+        toRecipients: request?.to ?? layout.to,
+        ccRecipients: request?.cc ?? layout.cc,
       });
     }
     if (child?.status === "sent") {
@@ -2582,6 +2695,19 @@ export async function getFollowUpEligibilityBatch(
           contactId: child.contactId,
           followUpOutreachId: child.id,
           followUpStatus: child.status,
+          recipients: child.recipientEmails,
+          recipientDeliveryMode: isRecipientDeliveryMode(
+            child.recipientDeliveryMode,
+          )
+            ? child.recipientDeliveryMode
+            : DEFAULT_RECIPIENT_DELIVERY_MODE,
+          primaryRecipientEmail: child.primaryRecipientEmail,
+          toRecipients:
+            parseResendRequestSnapshot(childAttempt?.providerRequest)?.to ??
+            [],
+          ccRecipients:
+            parseResendRequestSnapshot(childAttempt?.providerRequest)?.cc ??
+            [],
         },
       );
     }
@@ -2592,6 +2718,16 @@ export async function getFollowUpEligibilityBatch(
         (child.status === "queued" &&
           !isStaleOutreachClaim(child.claimedAt, now)))
     ) {
+      const deliveryMode = isRecipientDeliveryMode(
+        child.recipientDeliveryMode,
+      )
+        ? child.recipientDeliveryMode
+        : DEFAULT_RECIPIENT_DELIVERY_MODE;
+      const layout = recipientDeliveryLayout(
+        child.recipientEmails,
+        child.primaryRecipientEmail,
+        deliveryMode,
+      );
       return followUpResult(
         parent.id,
         "pending",
@@ -2605,6 +2741,11 @@ export async function getFollowUpEligibilityBatch(
           followUpOutreachId: child.id,
           followUpStatus: child.status,
           nextAttemptAt: child.nextAttemptAt ?? child.scheduledFor,
+          recipients: child.recipientEmails,
+          recipientDeliveryMode: deliveryMode,
+          primaryRecipientEmail: child.primaryRecipientEmail,
+          toRecipients: layout.to,
+          ccRecipients: layout.cc,
         },
       );
     }
@@ -2737,6 +2878,14 @@ export async function getFollowUpEligibilityBatch(
       suppressedEmails,
       allowMissingFrom: mode === "new",
       requestedRecipientEmails: currentRecipients,
+      requestedRecipientDeliveryMode:
+        mode === "retry" && child
+          ? isRecipientDeliveryMode(child.recipientDeliveryMode)
+            ? child.recipientDeliveryMode
+            : DEFAULT_RECIPIENT_DELIVERY_MODE
+          : isRecipientDeliveryMode(parent.recipientDeliveryMode)
+            ? parent.recipientDeliveryMode
+            : DEFAULT_RECIPIENT_DELIVERY_MODE,
       preserveFestivalAllContactsSend: true,
     });
     if (!policy.ok) {
@@ -2749,6 +2898,10 @@ export async function getFollowUpEligibilityBatch(
       contactId: contact.id,
       mode,
       recipients: policy.currentRecipients,
+      recipientDeliveryMode: policy.recipientDeliveryMode,
+      primaryRecipientEmail: policy.primaryRecipientEmail,
+      toRecipients: policy.policy.to,
+      ccRecipients: policy.policy.cc,
       fullTeamSend: policy.fullTeamSend,
       followUpOutreachId: child?.id,
       followUpStatus: child?.status,
@@ -2785,9 +2938,16 @@ async function prepareOriginalOutreach(
     trajectoryContext,
     festivalCoveredArtistIds,
     festivalAllContacts,
+    recipientDeliveryMode,
   } = input;
   const [sendability] = await getOutreachSendabilityBatch([
-    { showId, contactId, singleRecipient, festivalAllContacts },
+    {
+      showId,
+      contactId,
+      singleRecipient,
+      festivalAllContacts,
+      recipientDeliveryMode,
+    },
   ]);
   if (!sendability.sendable) {
     return { error: sendability.reason ?? "Outreach is not sendable" };
@@ -2942,6 +3102,10 @@ async function prepareOriginalOutreach(
     templateId: template.id,
     templatePurpose,
     recipients: sendability.recipients,
+    recipientDeliveryMode:
+      sendability.recipientDeliveryMode ??
+      DEFAULT_RECIPIENT_DELIVERY_MODE,
+    primaryRecipientEmail: sendability.primaryRecipientEmail ?? null,
     fullTeamSend: sendability.fullTeamSend,
     festivalAllContactsSend:
       sendability.festivalAllContactsSend ?? false,
@@ -2998,6 +3162,7 @@ async function prepareFollowUpOutreach(
         artistId: true,
         contactId: true,
         festivalAllContactsSend: true,
+        recipientDeliveryMode: true,
         expectedRecipientContactId: true,
         expectedRecipientArtistId: true,
         expectedRecipientEmail: true,
@@ -3120,6 +3285,16 @@ async function prepareFollowUpOutreach(
   const normalizedHtmlOverride = normalizeLegacyRateTemplateHtml(
     overrides.htmlOverride?.trim() ?? "",
   );
+  const recipientDeliveryMode =
+    overrides.recipientDeliveryMode ??
+    eligibility.recipientDeliveryMode ??
+    DEFAULT_RECIPIENT_DELIVERY_MODE;
+  const primaryRecipientEmail =
+    recipientDeliveryMode === "cc_thread"
+      ? eligibility.recipients.includes(expectedRecipientIdentity.normalizedEmail)
+        ? expectedRecipientIdentity.normalizedEmail
+        : eligibility.recipients[0] ?? null
+      : null;
   return {
     kind: "follow_up",
     parentOutreachId: parent.id,
@@ -3131,6 +3306,8 @@ async function prepareFollowUpOutreach(
     templateId: template.id,
     templatePurpose: "follow_up",
     recipients: eligibility.recipients,
+    recipientDeliveryMode,
+    primaryRecipientEmail,
     fullTeamSend: eligibility.fullTeamSend,
     festivalAllContactsSend: parent.festivalAllContactsSend,
     subject:
@@ -3183,6 +3360,8 @@ function claimedOutreach(
     finalHtml: string;
     recipientEmails: string[];
     recipientSnapshotState: string;
+    recipientDeliveryMode: string;
+    primaryRecipientEmail: string | null;
     fullTeamSend: boolean;
     festivalAllContactsSend: boolean;
     idempotencyKey: string;
@@ -3219,6 +3398,8 @@ function claimedOutreach(
     finalHtml: row.finalHtml,
     recipientEmails: row.recipientEmails,
     recipientSnapshotState: row.recipientSnapshotState,
+    recipientDeliveryMode: row.recipientDeliveryMode,
+    primaryRecipientEmail: row.primaryRecipientEmail,
     fullTeamSend: row.fullTeamSend,
     festivalAllContactsSend: row.festivalAllContactsSend,
     idempotencyKey: row.idempotencyKey,
@@ -3812,11 +3993,14 @@ async function preparedDeliveryPolicyBlockingReason(
       prep.festivalAllContactsSend,
     requestedRecipientEmails:
       currentFollowUpRecipients ?? undefined,
+    requestedRecipientDeliveryMode: prep.recipientDeliveryMode,
     preserveFestivalAllContactsSend: prep.kind === "follow_up",
   });
   if (!decision.ok) return decision.error;
   if (
     decision.fullTeamSend !== prep.fullTeamSend ||
+    decision.recipientDeliveryMode !== prep.recipientDeliveryMode ||
+    decision.primaryRecipientEmail !== prep.primaryRecipientEmail ||
     !sameEmails(decision.currentRecipients, prep.recipients)
   ) {
     return MANUAL_REVIEW_SNAPSHOT;
@@ -4068,6 +4252,8 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           prep.recipients,
           prep.fullTeamSend,
           prep.festivalAllContactsSend,
+          prep.recipientDeliveryMode,
+          prep.primaryRecipientEmail,
         );
         if (snapshotConflict) {
           if (
@@ -4122,6 +4308,8 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
                 finalHtml: prep.html,
                 recipientEmails: prep.recipients,
                 recipientSnapshotState: "verified",
+                recipientDeliveryMode: prep.recipientDeliveryMode,
+                primaryRecipientEmail: prep.primaryRecipientEmail,
                 fullTeamSend: prep.fullTeamSend,
                 festivalAllContactsSend: prep.festivalAllContactsSend,
                 templateId: prep.templateId,
@@ -4221,6 +4409,8 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
           recipientSnapshotState: "verified",
+          recipientDeliveryMode: prep.recipientDeliveryMode,
+          primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
           templateId: prep.templateId,
@@ -4261,6 +4451,8 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
           recipientSnapshotState: "verified",
+          recipientDeliveryMode: prep.recipientDeliveryMode,
+          primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
           templateId: prep.templateId,
@@ -4297,6 +4489,8 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           prep.recipients,
           prep.fullTeamSend,
           prep.festivalAllContactsSend,
+          prep.recipientDeliveryMode,
+          prep.primaryRecipientEmail,
         );
         if (snapshotConflict) {
           if (
@@ -4365,6 +4559,8 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
           recipientSnapshotState: "verified",
+          recipientDeliveryMode: prep.recipientDeliveryMode,
+          primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
           templateId: prep.templateId,
@@ -4438,6 +4634,8 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
           recipientSnapshotState: "verified",
+          recipientDeliveryMode: prep.recipientDeliveryMode,
+          primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
           templateId: prep.templateId,
@@ -4481,6 +4679,8 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         finalHtml: prep.html,
         recipientEmails: prep.recipients,
         recipientSnapshotState: "verified",
+        recipientDeliveryMode: prep.recipientDeliveryMode,
+        primaryRecipientEmail: prep.primaryRecipientEmail,
         fullTeamSend: prep.fullTeamSend,
         festivalAllContactsSend: prep.festivalAllContactsSend,
         ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
@@ -4646,6 +4846,12 @@ async function ensureAttempt(outreachInput: ClaimedOutreach): Promise<AttemptRes
       "No unsuppressed valid recipient snapshot is available",
     );
   }
+  if (!isRecipientDeliveryMode(outreachInput.recipientDeliveryMode)) {
+    return releasePreparationFailure(
+      outreachInput,
+      "Outreach recipient delivery mode is invalid",
+    );
+  }
   const outreach = outreachInput;
 
   const attemptId = attemptIdFromKey(outreach.id, outreach.idempotencyKey);
@@ -4658,6 +4864,9 @@ async function ensureAttempt(outreachInput: ClaimedOutreach): Promise<AttemptRes
 
   const prepared = await prepareResendRequest({
     to: outreach.recipientEmails,
+    recipientDeliveryMode:
+      outreach.recipientDeliveryMode as RecipientDeliveryMode,
+    primaryRecipientEmail: outreach.primaryRecipientEmail,
     subject: outreach.finalSubject,
     html: outreach.finalHtml,
     outreachId: outreach.id,
@@ -5999,6 +6208,8 @@ async function schedulePreparedOutreach(
         scheduled.templateId === prep.templateId &&
         scheduled.finalSubject === prep.subject &&
         scheduled.finalHtml === prep.html &&
+        scheduled.recipientDeliveryMode === prep.recipientDeliveryMode &&
+        scheduled.primaryRecipientEmail === prep.primaryRecipientEmail &&
         scheduled.fullTeamSend === prep.fullTeamSend &&
         scheduled.festivalAllContactsSend ===
           prep.festivalAllContactsSend &&
@@ -6095,6 +6306,8 @@ async function schedulePreparedOutreach(
           prep.recipients,
           prep.fullTeamSend,
           prep.festivalAllContactsSend,
+          prep.recipientDeliveryMode,
+          prep.primaryRecipientEmail,
         );
         if (snapshotConflict) {
           return (
@@ -6144,6 +6357,8 @@ async function schedulePreparedOutreach(
                 finalHtml: prep.html,
                 recipientEmails: prep.recipients,
                 recipientSnapshotState: "verified",
+                recipientDeliveryMode: prep.recipientDeliveryMode,
+                primaryRecipientEmail: prep.primaryRecipientEmail,
                 fullTeamSend: prep.fullTeamSend,
                 festivalAllContactsSend: prep.festivalAllContactsSend,
                 templateId: prep.templateId,
@@ -6227,6 +6442,8 @@ async function schedulePreparedOutreach(
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
           recipientSnapshotState: "verified",
+          recipientDeliveryMode: prep.recipientDeliveryMode,
+          primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
           templateId: prep.templateId,
@@ -6259,6 +6476,8 @@ async function schedulePreparedOutreach(
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
           recipientSnapshotState: "verified",
+          recipientDeliveryMode: prep.recipientDeliveryMode,
+          primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
           templateId: prep.templateId,
@@ -6287,6 +6506,8 @@ async function schedulePreparedOutreach(
           prep.recipients,
           prep.fullTeamSend,
           prep.festivalAllContactsSend,
+          prep.recipientDeliveryMode,
+          prep.primaryRecipientEmail,
         );
         if (snapshotConflict) {
           const completed = await markManualReview(
@@ -6343,6 +6564,8 @@ async function schedulePreparedOutreach(
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
           recipientSnapshotState: "verified",
+          recipientDeliveryMode: prep.recipientDeliveryMode,
+          primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
           templateId: prep.templateId,
@@ -6409,6 +6632,8 @@ async function schedulePreparedOutreach(
           finalHtml: prep.html,
           recipientEmails: prep.recipients,
           recipientSnapshotState: "verified",
+          recipientDeliveryMode: prep.recipientDeliveryMode,
+          primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
           templateId: prep.templateId,
@@ -6445,6 +6670,8 @@ async function schedulePreparedOutreach(
         finalHtml: prep.html,
         recipientEmails: prep.recipients,
         recipientSnapshotState: "verified",
+        recipientDeliveryMode: prep.recipientDeliveryMode,
+        primaryRecipientEmail: prep.primaryRecipientEmail,
         fullTeamSend: prep.fullTeamSend,
         festivalAllContactsSend: prep.festivalAllContactsSend,
         ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),

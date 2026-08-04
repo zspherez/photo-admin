@@ -134,7 +134,7 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
   assert.match(page, /Follow-up sent\. The delivered content is shown below\./);
   assert.match(actions, /scheduleFollowUp\(/);
   assert.match(actions, /sendFollowUp\(/);
-  assert.match(actions, /\{ subjectOverride, htmlOverride \}/);
+  assert.match(actions, /recipientDeliveryMode: recipientDeliveryModeValue/);
   assert.match(form, /followUpMode/);
   assert.match(
     form,
@@ -145,6 +145,9 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
     /This follow-up uses the immutable recipient snapshot/,
   );
   assert.match(form, /Send follow-up now/);
+  assert.match(form, /Keep recipients on one email thread/);
+  assert.match(form, /<b>To:<\/b>/);
+  assert.match(form, /<b>CC:<\/b>/);
   assert.match(
     send,
     /eligibility\.mode === "new" && normalizedSubjectOverride/,

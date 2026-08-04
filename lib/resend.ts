@@ -3,6 +3,11 @@ import type { Prisma } from "@prisma/client";
 import { Resend, type ErrorResponse } from "resend";
 import { db } from "@/lib/db";
 import { readGeneralDeliverySettingsInTransaction } from "@/lib/generalSettings";
+import {
+  DEFAULT_RECIPIENT_DELIVERY_MODE,
+  recipientDeliveryLayout,
+  type RecipientDeliveryMode,
+} from "@/lib/recipientDelivery";
 
 export const RESEND_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const RESEND_CONFIGURATION_ERROR =
@@ -111,6 +116,8 @@ export interface ResendRequestSnapshot {
 
 export interface PrepareResendRequestArgs {
   to: string[];
+  recipientDeliveryMode?: RecipientDeliveryMode;
+  primaryRecipientEmail?: string | null;
   subject: string;
   html: string;
   outreachId: string;
@@ -261,7 +268,9 @@ export async function getResendDeliverySettingsSnapshot(
 export interface ResendDeliveryPolicy {
   from: string;
   intendedRecipients: string[];
+  primaryIntendedRecipient: string;
   to: string[];
+  cc: string[];
   bcc: string[];
   subject: string;
   testSend: boolean;
@@ -278,6 +287,8 @@ export interface BuildResendDeliveryPolicyArgs {
   testOverride: string | null;
   bccEmails: string[];
   suppressedEmails: Iterable<string>;
+  recipientDeliveryMode?: RecipientDeliveryMode;
+  primaryRecipientEmail?: string | null;
   allowMissingFrom?: boolean;
 }
 
@@ -288,6 +299,8 @@ export function buildResendDeliveryPolicy({
   testOverride,
   bccEmails,
   suppressedEmails,
+  recipientDeliveryMode = DEFAULT_RECIPIENT_DELIVERY_MODE,
+  primaryRecipientEmail = null,
   allowMissingFrom = false,
 }: BuildResendDeliveryPolicyArgs): ResendDeliveryPolicyResult {
   const normalizedFrom = from?.trim();
@@ -324,13 +337,30 @@ export function buildResendDeliveryPolicy({
   const allowedBcc = overrideEmail
     ? []
     : normalizeEmails(bccEmails).filter((email) => !blocked.has(email));
+  const normalizedPrimary = normalizeEmail(primaryRecipientEmail ?? "");
+  const primaryIntendedRecipient =
+    (normalizedPrimary && allowedIntended.includes(normalizedPrimary)
+      ? normalizedPrimary
+      : allowedIntended[0])!;
+  const layout = overrideEmail
+    ? { to: [overrideEmail], cc: [] }
+    : recipientDeliveryLayout(
+        allowedIntended,
+        primaryIntendedRecipient,
+        recipientDeliveryMode,
+      );
   return {
     ok: true,
     policy: {
       from: normalizedFrom ?? "",
       intendedRecipients: allowedIntended,
-      to: overrideEmail ? [overrideEmail] : allowedIntended,
-      bcc: allowedBcc,
+      primaryIntendedRecipient,
+      to: layout.to,
+      cc: layout.cc,
+      bcc:
+        recipientDeliveryMode === "cc_thread"
+          ? allowedBcc.filter((email) => !allowedIntended.includes(email))
+          : allowedBcc,
       subject: overrideEmail
         ? `[TEST → ${allowedIntended.join(", ")}] ${subject}`
         : subject,
@@ -359,6 +389,9 @@ export function buildArbitraryResendDeliveryPolicy(
 export async function resolveResendDeliveryPolicy(
   intendedRecipients: string[],
   subject: string,
+  recipientDeliveryMode: RecipientDeliveryMode =
+    DEFAULT_RECIPIENT_DELIVERY_MODE,
+  primaryRecipientEmail: string | null = null,
 ): Promise<ResendDeliveryPolicyResult> {
   const { from, testOverride, bccEmails } =
     await getResendDeliverySettingsSnapshot();
@@ -381,6 +414,8 @@ export async function resolveResendDeliveryPolicy(
     testOverride,
     bccEmails,
     suppressedEmails: suppressed.map((row) => row.normalizedEmail),
+    recipientDeliveryMode,
+    primaryRecipientEmail,
   });
 }
 
@@ -434,9 +469,10 @@ export function compareResendRequestToPolicy(
   if (!sameStrings(request.to, policy.to)) {
     return "recipient or test-override policy changed";
   }
+  if (!sameStrings(request.cc, policy.cc)) return "CC policy changed";
   if (!sameStrings(request.bcc, policy.bcc)) return "BCC policy changed";
-  if (request.cc.length > 0 || request.replyTo.length > 0) {
-    return "stored CC or reply-to fields are not allowed by current policy";
+  if (request.replyTo.length > 0) {
+    return "stored reply-to fields are not allowed by current policy";
   }
   if (request.subject !== policy.subject) return "test-mode subject policy changed";
   return null;
@@ -447,10 +483,15 @@ export async function evaluateResendRetryPolicy(
   intendedRecipients: string[],
   baseSubject: string,
   testSend: boolean,
+  recipientDeliveryMode: RecipientDeliveryMode =
+    DEFAULT_RECIPIENT_DELIVERY_MODE,
+  primaryRecipientEmail: string | null = null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const resolved = await resolveResendDeliveryPolicy(
     intendedRecipients,
     baseSubject,
+    recipientDeliveryMode,
+    primaryRecipientEmail,
   );
   if (!resolved.ok) {
     return {
@@ -473,13 +514,38 @@ export async function evaluateResendRetryPolicy(
 
 export async function prepareResendRequest({
   to,
+  recipientDeliveryMode,
+  primaryRecipientEmail,
   subject,
   html,
   outreachId,
   attemptId,
   idempotencyKey,
 }: PrepareResendRequestArgs): Promise<PrepareResendRequestResult> {
-  const resolvedPolicy = await resolveResendDeliveryPolicy(to, subject);
+  const { from, testOverride, bccEmails } =
+    await getResendDeliverySettingsSnapshot();
+  const candidates = normalizeEmails([
+    ...to,
+    ...bccEmails,
+    ...(testOverride ? [testOverride] : []),
+  ]);
+  const suppressed =
+    candidates.length === 0
+      ? []
+      : await db.emailSuppression.findMany({
+          where: { normalizedEmail: { in: candidates } },
+          select: { normalizedEmail: true },
+        });
+  const resolvedPolicy = buildResendDeliveryPolicy({
+    from,
+    intendedRecipients: to,
+    subject,
+    testOverride,
+    bccEmails,
+    suppressedEmails: suppressed.map((row) => row.normalizedEmail),
+    recipientDeliveryMode,
+    primaryRecipientEmail,
+  });
   if (!resolvedPolicy.ok) {
     return {
       ...resolvedPolicy,
@@ -493,7 +559,7 @@ export async function prepareResendRequest({
     idempotencyKey,
     from: policy.from,
     to: policy.to,
-    cc: [],
+    cc: policy.cc,
     bcc: policy.bcc,
     replyTo: [],
     subject: policy.subject,
@@ -541,7 +607,7 @@ export async function prepareArbitraryResendRequest({
     idempotencyKey,
     from: policy.from,
     to: policy.to,
-    cc: [],
+    cc: policy.cc,
     bcc: policy.bcc,
     replyTo: [],
     subject: policy.subject,

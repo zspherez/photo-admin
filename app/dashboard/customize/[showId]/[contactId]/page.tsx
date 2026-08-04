@@ -142,6 +142,8 @@ export default async function CustomizePage({
               finalHtml: true,
               recipientEmails: true,
               recipientSnapshotState: true,
+              recipientDeliveryMode: true,
+              primaryRecipientEmail: true,
             },
           },
         },
@@ -270,6 +272,8 @@ export default async function CustomizePage({
             finalHtml: true,
             recipientEmails: true,
             recipientSnapshotState: true,
+            recipientDeliveryMode: true,
+            primaryRecipientEmail: true,
           },
         });
   const retrySnapshotById = new Map(
@@ -336,6 +340,17 @@ export default async function CustomizePage({
             followUpEligibility && followUpEligibility.recipients.length > 0
               ? followUpEligibility.recipients
               : (storedFollowUp?.recipientEmails ?? []),
+          recipientDeliveryMode:
+            followUpEligibility?.recipientDeliveryMode ??
+            (storedFollowUp?.recipientDeliveryMode === "cc_thread"
+              ? "cc_thread"
+              : "individual_threads"),
+          primaryRecipientEmail:
+            followUpEligibility?.primaryRecipientEmail ??
+            storedFollowUp?.primaryRecipientEmail ??
+            null,
+          toRecipients: followUpEligibility?.toRecipients ?? [],
+          ccRecipients: followUpEligibility?.ccRecipients ?? [],
           subject: content?.subject ?? null,
           html: content?.html ?? null,
           contentLocked:
@@ -397,6 +412,12 @@ export default async function CustomizePage({
           validRetrySnapshot?.recipientEmails ??
           sendability?.recipients ??
           [],
+        recipientDeliveryMode:
+          sendability?.recipientDeliveryMode ?? "individual_threads",
+        primaryRecipientEmail:
+          sendability?.primaryRecipientEmail ?? null,
+        toRecipients: sendability?.toRecipients ?? [],
+        ccRecipients: sendability?.ccRecipients ?? [],
         subject: content?.subject ?? null,
         html: content?.html ?? null,
         contentLocked: sendability?.mode === "retry",
@@ -422,6 +443,10 @@ export default async function CustomizePage({
           ? "This is a direct-outreach contact with no email action."
           : "This contact has no valid email action.",
       recipients: [],
+      recipientDeliveryMode: "individual_threads",
+      primaryRecipientEmail: null,
+      toRecipients: [],
+      ccRecipients: [],
       subject: null,
       html: null,
       contentLocked: false,

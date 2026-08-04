@@ -12,7 +12,8 @@ test("festival bulk outreach supports select all and grouped confirmation", () =
   assert.match(source, />\s*Select all\s*</);
   assert.match(source, />\s*Send to selected\s*</);
   assert.match(source, /Confirm festival outreach/);
-  assert.match(source, /<th[^>]*>Email<\/th>/);
+  assert.match(source, /<th[^>]*>To<\/th>/);
+  assert.match(source, /<th[^>]*>CC<\/th>/);
   assert.match(source, /<th[^>]*>Associated artists<\/th>/);
   assert.match(source, /<th[^>]*>Email format<\/th>/);
   assert.match(source, /"Shared"/);
@@ -32,6 +33,9 @@ test("confirmation groups selected artists by the exact server grouping key", ()
           artistName: "Artist A",
           groupKey: "manager@example.com",
           emailLabel: "manager@example.com",
+          recipients: ["manager@example.com"],
+          primaryRecipientEmail: "manager@example.com",
+          recipientDeliveryMode: "individual_threads",
           selectedByDefault: false,
         },
         {
@@ -39,6 +43,9 @@ test("confirmation groups selected artists by the exact server grouping key", ()
           artistName: "Artist B",
           groupKey: "manager@example.com",
           emailLabel: "manager@example.com",
+          recipients: ["manager@example.com"],
+          primaryRecipientEmail: "manager@example.com",
+          recipientDeliveryMode: "individual_threads",
           selectedByDefault: false,
         },
         {
@@ -46,6 +53,9 @@ test("confirmation groups selected artists by the exact server grouping key", ()
           artistName: "Artist C",
           groupKey: "contact:contact-c",
           emailLabel: "team@example.com, manager@example.com",
+          recipients: ["manager@example.com", "team@example.com"],
+          primaryRecipientEmail: "manager@example.com",
+          recipientDeliveryMode: "individual_threads",
           selectedByDefault: false,
         },
       ],
@@ -56,11 +66,15 @@ test("confirmation groups selected artists by the exact server grouping key", ()
         groupKey: "manager@example.com",
         emailLabel: "manager@example.com",
         artistNames: ["Artist A", "Artist B"],
+        recipients: ["manager@example.com"],
+        primaryRecipientEmail: "manager@example.com",
       },
       {
         groupKey: "contact:contact-c",
         emailLabel: "team@example.com, manager@example.com",
         artistNames: ["Artist C"],
+        recipients: ["manager@example.com", "team@example.com"],
+        primaryRecipientEmail: "manager@example.com",
       },
     ],
   );

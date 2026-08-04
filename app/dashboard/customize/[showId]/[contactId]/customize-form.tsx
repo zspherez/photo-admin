@@ -10,6 +10,10 @@ import {
   type CustomizeRecipientDrafts,
 } from "@/lib/customizeRecipientDrafts";
 import type { CustomizeActionState } from "./actions";
+import {
+  recipientDeliveryLayout,
+  type RecipientDeliveryMode,
+} from "@/lib/recipientDelivery";
 
 export interface CustomizeRecipientOption {
   id: string;
@@ -23,6 +27,10 @@ export interface CustomizeRecipientOption {
   mode: "new" | "retry" | null;
   reason: string | null;
   recipients: string[];
+  recipientDeliveryMode: RecipientDeliveryMode;
+  primaryRecipientEmail: string | null;
+  toRecipients: string[];
+  ccRecipients: string[];
   subject: string | null;
   html: string | null;
   contentLocked: boolean;
@@ -53,6 +61,11 @@ export function CustomizeForm({
 }) {
   const [selectedContactId, setSelectedContactId] =
     useState(contextContactId);
+  const [recipientDeliveryMode, setRecipientDeliveryMode] =
+    useState<RecipientDeliveryMode>(
+      recipientOptions.find((option) => option.id === contextContactId)
+        ?.recipientDeliveryMode ?? "individual_threads",
+    );
   const [drafts, setDrafts] = useState<CustomizeRecipientDrafts>(() =>
     initializeCustomizeRecipientDrafts(recipientOptions),
   );
@@ -71,6 +84,32 @@ export function CustomizeForm({
     state.error && state.selectedContactId === selectedContactId
       ? state.error
       : null;
+  const canChooseDeliveryMode =
+    followUpMode &&
+    selected?.mode === "new" &&
+    !contentLocked &&
+    (selected?.recipients.length ?? 0) > 1;
+  const primaryRecipientEmail =
+    recipientDeliveryMode === "cc_thread"
+      ? selected?.recipients.includes(selected.email)
+        ? selected.email
+        : selected?.primaryRecipientEmail ?? selected?.recipients[0] ?? null
+      : null;
+  const previewLayout = selected
+    ? contentLocked ||
+      selected.toRecipients.some(
+        (email) => !selected.recipients.includes(email),
+      )
+      ? {
+          to: selected.toRecipients,
+          cc: selected.ccRecipients,
+        }
+      : recipientDeliveryLayout(
+          selected.recipients,
+          primaryRecipientEmail,
+          recipientDeliveryMode,
+        )
+    : { to: [], cc: [] };
 
   return (
     <form action={formAction} className="space-y-4">
@@ -93,6 +132,11 @@ export function CustomizeForm({
         type="hidden"
         name="expectedRecipientUpdatedAt"
         value={selected?.updatedAt ?? ""}
+      />
+      <input
+        type="hidden"
+        name="recipientDeliveryMode"
+        value={recipientDeliveryMode}
       />
       <div>
         <label htmlFor="selected-contact" className="text-sm font-medium">
@@ -129,6 +173,40 @@ export function CustomizeForm({
                 }: ${selected.recipients.join(", ")}.`
               : `This email will be sent only to ${selected.email}.`}
           </p>
+        )}
+        {canChooseDeliveryMode && (
+          <label className="mt-3 flex items-start gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+            <input
+              type="checkbox"
+              checked={recipientDeliveryMode === "cc_thread"}
+              onChange={(event) =>
+                setRecipientDeliveryMode(
+                  event.target.checked ? "cc_thread" : "individual_threads",
+                )
+              }
+              className="mt-0.5 h-4 w-4 accent-zinc-900 dark:accent-zinc-100"
+            />
+            <span>
+              <span className="block text-sm font-medium">
+                Keep recipients on one email thread
+              </span>
+              <span className="mt-1 block text-xs text-zinc-500">
+                Put the primary recipient in To and the remaining management
+                contacts in CC. Off by default, each To recipient receives a
+                separate thread.
+              </span>
+            </span>
+          </label>
+        )}
+        {selected?.eligible && selected.recipients.length > 1 && (
+          <div className="mt-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs dark:bg-zinc-900">
+            <p>
+              <b>To:</b> {previewLayout.to.join(", ") || "—"}
+            </p>
+            <p className="mt-1">
+              <b>CC:</b> {previewLayout.cc.join(", ") || "—"}
+            </p>
+          </div>
         )}
       </div>
 

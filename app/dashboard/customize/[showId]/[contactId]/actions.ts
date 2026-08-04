@@ -35,6 +35,7 @@ import {
   captureTrajectoryAction,
   trajectoryActionResultHref,
 } from "@/lib/trajectoryActionError";
+import { isRecipientDeliveryMode } from "@/lib/recipientDelivery";
 
 export interface CustomizeActionState {
   error: string | null;
@@ -82,6 +83,12 @@ export async function sendCustom(
   ).trim();
   const subjectOverride = String(formData.get("subject") ?? "");
   const htmlOverride = String(formData.get("html") ?? "");
+  const recipientDeliveryModeValue = String(
+    formData.get("recipientDeliveryMode") ?? "",
+  );
+  if (!isRecipientDeliveryMode(recipientDeliveryModeValue)) {
+    return actionError(selectedContactId, "Unknown recipient delivery mode");
+  }
   const intent = String(formData.get("intent") ?? "send");
   if (intent !== "send" && intent !== "queue") {
     return actionError(selectedContactId, "Unknown email action");
@@ -227,19 +234,31 @@ export async function sendCustom(
             context.parentOutreachId,
             getNextNormalOutreachDispatch(),
             context.trajectoryContext ?? undefined,
-            { subjectOverride, htmlOverride },
+            {
+              subjectOverride,
+              htmlOverride,
+              recipientDeliveryMode: recipientDeliveryModeValue,
+            },
           )
         : isWeekendET()
           ? scheduleFollowUp(
               context.parentOutreachId,
               getNextMondaySlot(),
               context.trajectoryContext ?? undefined,
-              { subjectOverride, htmlOverride },
+              {
+                subjectOverride,
+                htmlOverride,
+                recipientDeliveryMode: recipientDeliveryModeValue,
+              },
             )
           : sendFollowUp(
               context.parentOutreachId,
               context.trajectoryContext ?? undefined,
-              { subjectOverride, htmlOverride },
+              {
+                subjectOverride,
+                htmlOverride,
+                recipientDeliveryMode: recipientDeliveryModeValue,
+              },
             )
       : intent === "queue"
         ? scheduleOutreach(

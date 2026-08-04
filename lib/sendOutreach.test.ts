@@ -1412,6 +1412,29 @@ test("follow-ups use every current active email and shared coverage uses the int
   );
 });
 
+test("new follow-ups inherit delivery mode while attempted retries keep the child snapshot", () => {
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /mode === "retry" && child[\s\S]*child\.recipientDeliveryMode[\s\S]*parent\.recipientDeliveryMode/,
+  );
+  assert.match(
+    source,
+    /overrides\.recipientDeliveryMode \?\?[\s\S]*eligibility\.recipientDeliveryMode/,
+  );
+  assert.match(
+    source,
+    /recipientDeliveryMode: prep\.recipientDeliveryMode[\s\S]*primaryRecipientEmail: prep\.primaryRecipientEmail/,
+  );
+  assert.match(
+    source,
+    /prepareResendRequest\(\{[\s\S]*recipientDeliveryMode:[\s\S]{0,100}outreach\.recipientDeliveryMode[\s\S]*primaryRecipientEmail: outreach\.primaryRecipientEmail/,
+  );
+});
+
 test("follow-up recipient snapshots can include multiple unmarked current contacts", () => {
   const contact = {
     id: "contact-new",
@@ -1609,6 +1632,43 @@ test("festival all-contacts mode includes every active email without a full-team
       "manager@example.com",
     ]);
   }
+});
+
+test("festival all-contacts CC mode keeps the selected manager on To", () => {
+  const primary = {
+    id: "contact-1",
+    artistId: "artist-1",
+    email: "manager@example.com",
+    state: "active" as const,
+    isFullTeam: false,
+  };
+  const decision = evaluateOutreachDeliveryPolicy(
+    deliveryPolicyFixture({
+      contact: primary,
+      artistContacts: [
+        primary,
+        {
+          id: "contact-2",
+          artistId: "artist-1",
+          email: "co-manager@example.com",
+          state: "active",
+          isFullTeam: false,
+        },
+      ],
+      stored: null,
+      attempt: null,
+      bccEmails: [],
+      requestedFullTeamSend: true,
+      requestedFestivalAllContactsSend: true,
+      requestedRecipientDeliveryMode: "cc_thread",
+    }),
+  );
+  assert.equal(decision.ok, true);
+  if (!decision.ok) return;
+  assert.equal(decision.recipientDeliveryMode, "cc_thread");
+  assert.equal(decision.primaryRecipientEmail, "manager@example.com");
+  assert.deepEqual(decision.policy.to, ["manager@example.com"]);
+  assert.deepEqual(decision.policy.cc, ["co-manager@example.com"]);
 });
 
 test("festival all-contacts mode stays off for one active email", () => {

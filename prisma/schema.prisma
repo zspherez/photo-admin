@@ -857,6 +857,8 @@ model Outreach {
   finalHtml                  String
   recipientEmails            String[]              @default([])
   recipientSnapshotState     String                @default("legacy_unknown")
+  recipientDeliveryMode      String                @default("individual_threads")
+  primaryRecipientEmail      String?
   fullTeamSend               Boolean               @default(false)
   festivalAllContactsSend    Boolean               @default(false)
   expectedRecipientContactId String?
