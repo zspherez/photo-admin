@@ -254,6 +254,7 @@ function brokerProvenance(state, submission) {
       identityByEmail.set(candidate.email.toLowerCase(), {
         personName: state.claimContext.personName,
         organizationName: state.claimContext.organizationName,
+        roleTitle: candidate.roleTitle,
       });
       normalizedIdentityTokens(candidate.roleTitle).forEach((token) =>
         relevantTokens.add(token),
@@ -267,6 +268,7 @@ function brokerProvenance(state, submission) {
         identityByEmail.set(example.email.toLowerCase(), {
           personName: example.personName,
           organizationName: state.claimContext.organizationName,
+          roleTitle: null,
         });
         normalizedIdentityTokens(example.personName).forEach((token) =>
           relevantTokens.add(token),
@@ -289,6 +291,9 @@ function brokerProvenance(state, submission) {
       return {
         url: source.url,
         contentSha256: source.contentSha256,
+        primaryEntityTokens: source.primaryEntityTokens.filter((token) =>
+          relevantTokens.has(token),
+        ),
         observedEmails: source.observedEmails.filter((email) =>
           relevantEmails.has(email),
         ),

@@ -359,6 +359,7 @@ test("without a website an authoritative company profile can establish the offic
         contentSha256: "8".repeat(64),
         observedEmails: [],
         observedDomains: ["ledpresents.com"],
+        primaryEntityTokens: ["led", "presents"],
         emailAssociations: [],
         ownershipStatements: [
           {
@@ -392,6 +393,63 @@ test("without a website an authoritative company profile can establish the offic
       provenance,
       { ...context, website: null },
     ),
+  );
+});
+
+test("an agency LinkedIn profile cannot transfer its domain to a represented client", () => {
+  const candidate = {
+    ...directCandidate,
+    email: "jane.doe@agency.com",
+    sourceUrls: [
+      "https://agency.com/team/jane-doe",
+      "https://www.linkedin.com/company/agency",
+    ],
+  };
+  assert.throws(
+    () =>
+      validateProfessionalContactProvenance(
+        { outcome: "candidates", candidates: [candidate] },
+        {
+          claimProvenanceToken,
+          searches: [],
+          fetchedSources: [
+            {
+              url: "https://agency.com/team/jane-doe",
+              contentSha256: "3".repeat(64),
+              observedEmails: ["jane.doe@agency.com"],
+              observedDomains: ["agency.com"],
+              primaryEntityTokens: ["agency"],
+              emailAssociations: [
+                {
+                  email: "jane.doe@agency.com",
+                  excerptSha256: "4".repeat(64),
+                  contentTokens: ["jane", "doe", "founder"],
+                },
+              ],
+              ownershipStatements: [],
+              contentTokens: ["jane", "doe", "founder", "led", "presents"],
+            },
+            {
+              url: "https://www.linkedin.com/company/agency",
+              contentSha256: "5".repeat(64),
+              observedEmails: [],
+              observedDomains: ["agency.com"],
+              primaryEntityTokens: ["agency"],
+              emailAssociations: [],
+              ownershipStatements: [
+                {
+                  domain: "agency.com",
+                  blockSha256: "6".repeat(64),
+                  contentTokens: ["led", "presents", "website"],
+                },
+              ],
+              contentTokens: ["agency", "led", "presents", "website"],
+            },
+          ],
+        },
+        { ...context, website: null },
+      ),
+    /domain is not associated/,
   );
 });
 

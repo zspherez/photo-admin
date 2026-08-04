@@ -64,22 +64,43 @@ function normalizedPhrase(value) {
   return normalizedIdentityTokens(value).join(" ");
 }
 
-function blockHasOtherDistinctPerson(block, personName, organizationName) {
-  const personTokens = new Set(normalizedIdentityTokens(personName));
-  const organization = normalizedPhrase(organizationName);
-  const phrases =
-    block.text.match(
-      /\b[A-Z][\p{Ll}\p{M}'’-]+(?:\s+[A-Z][\p{Ll}\p{M}'’-]+){1,3}\b/gu,
-    ) ?? [];
-  return phrases.some((phrase) => {
-    const normalized = normalizedPhrase(phrase);
-    const tokens = normalizedIdentityTokens(phrase);
-    return (
-      normalized !== normalizedPhrase(personName) &&
-      normalized !== organization &&
-      !tokens.some((token) => personTokens.has(token))
-    );
-  });
+const RECORD_CONTEXT_TOKENS = new Set([
+  "and",
+  "at",
+  "contact",
+  "email",
+  "for",
+  "is",
+  "of",
+  "official",
+  "reach",
+  "staff",
+  "team",
+  "the",
+  "via",
+]);
+
+function blockHasOtherDistinctPerson(block, identity) {
+  const allowed = new Set([
+    ...normalizedIdentityTokens(identity.personName),
+    ...normalizedIdentityTokens(identity.organizationName),
+    ...normalizedIdentityTokens(identity.roleTitle ?? ""),
+    ...RECORD_CONTEXT_TOKENS,
+  ]);
+  const emailDomain = block.emails[0]?.split("@")[1] ?? "";
+  normalizedIdentityTokens(emailDomain).forEach((token) =>
+    allowed.add(token),
+  );
+  let unknownRun = 0;
+  for (const token of normalizedIdentityTokens(block.text)) {
+    if (allowed.has(token) || /^\d+$/.test(token)) {
+      unknownRun = 0;
+      continue;
+    }
+    unknownRun += 1;
+    if (unknownRun >= 2) return true;
+  }
+  return false;
 }
 
 export function emailAssociation(source, email, identity) {
@@ -89,11 +110,7 @@ export function emailAssociation(source, email, identity) {
       block.emails.length === 1 &&
       block.emails[0] === email &&
       normalizedPhrase(block.text).includes(personPhrase) &&
-      !blockHasOtherDistinctPerson(
-        block,
-        identity.personName,
-        identity.organizationName,
-      ),
+      !blockHasOtherDistinctPerson(block, identity),
   );
   if (matches.length !== 1) return null;
   const [block] = matches;
@@ -102,6 +119,33 @@ export function emailAssociation(source, email, identity) {
     excerptSha256: block.blockSha256,
     contentTokens: block.contentTokens,
   };
+}
+
+function primaryEntityTokens(result, url) {
+  const parsed = new URL(url);
+  const linkedInSlug = parsed.pathname.match(/^\/company\/([^/]+)/)?.[1];
+  const titlePrimary = String(result.title ?? "")
+    .split(/\s+[|—–]\s+/)[0]
+    .replace(/\s+-\s+LinkedIn$/i, "");
+  const titleTokens = normalizedIdentityTokens(titlePrimary).filter(
+    (token) =>
+      !new Set([
+        "facebook",
+        "instagram",
+        "linkedin",
+        "twitter",
+      ]).has(token),
+  );
+  const slugTokens = normalizedIdentityTokens(
+    linkedInSlug?.replace(/[-_]+/g, " ") ?? "",
+  );
+  return Array.from(
+    new Set(
+      slugTokens.length > 0
+        ? slugTokens.filter((token) => titleTokens.includes(token))
+        : titleTokens,
+    ),
+  ).slice(0, 50);
 }
 
 export function ownershipStatement(source, domain, organizationName) {
@@ -137,6 +181,7 @@ export function buildFetchedSourceRecord(result) {
     url,
     observedEmails,
     observedDomains: observedDomains(result, observedEmails),
+    primaryEntityTokens: primaryEntityTokens(result, url),
     blocks: pageBlocks(result),
     contentTokens: contentTokens(result),
     contentSha256: createHash("sha256")
