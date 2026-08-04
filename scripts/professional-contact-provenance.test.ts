@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildFetchedSourceRecord,
+  claimBoundPrimaryEntityTokens,
   emailAssociation,
   ownershipStatement,
 } from "./professional-contact-provenance.mjs";
+import { validateProfessionalContactProvenance } from "../lib/professionalContactProvenance.mjs";
 
 test("compact adjacent staff records cannot bind another person's email", () => {
   const source = buildFetchedSourceRecord({
@@ -183,7 +185,11 @@ test("authoritative profile identity requires matching slug and primary title", 
     title: "Agency | LinkedIn",
     blocks: ["Agency represents LED Presents. Website: agency.com"],
   });
-  assert.deepEqual(spoofedSlug.primaryEntityTokens, []);
+  assert.deepEqual(spoofedSlug.primaryEntityTokens, [
+    "agency",
+    "led",
+    "presents",
+  ]);
 
   const official = buildFetchedSourceRecord({
     ...agency,
@@ -206,4 +212,155 @@ test("authoritative profile identity requires matching slug and primary title", 
     "led",
     "presents",
   ]);
+});
+
+test("broker preserves extra primary entity tokens through submission validation", () => {
+  const claimProvenanceToken = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const candidate = {
+    email: "jane.doe@agency.com",
+    personName: "Jane Doe",
+    roleTitle: "Founder",
+    organization: "LED Presents",
+    confidence: "high",
+    discoveryMethod: "official",
+    sourceUrls: [
+      "https://agency.com/team/jane-doe",
+      "https://www.linkedin.com/company/agency-led-presents",
+    ],
+    patternEvidence: null,
+    patternEvidenceUrl: null,
+    patternExamples: [],
+  };
+  const agencySource = buildFetchedSourceRecord({
+    url: candidate.sourceUrls[0],
+    title: "Agency Team",
+    text: "Jane Doe | Founder | jane.doe@agency.com",
+    emails: [candidate.email],
+    links: [],
+    blocks: ["Jane Doe | Founder | jane.doe@agency.com"],
+  });
+  const agencyAssociation = emailAssociation(
+    agencySource,
+    candidate.email,
+    {
+      personName: "Jane Doe",
+      organizationName: "LED Presents",
+      roleTitle: "Founder",
+    },
+  );
+  assert.ok(agencyAssociation);
+  const agencyProfile = buildFetchedSourceRecord({
+    url: candidate.sourceUrls[1],
+    title: "Agency LED Presents | LinkedIn",
+    text: "Agency LED Presents Website: agency.com",
+    emails: [],
+    links: [{ label: "Website", url: "https://agency.com/" }],
+    blocks: ["Agency LED Presents Website: agency.com"],
+  });
+  const agencyOwnership = ownershipStatement(
+    agencyProfile,
+    "agency.com",
+    "LED Presents",
+  );
+  assert.ok(agencyOwnership);
+
+  const proof = (
+    source: ReturnType<typeof buildFetchedSourceRecord>,
+    associations: Array<NonNullable<ReturnType<typeof emailAssociation>>>,
+    ownership: Array<NonNullable<ReturnType<typeof ownershipStatement>>>,
+  ) => ({
+    url: source.url,
+    contentSha256: source.contentSha256,
+    primaryEntityTokens: claimBoundPrimaryEntityTokens(source),
+    observedEmails: source.observedEmails,
+    observedDomains: source.observedDomains,
+    emailAssociations: associations,
+    ownershipStatements: ownership,
+    contentTokens: source.contentTokens,
+  });
+  assert.throws(
+    () =>
+      validateProfessionalContactProvenance(
+        { outcome: "candidates", candidates: [candidate] },
+        {
+          claimProvenanceToken,
+          searches: [],
+          fetchedSources: [
+            proof(agencySource, [agencyAssociation], []),
+            proof(agencyProfile, [], [agencyOwnership]),
+          ],
+        },
+        {
+          claimProvenanceToken,
+          personName: "Jane Doe",
+          organizationName: "LED Presents",
+          website: null,
+        },
+      ),
+    /domain is not associated/,
+  );
+
+  const exactCandidate = {
+    ...candidate,
+    email: "jane.doe@ledpresents.com",
+    sourceUrls: [
+      "https://ledpresents.com/team/jane-doe",
+      "https://www.linkedin.com/company/led-presents",
+    ],
+  };
+  const exactSource = buildFetchedSourceRecord({
+    url: exactCandidate.sourceUrls[0],
+    title: "LED Presents Team",
+    text: "Jane Doe | Founder | jane.doe@ledpresents.com",
+    emails: [exactCandidate.email],
+    links: [],
+    blocks: ["Jane Doe | Founder | jane.doe@ledpresents.com"],
+  });
+  const exactAssociation = emailAssociation(
+    exactSource,
+    exactCandidate.email,
+    {
+      personName: "Jane Doe",
+      organizationName: "LED Presents",
+      roleTitle: "Founder",
+    },
+  );
+  assert.ok(exactAssociation);
+  const exactProfile = buildFetchedSourceRecord({
+    url: exactCandidate.sourceUrls[1],
+    title: "LED Presents LLC | LinkedIn",
+    text: "LED Presents LLC Website: ledpresents.com",
+    emails: [],
+    links: [{ label: "Website", url: "https://ledpresents.com/" }],
+    blocks: ["LED Presents LLC Website: ledpresents.com"],
+  });
+  const exactOwnership = ownershipStatement(
+    exactProfile,
+    "ledpresents.com",
+    "LED Presents",
+  );
+  assert.ok(exactOwnership);
+  assert.deepEqual(
+    claimBoundPrimaryEntityTokens(exactProfile),
+    ["led", "presents", "llc"],
+  );
+  assert.doesNotThrow(() =>
+    validateProfessionalContactProvenance(
+      { outcome: "candidates", candidates: [exactCandidate] },
+      {
+        claimProvenanceToken,
+        searches: [],
+        fetchedSources: [
+          proof(exactSource, [exactAssociation], []),
+          proof(exactProfile, [], [exactOwnership]),
+        ],
+      },
+      {
+        claimProvenanceToken,
+        personName: "Jane Doe",
+        organizationName: "LED Presents",
+        website: null,
+      },
+    ),
+  );
 });

@@ -180,17 +180,13 @@ function primaryEntityTokens(result, url) {
     linkedInSlug?.replace(/[-_]+/g, " ") ?? "",
   );
   return Array.from(
-    new Set(
-      slugTokens.length > 0
-        ? slugTokens.filter((token) => titleTokens.includes(token))
-        : titleTokens,
-    ),
+    new Set([...titleTokens, ...slugTokens]),
   ).slice(0, 50);
 }
 
 export function ownershipStatement(source, domain, organizationName) {
   const ownershipPattern =
-    /\b(?:official (?:website|(?:email )?domain|site)|(?:our|company|organization) (?:website|domain)|we (?:use|own|operate|control)|owned by|operated by|controlled by|website\s*:)\b/i;
+    /\b(?:official (?:website|(?:email )?domain|site)|(?:our|company|organization) (?:website|domain)|we (?:use|own|operate|control)|owned by|operated by|controlled by|website\s*:)/i;
   const organizationTokens = normalizedIdentityTokens(organizationName);
   const matches = source.blocks.filter(
     (block) =>
@@ -206,6 +202,10 @@ export function ownershipStatement(source, domain, organizationName) {
     blockSha256: matches[0].blockSha256,
     contentTokens: matches[0].contentTokens,
   };
+}
+
+export function claimBoundPrimaryEntityTokens(source) {
+  return [...source.primaryEntityTokens];
 }
 
 export function buildFetchedSourceRecord(result) {

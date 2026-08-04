@@ -16,6 +16,7 @@ import {
 } from "../lib/professionalContactProvenance.mjs";
 import {
   buildFetchedSourceRecord,
+  claimBoundPrimaryEntityTokens,
   emailAssociation,
   ownershipStatement,
 } from "./professional-contact-provenance.mjs";
@@ -291,9 +292,7 @@ function brokerProvenance(state, submission) {
       return {
         url: source.url,
         contentSha256: source.contentSha256,
-        primaryEntityTokens: source.primaryEntityTokens.filter((token) =>
-          relevantTokens.has(token),
-        ),
+        primaryEntityTokens: claimBoundPrimaryEntityTokens(source),
         observedEmails: source.observedEmails.filter((email) =>
           relevantEmails.has(email),
         ),
