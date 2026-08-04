@@ -664,9 +664,96 @@ test("accepted bounce stays per-message while pending indexes remain retryable",
   );
   assert.deepEqual(calls, ["pending@example.com"]);
   const merged = mergeResendRequestResults(partial, retried.results);
-  assert.equal(resendRequestResultsAreResolved(merged), true);
-  assert.equal(merged[0].deliveryFailure, "bounce:permanent");
-  assert.equal(merged[1].providerMessageId, "message-pending");
+  assert.equal(merged.conflict, null);
+  assert.equal(resendRequestResultsAreResolved(merged.results), true);
+  assert.equal(merged.results[0].deliveryFailure, "bounce:permanent");
+  assert.equal(merged.results[1].providerMessageId, "message-pending");
+});
+
+test("webhook acceptance wins a race with an earlier uncertain provider return", async () => {
+  const prior = [
+    {
+      providerMessageId: "message-webhook",
+      error: null,
+      failureDisposition: null,
+    },
+  ];
+  const merged = mergeResendRequestResults(prior, [
+    {
+      providerMessageId: null,
+      error: "connection reset",
+      failureDisposition: "uncertain",
+    },
+  ]);
+  assert.equal(merged.conflict, null);
+  assert.deepEqual(merged.results, prior);
+  assert.equal(
+    summarizeResendRequestResults(merged.results).failureDisposition,
+    null,
+  );
+
+  const policy = buildResendDeliveryPolicy({
+    from: REQUEST.from,
+    intendedRecipients: ["manager@example.com"],
+    subject: REQUEST.subject,
+    testOverride: null,
+    bccEmails: [],
+    suppressedEmails: [],
+    recipientDeliveryMode: "individual_threads",
+  });
+  assert.equal(policy.ok, true);
+  if (!policy.ok) return;
+  const batch = buildResendRequestBatchSnapshot({
+    policy: policy.policy,
+    recipientDeliveryMode: "individual_threads",
+    html: REQUEST.html,
+    outreachId: "outreach-webhook-race",
+    attemptId: "attempt-webhook-race",
+    idempotencyKey:
+      "outreach/outreach-webhook-race/attempt-webhook-race",
+  });
+  let calls = 0;
+  const retry = await sendPreparedEmailBatchViaResend(
+    batch,
+    hashResendRequestBatchSnapshot(batch),
+    [],
+    null,
+    merged.results,
+    async () => {
+      calls += 1;
+      return {
+        providerMessageId: "message-duplicate",
+        error: null,
+        failureDisposition: null,
+      };
+    },
+  );
+  assert.equal(calls, 0);
+  assert.equal(retry.results[0].providerMessageId, "message-webhook");
+});
+
+test("conflicting accepted provider IDs preserve the prior acceptance and flag policy review", () => {
+  const merged = mergeResendRequestResults(
+    [
+      {
+        providerMessageId: "message-webhook",
+        error: null,
+        failureDisposition: null,
+      },
+    ],
+    [
+      {
+        providerMessageId: "message-provider-call",
+        error: null,
+        failureDisposition: null,
+      },
+    ],
+  );
+  assert.match(merged.conflict ?? "", /Provider message ID conflict/);
+  assert.equal(
+    merged.results[0].providerMessageId,
+    "message-webhook",
+  );
 });
 
 test("test override matching an intended recipient still resolves to one provider request", () => {

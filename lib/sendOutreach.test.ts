@@ -1514,6 +1514,11 @@ test("individual-thread delivery persists every provider message identity and re
   assert.match(source, /status: testSend \? "test" : "sent"/);
   assert.match(source, /summarizeResendRequestResults/);
   assert.match(source, /providerRequestResults:/);
+  assert.match(source, /if \(mergedRequestResults\.conflict\)/);
+  assert.match(
+    source,
+    /mergedRequestResults\.conflict[\s\S]*status: "manual_review"[\s\S]*failureDisposition: "policy"/,
+  );
 });
 
 test("partially accepted recipient batches are never treated as definitively unsent", () => {

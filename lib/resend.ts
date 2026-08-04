@@ -325,13 +325,29 @@ export function summarizeResendRequestResults(
 export function mergeResendRequestResults(
   prior: readonly (SendResult | null)[],
   current: readonly SendResult[],
-): SendResult[] {
-  return current.map((result, index) => ({
-    ...result,
-    ...(prior[index]?.deliveryFailure
-      ? { deliveryFailure: prior[index].deliveryFailure }
-      : {}),
-  }));
+): { results: SendResult[]; conflict: string | null } {
+  let conflict: string | null = null;
+  const results = current.map((result, index) => {
+    const previous = prior[index];
+    if (previous?.providerMessageId) {
+      if (
+        result.providerMessageId &&
+        result.providerMessageId !== previous.providerMessageId
+      ) {
+        conflict ??=
+          `Provider message ID conflict for request ${index + 1}: ` +
+          `${previous.providerMessageId} != ${result.providerMessageId}`;
+      }
+      return previous;
+    }
+    return {
+      ...result,
+      ...(previous?.deliveryFailure
+        ? { deliveryFailure: previous.deliveryFailure }
+        : {}),
+    };
+  });
+  return { results, conflict };
 }
 
 export function markResendRequestDeliveryFailure(

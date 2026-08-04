@@ -5869,7 +5869,7 @@ async function finishClaimedSend(
       attempt.deliveredAt,
     );
 
-    const requestResults = mergeResendRequestResults(
+    const mergedRequestResults = mergeResendRequestResults(
       parseResendRequestResultSnapshot(
         attempt.providerRequestResults,
         batchResult.results.length,
@@ -5877,6 +5877,7 @@ async function finishClaimedSend(
       ),
       batchResult.results,
     );
+    const requestResults = mergedRequestResults.results;
     const providerMessageIds = requestResults.map(
       (result, index) =>
         result.providerMessageId ??
@@ -5886,6 +5887,32 @@ async function finishClaimedSend(
     const aggregateResult = summarizeResendRequestResults(
       requestResults,
     );
+    if (mergedRequestResults.conflict) {
+      const error = mergedRequestResults.conflict;
+      await tx.outreachSendAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          status: "manual_review",
+          error,
+          failureDisposition: "policy",
+          nextAttemptAt: null,
+          providerMessageIds,
+          providerRequestResults:
+            requestResults as unknown as Prisma.InputJsonValue,
+        },
+      });
+      await tx.outreach.updateMany({
+        where: { id: current.id, idempotencyKey: attempt.idempotencyKey },
+        data: {
+          status: "manual_review",
+          error,
+          nextAttemptAt: null,
+          claimedAt: null,
+          claimToken: null,
+        },
+      });
+      return { ok: false, outreachId: current.id, error, ...outputMetadata };
+    }
     const returnedProviderIds = providerMessageIds.filter(Boolean);
     const providerOwners =
       returnedProviderIds.length === 0
