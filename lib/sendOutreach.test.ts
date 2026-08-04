@@ -14,6 +14,7 @@ import {
   currentFollowUpRecipientEmails,
   evaluateAttemptRetryEligibility,
   evaluateOutreachDeliveryPolicy,
+  earliestDeliveryDate,
   festivalOutreachBlockingReason,
   followUpParentBlockingReason,
   getAcceptedDeliveryFailureOutreachState,
@@ -1211,6 +1212,28 @@ test("accepted test-delivery failures stay reusable while real failures remain f
     ).status,
     "failed",
   );
+});
+
+test("batch recovery and finalization preserve the earliest delivered timestamp", () => {
+  const earlier = new Date("2026-07-16T04:00:00.000Z");
+  const later = new Date("2026-07-16T05:00:00.000Z");
+  assert.equal(earliestDeliveryDate(earlier, later), earlier);
+  assert.equal(earliestDeliveryDate(later, earlier), earlier);
+  assert.equal(earliestDeliveryDate(null, earlier), earlier);
+
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /finishAlreadyAccepted[\s\S]*earliestDeliveryDate\([\s\S]*attempt\.deliveredAt/,
+  );
+  assert.match(
+    source,
+    /finishClaimedSend[\s\S]*earliestDeliveryDate\(\s*current\.deliveredAt,\s*attempt\.deliveredAt/,
+  );
+  assert.ok((source.match(/deliveredAt,/g)?.length ?? 0) >= 4);
 });
 
 test("attachment preparation completes before an immutable provider attempt is persisted", () => {

@@ -717,6 +717,14 @@ async function processEvent(
                   providerMessageId: primaryProviderMessageId,
                   providerMessageIds,
                   sentAt: earlier(outreach.sentAt, acceptedAt),
+                  ...(attempt.deliveredAt
+                    ? {
+                        deliveredAt: earlier(
+                          outreach.deliveredAt,
+                          attempt.deliveredAt,
+                        ),
+                      }
+                    : {}),
                   ...(hadDeliveryFailure && attempt.bouncedAt
                     ? {
                         bouncedAt: earlier(
@@ -759,6 +767,14 @@ async function processEvent(
                   outreach.sentAt ??
                   attempt.acceptedAt ??
                   providerCreatedAt,
+                ...(attempt.deliveredAt
+                  ? {
+                      deliveredAt: earlier(
+                        outreach.deliveredAt,
+                        attempt.deliveredAt,
+                      ),
+                    }
+                  : {}),
                 scheduledFor: null,
                 nextAttemptAt: null,
                 claimedAt: null,
@@ -804,6 +820,14 @@ async function processEvent(
                     providerMessageId: primaryProviderMessageId,
                     providerMessageIds,
                     sentAt: earlier(outreach.sentAt, acceptedAt),
+                    ...(attempt.deliveredAt
+                      ? {
+                          deliveredAt: earlier(
+                            outreach.deliveredAt,
+                            attempt.deliveredAt,
+                          ),
+                        }
+                      : {}),
                     scheduledFor: null,
                     nextAttemptAt: null,
                     claimedAt: null,
@@ -848,7 +872,13 @@ async function processEvent(
                     providerMessageId: primaryProviderMessageId,
                     providerMessageIds,
                     sentAt: outreach.sentAt ?? providerCreatedAt,
-                    deliveredAt: earlier(outreach.deliveredAt, providerCreatedAt),
+                    deliveredAt: earlier(
+                      earlier(
+                        outreach.deliveredAt,
+                        attempt.deliveredAt ?? providerCreatedAt,
+                      ),
+                      providerCreatedAt,
+                    ),
                     error: completedError,
                     scheduledFor: null,
                     nextAttemptAt: null,

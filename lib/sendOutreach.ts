@@ -389,6 +389,7 @@ interface StoredAttempt {
   nextAttemptAt: Date | null;
   acceptedAt: Date | null;
   error: string | null;
+  deliveredAt: Date | null;
   bouncedAt: Date | null;
   complainedAt: Date | null;
 }
@@ -1260,6 +1261,14 @@ function sameEmails(left: string[], right: string[]): boolean {
     normalizedLeft.length === normalizedRight.length &&
     normalizedLeft.every((email, index) => email === normalizedRight[index])
   );
+}
+
+export function earliestDeliveryDate(
+  current: Date | null,
+  candidate: Date | null,
+): Date | null {
+  if (!candidate) return current;
+  return !current || candidate < current ? candidate : current;
 }
 
 function sameOrderedStrings(
@@ -3892,6 +3901,14 @@ async function finishAlreadyAccepted(
   if (!attempt.providerMessageId) {
     throw new Error("Accepted attempt has no provider message ID");
   }
+  const deliveryState = await tx.outreach.findUnique({
+    where: { id: outreach.id },
+    select: { deliveredAt: true },
+  });
+  const deliveredAt = earliestDeliveryDate(
+    deliveryState?.deliveredAt ?? null,
+    attempt.deliveredAt,
+  );
   if (attempt.testSend === null) {
     return markManualReview(
       tx,
@@ -3927,12 +3944,19 @@ async function finishAlreadyAccepted(
           ),
           bouncedAt: attempt.bouncedAt,
           complainedAt: attempt.complainedAt,
+          deliveredAt,
         },
       });
       return {
         kind: "complete",
         result: { ok: false, outreachId: outreach.id, error },
       };
+    }
+    if (deliveredAt) {
+      await tx.outreach.update({
+        where: { id: outreach.id },
+        data: { deliveredAt },
+      });
     }
     return markManualReview(tx, outreach.id, error);
   }
@@ -3955,6 +3979,7 @@ async function finishAlreadyAccepted(
       providerMessageIds:
         attempt.providerMessageIds ?? [attempt.providerMessageId],
       sentAt: attempt.acceptedAt ?? new Date(),
+      deliveredAt,
       scheduledFor: null,
       nextAttemptAt: null,
       claimedAt: null,
@@ -5839,6 +5864,10 @@ async function finishClaimedSend(
         ...outputMetadata,
       };
     }
+    const deliveredAt = earliestDeliveryDate(
+      current.deliveredAt,
+      attempt.deliveredAt,
+    );
 
     const requestResults = mergeResendRequestResults(
       parseResendRequestResultSnapshot(
@@ -5959,6 +5988,7 @@ async function finishClaimedSend(
             ),
             bouncedAt: attempt.bouncedAt,
             complainedAt: attempt.complainedAt,
+            deliveredAt,
           },
         });
         return { ok: false, outreachId: current.id, error, ...outputMetadata };
@@ -5983,6 +6013,7 @@ async function finishClaimedSend(
           providerMessageId,
           providerMessageIds,
           sentAt: attempt.acceptedAt ?? completedAt,
+          deliveredAt,
           scheduledFor: null,
           nextAttemptAt: null,
           claimedAt: null,

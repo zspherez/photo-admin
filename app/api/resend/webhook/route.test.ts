@@ -108,3 +108,18 @@ test("partial accepted delivery failures preserve unresolved batch retry state",
     /hadDeliveryFailure && attempt\.complainedAt[\s\S]*outreach\.complainedAt/,
   );
 });
+
+test("webhook completion merges delivery observed before final batch acceptance", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.ok(
+    (source.match(/attempt\.deliveredAt/g)?.length ?? 0) >= 4,
+  );
+  assert.match(
+    source,
+    /deliveredAt: earlier\(\s*outreach\.deliveredAt,\s*attempt\.deliveredAt/,
+  );
+  assert.match(
+    source,
+    /deliveredAt: earlier\(\s*earlier\(\s*outreach\.deliveredAt,\s*attempt\.deliveredAt \?\? providerCreatedAt/,
+  );
+});
