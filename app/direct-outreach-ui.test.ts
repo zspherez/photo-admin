@@ -109,7 +109,9 @@ test("direct outreach writes reuse matching history and inactive notes remain vi
     assert.match(contents, /findMatchingDirectOutreachContact/);
   }
   assert.match(addContact, /CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/);
+  assert.match(addContact, /map\(normalizeContactEmail\)/);
   assert.match(editor, /duplicate_direct_outreach/);
+  assert.match(editor, /error: "invalid_email"/);
   assert.match(artist, /Inactive contact history/);
   assert.match(artist, /contact\.auditJobs\[0\]/);
   assert.match(artist, /audit\.evidence/);

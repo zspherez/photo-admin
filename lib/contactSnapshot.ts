@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { normalizeEmail } from "@/lib/resend";
+import { normalizeContactEmail } from "@/lib/contactEmail";
 
 export const LEGACY_CONTACT_SNAPSHOT_HEADERS = [
   "snapshot_timestamp",
@@ -220,7 +221,7 @@ export function buildContactSnapshot(
     contact.artist.name,
     contact.name,
     contact.role,
-    contact.email,
+    normalizeContactEmail(contact.email ?? ""),
     contact.phone,
     contact.directOutreachNote,
     contact.source,
@@ -332,7 +333,7 @@ export function contactSnapshotGoogleRows(
 export async function readCanonicalContactRows(
   tx: ContactSnapshotTransaction,
 ): Promise<ContactSnapshotSourceRow[]> {
-  const contacts = await tx.contact.findMany({
+  const contactRows = await tx.contact.findMany({
     where: {
       state: {
         in: ["active", "quarantined"],
@@ -367,6 +368,11 @@ export async function readCanonicalContactRows(
       },
     },
   });
+  const contacts = contactRows.filter(
+    (contact) =>
+      normalizeContactEmail(contact.email ?? "") !== null ||
+      Boolean(contact.phone?.trim()),
+  );
   const artistIds = Array.from(new Set(contacts.map((contact) => contact.artistId)));
   const contactIds = contacts.map((contact) => contact.id);
   const [researchCandidates, auditJobs] = await Promise.all([
