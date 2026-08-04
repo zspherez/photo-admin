@@ -194,6 +194,10 @@ test("comprehensive public-provider and generic named-person policies reject var
     "technical_support@ledpresents.com",
     "media-relations@ledpresents.com",
     "accounts-payable@ledpresents.com",
+    "publicrelations@ledpresents.com",
+    "businessdevelopment@ledpresents.com",
+    "customersupport@ledpresents.com",
+    "supportcustomer@ledpresents.com",
   ]) {
     assert.throws(
       () => assertNamedBusinessEmail(email),
