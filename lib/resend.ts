@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { Resend, type ErrorResponse } from "resend";
 import { db } from "@/lib/db";
 import { readGeneralDeliverySettingsInTransaction } from "@/lib/generalSettings";
+import { resolveSentMailCopyRequestState } from "@/lib/sentMailConfig";
 
 export const RESEND_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const RESEND_CONFIGURATION_ERROR =
@@ -135,6 +136,7 @@ export type PrepareResendRequestResult =
       request: ResendRequestSnapshot;
       requestHash: string;
       testSend: boolean;
+      sentMailboxCopyRequested: boolean;
       intendedRecipients: string[];
       attachmentBlobs: ResendAttachmentBlob[];
       warnings: string[];
@@ -233,6 +235,8 @@ export interface ResendDeliverySettingsSnapshot {
   from: string | undefined;
   testOverride: string | null;
   bccEmails: string[];
+  sentMailCopyRequested?: boolean;
+  sentMailCopyConfigurationError?: string | null;
 }
 
 export async function getResendDeliverySettingsSnapshot(
@@ -243,6 +247,10 @@ export async function getResendDeliverySettingsSnapshot(
   ): Promise<ResendDeliverySettingsSnapshot> => {
     const settings = await readGeneralDeliverySettingsInTransaction(policyTx);
     const apiKey = process.env.RESEND_API_KEY;
+    const sentMailCopy = resolveSentMailCopyRequestState(
+      settings.sentMailCopyEnabledValue,
+      settings.sentMailCopyMailboxValue,
+    );
     return {
       apiKey,
       credentialScope: getResendCredentialScope(apiKey),
@@ -253,6 +261,8 @@ export async function getResendDeliverySettingsSnapshot(
           : { value: settings.testOverrideValue },
       ),
       bccEmails: parseBccEmails(settings.bccEmailsValue),
+      sentMailCopyRequested: sentMailCopy.requested,
+      sentMailCopyConfigurationError: sentMailCopy.configurationError,
     };
   };
   return tx ? readSnapshot(tx) : db.$transaction(readSnapshot);
@@ -265,6 +275,7 @@ export interface ResendDeliveryPolicy {
   bcc: string[];
   subject: string;
   testSend: boolean;
+  sentMailCopyRequested: boolean;
 }
 
 export type ResendDeliveryPolicyResult =
@@ -279,6 +290,8 @@ export interface BuildResendDeliveryPolicyArgs {
   bccEmails: string[];
   suppressedEmails: Iterable<string>;
   allowMissingFrom?: boolean;
+  sentMailCopyRequested?: boolean;
+  sentMailCopyConfigurationError?: string | null;
 }
 
 export function buildResendDeliveryPolicy({
@@ -289,7 +302,12 @@ export function buildResendDeliveryPolicy({
   bccEmails,
   suppressedEmails,
   allowMissingFrom = false,
+  sentMailCopyRequested = false,
+  sentMailCopyConfigurationError = null,
 }: BuildResendDeliveryPolicyArgs): ResendDeliveryPolicyResult {
+  if (sentMailCopyConfigurationError) {
+    return { ok: false, error: sentMailCopyConfigurationError };
+  }
   const normalizedFrom = from?.trim();
   if (!normalizedFrom && !allowMissingFrom) {
     return { ok: false, error: "Missing RESEND_FROM_EMAIL" };
@@ -335,6 +353,7 @@ export function buildResendDeliveryPolicy({
         ? `[TEST → ${allowedIntended.join(", ")}] ${subject}`
         : subject,
       testSend: !!overrideEmail,
+      sentMailCopyRequested: !!sentMailCopyRequested && !overrideEmail,
     },
   };
 }
@@ -360,8 +379,13 @@ export async function resolveResendDeliveryPolicy(
   intendedRecipients: string[],
   subject: string,
 ): Promise<ResendDeliveryPolicyResult> {
-  const { from, testOverride, bccEmails } =
-    await getResendDeliverySettingsSnapshot();
+  const {
+    from,
+    testOverride,
+    bccEmails,
+    sentMailCopyRequested,
+    sentMailCopyConfigurationError,
+  } = await getResendDeliverySettingsSnapshot();
   const candidates = normalizeEmails([
     ...intendedRecipients,
     ...bccEmails,
@@ -381,6 +405,8 @@ export async function resolveResendDeliveryPolicy(
     testOverride,
     bccEmails,
     suppressedEmails: suppressed.map((row) => row.normalizedEmail),
+    sentMailCopyRequested,
+    sentMailCopyConfigurationError,
   });
 }
 
@@ -388,8 +414,13 @@ export async function resolveArbitraryResendDeliveryPolicy(
   intendedRecipients: string[],
   subject: string,
 ): Promise<ResendDeliveryPolicyResult> {
-  const { from, testOverride, bccEmails } =
-    await getResendDeliverySettingsSnapshot();
+  const {
+    from,
+    testOverride,
+    bccEmails,
+    sentMailCopyRequested,
+    sentMailCopyConfigurationError,
+  } = await getResendDeliverySettingsSnapshot();
   const candidates = normalizeEmails([
     ...intendedRecipients,
     ...bccEmails,
@@ -410,6 +441,8 @@ export async function resolveArbitraryResendDeliveryPolicy(
     testOverride,
     bccEmails,
     suppressedEmails: suppressed.map((row) => row.normalizedEmail),
+    sentMailCopyRequested,
+    sentMailCopyConfigurationError,
   });
 }
 
@@ -514,6 +547,7 @@ export async function prepareResendRequest({
     request,
     requestHash: hashResendRequestSnapshot(request),
     testSend: policy.testSend,
+    sentMailboxCopyRequested: policy.sentMailCopyRequested,
     intendedRecipients: policy.intendedRecipients,
     attachmentBlobs: [],
     warnings: [],
@@ -556,6 +590,7 @@ export async function prepareArbitraryResendRequest({
     request,
     requestHash: hashResendRequestSnapshot(request),
     testSend: policy.testSend,
+    sentMailboxCopyRequested: policy.sentMailCopyRequested,
     intendedRecipients: policy.intendedRecipients,
     attachmentBlobs: [],
     warnings: [],

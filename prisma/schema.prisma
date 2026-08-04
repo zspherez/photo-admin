@@ -921,6 +921,7 @@ model OutreachSendAttempt {
   providerRequest         Json?
   requestHash             String?
   testSend                Boolean?
+  sentMailboxCopyRequested Boolean?
   /// Stable SHA-256 fingerprint of the Resend API credential; never the secret key.
   providerCredentialScope String?
   providerMessageId       String?              @unique
@@ -942,6 +943,7 @@ model OutreachSendAttempt {
   bouncedAt               DateTime?
   complainedAt            DateTime?
   webhookEvents           ResendWebhookEvent[]
+  sentMailCopy            SentMailCopy?
   createdAt               DateTime             @default(now())
   updatedAt               DateTime             @updatedAt
 
@@ -1013,6 +1015,7 @@ model ArbitraryEmail {
   providerRequest         Json?
   requestHash             String?
   testSend                Boolean?
+  sentMailboxCopyRequested Boolean?
   scheduledFor            DateTime?
   nextAttemptAt           DateTime?
   claimedAt               DateTime?
@@ -1035,12 +1038,37 @@ model ArbitraryEmail {
   complainedAt            DateTime?
   dismissedAt             DateTime?
   webhookEvents           ResendWebhookEvent[]
+  sentMailCopy            SentMailCopy?
   createdAt               DateTime             @default(now())
   updatedAt               DateTime             @updatedAt
 
   @@index([createdAt])
   @@index([dismissedAt, createdAt])
   @@index([status, createdAt])
+  @@index([status, nextAttemptAt])
+  @@index([status, claimedAt])
+}
+
+model SentMailCopy {
+  id                String               @id
+  outreachAttemptId String?              @unique
+  outreachAttempt   OutreachSendAttempt? @relation(fields: [outreachAttemptId], references: [id], onDelete: Cascade)
+  arbitraryEmailId  String?              @unique
+  arbitraryEmail    ArbitraryEmail?      @relation(fields: [arbitraryEmailId], references: [id], onDelete: Cascade)
+  providerMessageId String               @unique
+  status            String               @default("pending")
+  attemptCount      Int                  @default(0)
+  nextAttemptAt     DateTime             @default(now())
+  claimedAt         DateTime?
+  claimToken        String?              @unique
+  mailbox           String?
+  mailboxUid        String?
+  mailboxUidValidity String?
+  error             String?
+  copiedAt          DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
   @@index([status, nextAttemptAt])
   @@index([status, claimedAt])
 }

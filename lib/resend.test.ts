@@ -350,6 +350,54 @@ test("arbitrary single-recipient and test-override delivery preserve expected ro
   }
 });
 
+test("Sent mailbox copy is fail-closed and excluded from test sends", () => {
+  const real = buildResendDeliveryPolicy({
+    from: "Photo Admin <sender@example.com>",
+    intendedRecipients: ["person@example.com"],
+    subject: "Direct update",
+    testOverride: null,
+    bccEmails: [],
+    suppressedEmails: [],
+    sentMailCopyRequested: true,
+  });
+  assert.equal(real.ok, true);
+  if (real.ok) assert.equal(real.policy.sentMailCopyRequested, true);
+
+  const testSend = buildResendDeliveryPolicy({
+    from: "Photo Admin <sender@example.com>",
+    intendedRecipients: ["person@example.com"],
+    subject: "Direct update",
+    testOverride: "test@example.com",
+    bccEmails: [],
+    suppressedEmails: [],
+    sentMailCopyRequested: true,
+  });
+  assert.equal(testSend.ok, true);
+  if (testSend.ok) {
+    assert.equal(testSend.policy.testSend, true);
+    assert.equal(testSend.policy.sentMailCopyRequested, false);
+  }
+
+  assert.deepEqual(
+    buildResendDeliveryPolicy({
+      from: "Photo Admin <sender@example.com>",
+      intendedRecipients: ["person@example.com"],
+      subject: "Direct update",
+      testOverride: null,
+      bccEmails: [],
+      suppressedEmails: [],
+      sentMailCopyRequested: true,
+      sentMailCopyConfigurationError:
+        "Sent mailbox copy is enabled but SENT_MAIL_IMAP_PASSWORD is missing",
+    }),
+    {
+      ok: false,
+      error:
+        "Sent mailbox copy is enabled but SENT_MAIL_IMAP_PASSWORD is missing",
+    },
+  );
+});
+
 test("provider credential rejections are configuration outages without broadening content retries", () => {
   assert.equal(
     classifyResendProviderError({

@@ -8,6 +8,7 @@ import {
   getResendWebhookFailurePolicy,
   shouldMirrorResendAttempt,
 } from "@/lib/resend";
+import { ensureSentMailCopyQueued } from "@/lib/sentMailCopy";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
 import {
   arbitraryEmailEventUpdate,
@@ -336,6 +337,15 @@ async function processEvent(
                 impactedRecipients,
               );
             }
+            if (arbitraryEmail.providerMessageId) {
+              await ensureSentMailCopyQueued(tx, {
+                kind: "arbitrary",
+                id: arbitraryEmail.id,
+                providerMessageId: arbitraryEmail.providerMessageId,
+                requested: arbitraryEmail.sentMailboxCopyRequested,
+                testSend: arbitraryTestSend as boolean,
+              });
+            }
             const intendedRecipientImpact =
               arbitraryEmailWebhookRecipientImpact(
                 arbitraryEmail.recipientEmails,
@@ -522,6 +532,13 @@ async function processEvent(
           const hadDeliveryFailure = attempt.status === "delivery_failed";
 
           if (attempt.providerMessageId) {
+            await ensureSentMailCopyQueued(tx, {
+              kind: "outreach",
+              id: attempt.id,
+              providerMessageId: attempt.providerMessageId,
+              requested: attempt.sentMailboxCopyRequested,
+              testSend: attempt.testSend,
+            });
             const acceptedAt = earlier(attempt.acceptedAt, providerCreatedAt);
             await tx.outreachSendAttempt.update({
               where: { id: attempt.id },

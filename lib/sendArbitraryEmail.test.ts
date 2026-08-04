@@ -291,6 +291,7 @@ function prepareWithSettings(
       request,
       requestHash: hashResendRequestSnapshot(request),
       testSend: resolved.policy.testSend,
+      sentMailboxCopyRequested: resolved.policy.sentMailCopyRequested,
       intendedRecipients: resolved.policy.intendedRecipients,
       attachmentBlobs: [],
       warnings: [],

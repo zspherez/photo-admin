@@ -14,7 +14,7 @@ test("settings no longer read, write, or display the venue blocklist", () => {
   for (const contents of [generalSettings, generalPage, settingsIndex]) {
     assert.doesNotMatch(contents, /venue_blocklist|venue blocklist/i);
   }
-  assert.match(settingsIndex, /key: "portfolio_url"/);
+  assert.match(settingsIndex, /"portfolio_url"/);
   assert.match(settingsIndex, /\/1 set/);
 });
 

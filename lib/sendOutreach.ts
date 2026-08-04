@@ -43,6 +43,7 @@ import {
   type ResendRequestSnapshot,
   type ResendSubmissionCredential,
 } from "@/lib/resend";
+import { ensureSentMailCopyQueued } from "@/lib/sentMailCopy";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
 import {
   customizeRecipientIdentity,
@@ -305,6 +306,7 @@ interface StoredAttempt {
   providerRequest: Prisma.JsonValue | null;
   requestHash: string | null;
   testSend: boolean | null;
+  sentMailboxCopyRequested: boolean | null;
   providerCredentialScope: string | null;
   providerMessageId: string | null;
   firstAttemptAt: Date | null;
@@ -1198,6 +1200,8 @@ export interface EvaluateOutreachDeliveryPolicyInput {
   from: string | undefined;
   testOverride: string | null;
   bccEmails: string[];
+  sentMailCopyRequested?: boolean;
+  sentMailCopyConfigurationError?: string | null;
   suppressedEmails: readonly string[];
   configurationError?: string | null;
   allowMissingFrom?: boolean;
@@ -1227,6 +1231,8 @@ function deliveryPolicyConfigurationError(error: string): boolean {
   return (
     error === "Missing RESEND_FROM_EMAIL" ||
     error.startsWith("Invalid RESEND_FROM_EMAIL;") ||
+    error.startsWith("Sent mailbox copy") ||
+    error.startsWith("SENT_MAIL_IMAP_") ||
     error === "Test override email is invalid" ||
     error === "Test override email is suppressed"
   );
@@ -1245,6 +1251,8 @@ export function evaluateOutreachDeliveryPolicy({
   from,
   testOverride,
   bccEmails,
+  sentMailCopyRequested = false,
+  sentMailCopyConfigurationError = null,
   suppressedEmails,
   configurationError = null,
   allowMissingFrom = false,
@@ -1346,6 +1354,8 @@ export function evaluateOutreachDeliveryPolicy({
     bccEmails,
     suppressedEmails,
     allowMissingFrom: allowMissingFrom || !!configurationError,
+    sentMailCopyRequested,
+    sentMailCopyConfigurationError,
   });
   if (!resolved.ok) {
     return {
@@ -1790,6 +1800,9 @@ async function evaluateLockedOutreachDeliveryPolicy(
       from: deliverySettings.from,
       testOverride,
       bccEmails,
+      sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+      sentMailCopyConfigurationError:
+        deliverySettings.sentMailCopyConfigurationError,
       suppressedEmails: suppressions.map(
         (suppression) => suppression.normalizedEmail,
       ),
@@ -2010,6 +2023,9 @@ export async function getOutreachSendabilityBatch(
       from: deliverySettings.from,
       testOverride,
       bccEmails,
+      sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+      sentMailCopyConfigurationError:
+        deliverySettings.sentMailCopyConfigurationError,
       suppressedEmails,
       allowMissingFrom: true,
       requestedFullTeamSend: input.singleRecipient
@@ -2096,6 +2112,9 @@ export async function getOutreachSendabilityBatch(
           from: deliverySettings.from,
           testOverride,
           bccEmails,
+          sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+          sentMailCopyConfigurationError:
+            deliverySettings.sentMailCopyConfigurationError,
           suppressedEmails,
           configurationError: getResendConfigurationError(
             deliverySettings.apiKey,
@@ -2291,6 +2310,9 @@ export async function getOutreachSendabilityBatch(
       from: deliverySettings.from,
       testOverride,
       bccEmails,
+      sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+      sentMailCopyConfigurationError:
+        deliverySettings.sentMailCopyConfigurationError,
       suppressedEmails,
     });
     if (!currentPolicy.ok) {
@@ -2734,6 +2756,9 @@ export async function getFollowUpEligibilityBatch(
       from: deliverySettings.from,
       testOverride: deliverySettings.testOverride,
       bccEmails: deliverySettings.bccEmails,
+      sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+      sentMailCopyConfigurationError:
+        deliverySettings.sentMailCopyConfigurationError,
       suppressedEmails,
       allowMissingFrom: mode === "new",
       requestedRecipientEmails: currentRecipients,
@@ -3543,6 +3568,13 @@ async function finishAlreadyAccepted(
       acceptedAt: attempt.acceptedAt ?? new Date(),
     },
   });
+  await ensureSentMailCopyQueued(tx, {
+    kind: "outreach",
+    id: attempt.id,
+    providerMessageId: attempt.providerMessageId,
+    requested: attempt.sentMailboxCopyRequested,
+    testSend: attempt.testSend,
+  });
   await tx.outreach.updateMany({
     where: { id: outreach.id, idempotencyKey: outreach.idempotencyKey },
     data: {
@@ -3803,6 +3835,9 @@ async function preparedDeliveryPolicyBlockingReason(
     from: deliverySettings.from,
     testOverride: deliverySettings.testOverride,
     bccEmails: deliverySettings.bccEmails,
+    sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+    sentMailCopyConfigurationError:
+      deliverySettings.sentMailCopyConfigurationError,
     suppressedEmails: suppressions.map(
       (suppression) => suppression.normalizedEmail,
     ),
@@ -4788,6 +4823,7 @@ async function ensureAttempt(outreachInput: ClaimedOutreach): Promise<AttemptRes
           providerRequest: prepared.request as unknown as Prisma.InputJsonValue,
           requestHash: prepared.requestHash,
           testSend: prepared.testSend,
+          sentMailboxCopyRequested: prepared.sentMailboxCopyRequested,
         },
       }));
     return {
@@ -5415,6 +5451,13 @@ async function finishClaimedSend(
     const providerMessageId =
       attempt.providerMessageId ?? result.providerMessageId;
     if (providerMessageId) {
+      await ensureSentMailCopyQueued(tx, {
+        kind: "outreach",
+        id: attempt.id,
+        providerMessageId,
+        requested: attempt.sentMailboxCopyRequested,
+        testSend: attempt.testSend,
+      });
       if (attempt.status === "delivery_failed") {
         const error =
           attempt.error ??

@@ -103,6 +103,18 @@ _Optional integration._
 | `RESEND_FROM_EMAIL` | no | Sender address or "Name <address>" used for outgoing email. |
 | `RESEND_WEBHOOK_SECRET` | yes | Resend webhook signing secret (whsec_...). |
 
+## Sent mailbox copy (optional IMAP integration)
+
+_Optional integration._
+
+| Variable | Secret | Description |
+|---|---|---|
+| `SENT_MAIL_IMAP_HOST` | no | IMAP hostname used to append successful sends to the Sent mailbox. |
+| `SENT_MAIL_IMAP_PORT` | no | IMAP port (defaults to 993). |
+| `SENT_MAIL_IMAP_SECURE` | no | Use implicit TLS for IMAP (defaults to true). |
+| `SENT_MAIL_IMAP_USERNAME` | yes | IMAP login username for the target mailbox. |
+| `SENT_MAIL_IMAP_PASSWORD` | yes | Provider-issued IMAP app password; never use the primary account password. |
+
 ## Send-time behavior
 
 _Optional integration._

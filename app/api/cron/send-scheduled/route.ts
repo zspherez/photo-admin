@@ -3,6 +3,7 @@ import { isValidCronAuthorization } from "@/lib/cron-auth";
 import { db } from "@/lib/db";
 import { dispatchScheduledOutreach } from "@/lib/sendOutreach";
 import { dispatchScheduledArbitraryEmail } from "@/lib/sendArbitraryEmail";
+import { dispatchDueSentMailCopies } from "@/lib/sentMailCopy";
 import {
   getScheduledDispatchDisposition,
   getScheduledDispatchHttpStatus,
@@ -147,6 +148,7 @@ export async function GET(request: NextRequest) {
       });
       break;
     }
+
     if (due.length === 0) break;
 
     for (const row of due) {
@@ -177,6 +179,16 @@ export async function GET(request: NextRequest) {
       }
     }
   }
+
+  const sentMailCopies = await dispatchDueSentMailCopies(
+    Math.min(5, Math.max(1, SCHEDULED_DISPATCH_MAX_ROWS - results.length)),
+  ).catch((error) => [
+    {
+      id: "sent-mail-copy-dispatcher",
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    },
+  ]);
 
   let scheduledRetries = 0;
   let nextRetryAt: Date | null = null;
@@ -303,6 +315,9 @@ export async function GET(request: NextRequest) {
       unscheduledRetryableFailures,
       bounded,
       results,
+      sentMailCopies,
+      sentMailCopyFailures: sentMailCopies.filter((result) => !result.ok)
+        .length,
     },
     {
       status: getScheduledDispatchHttpStatus(state),

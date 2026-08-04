@@ -23,6 +23,7 @@ import {
   type ResendDeliverySettingsSnapshot,
   type SendResult,
 } from "@/lib/resend";
+import { ensureSentMailCopyQueued } from "@/lib/sentMailCopy";
 import {
   OUTREACH_CLAIM_TIMEOUT_MS,
   OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
@@ -333,6 +334,7 @@ export async function sendArbitraryEmailWithDependencies(
       providerRequest: prepared.request as unknown as Prisma.InputJsonValue,
       requestHash: prepared.requestHash,
       testSend: prepared.testSend,
+      sentMailboxCopyRequested: prepared.sentMailboxCopyRequested,
     },
   });
 
@@ -401,6 +403,9 @@ export async function sendArbitraryEmailWithDependencies(
           subject: stored.subject,
           testOverride: deliverySettings.testOverride,
           bccEmails: deliverySettings.bccEmails,
+          sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+          sentMailCopyConfigurationError:
+            deliverySettings.sentMailCopyConfigurationError,
           suppressedEmails: suppressions.map(
             (suppression) => suppression.normalizedEmail,
           ),
@@ -457,6 +462,13 @@ export async function sendArbitraryEmailWithDependencies(
               sentAt: completedAt,
               error: null,
             },
+          });
+          await ensureSentMailCopyQueued(tx, {
+            kind: "arbitrary",
+            id,
+            providerMessageId: submission.providerMessageId,
+            requested: stored.sentMailboxCopyRequested,
+            testSend: stored.testSend,
           });
           return { ok: true, id, testSend: stored.testSend };
         }
@@ -764,6 +776,7 @@ async function ensureScheduledArbitraryRequest(
       providerRequest: prepared.request as unknown as Prisma.InputJsonValue,
       requestHash: prepared.requestHash,
       testSend: prepared.testSend,
+      sentMailboxCopyRequested: prepared.sentMailboxCopyRequested,
     },
   });
   if (persisted.count !== 1) {
@@ -1012,6 +1025,9 @@ async function submitScheduledArbitraryEmail(
             subject: stored.subject,
             testOverride: deliverySettings.testOverride,
             bccEmails: deliverySettings.bccEmails,
+            sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+            sentMailCopyConfigurationError:
+              deliverySettings.sentMailCopyConfigurationError,
             suppressedEmails: suppressions.map(
               (suppression) => suppression.normalizedEmail,
             ),
@@ -1121,6 +1137,13 @@ async function submitScheduledArbitraryEmail(
                 claimedAt: null,
                 claimToken: null,
               },
+            });
+            await ensureSentMailCopyQueued(tx, {
+              kind: "arbitrary",
+              id,
+              providerMessageId: submission.providerMessageId,
+              requested: stored.sentMailboxCopyRequested,
+              testSend: stored.testSend,
             });
             return { ok: true, id };
           }

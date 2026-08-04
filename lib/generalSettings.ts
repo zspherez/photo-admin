@@ -6,6 +6,10 @@ import {
   resolveEmailUtmSettings,
   type EmailUtmSettings,
 } from "@/lib/emailUtm";
+import {
+  SENT_MAIL_COPY_ENABLED_KEY,
+  SENT_MAIL_COPY_MAILBOX_KEY,
+} from "@/lib/sentMailConfig";
 
 export const GENERAL_SETTING_FIELDS = [
   {
@@ -49,10 +53,10 @@ export const GENERAL_SETTING_FIELDS = [
   },
   {
     key: "bcc_emails",
-    label: "BCC me on every send",
+    label: "BCC copy (not Sent mail)",
     placeholder: "you@example.com",
     description:
-      "Comma-separated. Added as BCC on every real send (skipped when test mode is on, to avoid CC-ing yourself on tests).",
+      "Comma-separated. Adds recipient copies but does not place the message in a mailbox's Sent folder. Skipped in test mode.",
   },
   {
     key: "utm_source",
@@ -97,15 +101,19 @@ export const GENERAL_SETTING_KEYS = GENERAL_SETTING_FIELDS.map(
 export const GENERAL_DELIVERY_SETTING_KEYS = [
   "test_override_email",
   "bcc_emails",
-] as const satisfies readonly GeneralSettingKey[];
+  SENT_MAIL_COPY_ENABLED_KEY,
+  SENT_MAIL_COPY_MAILBOX_KEY,
+] as const;
 
 const PRESERVE_EMPTY_SETTING_KEYS = new Set<GeneralSettingKey>(
-  [...GENERAL_DELIVERY_SETTING_KEYS, ...EMAIL_UTM_SETTING_KEYS],
+  ["test_override_email", "bcc_emails", ...EMAIL_UTM_SETTING_KEYS],
 );
 
 export interface GeneralDeliverySettingsSnapshot {
   testOverrideValue: string | null;
   bccEmailsValue: string | null;
+  sentMailCopyEnabledValue: string | null;
+  sentMailCopyMailboxValue: string | null;
 }
 
 export type GeneralSettingsTransactionRunner = <T>(
@@ -152,6 +160,10 @@ export async function readGeneralDeliverySettingsInTransaction(
   return {
     testOverrideValue: values.get("test_override_email") ?? null,
     bccEmailsValue: values.get("bcc_emails") ?? null,
+    sentMailCopyEnabledValue:
+      values.get(SENT_MAIL_COPY_ENABLED_KEY) ?? null,
+    sentMailCopyMailboxValue:
+      values.get(SENT_MAIL_COPY_MAILBOX_KEY) ?? null,
   };
 }
 

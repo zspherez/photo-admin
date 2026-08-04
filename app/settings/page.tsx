@@ -3,6 +3,12 @@ import { db } from "@/lib/db";
 import { CardLink } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { easternTodayStoredDate } from "@/lib/calendarDate";
+import {
+  getSentMailImapConfiguration,
+  SENT_MAIL_COPY_ENABLED_KEY,
+  SENT_MAIL_COPY_MAILBOX_KEY,
+  sentMailCopyEnabled,
+} from "@/lib/sentMailConfig";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Settings" };
@@ -35,19 +41,47 @@ export default async function SettingsIndex() {
         syncStatus: "active",
       },
     }),
-    db.setting.findMany({ where: { key: "portfolio_url" } }),
+    db.setting.findMany({
+      where: {
+        key: {
+          in: [
+            "portfolio_url",
+            SENT_MAIL_COPY_ENABLED_KEY,
+            SENT_MAIL_COPY_MAILBOX_KEY,
+          ],
+        },
+      },
+    }),
     db.agentRuleSet.findUnique({ where: { scope: "global" } }),
     db.agentRuleSet.findUnique({ where: { scope: "contact_audit" } }),
   ]);
   const settingMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
+  const sentMailEnabled = sentMailCopyEnabled(
+    settingMap[SENT_MAIL_COPY_ENABLED_KEY],
+  );
+  const sentMailConfiguration = getSentMailImapConfiguration(
+    settingMap[SENT_MAIL_COPY_MAILBOX_KEY],
+  );
 
   const cards: { title: string; href: string; status: string; ok: boolean; description: string }[] = [
     {
       title: "General",
       href: "/settings/general",
-      status: `${Object.keys(settingMap).length}/1 set`,
-      ok: Object.keys(settingMap).length === 1,
+      status: `${settingMap.portfolio_url ? 1 : 0}/1 set`,
+      ok: Boolean(settingMap.portfolio_url),
       description: "Portfolio URL for email templates.",
+    },
+    {
+      title: "Sent mailbox copy",
+      href: "/settings/sent-mail",
+      status: sentMailEnabled
+        ? sentMailConfiguration.ok
+          ? `Enabled (${sentMailConfiguration.config.provider})`
+          : "Enabled but misconfigured"
+        : "Disabled",
+      ok: sentMailEnabled && sentMailConfiguration.ok,
+      description:
+        "Append successful real sends to Gmail, iCloud, or another IMAP Sent mailbox.",
     },
     {
       title: "Agent rules",
