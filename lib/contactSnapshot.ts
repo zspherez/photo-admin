@@ -55,14 +55,8 @@ export const CONTACT_SNAPSHOT_HEADERS = [
 
 export const CONTACT_SNAPSHOT_VISIBLE_HEADERS = [
   "artist_name",
-  "name",
-  "role",
   "email",
   "phone",
-  "direct_outreach",
-  "source",
-  "created_at",
-  "updated_at",
 ] as const;
 
 export const CONTACT_SNAPSHOT_MAX_CONTACTS = 100_000;
@@ -343,6 +337,10 @@ export async function readCanonicalContactRows(
       state: {
         in: ["active", "quarantined"],
       },
+      OR: [
+        { email: { not: null } },
+        { phone: { not: null } },
+      ],
     },
     select: {
       id: true,

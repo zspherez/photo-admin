@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildContactSnapshot,
   CONTACT_SNAPSHOT_HEADERS,
+  CONTACT_SNAPSHOT_VISIBLE_HEADERS,
   LEGACY_CONTACT_SNAPSHOT_HEADERS,
   contactSnapshotDigest,
   contactSnapshotGoogleRows,
@@ -56,6 +57,11 @@ const metadata = {
 };
 
 test("contact snapshots contain the documented fields in deterministic order", () => {
+  assert.deepEqual(CONTACT_SNAPSHOT_VISIBLE_HEADERS, [
+    "artist_name",
+    "email",
+    "phone",
+  ]);
   const snapshot = buildContactSnapshot(
     [
       contact("contact-c", {
@@ -109,6 +115,27 @@ test("contact snapshots contain the documented fields in deterministic order", (
     "https://artist.example/contact",
     "2026-07-22T12:00:00.000Z",
   ]);
+});
+
+test("canonical contact query excludes rows without an email or phone", async () => {
+  let contactQuery: Record<string, unknown> | null = null;
+  const rows = await readCanonicalContactRows({
+    contact: {
+      findMany: async (query: Record<string, unknown>) => {
+        contactQuery = query;
+        return [];
+      },
+    },
+  } as never);
+  assert.deepEqual(rows, []);
+  assert.ok(contactQuery);
+  assert.deepEqual(
+    (contactQuery as unknown as { where: { OR: unknown[] } }).where.OR,
+    [
+      { email: { not: null } },
+      { phone: { not: null } },
+    ],
+  );
 });
 
 test("canonical digest is stable across database return order", () => {

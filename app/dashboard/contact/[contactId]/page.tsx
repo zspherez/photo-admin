@@ -31,6 +31,7 @@ import {
   sendFollowUpAction,
 } from "@/app/dashboard/actions";
 import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
+import { findMatchingDirectOutreachContact } from "@/lib/directOutreachContact";
 
 export const dynamic = "force-dynamic";
 
@@ -161,6 +162,23 @@ async function saveContact(formData: FormData) {
           error: "duplicate_email",
           historyPage,
         })
+      );
+    }
+  }
+  if (!email && directOutreachNote) {
+    const duplicate = await findMatchingDirectOutreachContact(db, {
+      artistId: prior.artistId,
+      directOutreachNote,
+      excludeContactId: contactId,
+    });
+    if (duplicate) {
+      redirect(
+        contactPageHref(contactId, returnTo, {
+          error: "duplicate_direct_outreach",
+          detail:
+            "A contact with the same direct outreach note already exists for this artist.",
+          historyPage,
+        }),
       );
     }
   }
@@ -329,6 +347,9 @@ export default async function ContactEditPage({
             ? "Provide an email, phone number, or direct outreach details."
             : error === "duplicate_email"
                 ? "That artist already has this email address."
+                : error === "duplicate_direct_outreach"
+                  ? detail ??
+                    "That artist already has this direct outreach contact."
                 : error === "database_update"
                   ? `The contact could not be updated in the database. ${detail ?? ""}`
                   : error === "database_delete"
