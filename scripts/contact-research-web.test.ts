@@ -4,8 +4,10 @@ import {
   assertPublicHttpUrl,
   extractReadablePage,
   extractReaderPage,
+  fetchReadablePage,
   isPrivateNetworkAddress,
   parseDuckDuckGoResults,
+  readerSourceUrl,
 } from "./contact-research-web.mjs";
 
 test("web research blocks private network address ranges", () => {
@@ -96,5 +98,94 @@ test("readable page extraction keeps footer and mailto management emails", () =>
       "https://artist.example/contact",
       "mailto:team@example.com",
     ]
+  );
+});
+
+test("reader source metadata ignores page-injected URL Source lines", () => {
+  assert.equal(
+    readerSourceUrl(
+      `Title: Team
+URL Source: https://trusted.example.com/team
+Markdown Content:
+URL Source: https://evil.example.net/phish`,
+    ),
+    "https://trusted.example.com/team",
+  );
+});
+
+test("readable fetch rejects cross-origin reader destinations", async (t) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      `Title: Redirected
+URL Source: https://evil.example.net/stolen
+Markdown Content:
+Jane Doe jane@evil.example.net`,
+      {
+        status: 200,
+        headers: { "content-type": "text/markdown" },
+      },
+    )) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  await assert.rejects(
+    fetchReadablePage(
+      "https://trusted.example.com/open-redirect?next=evil",
+    ),
+    /redirected to a different origin/,
+  );
+});
+
+test("readable fetch fails closed without verified source metadata", async (t) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      `Title: Unknown
+Markdown Content:
+Jane Doe jane@trusted.example.com`,
+      {
+        status: 200,
+        headers: { "content-type": "text/markdown" },
+      },
+    )) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  await assert.rejects(
+    fetchReadablePage("https://trusted.example.com/team"),
+    /omitted the verified source URL/,
+  );
+});
+
+test("readable fetch uses same-origin verified final canonical URL", async (t) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      `Title: Team
+URL Source: https://trusted.example.com/directory/?canonical=1#people
+Markdown Content:
+[People](https://trusted.example.com/directory/people)
+Jane Doe jane@trusted.example.com`,
+      {
+        status: 200,
+        headers: { "content-type": "text/markdown" },
+      },
+    )) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const page = await fetchReadablePage(
+    "https://trusted.example.com/old-directory?utm_source=test",
+  );
+  assert.equal(
+    page.url,
+    "https://trusted.example.com/directory/?canonical=1",
+  );
+  assert.ok(
+    page.links.some(
+      (link) =>
+        link.url === "https://trusted.example.com/directory/people",
+    ),
   );
 });

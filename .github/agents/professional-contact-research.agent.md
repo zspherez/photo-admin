@@ -62,6 +62,9 @@ ambiguous and cannot support a candidate. The broker records claim-bound
 search/fetch provenance and rejects sources or addresses that were not actually
 observed.
 
+Always use the verified `url` returned by `fetch` in `sourceUrls`; never reuse
+the requested URL after a redirect. Cross-origin redirects are rejected.
+
 When the request includes an official website, the email must use that domain,
 a controlled subdomain, or an alternate domain explicitly documented by a
 fetched ownership/control statement on the official website. A bare link or an

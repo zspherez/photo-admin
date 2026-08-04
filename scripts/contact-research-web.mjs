@@ -298,6 +298,42 @@ export function extractReaderPage(markdown, pageUrl) {
   };
 }
 
+export function readerSourceUrl(markdown) {
+  const metadata = markdown.split(/^Markdown Content:\s*$/im, 1)[0];
+  const matches = Array.from(
+    metadata.matchAll(/^URL Source:\s*(\S+)\s*$/gim),
+  );
+  return matches.length === 1 ? matches[0][1] : null;
+}
+
+async function assertSafeReaderDestination(requested, finalValue) {
+  if (!finalValue) {
+    throw new Error("Research reader omitted the verified source URL");
+  }
+  const destination = await assertPublicHttpUrl(finalValue);
+  const requestedUrl = new URL(requested);
+  const requestedPort =
+    requestedUrl.port ||
+    (requestedUrl.protocol === "https:" ? "443" : "80");
+  const destinationPort =
+    destination.port ||
+    (destination.protocol === "https:" ? "443" : "80");
+  if (
+    destination.hostname.toLowerCase() !==
+      requestedUrl.hostname.toLowerCase() ||
+    (destination.protocol === requestedUrl.protocol &&
+      destinationPort !== requestedPort) ||
+    (requestedUrl.protocol === "https:" &&
+      destination.protocol !== "https:")
+  ) {
+    throw new Error(
+      "Research source redirected to a different origin",
+    );
+  }
+  destination.hash = "";
+  return destination;
+}
+
 export async function fetchReadablePage(value) {
   const target = await assertPublicHttpUrl(value);
   const readerUrl = `https://r.jina.ai/${target.toString()}`;
@@ -305,8 +341,12 @@ export async function fetchReadablePage(value) {
     accept: "text/plain,text/markdown",
     timeoutMs: 30_000,
   });
+  const destination = await assertSafeReaderDestination(
+    target.toString(),
+    readerSourceUrl(response.text),
+  );
   return {
-    url: target.toString(),
-    ...extractReaderPage(response.text, target.toString()),
+    url: destination.toString(),
+    ...extractReaderPage(response.text, destination.toString()),
   };
 }

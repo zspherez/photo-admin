@@ -44,6 +44,7 @@ test("professional contact agent has only narrow tools and privacy constraints",
   assert.match(agent, /domain-pattern inference only as a last resort/i);
   assert.match(agent, /human review/i);
   assert.match(agent, /Every submitted source URL must first be opened with `fetch`/);
+  assert.match(agent, /use the verified `url` returned by `fetch`/);
   assert.match(
     agent,
     /exact email and the claimed person's name must appear together/,
