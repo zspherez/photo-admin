@@ -48,6 +48,12 @@ test("professional contact agent has only narrow tools and privacy constraints",
     agent,
     /exact email and the claimed person's name must appear together/,
   );
+  assert.match(agent, /block containing multiple distinct people or multiple emails is/);
+  assert.match(agent, /fetched ownership\/control statement on the official website/);
+  assert.match(
+    agent,
+    /independent authoritative[\s\S]*company profile or government record/,
+  );
   assert.match(agent, /two to five `patternExamples`/);
   assert.match(agent, /`priorCandidates` lists at most 20/);
   assert.match(agent, /A `422` with code `duplicate_candidates` leaves the claim active/);

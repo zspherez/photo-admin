@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   assertPublicHttpUrl,
   extractReadablePage,
+  extractReaderPage,
   isPrivateNetworkAddress,
   parseDuckDuckGoResults,
 } from "./contact-research-web.mjs";
@@ -23,6 +24,20 @@ test("web research blocks private network address ranges", () => {
   }
   assert.equal(isPrivateNetworkAddress("8.8.8.8"), false);
   assert.equal(isPrivateNetworkAddress("2606:4700:4700::1111"), false);
+});
+
+test("reader extraction preserves compact staff records as separate blocks", () => {
+  const page = extractReaderPage(
+    `Title: Team
+
+| Jane Doe | Founder | jane@example.org |
+| John Smith | COO | john@example.org |`,
+    "https://example.org/team",
+  );
+  assert.deepEqual(page.blocks, [
+    "| Jane Doe | Founder | jane@example.org |",
+    "| John Smith | COO | john@example.org |",
+  ]);
 });
 
 test("URL screening rejects bracketed private IPv6 literals", async () => {

@@ -57,16 +57,20 @@ and invented citations are never sufficient. For a directly published
 candidate, the exact email and the claimed person's name must appear together
 in the same fetched excerpt or structured mail link. A staff directory that
 lists the claimed person and another employee's email does not establish an
-association. The broker records claim-bound search/fetch provenance and rejects
-sources or addresses that were not actually observed.
+association. A block containing multiple distinct people or multiple emails is
+ambiguous and cannot support a candidate. The broker records claim-bound
+search/fetch provenance and rejects sources or addresses that were not actually
+observed.
 
 When the request includes an official website, the email must use that domain,
 a controlled subdomain, or an alternate domain explicitly documented by a
-fetched page on the official website. An unrelated agency or directory merely
-mentioning the organization cannot establish its business domain. Without a
-submitted website, include at least two fetched pages on a lexically matching
-organization domain: one with the person/email association and a separate page
-establishing the organization identity.
+fetched ownership/control statement on the official website. A bare link or an
+unrelated agency or directory merely mentioning the organization cannot
+establish its business domain. Without a submitted website, include the
+person/email source on the candidate domain plus an independent authoritative
+company profile or government record that explicitly identifies that domain
+as the organization's website/domain. Tracking-query variants or duplicate
+page content never count as independent proof.
 
 Confidence:
 

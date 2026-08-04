@@ -3,7 +3,6 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { z } from "zod";
 import {
@@ -15,6 +14,11 @@ import {
   normalizedIdentityTokens,
   validateProfessionalContactProvenance,
 } from "../lib/professionalContactProvenance.mjs";
+import {
+  buildFetchedSourceRecord,
+  emailAssociation,
+  ownershipStatement,
+} from "./professional-contact-provenance.mjs";
 
 const baseUrl = process.env.APP_BASE_URL?.trim().replace(/\/+$/, "");
 const staticToken =
@@ -204,68 +208,6 @@ function stateFor(sessionId) {
   return state;
 }
 
-function contentTokens(result) {
-  return Array.from(
-    new Set(
-      normalizedIdentityTokens(`${result.title ?? ""} ${result.text ?? ""}`),
-    ),
-  ).slice(0, 5_000);
-}
-
-function observedDomains(result, observedEmails) {
-  const domains = new Set(
-    observedEmails.map((email) => email.split("@").at(-1)).filter(Boolean),
-  );
-  for (const link of Array.isArray(result.links) ? result.links : []) {
-    try {
-      if (typeof link.url === "string" && link.url.startsWith("https://")) {
-        domains.add(new URL(link.url).hostname.toLowerCase().replace(/^www\./, ""));
-      }
-    } catch {
-      // Ignore malformed links returned by untrusted pages.
-    }
-  }
-  const textDomains =
-    String(result.text ?? "")
-      .toLowerCase()
-      .match(/(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}/g) ?? [];
-  textDomains.forEach((domain) => domains.add(domain.replace(/^www\./, "")));
-  return [...domains].slice(0, 100);
-}
-
-function emailAssociations(result, observedEmails) {
-  const haystack = `${result.title ?? ""}\n${result.text ?? ""}`;
-  const normalizedHaystack = haystack.toLowerCase();
-  return observedEmails.map((email) => {
-    const excerpts = [];
-    let offset = 0;
-    while (offset < normalizedHaystack.length) {
-      const index = normalizedHaystack.indexOf(email, offset);
-      if (index < 0) break;
-      excerpts.push(
-        haystack.slice(Math.max(0, index - 120), index + email.length + 120),
-      );
-      offset = index + email.length;
-    }
-    for (const link of Array.isArray(result.links) ? result.links : []) {
-      if (
-        typeof link.url === "string" &&
-        link.url.toLowerCase().startsWith(`mailto:${email}`)
-      ) {
-        excerpts.push(`${link.label ?? ""} ${email}`);
-      }
-    }
-    const excerpt = excerpts.join("\n").slice(0, 2_000);
-    return {
-      email,
-      excerptSha256: createHash("sha256").update(excerpt).digest("hex"),
-      contentTokens: Array.from(
-        new Set(normalizedIdentityTokens(excerpt)),
-      ).slice(0, 500),
-    };
-  });
-}
-
 function recordSearch(state, query, results) {
   if (state.searches.length >= 20) {
     throw new BrokerConflictError("search limit reached for this claim");
@@ -283,38 +225,14 @@ function recordSearch(state, query, results) {
 }
 
 function recordFetch(state, result) {
+  const source = buildFetchedSourceRecord(result);
   if (
-    !state.fetchedSources.has(result.url) &&
+    !state.fetchedSources.has(source.url) &&
     state.fetchedSources.size >= 12
   ) {
     throw new BrokerConflictError("fetch limit reached for this claim");
   }
-  const url = canonicalPublicHttpsUrl(result.url);
-  const observedEmails = Array.from(
-    new Set(
-      (Array.isArray(result.emails) ? result.emails : []).map((email) =>
-        String(email).trim().toLowerCase(),
-      ),
-    ),
-  );
-  const associations = emailAssociations(result, observedEmails);
-  state.fetchedSources.set(url, {
-    url,
-    observedEmails,
-    observedDomains: observedDomains(result, observedEmails),
-    emailAssociations: associations,
-    contentTokens: contentTokens(result),
-    contentSha256: createHash("sha256")
-      .update(
-        JSON.stringify({
-          url,
-          title: result.title ?? "",
-          text: result.text ?? "",
-          observedEmails,
-        }),
-      )
-      .digest("hex"),
-  });
+  state.fetchedSources.set(source.url, source);
 }
 
 function brokerProvenance(state, submission) {
@@ -323,6 +241,7 @@ function brokerProvenance(state, submission) {
   }
   const relevantEmails = new Set();
   const relevantDomains = new Set();
+  const identityByEmail = new Map();
   const relevantTokens = new Set([
     ...normalizedIdentityTokens(state.claimContext.personName),
     ...normalizedIdentityTokens(state.claimContext.organizationName),
@@ -332,6 +251,10 @@ function brokerProvenance(state, submission) {
     for (const candidate of submission.candidates) {
       relevantEmails.add(candidate.email.toLowerCase());
       relevantDomains.add(candidate.email.toLowerCase().split("@").at(-1));
+      identityByEmail.set(candidate.email.toLowerCase(), {
+        personName: state.claimContext.personName,
+        organizationName: state.claimContext.organizationName,
+      });
       normalizedIdentityTokens(candidate.roleTitle).forEach((token) =>
         relevantTokens.add(token),
       );
@@ -341,6 +264,10 @@ function brokerProvenance(state, submission) {
       for (const example of candidate.patternExamples) {
         relevantEmails.add(example.email.toLowerCase());
         relevantDomains.add(example.email.toLowerCase().split("@").at(-1));
+        identityByEmail.set(example.email.toLowerCase(), {
+          personName: example.personName,
+          organizationName: state.claimContext.organizationName,
+        });
         normalizedIdentityTokens(example.personName).forEach((token) =>
           relevantTokens.add(token),
         );
@@ -374,15 +301,35 @@ function brokerProvenance(state, submission) {
                 relevant.endsWith(`.${domain}`)),
           ),
         ),
-        emailAssociations: source.emailAssociations
-          .filter((association) => relevantEmails.has(association.email))
-          .map((association) => ({
+        emailAssociations: [...relevantEmails].flatMap((email) => {
+          const identity = identityByEmail.get(email);
+          if (!identity) return [];
+          const association = emailAssociation(source, email, identity);
+          if (!association) return [];
+          return [{
             email: association.email,
             excerptSha256: association.excerptSha256,
             contentTokens: association.contentTokens.filter((token) =>
               relevantTokens.has(token),
             ),
-          })),
+          }];
+        }),
+        ownershipStatements: [...relevantDomains].flatMap((domain) => {
+          if (!domain) return [];
+          const statement = ownershipStatement(
+            source,
+            domain,
+            state.claimContext.organizationName,
+          );
+          if (!statement) return [];
+          return [{
+            domain: statement.domain,
+            blockSha256: statement.blockSha256,
+            contentTokens: statement.contentTokens.filter((token) =>
+              relevantTokens.has(token),
+            ),
+          }];
+        }),
         contentTokens: source.contentTokens.filter((token) =>
           relevantTokens.has(token),
         ),

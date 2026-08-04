@@ -59,6 +59,7 @@ const validProvenance = {
           contentTokens: ["jane", "doe", "founder"],
         },
       ],
+      ownershipStatements: [],
       contentTokens: ["led", "presents", "jane", "doe", "founder"],
     },
   ],

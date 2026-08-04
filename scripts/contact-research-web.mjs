@@ -219,7 +219,44 @@ export function extractReadablePage(html, pageUrl) {
         })
     ).values()
   ).slice(0, 50);
-  return { title, text, emails: [...emails], links };
+  const blocks = root
+    .find("address,article,blockquote,h1,h2,h3,h4,h5,h6,li,p,tr")
+    .toArray()
+    .map((element) => $(element).text().replace(/\s+/g, " ").trim())
+    .filter((block) => block.length >= 2 && block.length <= 2_000)
+    .slice(0, 500);
+  return { title, text, emails: [...emails], links, blocks };
+}
+
+function extractMarkdownBlocks(markdown) {
+  return markdown
+    .split(/\r?\n\s*\r?\n/)
+    .flatMap((paragraph) => {
+      const lines = paragraph
+        .split(/\r?\n/)
+        .map((line) => line.replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      if (
+        lines.length > 1 &&
+        lines.every(
+          (line) =>
+            line.startsWith("|") ||
+            /^[-*]\s/.test(line) ||
+            /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(line),
+        )
+      ) {
+        return lines;
+      }
+      return [lines.join(" ")];
+    })
+    .map((block) => block.trim())
+    .filter(
+      (block) =>
+        block.length >= 2 &&
+        block.length <= 2_000 &&
+        !/^(?:Title|URL Source|Markdown Content):/i.test(block),
+    )
+    .slice(0, 500);
 }
 
 export function extractReaderPage(markdown, pageUrl) {
@@ -257,6 +294,7 @@ export function extractReaderPage(markdown, pageUrl) {
     text: markdown.replace(/\s+/g, " ").trim().slice(0, 20_000),
     emails: Array.from(new Set(emails.map((email) => email.toLowerCase()))),
     links,
+    blocks: extractMarkdownBlocks(markdown),
   };
 }
 

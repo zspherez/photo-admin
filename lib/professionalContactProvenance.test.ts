@@ -45,6 +45,7 @@ const directProvenance = {
           contentTokens: ["jane", "doe", "founder"],
         },
       ],
+      ownershipStatements: [],
       contentTokens: ["jane", "doe", "founder", "led", "presents"],
     },
   ],
@@ -131,6 +132,7 @@ test("staff directory email must be locally associated with the claimed person",
                   contentTokens: ["john", "smith", "founder"],
                 },
               ],
+              ownershipStatements: [],
               contentTokens: [
                 "jane",
                 "doe",
@@ -155,6 +157,9 @@ test("comprehensive public-provider and generic named-person policies reject var
     "jane@hotmail.co.uk",
     "jane@yahoo.co.jp",
     "jane@protonmail.ch",
+    "jane@tuta.com",
+    "jane@tuta.io",
+    "jane@tutanota.com",
     "jane@mailinator.com",
   ]) {
     assert.throws(
@@ -174,6 +179,12 @@ test("comprehensive public-provider and generic named-person policies reject var
     "operations@ledpresents.com",
     "staff@ledpresents.com",
     "editorial@ledpresents.com",
+    "webmaster@ledpresents.com",
+    "postmaster@ledpresents.com",
+    "noreply@ledpresents.com",
+    "no-reply@ledpresents.com",
+    "finance@ledpresents.com",
+    "accounting@ledpresents.com",
   ]) {
     assert.throws(
       () => assertNamedBusinessEmail(email),
@@ -202,6 +213,13 @@ test("official website controls domain association and can document an alternate
         observedEmails: [],
         observedDomains: ["ledmail.com"],
         emailAssociations: [],
+        ownershipStatements: [
+          {
+            domain: "ledmail.com",
+            blockSha256: "0".repeat(64),
+            contentTokens: ["led", "presents"],
+          },
+        ],
         contentTokens: ["led", "presents", "ledmail"],
       },
       {
@@ -216,6 +234,7 @@ test("official website controls domain association and can document an alternate
             contentTokens: ["jane", "doe", "founder"],
           },
         ],
+        ownershipStatements: [],
         contentTokens: ["jane", "doe", "founder", "led", "presents"],
       },
     ],
@@ -226,6 +245,57 @@ test("official website controls domain association and can document an alternate
       provenance,
       context,
     ),
+  );
+});
+
+test("official domain checks use directional registrable ownership", () => {
+  assert.doesNotThrow(() =>
+    validateProfessionalContactProvenance(
+      { outcome: "candidates", candidates: [directCandidate] },
+      directProvenance,
+      { ...context, website: "https://events.ledpresents.com/" },
+    ),
+  );
+  const maliciousEmail = "jane.doe@mail.ledpresents.com.evil-business.net";
+  assert.throws(
+    () =>
+      validateProfessionalContactProvenance(
+        {
+          outcome: "candidates",
+          candidates: [
+            {
+              ...directCandidate,
+              email: maliciousEmail,
+              sourceUrls: [
+                "https://mail.ledpresents.com.evil-business.net/jane",
+              ],
+            },
+          ],
+        },
+        {
+          claimProvenanceToken,
+          searches: [],
+          fetchedSources: [
+            {
+              url: "https://mail.ledpresents.com.evil-business.net/jane",
+              contentSha256: "1".repeat(64),
+              observedEmails: [maliciousEmail],
+              observedDomains: ["mail.ledpresents.com.evil-business.net"],
+              emailAssociations: [
+                {
+                  email: maliciousEmail,
+                  excerptSha256: "2".repeat(64),
+                  contentTokens: ["jane", "doe", "founder"],
+                },
+              ],
+              ownershipStatements: [],
+              contentTokens: ["jane", "doe", "founder", "led", "presents"],
+            },
+          ],
+        },
+        context,
+      ),
+    /domain is not associated/,
   );
 });
 
@@ -254,6 +324,7 @@ test("without an official website an agency mentioning the organization is insuf
             },
           ]
         : [],
+    ownershipStatements: [],
     contentTokens: ["led", "presents", "jane", "doe", "founder"],
   }));
   assert.throws(
@@ -271,11 +342,11 @@ test("without an official website an agency mentioning the organization is insuf
   );
 });
 
-test("without a website two independent matching-domain sources can establish the organization", () => {
+test("without a website an authoritative company profile can establish the official domain", () => {
   const candidate = {
     ...directCandidate,
     sourceUrls: [
-      "https://ledpresents.com/about",
+      "https://www.linkedin.com/company/led-presents",
       "https://ledpresents.com/team/jane-doe",
     ],
   };
@@ -284,12 +355,19 @@ test("without a website two independent matching-domain sources can establish th
     searches: [],
     fetchedSources: [
       {
-        url: "https://ledpresents.com/about",
+        url: "https://www.linkedin.com/company/led-presents",
         contentSha256: "8".repeat(64),
         observedEmails: [],
         observedDomains: ["ledpresents.com"],
         emailAssociations: [],
-        contentTokens: ["led", "presents"],
+        ownershipStatements: [
+          {
+            domain: "ledpresents.com",
+            blockSha256: "b".repeat(64),
+            contentTokens: ["led", "presents", "website"],
+          },
+        ],
+        contentTokens: ["led", "presents", "website"],
       },
       {
         url: "https://ledpresents.com/team/jane-doe",
@@ -303,6 +381,7 @@ test("without a website two independent matching-domain sources can establish th
             contentTokens: ["jane", "doe", "founder"],
           },
         ],
+        ownershipStatements: [],
         contentTokens: ["led", "presents", "jane", "doe", "founder"],
       },
     ],
@@ -313,6 +392,92 @@ test("without a website two independent matching-domain sources can establish th
       provenance,
       { ...context, website: null },
     ),
+  );
+});
+
+test("lexical organization collision cannot establish an official domain", () => {
+  const candidate = {
+    ...directCandidate,
+    email: "jane.doe@ledlighting.com",
+    sourceUrls: [
+      "https://ledlighting.com/led-presents",
+      "https://ledlighting.com/team/jane-doe",
+    ],
+  };
+  const sources = candidate.sourceUrls.map((url, index) => ({
+    url,
+    contentSha256: `${index + 2}`.repeat(64),
+    observedEmails:
+      index === 1 ? ["jane.doe@ledlighting.com"] : [],
+    observedDomains: ["ledlighting.com"],
+    emailAssociations:
+      index === 1
+        ? [
+            {
+              email: "jane.doe@ledlighting.com",
+              excerptSha256: "c".repeat(64),
+              contentTokens: ["jane", "doe", "founder"],
+            },
+          ]
+        : [],
+    ownershipStatements: [],
+    contentTokens: ["led", "presents", "jane", "doe", "founder"],
+  }));
+  assert.throws(
+    () =>
+      validateProfessionalContactProvenance(
+        { outcome: "candidates", candidates: [candidate] },
+        {
+          claimProvenanceToken,
+          searches: [],
+          fetchedSources: sources,
+        },
+        { ...context, website: null },
+      ),
+    /domain is not associated/,
+  );
+});
+
+test("tracking-query variants and duplicate page content cannot fake independent proof", () => {
+  const duplicateQuerySources = [
+    directProvenance.fetchedSources[0],
+    {
+      ...directProvenance.fetchedSources[0],
+      url: "https://ledpresents.com/team/jane-doe?utm_source=duplicate",
+      contentSha256: "d".repeat(64),
+    },
+  ];
+  assert.throws(
+    () =>
+      validateProfessionalContactProvenance(
+        { outcome: "candidates", candidates: [directCandidate] },
+        {
+          claimProvenanceToken,
+          searches: [],
+          fetchedSources: duplicateQuerySources,
+        },
+        context,
+      ),
+    /duplicate source facts/,
+  );
+  assert.throws(
+    () =>
+      validateProfessionalContactProvenance(
+        { outcome: "candidates", candidates: [directCandidate] },
+        {
+          claimProvenanceToken,
+          searches: [],
+          fetchedSources: [
+            directProvenance.fetchedSources[0],
+            {
+              ...directProvenance.fetchedSources[0],
+              url: "https://mirror-business.net/team/jane-doe",
+            },
+          ],
+        },
+        context,
+      ),
+    /duplicate page content identities/,
   );
 });
 
@@ -346,6 +511,7 @@ test("organization business-domain mismatch is rejected", () => {
                 contentTokens: ["jane", "doe", "founder"],
               },
             ],
+            ownershipStatements: [],
           })),
         },
         context,
@@ -398,6 +564,7 @@ test("low-confidence inference requires fetched published examples with one patt
             contentTokens: ["maria", "garcia"],
           },
         ],
+        ownershipStatements: [],
         contentTokens: [
           "alex",
           "lee",
