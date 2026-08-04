@@ -185,6 +185,10 @@ test("comprehensive public-provider and generic named-person policies reject var
     "no-reply@ledpresents.com",
     "finance@ledpresents.com",
     "accounting@ledpresents.com",
+    "nyc.press@ledpresents.com",
+    "us-support@ledpresents.com",
+    "la.media@ledpresents.com",
+    "eu.finance@ledpresents.com",
   ]) {
     assert.throws(
       () => assertNamedBusinessEmail(email),
@@ -192,6 +196,10 @@ test("comprehensive public-provider and generic named-person policies reject var
       email,
     );
   }
+  assert.equal(
+    assertNamedBusinessEmail("john.press@ledpresents.com"),
+    "john.press@ledpresents.com",
+  );
 });
 
 test("official website controls domain association and can document an alternate", () => {
@@ -444,6 +452,68 @@ test("an agency LinkedIn profile cannot transfer its domain to a represented cli
                 },
               ],
               contentTokens: ["agency", "led", "presents", "website"],
+            },
+          ],
+        },
+        { ...context, website: null },
+      ),
+    /domain is not associated/,
+  );
+});
+
+test("authoritative primary entity rejects extra distinctive organization tokens", () => {
+  const candidate = {
+    ...directCandidate,
+    email: "jane.doe@agency.com",
+    sourceUrls: [
+      "https://agency.com/team/jane-doe",
+      "https://www.linkedin.com/company/agency-led-presents",
+    ],
+  };
+  assert.throws(
+    () =>
+      validateProfessionalContactProvenance(
+        { outcome: "candidates", candidates: [candidate] },
+        {
+          claimProvenanceToken,
+          searches: [],
+          fetchedSources: [
+            {
+              url: "https://agency.com/team/jane-doe",
+              contentSha256: "7".repeat(64),
+              observedEmails: ["jane.doe@agency.com"],
+              observedDomains: ["agency.com"],
+              primaryEntityTokens: ["agency"],
+              emailAssociations: [
+                {
+                  email: "jane.doe@agency.com",
+                  excerptSha256: "8".repeat(64),
+                  contentTokens: ["jane", "doe", "founder"],
+                },
+              ],
+              ownershipStatements: [],
+              contentTokens: ["jane", "doe", "founder", "led", "presents"],
+            },
+            {
+              url: "https://www.linkedin.com/company/agency-led-presents",
+              contentSha256: "9".repeat(64),
+              observedEmails: [],
+              observedDomains: ["agency.com"],
+              primaryEntityTokens: ["agency", "led", "presents"],
+              emailAssociations: [],
+              ownershipStatements: [
+                {
+                  domain: "agency.com",
+                  blockSha256: "a".repeat(64),
+                  contentTokens: ["led", "presents", "website"],
+                },
+              ],
+              contentTokens: [
+                "agency",
+                "led",
+                "presents",
+                "website",
+              ],
             },
           ],
         },

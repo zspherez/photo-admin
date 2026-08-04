@@ -54,7 +54,11 @@ test("professional contact agent has only narrow tools and privacy constraints",
     agent,
     /independent authoritative[\s\S]*company profile or government record/,
   );
-  assert.match(agent, /authoritative profile's primary[\s\S]*entity must be the submitted organization/);
+  assert.match(
+    agent,
+    /authoritative profile's primary[\s\S]*entity must be exactly the submitted organization/,
+  );
+  assert.match(agent, /extra distinctive names such as an agency are rejected/);
   assert.match(agent, /two to five `patternExamples`/);
   assert.match(agent, /`priorCandidates` lists at most 20/);
   assert.match(agent, /A `422` with code `duplicate_candidates` leaves the claim active/);

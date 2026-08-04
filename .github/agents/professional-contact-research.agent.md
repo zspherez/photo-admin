@@ -70,9 +70,11 @@ establish its business domain. Without a submitted website, include the
 person/email source on the candidate domain plus an independent authoritative
 company profile or government record that explicitly identifies that domain
 as the organization's website/domain. The authoritative profile's primary
-entity must be the submitted organization itself; an agency profile cannot
-transfer its domain to a represented client. Tracking-query variants or
-duplicate page content never count as independent proof.
+entity must be exactly the submitted organization after ordinary legal
+suffixes are removed; extra distinctive names such as an agency are rejected.
+An agency profile cannot transfer its domain to a represented client.
+Tracking-query variants or duplicate page content never count as independent
+proof.
 
 Confidence:
 

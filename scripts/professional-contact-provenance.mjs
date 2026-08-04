@@ -79,26 +79,66 @@ const RECORD_CONTEXT_TOKENS = new Set([
   "the",
   "via",
 ]);
+const COMMON_ROLE_TOKENS = new Set([
+  "advisor",
+  "assistant",
+  "chief",
+  "cofounder",
+  "coo",
+  "ceo",
+  "cto",
+  "director",
+  "editor",
+  "executive",
+  "founder",
+  "manager",
+  "officer",
+  "owner",
+  "partner",
+  "president",
+  "producer",
+  "vp",
+]);
 
 function blockHasOtherDistinctPerson(block, identity) {
-  const allowed = new Set([
-    ...normalizedIdentityTokens(identity.personName),
+  const claimedPersonTokens = new Set(
+    normalizedIdentityTokens(identity.personName),
+  );
+  const nonPersonAllowed = new Set([
     ...normalizedIdentityTokens(identity.organizationName),
     ...normalizedIdentityTokens(identity.roleTitle ?? ""),
     ...RECORD_CONTEXT_TOKENS,
+    ...COMMON_ROLE_TOKENS,
   ]);
   const emailDomain = block.emails[0]?.split("@")[1] ?? "";
   normalizedIdentityTokens(emailDomain).forEach((token) =>
-    allowed.add(token),
+    nonPersonAllowed.add(token),
   );
-  let unknownRun = 0;
-  for (const token of normalizedIdentityTokens(block.text)) {
-    if (allowed.has(token) || /^\d+$/.test(token)) {
-      unknownRun = 0;
-      continue;
+  const structuralSegments = block.text
+    .split(/\s*(?:\||•|·|;|\/|—|–|\s-\s)\s*/u)
+    .map((segment) => normalizedIdentityTokens(segment))
+    .filter((tokens) => tokens.length > 0);
+  for (const tokens of structuralSegments) {
+    const identityTokens = tokens.filter(
+      (token) =>
+        !claimedPersonTokens.has(token) &&
+        !nonPersonAllowed.has(token) &&
+        !/^\d+$/.test(token),
+    );
+    if (identityTokens.length >= 2) return true;
+
+    const claimedOverlap = tokens.filter((token) =>
+      claimedPersonTokens.has(token),
+    );
+    const distinctTokens = tokens.filter(
+      (token) =>
+        !claimedPersonTokens.has(token) &&
+        !nonPersonAllowed.has(token) &&
+        !/^\d+$/.test(token),
+    );
+    if (claimedOverlap.length > 0 && distinctTokens.length > 0) {
+      return true;
     }
-    unknownRun += 1;
-    if (unknownRun >= 2) return true;
   }
   return false;
 }

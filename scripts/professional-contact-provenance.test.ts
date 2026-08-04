@@ -42,9 +42,48 @@ test("uppercase and lowercase adjacent people remain distinct identities", () =>
       links: [],
       blocks: [block],
     });
+
     assert.equal(
       emailAssociation(source, "john.smith@ledpresents.com", {
         personName: "Jane Doe",
+        organizationName: "LED Presents",
+        roleTitle: "Founder",
+      }),
+      null,
+      block,
+    );
+  }
+});
+
+test("shared surname and shared middle-name records remain distinct", () => {
+  for (const [claimedName, block] of [
+    [
+      "Jane Doe",
+      "JANE DOE | Founder | JOHN DOE | COO | john.doe@ledpresents.com",
+    ],
+    [
+      "Jane Ann Doe",
+      "jane ann doe | founder | john ann doe | coo | john.doe@ledpresents.com",
+    ],
+    [
+      "Jane Lee",
+      "Jane Lee | Founder | John Lee | COO | john.lee@ledpresents.com",
+    ],
+  ]) {
+    const email = block.match(
+      /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i,
+    )![0].toLowerCase();
+    const source = buildFetchedSourceRecord({
+      url: "https://ledpresents.com/team",
+      title: "LED Presents Team",
+      text: block,
+      emails: [email],
+      links: [],
+      blocks: [block],
+    });
+    assert.equal(
+      emailAssociation(source, email, {
+        personName: claimedName,
         organizationName: "LED Presents",
         roleTitle: "Founder",
       }),
@@ -154,4 +193,17 @@ test("authoritative profile identity requires matching slug and primary title", 
     blocks: ["LED Presents Website: ledpresents.com"],
   });
   assert.deepEqual(official.primaryEntityTokens, ["led", "presents"]);
+
+  const extraEntity = buildFetchedSourceRecord({
+    ...agency,
+    url: "https://www.linkedin.com/company/agency-led-presents",
+    title: "Agency LED Presents | LinkedIn",
+    text: "Agency LED Presents Website: agency.com",
+    blocks: ["Agency LED Presents Website: agency.com"],
+  });
+  assert.deepEqual(extraEntity.primaryEntityTokens, [
+    "agency",
+    "led",
+    "presents",
+  ]);
 });
