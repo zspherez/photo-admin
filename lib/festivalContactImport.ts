@@ -224,6 +224,17 @@ function csvRowIsIntentionalSkip(row: FestivalContactImportRow): boolean {
   return ["skip", "skipped", "intentional-skip"].includes(status);
 }
 
+export function festivalContactRowEmails(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .split(";")
+        .map((email) => email.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
 function evidenceForRows(rows: readonly FestivalContactImportRow[]): string {
   return [
     "Imported from festival_contacts_master.csv for manual review.",
@@ -275,13 +286,9 @@ export function planFestivalContactImport(
       intentionallySkippedArtists += 1;
       continue;
     }
-    if (!row.contactEmail) {
+    const importedEmails = festivalContactRowEmails(row.contactEmail);
+    if (importedEmails.length === 0) {
       rowsWithoutEmail += 1;
-      continue;
-    }
-    const normalizedEmail = normalizeEmail(row.contactEmail);
-    if (!normalizedEmail) {
-      invalidEmails += 1;
       continue;
     }
     const normalizedArtist = normalizeArtistName(row.artistName);
@@ -298,10 +305,17 @@ export function planFestivalContactImport(
       intentionallySkippedArtists += 1;
       continue;
     }
-    const key = `${matches[0].id}\u0000${normalizedEmail}`;
-    const values = groupedRows.get(key) ?? [];
-    values.push(row);
-    groupedRows.set(key, values);
+    for (const importedEmail of importedEmails) {
+      const normalizedEmail = normalizeEmail(importedEmail);
+      if (!normalizedEmail) {
+        invalidEmails += 1;
+        continue;
+      }
+      const key = `${matches[0].id}\u0000${normalizedEmail}`;
+      const values = groupedRows.get(key) ?? [];
+      values.push(row);
+      groupedRows.set(key, values);
+    }
   }
 
   let exactActiveMatches = 0;
