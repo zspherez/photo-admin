@@ -38,6 +38,7 @@ import {
   parseResendRequestResultSnapshot,
   prepareResendRequestBatch,
   sendPreparedEmailBatchViaResend,
+  mergeResendRequestResults,
   summarizeResendRequestResults,
   type ResendAttachmentBlob,
   type ResendDeliveryPolicy,
@@ -3855,8 +3856,15 @@ async function finishAlreadyAccepted(
       attempt.id,
     );
   }
-  if (attempt.status === "delivery_failed") {
+  const deliveryFailure = parseResendRequestResultSnapshot(
+    attempt.providerRequestResults,
+    parseResendRequestBatchSnapshot(attempt.providerRequest)?.requests.length ??
+      Math.max(attempt.providerMessageIds?.length ?? 0, 1),
+    attempt.providerMessageIds ?? [attempt.providerMessageId],
+  ).find((result) => result?.deliveryFailure)?.deliveryFailure;
+  if (attempt.status === "delivery_failed" || deliveryFailure) {
     const error =
+      deliveryFailure ??
       attempt.error ??
       "Resend accepted the request but later reported delivery failure; review manually";
     if (attempt.testSend) {
@@ -5784,14 +5792,22 @@ async function finishClaimedSend(
       };
     }
 
-    const providerMessageIds = batchResult.results.map(
+    const requestResults = mergeResendRequestResults(
+      parseResendRequestResultSnapshot(
+        attempt.providerRequestResults,
+        batchResult.results.length,
+        attempt.providerMessageIds ?? [],
+      ),
+      batchResult.results,
+    );
+    const providerMessageIds = requestResults.map(
       (result, index) =>
         result.providerMessageId ??
         attempt.providerMessageIds?.[index] ??
         "",
     );
     const aggregateResult = summarizeResendRequestResults(
-      batchResult.results,
+      requestResults,
     );
     const returnedProviderIds = providerMessageIds.filter(Boolean);
     const providerOwners =
@@ -5833,13 +5849,16 @@ async function finishClaimedSend(
       return { ok: false, outreachId: current.id, error, ...outputMetadata };
     }
 
-    const failedResults = batchResult.results.filter(
+    const failedResults = requestResults.filter(
       (result) => result.providerMessageId === null,
     );
     const result = aggregateResult;
     const allRequestsAccepted =
       failedResults.length === 0 &&
       providerMessageIds.every(Boolean);
+    const deliveryFailure = requestResults.find(
+      (requestResult) => requestResult.deliveryFailure,
+    )?.deliveryFailure;
     const providerMessageId =
       attempt.providerMessageId ??
       (allRequestsAccepted ? providerMessageIds[0] : null) ??
@@ -5851,7 +5870,7 @@ async function finishClaimedSend(
           ...(providerMessageId ? { providerMessageId } : {}),
           providerMessageIds,
           providerRequestResults:
-            batchResult.results as unknown as Prisma.InputJsonValue,
+            requestResults as unknown as Prisma.InputJsonValue,
         },
       });
       await tx.outreach.updateMany({
@@ -5863,8 +5882,9 @@ async function finishClaimedSend(
       });
     }
     if (allRequestsAccepted && providerMessageId) {
-      if (attempt.status === "delivery_failed") {
+      if (attempt.status === "delivery_failed" || deliveryFailure) {
         const error =
+          deliveryFailure ??
           attempt.error ??
           "Resend accepted the request but later reported delivery failure";
         await tx.outreachSendAttempt.update({

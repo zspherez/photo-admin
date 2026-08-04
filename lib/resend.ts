@@ -185,6 +185,7 @@ export interface SendResult {
   providerMessageId: string | null;
   error: string | null;
   failureDisposition: ResendFailureDisposition | null;
+  deliveryFailure?: string | null;
 }
 
 export interface SendBatchResult {
@@ -236,6 +237,9 @@ export function parseResendRequestResultSnapshot(
           (entry.providerMessageId === null ||
             typeof entry.providerMessageId === "string") &&
           (entry.error === null || typeof entry.error === "string") &&
+          (!("deliveryFailure" in entry) ||
+            entry.deliveryFailure === null ||
+            typeof entry.deliveryFailure === "string") &&
           (entry.failureDisposition === null ||
             [
               "configuration",
@@ -255,6 +259,12 @@ export function parseResendRequestResultSnapshot(
             error: entry.error as string | null,
             failureDisposition:
               entry.failureDisposition as ResendFailureDisposition | null,
+            ...("deliveryFailure" in entry
+              ? {
+                  deliveryFailure:
+                    entry.deliveryFailure as string | null,
+                }
+              : {}),
           },
     );
   }
@@ -282,6 +292,7 @@ export function summarizeResendRequestResults(
       failureDisposition: null,
     };
   }
+
   const priority: ResendFailureDisposition[] = [
     "uncertain",
     "in_flight",
@@ -309,6 +320,49 @@ export function summarizeResendRequestResults(
       .join(" | "),
     failureDisposition,
   };
+}
+
+export function mergeResendRequestResults(
+  prior: readonly (SendResult | null)[],
+  current: readonly SendResult[],
+): SendResult[] {
+  return current.map((result, index) => ({
+    ...result,
+    ...(prior[index]?.deliveryFailure
+      ? { deliveryFailure: prior[index].deliveryFailure }
+      : {}),
+  }));
+}
+
+export function markResendRequestDeliveryFailure(
+  results: readonly (SendResult | null)[],
+  index: number,
+  providerMessageId: string,
+  error: string,
+): ResendRequestResultSnapshot {
+  return results.map((result, candidateIndex) =>
+    candidateIndex === index
+      ? {
+          providerMessageId:
+            result?.providerMessageId ?? providerMessageId,
+          error: result?.error ?? null,
+          failureDisposition: result?.failureDisposition ?? null,
+          deliveryFailure: error,
+        }
+      : result,
+  );
+}
+
+export function resendRequestResultsAreResolved(
+  results: readonly (SendResult | null)[],
+): boolean {
+  return results.every(
+    (result) =>
+      result !== null &&
+      (result.providerMessageId !== null ||
+        result.failureDisposition === "permanent" ||
+        result.failureDisposition === "policy"),
+  );
 }
 
 function normalizeMailboxAddress(value: string): string | null {
@@ -649,7 +703,10 @@ export function compareResendRequestBatchToPolicy(
         to: layout.to,
         cc: layout.cc,
         bcc: policy.bcc.filter(
-          (email) => !layout.to.includes(email) && !layout.cc.includes(email),
+          (email) =>
+            !policy.intendedRecipients.includes(email) &&
+            !layout.to.includes(email) &&
+            !layout.cc.includes(email),
         ),
       },
     );
@@ -852,7 +909,10 @@ export function buildResendRequestBatchSnapshot({
     to: layout.to,
     cc: layout.cc,
     bcc: policy.bcc.filter(
-      (email) => !layout.to.includes(email) && !layout.cc.includes(email),
+      (email) =>
+        !policy.intendedRecipients.includes(email) &&
+        !layout.to.includes(email) &&
+        !layout.cc.includes(email),
     ),
     replyTo: [],
     subject: policy.subject,

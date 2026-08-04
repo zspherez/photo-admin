@@ -20,7 +20,11 @@ test("recipient delivery migration preserves existing rows as separate threads",
   assert.match(migration, /"providerRequestResults" JSONB/);
   assert.match(
     migration,
-    /SET "recipientDeliveryMode" = 'legacy_multi_to'[\s\S]*cardinality\("recipientEmails"\) > 1[\s\S]*"OutreachSendAttempt"[\s\S]*"providerRequest" IS NOT NULL/,
+    /DELETE FROM "OutreachSendAttempt"[\s\S]*"status" = 'prepared'[\s\S]*"firstAttemptAt" IS NULL[\s\S]*"attemptCount" = 0/,
+  );
+  assert.match(
+    migration,
+    /SET "recipientDeliveryMode" = 'legacy_multi_to'[\s\S]*"providerRequest" IS NOT NULL[\s\S]*"firstAttemptAt" IS NOT NULL[\s\S]*"attemptCount" > 0/,
   );
   assert.doesNotMatch(
     migration,

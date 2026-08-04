@@ -24,6 +24,9 @@ import {
   hashResendRequestBatchSnapshot,
   isValidResendSender,
   outreachWebhookRecipientImpact,
+  markResendRequestDeliveryFailure,
+  mergeResendRequestResults,
+  resendRequestResultsAreResolved,
   parseResendRequestSnapshot,
   sendPreparedEmailViaResend,
   sendPreparedEmailBatchViaResend,
@@ -348,7 +351,7 @@ test("individual-thread outreach creates one private immutable request per recip
     intendedRecipients: ["first@example.com", "second@example.com"],
     subject: REQUEST.subject,
     testOverride: null,
-    bccEmails: ["audit@example.com"],
+    bccEmails: ["audit@example.com", "second@example.com"],
     suppressedEmails: [],
     recipientDeliveryMode: "individual_threads",
   });
@@ -366,18 +369,21 @@ test("individual-thread outreach creates one private immutable request per recip
     batch.requests.map((request) => ({
       to: request.to,
       cc: request.cc,
+      bcc: request.bcc,
       idempotencyKey: request.idempotencyKey,
     })),
     [
       {
         to: ["first@example.com"],
         cc: [],
+        bcc: ["audit@example.com"],
         idempotencyKey:
           "outreach/outreach-private/attempt-private/message/0",
       },
       {
         to: ["second@example.com"],
         cc: [],
+        bcc: ["audit@example.com"],
         idempotencyKey:
           "outreach/outreach-private/attempt-private/message/1",
       },
@@ -516,6 +522,7 @@ test("mixed batch outcomes preserve accepted indexes and let uncertainty dominat
     suppressedEmails: [],
     recipientDeliveryMode: "individual_threads",
   });
+
   assert.equal(policy.ok, true);
   if (!policy.ok) return;
   const batch = buildResendRequestBatchSnapshot({
@@ -568,6 +575,66 @@ test("mixed batch outcomes preserve accepted indexes and let uncertainty dominat
   assert.deepEqual(retried.results.slice(0, 2), prior.slice(0, 2));
   assert.equal(retried.results[2].providerMessageId, "message-retried");
   assert.deepEqual(retried.results[3], prior[3]);
+});
+
+test("accepted bounce stays per-message while pending indexes remain retryable", async () => {
+  const partial = markResendRequestDeliveryFailure(
+    [
+      {
+        providerMessageId: "message-accepted",
+        error: null,
+        failureDisposition: null,
+      },
+      null,
+    ],
+    0,
+    "message-accepted",
+    "bounce:permanent",
+  );
+  assert.equal(resendRequestResultsAreResolved(partial), false);
+  assert.equal(partial[0]?.deliveryFailure, "bounce:permanent");
+
+  const policy = buildResendDeliveryPolicy({
+    from: REQUEST.from,
+    intendedRecipients: ["accepted@example.com", "pending@example.com"],
+    subject: REQUEST.subject,
+    testOverride: null,
+    bccEmails: [],
+    suppressedEmails: [],
+    recipientDeliveryMode: "individual_threads",
+  });
+  assert.equal(policy.ok, true);
+  if (!policy.ok) return;
+  const batch = buildResendRequestBatchSnapshot({
+    policy: policy.policy,
+    recipientDeliveryMode: "individual_threads",
+    html: REQUEST.html,
+    outreachId: "outreach-bounce-pending",
+    attemptId: "attempt-bounce-pending",
+    idempotencyKey:
+      "outreach/outreach-bounce-pending/attempt-bounce-pending",
+  });
+  const calls: string[] = [];
+  const retried = await sendPreparedEmailBatchViaResend(
+    batch,
+    hashResendRequestBatchSnapshot(batch),
+    [],
+    null,
+    partial,
+    async (request) => {
+      calls.push(request.to[0]);
+      return {
+        providerMessageId: "message-pending",
+        error: null,
+        failureDisposition: null,
+      };
+    },
+  );
+  assert.deepEqual(calls, ["pending@example.com"]);
+  const merged = mergeResendRequestResults(partial, retried.results);
+  assert.equal(resendRequestResultsAreResolved(merged), true);
+  assert.equal(merged[0].deliveryFailure, "bounce:permanent");
+  assert.equal(merged[1].providerMessageId, "message-pending");
 });
 
 test("test override matching an intended recipient still resolves to one provider request", () => {
@@ -1112,7 +1179,7 @@ test("late provider acceptance mirrors only the current immutable identity", () 
   assert.match(route, /shouldMirrorResendAttempt\(outreach, attempt\)/);
   assert.match(
     route,
-    /failureDisposition: hadDeliveryFailure[\s\S]*nextAttemptAt: null/,
+    /failureDisposition: null,[\s\S]*nextAttemptAt: null/,
   );
   assert.match(
     route,

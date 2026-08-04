@@ -78,3 +78,17 @@ test("individual-mode BCC opens, clicks, and failures record without aggregate m
   assert.ok(auxiliaryGuard < source.indexOf('case "email.clicked"', auxiliaryGuard));
   assert.ok(auxiliaryGuard < source.indexOf('case "email.failed"', auxiliaryGuard));
 });
+
+test("partial accepted delivery failures preserve unresolved batch retry state", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(source, /markResendRequestDeliveryFailure/);
+  assert.match(source, /resendRequestResultsAreResolved/);
+  assert.match(
+    source,
+    /status: deliveryFailure\.resolved[\s\S]*"delivery_failed"[\s\S]*attempt\.status/,
+  );
+  assert.match(
+    source,
+    /nextAttemptAt: deliveryFailure\.resolved[\s\S]*null[\s\S]*attempt\.nextAttemptAt/,
+  );
+});

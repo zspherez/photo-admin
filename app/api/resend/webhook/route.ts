@@ -6,9 +6,11 @@ import {
   canBindResendWebhookProviderMessage,
   correlateResendWebhookAttempt,
   getResendWebhookFailurePolicy,
+  markResendRequestDeliveryFailure,
   outreachWebhookRecipientImpact,
   parseResendRequestBatchSnapshot,
   parseResendRequestResultSnapshot,
+  resendRequestResultsAreResolved,
   shouldMirrorResendAttempt,
 } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
@@ -639,7 +641,56 @@ async function processEvent(
             attempt.providerMessageId ?? providerMessageIds[0] ?? null;
           const mirrorDeliveryProblem =
             mirror && failurePolicy.mirrorOutreachFailure;
-          const hadDeliveryFailure = attempt.status === "delivery_failed";
+          const requestResultIndex =
+            matchedMessageIndex >= 0
+              ? matchedMessageIndex
+              : expectedProviderMessages === 1
+                ? 0
+                : -1;
+          const currentRequestResults = parseResendRequestResultSnapshot(
+            attempt.providerRequestResults,
+            expectedProviderMessages,
+            attempt.providerMessageIds,
+          );
+          const persistedDeliveryFailure = currentRequestResults.find(
+            (result) => result?.deliveryFailure,
+          )?.deliveryFailure;
+          const hadDeliveryFailure =
+            attempt.status === "delivery_failed" ||
+            persistedDeliveryFailure !== undefined;
+          const completedAttemptStatus = hadDeliveryFailure
+            ? "delivery_failed"
+            : "accepted";
+          const completedOutreachStatus = attempt.testSend
+            ? "test"
+            : hadDeliveryFailure
+              ? "failed"
+              : "sent";
+          const completedError =
+            persistedDeliveryFailure ??
+            (attempt.status === "delivery_failed" ? attempt.error : null);
+          const deliveryFailureState = (error: string) => {
+            const providerId =
+              messageId ??
+              currentRequestResults[requestResultIndex]?.providerMessageId ??
+              null;
+            if (requestResultIndex < 0 || !providerId) {
+              return {
+                results: currentRequestResults,
+                resolved: false,
+              };
+            }
+            const results = markResendRequestDeliveryFailure(
+              currentRequestResults,
+              requestResultIndex,
+              providerId,
+              error,
+            );
+            return {
+              results,
+              resolved: resendRequestResultsAreResolved(results),
+            };
+          };
 
           if (providerAcceptanceComplete && primaryProviderMessageId) {
             const acceptedAt = earlier(attempt.acceptedAt, providerCreatedAt);
@@ -647,15 +698,11 @@ async function processEvent(
               where: { id: attempt.id },
               data: {
                 status: hadDeliveryFailure
-                  ? attempt.status
-                  : providerAcceptanceComplete
-                    ? "accepted"
-                    : attempt.status,
+                  ? completedAttemptStatus
+                  : "accepted",
                 acceptedAt,
-                error: hadDeliveryFailure ? attempt.error : null,
-                failureDisposition: hadDeliveryFailure
-                  ? attempt.failureDisposition
-                  : null,
+                error: completedError,
+                failureDisposition: null,
                 nextAttemptAt: null,
                 providerMessageId: primaryProviderMessageId,
                 providerMessageIds,
@@ -665,12 +712,8 @@ async function processEvent(
               await tx.outreach.update({
                 where: { id: outreach.id },
                 data: {
-                  status: hadDeliveryFailure
-                    ? outreach.status
-                    : attempt.testSend
-                      ? "test"
-                      : "sent",
-                  error: hadDeliveryFailure ? outreach.error : null,
+                  status: completedOutreachStatus,
+                  error: completedError,
                   providerMessageId: primaryProviderMessageId,
                   providerMessageIds,
                   sentAt: earlier(outreach.sentAt, acceptedAt),
@@ -715,19 +758,22 @@ async function processEvent(
                 where: { id: attempt.id },
                 data: {
                   status: hadDeliveryFailure
-                    ? attempt.status
+                    ? providerAcceptanceComplete
+                      ? completedAttemptStatus
+                      : attempt.status
                     : providerAcceptanceComplete
                       ? "accepted"
                       : attempt.status,
                   error:
-                    hadDeliveryFailure || !providerAcceptanceComplete
-                      ? attempt.error
+                    hadDeliveryFailure
+                      ? completedError
+                      : !providerAcceptanceComplete
+                        ? attempt.error
                       : null,
                   acceptedAt,
-                  failureDisposition:
-                    hadDeliveryFailure || !providerAcceptanceComplete
-                      ? attempt.failureDisposition
-                      : null,
+                  failureDisposition: providerAcceptanceComplete
+                    ? null
+                    : attempt.failureDisposition,
                   nextAttemptAt: providerAcceptanceComplete
                     ? null
                     : attempt.nextAttemptAt,
@@ -737,12 +783,8 @@ async function processEvent(
                 await tx.outreach.update({
                   where: { id: outreach.id },
                   data: {
-                    status: hadDeliveryFailure
-                      ? outreach.status
-                      : attempt.testSend
-                        ? "test"
-                        : "sent",
-                    error: hadDeliveryFailure ? outreach.error : null,
+                    status: completedOutreachStatus,
+                    error: completedError,
                     providerMessageId: primaryProviderMessageId,
                     providerMessageIds,
                     sentAt: earlier(outreach.sentAt, acceptedAt),
@@ -760,20 +802,23 @@ async function processEvent(
                 where: { id: attempt.id },
                 data: {
                   status: hadDeliveryFailure
-                    ? attempt.status
+                    ? providerAcceptanceComplete
+                      ? completedAttemptStatus
+                      : attempt.status
                     : providerAcceptanceComplete
                       ? "accepted"
                       : attempt.status,
                   acceptedAt: attempt.acceptedAt ?? providerCreatedAt,
                   deliveredAt: earlier(attempt.deliveredAt, providerCreatedAt),
                   error:
-                    hadDeliveryFailure || !providerAcceptanceComplete
-                      ? attempt.error
+                    hadDeliveryFailure
+                      ? completedError
+                      : !providerAcceptanceComplete
+                        ? attempt.error
                       : null,
-                  failureDisposition:
-                    hadDeliveryFailure || !providerAcceptanceComplete
-                      ? attempt.failureDisposition
-                      : null,
+                  failureDisposition: providerAcceptanceComplete
+                    ? null
+                    : attempt.failureDisposition,
                   nextAttemptAt: providerAcceptanceComplete
                     ? null
                     : attempt.nextAttemptAt,
@@ -783,16 +828,12 @@ async function processEvent(
                 await tx.outreach.update({
                   where: { id: outreach.id },
                   data: {
-                    status: hadDeliveryFailure
-                      ? outreach.status
-                      : attempt.testSend
-                        ? "test"
-                        : "sent",
+                    status: completedOutreachStatus,
                     providerMessageId: primaryProviderMessageId,
                     providerMessageIds,
                     sentAt: outreach.sentAt ?? providerCreatedAt,
                     deliveredAt: earlier(outreach.deliveredAt, providerCreatedAt),
-                    error: hadDeliveryFailure ? outreach.error : null,
+                    error: completedError,
                     scheduledFor: null,
                     nextAttemptAt: null,
                     claimedAt: null,
@@ -862,15 +903,32 @@ async function processEvent(
               break;
             case "email.bounced": {
               const error = suppressionReason(parsed);
+              const deliveryFailure = deliveryFailureState(error);
               await tx.outreachSendAttempt.update({
                 where: { id: attempt.id },
                 data: {
-                  status: "delivery_failed",
-                  bouncedAt: earlier(attempt.bouncedAt, providerCreatedAt),
-                  error,
+                  providerRequestResults:
+                    deliveryFailure.results as Prisma.InputJsonValue,
+                  status: deliveryFailure.resolved
+                    ? "delivery_failed"
+                    : attempt.status,
+                  bouncedAt: deliveryFailure.resolved
+                    ? earlier(attempt.bouncedAt, providerCreatedAt)
+                    : attempt.bouncedAt,
+                  error: deliveryFailure.resolved ? error : attempt.error,
+                  failureDisposition: deliveryFailure.resolved
+                    ? null
+                    : attempt.failureDisposition,
+                  nextAttemptAt: deliveryFailure.resolved
+                    ? null
+                    : attempt.nextAttemptAt,
                 },
               });
-              if (mirrorDeliveryProblem && outreach) {
+              if (
+                deliveryFailure.resolved &&
+                mirrorDeliveryProblem &&
+                outreach
+              ) {
                 await tx.outreach.update({
                   where: { id: outreach.id },
                   data: {
@@ -882,19 +940,34 @@ async function processEvent(
               }
               break;
             }
-            case "email.complained":
+            case "email.complained": {
+              const error = "complaint";
+              const deliveryFailure = deliveryFailureState(error);
               await tx.outreachSendAttempt.update({
                 where: { id: attempt.id },
                 data: {
-                  status: "delivery_failed",
-                  complainedAt: earlier(
-                    attempt.complainedAt,
-                    providerCreatedAt,
-                  ),
-                  error: "complaint",
+                  providerRequestResults:
+                    deliveryFailure.results as Prisma.InputJsonValue,
+                  status: deliveryFailure.resolved
+                    ? "delivery_failed"
+                    : attempt.status,
+                  complainedAt: deliveryFailure.resolved
+                    ? earlier(attempt.complainedAt, providerCreatedAt)
+                    : attempt.complainedAt,
+                  error: deliveryFailure.resolved ? error : attempt.error,
+                  failureDisposition: deliveryFailure.resolved
+                    ? null
+                    : attempt.failureDisposition,
+                  nextAttemptAt: deliveryFailure.resolved
+                    ? null
+                    : attempt.nextAttemptAt,
                 },
               });
-              if (mirrorDeliveryProblem && outreach) {
+              if (
+                deliveryFailure.resolved &&
+                mirrorDeliveryProblem &&
+                outreach
+              ) {
                 await tx.outreach.update({
                   where: { id: outreach.id },
                   data: {
@@ -903,18 +976,37 @@ async function processEvent(
                       providerCreatedAt,
                     ),
                     status: "failed",
-                    error: "complaint",
+                    error,
                   },
                 });
               }
               break;
+            }
             case "email.suppressed": {
               const error = suppressionReason(parsed);
+              const deliveryFailure = deliveryFailureState(error);
               await tx.outreachSendAttempt.update({
                 where: { id: attempt.id },
-                data: { status: "delivery_failed", error },
+                data: {
+                  providerRequestResults:
+                    deliveryFailure.results as Prisma.InputJsonValue,
+                  status: deliveryFailure.resolved
+                    ? "delivery_failed"
+                    : attempt.status,
+                  error: deliveryFailure.resolved ? error : attempt.error,
+                  failureDisposition: deliveryFailure.resolved
+                    ? null
+                    : attempt.failureDisposition,
+                  nextAttemptAt: deliveryFailure.resolved
+                    ? null
+                    : attempt.nextAttemptAt,
+                },
               });
-              if (mirrorDeliveryProblem && outreach) {
+              if (
+                deliveryFailure.resolved &&
+                mirrorDeliveryProblem &&
+                outreach
+              ) {
                 await tx.outreach.update({
                   where: { id: outreach.id },
                   data: { status: "failed", error },
@@ -935,19 +1027,39 @@ async function processEvent(
                 });
               }
               break;
-            case "email.failed":
+            case "email.failed": {
               if (hadDeliveryFailure) break;
+              const error = "email.failed";
+              const deliveryFailure = deliveryFailureState(error);
               await tx.outreachSendAttempt.update({
                 where: { id: attempt.id },
-                data: { status: "delivery_failed", error: "email.failed" },
+                data: {
+                  providerRequestResults:
+                    deliveryFailure.results as Prisma.InputJsonValue,
+                  status: deliveryFailure.resolved
+                    ? "delivery_failed"
+                    : attempt.status,
+                  error: deliveryFailure.resolved ? error : attempt.error,
+                  failureDisposition: deliveryFailure.resolved
+                    ? null
+                    : attempt.failureDisposition,
+                  nextAttemptAt: deliveryFailure.resolved
+                    ? null
+                    : attempt.nextAttemptAt,
+                },
               });
-              if (mirrorDeliveryProblem && outreach) {
+              if (
+                deliveryFailure.resolved &&
+                mirrorDeliveryProblem &&
+                outreach
+              ) {
                 await tx.outreach.update({
                   where: { id: outreach.id },
-                  data: { status: "failed", error: "email.failed" },
+                  data: { status: "failed", error },
                 });
               }
               break;
+            }
             default:
               return { note: `unhandled type: ${parsed.type}` };
           }
