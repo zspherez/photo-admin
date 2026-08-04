@@ -38,7 +38,51 @@ export const PROFESSIONAL_CONTACT_WORKFLOW_REF =
     PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_FILE,
   );
 
+export function resolveProfessionalContactDispatchTarget(
+  configuration: WorkflowTrustConfig | null = TRUST_CONFIG,
+  repository = appConfig.repository,
+): {
+  workflowFile: string;
+  ref: "main";
+  workflowRef: string;
+} {
+  if (
+    !configuration ||
+    configuration.repository !== repository.slug ||
+    configuration.owner !== repository.owner
+  ) {
+    throw new Error(
+      "Professional contact workflow dispatch trust is not configured",
+    );
+  }
+  const prefix = `${repository.slug}/.github/workflows/`;
+  if (
+    !configuration.workflowRef.startsWith(prefix) ||
+    !configuration.workflowRef.endsWith(TRUSTED_WORKFLOW_SUFFIX)
+  ) {
+    throw new Error(
+      "Professional contact workflow dispatch ref is not allowed",
+    );
+  }
+  const workflowFile = configuration.workflowRef.slice(
+    prefix.length,
+    -TRUSTED_WORKFLOW_SUFFIX.length,
+  );
+  if (!WORKFLOW_FILE_PATTERN.test(workflowFile)) {
+    throw new Error(
+      "Professional contact workflow dispatch file is invalid",
+    );
+  }
+  return {
+    workflowFile,
+    ref: "main",
+    workflowRef: configuration.workflowRef,
+  };
+}
+
 const TRUST_CONFIG = resolveProfessionalContactResearchTrustConfig();
+const TRUSTED_WORKFLOW_SUFFIX = "@refs/heads/main";
+const WORKFLOW_FILE_PATTERN = /^[A-Za-z0-9_.-]+\.(?:yml|yaml)$/;
 const githubActionsJwks = createRemoteJWKSet(
   new URL(`${PROFESSIONAL_CONTACT_OIDC_ISSUER}/.well-known/jwks`),
 );
@@ -753,6 +797,7 @@ interface ProfessionalContactDispatchOptions {
   token?: string;
   fetchImpl?: typeof fetch;
   runTransaction?: ProfessionalContactTransactionRunner;
+  trustConfig?: WorkflowTrustConfig | null;
 }
 
 function existingDispatchState(
@@ -953,13 +998,18 @@ export async function dispatchProfessionalContactRequest(
       );
     }
     const fetchImpl = options.fetchImpl ?? fetch;
+    const dispatchTarget = resolveProfessionalContactDispatchTarget(
+      Object.prototype.hasOwnProperty.call(options, "trustConfig")
+        ? options.trustConfig ?? null
+        : TRUST_CONFIG,
+    );
     const response = await fetchImpl(
       `https://api.github.com/repos/${encodeURIComponent(
         appConfig.repository.owner,
       )}/${encodeURIComponent(
         appConfig.repository.name,
       )}/actions/workflows/${encodeURIComponent(
-        PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_FILE,
+        dispatchTarget.workflowFile,
       )}/dispatches`,
       {
         method: "POST",
@@ -970,7 +1020,7 @@ export async function dispatchProfessionalContactRequest(
           "x-github-api-version": "2022-11-28",
         },
         body: JSON.stringify({
-          ref: "main",
+          ref: dispatchTarget.ref,
           inputs: { request_id: requestId },
         }),
         signal: AbortSignal.timeout(15_000),

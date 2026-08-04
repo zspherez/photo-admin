@@ -15,6 +15,7 @@ import {
   PROFESSIONAL_CONTACT_OIDC_AUDIENCE,
   PROFESSIONAL_CONTACT_WORKFLOW_REF,
   requeueProfessionalContactJob,
+  resolveProfessionalContactDispatchTarget,
   submitProfessionalContactResult,
 } from "./professionalContactResearch";
 
@@ -71,6 +72,39 @@ const validSubmission = {
   candidates: [validCandidate],
   provenance: validProvenance,
 } as const;
+
+test("workflow dispatch target stays aligned with trusted OIDC workflow refs", () => {
+  assert.deepEqual(resolveProfessionalContactDispatchTarget(), {
+    workflowFile: "professional-contact-research.yml",
+    ref: "main",
+    workflowRef:
+      "zspherez/photo-admin/.github/workflows/professional-contact-research.yml@refs/heads/main",
+  });
+  assert.deepEqual(
+    resolveProfessionalContactDispatchTarget({
+      repository: "zspherez/photo-admin",
+      owner: "zspherez",
+      workflowRef:
+        "zspherez/photo-admin/.github/workflows/custom-professional-worker.yaml@refs/heads/main",
+    }),
+    {
+      workflowFile: "custom-professional-worker.yaml",
+      ref: "main",
+      workflowRef:
+        "zspherez/photo-admin/.github/workflows/custom-professional-worker.yaml@refs/heads/main",
+    },
+  );
+  assert.throws(
+    () =>
+      resolveProfessionalContactDispatchTarget({
+        repository: "other/repo",
+        owner: "other",
+        workflowRef:
+          "other/repo/.github/workflows/professional-contact-research.yml@refs/heads/main",
+      }),
+    /trust is not configured/,
+  );
+});
 
 test("form submission durably creates jobs and dispatch state before triggering", async () => {
   let createdData: Record<string, unknown> | null = null;
@@ -680,6 +714,35 @@ test("form dispatch immediately triggers the trusted workflow once", async () =>
   assert.equal(duplicate.state, "already_dispatched");
   assert.equal(duplicate.triggered, false);
   assert.equal(fetchCalls, 1);
+});
+
+test("configured trusted workflow override controls the dispatched filename", async () => {
+  const harness = createDispatchHarness();
+  let dispatchedUrl = "";
+  const result = await dispatchProfessionalContactRequest("request-1", {
+    now: new Date("2026-08-04T18:00:00.000Z"),
+    token: "dispatch-token",
+    trustConfig: {
+      repository: "zspherez/photo-admin",
+      owner: "zspherez",
+      workflowRef:
+        "zspherez/photo-admin/.github/workflows/custom-professional-worker.yaml@refs/heads/main",
+    },
+    fetchImpl: async (url, init) => {
+      dispatchedUrl = String(url);
+      assert.deepEqual(JSON.parse(String(init?.body)), {
+        ref: "main",
+        inputs: { request_id: "request-1" },
+      });
+      return new Response(null, { status: 204 });
+    },
+    runTransaction: harness.runner,
+  });
+  assert.equal(result.state, "dispatched");
+  assert.match(
+    dispatchedUrl,
+    /actions\/workflows\/custom-professional-worker\.yaml\/dispatches$/,
+  );
 });
 
 test("dispatch failure preserves queued work and a versioned manual retry triggers again", async () => {
