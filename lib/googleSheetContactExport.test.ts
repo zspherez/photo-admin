@@ -182,9 +182,11 @@ test("Google export creates one tab, writes bounded RAW batches, and verifies", 
         request.updateDimensionProperties.properties.hiddenByUser,
     })),
     [
-      { startIndex: 0, endIndex: 9, hidden: false },
+      { startIndex: 0, endIndex: 1, hidden: false },
+      { startIndex: 1, endIndex: 3, hidden: true },
+      { startIndex: 3, endIndex: 5, hidden: false },
       {
-        startIndex: 9,
+        startIndex: 5,
         endIndex: CONTACT_SNAPSHOT_HEADERS.length,
         hidden: true,
       },

@@ -67,6 +67,7 @@ import {
   artistDisplayName,
   normalizeArtistCustomName,
 } from "@/lib/artistDisplayName";
+import { normalizeDirectOutreachContactNote } from "@/lib/directOutreachContact";
 
 export const dynamic = "force-dynamic";
 
@@ -277,8 +278,21 @@ const getArtistPageData = cache(async (id: string) => {
           orderBy: { rank: "asc" },
         },
         contacts: {
-          where: { state: "active" },
-          orderBy: { updatedAt: "desc" },
+          orderBy: [{ state: "asc" }, { updatedAt: "desc" }],
+          include: {
+            auditJobs: {
+              where: { verifiedAt: { not: null } },
+              orderBy: [{ verifiedAt: "desc" }, { createdAt: "desc" }],
+              take: 1,
+              select: {
+                finding: true,
+                confidence: true,
+                evidence: true,
+                sourceUrls: true,
+                verifiedAt: true,
+              },
+            },
+          },
         },
         contactResearchJob: {
           select: {
@@ -382,6 +396,61 @@ export default async function ArtistPage({
   const today = easternTodayStoredDate(now);
   if (!artist) return notFound();
   const displayName = artistDisplayName(artist);
+  const activeContacts = artist.contacts.filter(
+    (contact) => contact.state === "active",
+  );
+  type ArtistContact = (typeof artist.contacts)[number];
+  type ContactAudit = ArtistContact["auditJobs"][number];
+  const directOutreachGroupMetadata = new Map<
+    string,
+    { count: number; audit: ContactAudit | null }
+  >();
+  for (const contact of artist.contacts) {
+    if (contact.email || !contact.directOutreachNote) continue;
+    const normalizedNote = normalizeDirectOutreachContactNote(
+      contact.directOutreachNote,
+    );
+    if (!normalizedNote) continue;
+    const audit = contact.auditJobs[0] ?? null;
+    const existing = directOutreachGroupMetadata.get(normalizedNote);
+    if (!existing) {
+      directOutreachGroupMetadata.set(normalizedNote, { count: 1, audit });
+      continue;
+    }
+    existing.count += 1;
+    if (
+      audit?.verifiedAt &&
+      (!existing.audit?.verifiedAt ||
+        audit.verifiedAt > existing.audit.verifiedAt)
+    ) {
+      existing.audit = audit;
+    }
+  }
+  const inactiveContactGroups = new Map<
+    string,
+    { contact: ArtistContact; count: number; audit: ContactAudit | null }
+  >();
+  for (const contact of artist.contacts.filter(
+    (candidate) => candidate.state === "quarantined",
+  )) {
+    const normalizedNote = contact.directOutreachNote
+      ? normalizeDirectOutreachContactNote(contact.directOutreachNote)
+      : "";
+    const key =
+      !contact.email && normalizedNote
+        ? `direct:${normalizedNote}`
+        : `contact:${contact.id}`;
+    if (inactiveContactGroups.has(key)) continue;
+    const groupMetadata = normalizedNote
+      ? directOutreachGroupMetadata.get(normalizedNote)
+      : null;
+    inactiveContactGroups.set(key, {
+      contact,
+      count: groupMetadata?.count ?? 1,
+      audit: groupMetadata?.audit ?? contact.auditJobs[0] ?? null,
+    });
+  }
+  const inactiveContacts = [...inactiveContactGroups.values()];
 
   const genres: string[] = (() => {
     try {
@@ -411,8 +480,8 @@ export default async function ArtistPage({
     rows.push(outreach);
     outreachesByShow.set(outreach.showId, rows);
   }
-  const emailContact = pickEmailContact(artist.contacts);
-  const phoneContact = pickPhoneContact(artist.contacts, emailContact);
+  const emailContact = pickEmailContact(activeContacts);
+  const phoneContact = pickPhoneContact(activeContacts, emailContact);
   const weekend = isWeekendET();
   const [sendabilityRows, followUpEligibilityRows] = await Promise.all([
     emailContact
@@ -441,7 +510,7 @@ export default async function ArtistPage({
   const researchJob = artist.contactResearchJob;
   const activeResearchSkip = artist.researchSkips[0] ?? null;
   const festivalContextShowId = workflowFestivalShowId(safeReturnTo);
-  const hasActiveEmailContact = artist.contacts.some((contact) =>
+  const hasActiveEmailContact = activeContacts.some((contact) =>
     Boolean(contact.email?.trim())
   );
   const researchWindowEnd = new Date(
@@ -779,7 +848,7 @@ export default async function ArtistPage({
               variant="secondary"
               size="sm"
               pendingLabel="Queueing audit…"
-              disabled={artist.contacts.length === 0}
+              disabled={activeContacts.length === 0}
             >
               Queue audit
             </PendingSubmitButton>
@@ -950,12 +1019,12 @@ export default async function ArtistPage({
         </section>
       )}
 
-      {artist.contacts.length > 0 && (
+      {activeContacts.length > 0 && (
         <section className="mt-6">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Contacts</h2>
           <Card className="mt-2">
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
-              {artist.contacts.map((c) => (
+              {activeContacts.map((c) => (
                 <li key={c.id} className="px-4 py-3 text-sm">
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
@@ -996,6 +1065,79 @@ export default async function ArtistPage({
                   />
                 </li>
               ))}
+            </ul>
+          </Card>
+        </section>
+      )}
+
+      {inactiveContacts.length > 0 && (
+        <section className="mt-6">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            Inactive contact history
+          </h2>
+          <Card className="mt-2">
+            <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
+              {inactiveContacts.map(({ contact, count, audit }) => {
+                return (
+                  <li key={contact.id} className="px-4 py-3 text-sm">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Link
+                        href={withWorkflowReturnTo(
+                          `/dashboard/contact/${contact.id}`,
+                          safeReturnTo,
+                        )}
+                        className="font-medium hover:underline"
+                      >
+                        {contact.name
+                          ? `${contact.name} · ${contactDisplayValue(contact)}`
+                          : contactDisplayValue(contact)}
+                      </Link>
+                      <Badge tone="muted" size="xs">
+                        Quarantined
+                      </Badge>
+                      {count > 1 && (
+                        <Badge tone="warning" size="xs">
+                          {count} matching contact records
+                        </Badge>
+                      )}
+                    </div>
+                    {audit && (
+                      <div className="mt-2 text-xs text-zinc-500">
+                        <p>
+                          Audit:{" "}
+                          {audit.finding?.replaceAll("_", " ") ?? "reviewed"}
+                          {audit.confidence
+                            ? ` · ${audit.confidence} confidence`
+                            : ""}
+                          {audit.verifiedAt
+                            ? ` · ${audit.verifiedAt.toLocaleDateString()}`
+                            : ""}
+                        </p>
+                        {audit.evidence && (
+                          <p className="mt-1 whitespace-pre-wrap">
+                            {audit.evidence}
+                          </p>
+                        )}
+                        {audit.sourceUrls.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                            {audit.sourceUrls.map((url) => (
+                              <a
+                                key={url}
+                                href={url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="underline"
+                              >
+                                Source ↗
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </Card>
         </section>
@@ -1125,7 +1267,7 @@ export default async function ArtistPage({
         </section>
       )}
 
-      {artist.contacts.length === 0 && (
+      {activeContacts.length === 0 && inactiveContacts.length === 0 && (
         <p className="mt-6 text-xs text-zinc-500">
           No contact yet.
         </p>

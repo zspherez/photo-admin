@@ -25,6 +25,8 @@ import {
   isDirectOutreachOnly,
 } from "@/lib/contactDisplay";
 import { satisfiesFestivalLeadTime } from "@/lib/festivalEligibility";
+import { findMatchingDirectOutreachContact } from "@/lib/directOutreachContact";
+import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
 
 export const dynamic = "force-dynamic";
 
@@ -110,6 +112,29 @@ async function createContacts(formData: FormData) {
       let created = 0;
       let updated = 0;
       if (emails.length === 0) {
+        const existing = directOutreachNote
+          ? await findMatchingDirectOutreachContact(tx, {
+              artistId,
+              directOutreachNote,
+            })
+          : null;
+        if (existing) {
+          await tx.contact.update({
+            where: { id: existing.id },
+            data: {
+              phone,
+              directOutreachNote,
+              name,
+              role,
+              customPrice,
+              notes,
+              source: "manual",
+              state: "active",
+              ...CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE,
+            },
+          });
+          return { createdCount: 0, updatedCount: 1 };
+        }
         await tx.contact.create({
           data: {
             artistId,

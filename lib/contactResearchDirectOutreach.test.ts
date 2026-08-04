@@ -344,6 +344,7 @@ test("human approval preserves existing contact fields and atomically records pr
     "proposal-1",
     new Date("2026-07-21T17:00:00.000Z"),
     runWithTransaction({
+      $queryRaw: async () => [],
       contactResearchDirectOutreachProposal: {
         findFirst: async () => ({
           id: "proposal-1",
@@ -409,6 +410,7 @@ test("human approval creates one null-email agent contact when no manager contac
     "proposal-1",
     new Date("2026-07-21T17:00:00.000Z"),
     runWithTransaction({
+      $queryRaw: async () => [],
       contactResearchDirectOutreachProposal: {
         findFirst: async () => ({
           id: "proposal-1",
@@ -443,6 +445,123 @@ test("human approval creates one null-email agent contact when no manager contac
   assert.equal(creates[0].phone, null);
   assert.equal(creates[0].source, "agent");
   assert.equal(creates[0].role, "management");
+});
+
+test("human approval reactivates a matching quarantined direct outreach contact", async () => {
+  const updates: Array<{
+    where: { id: string };
+    data: Record<string, unknown>;
+  }> = [];
+  let creates = 0;
+  const result = await approveContactResearchDirectOutreach(
+    "proposal-1",
+    new Date("2026-07-21T17:00:00.000Z"),
+    runWithTransaction({
+      $queryRaw: async () => [
+        {
+          id: "contact-history",
+          state: "quarantined",
+        },
+      ],
+      contactResearchDirectOutreachProposal: {
+        findFirst: async () => ({
+          id: "proposal-1",
+          jobId: "job-1",
+          ruleVersion: 4,
+          canonicalRule,
+          managerName: "Leif Fosse",
+          managerCompany: null,
+          note: "Direct outreach: Use the number already on file",
+          sourceUrls: ["https://fossemanagement.com/team"],
+          evidenceQuotes: ["Managed by Leif Fosse."],
+          job: { id: "job-1", artistId: "artist-1" },
+        }),
+        updateMany: async () => ({ count: 1 }),
+        findMany: async () => [{ status: "approved" }],
+      },
+      contact: {
+        findUnique: async () => null,
+        findMany: async () => [],
+        update: async (value: {
+          where: { id: string };
+          data: Record<string, unknown>;
+        }) => {
+          updates.push(value);
+          return { id: value.where.id };
+        },
+        create: async () => {
+          creates += 1;
+          return { id: "unexpected" };
+        },
+      },
+      contactResearchCandidate: { findMany: async () => [] },
+      contactResearchJob: { update: async () => ({}) },
+    }),
+  );
+
+  assert.deepEqual(result, { ok: true, contactId: "contact-history" });
+  assert.equal(creates, 0);
+  assert.equal(updates[0].where.id, "contact-history");
+  assert.equal(updates[0].data.state, "active");
+  assert.equal(updates[0].data.source, "agent");
+  assert.equal(updates[0].data.directOutreachRuleText, canonicalRule);
+});
+
+test("human approval merges a quarantined identity into the active matching note", async () => {
+  const updates: Array<{
+    where: { id: string };
+    data: Record<string, unknown>;
+  }> = [];
+  const result = await approveContactResearchDirectOutreach(
+    "proposal-1",
+    new Date("2026-07-21T17:00:00.000Z"),
+    runWithTransaction({
+      $queryRaw: async () => [
+        {
+          id: "active-note-contact",
+          state: "active",
+        },
+      ],
+      contactResearchDirectOutreachProposal: {
+        findFirst: async () => ({
+          id: "proposal-1",
+          jobId: "job-1",
+          ruleVersion: 4,
+          canonicalRule,
+          managerName: "Leif Fosse",
+          managerCompany: null,
+          note: "Direct outreach: Use the number already on file",
+          sourceUrls: ["https://fossemanagement.com/team"],
+          evidenceQuotes: ["Managed by Leif Fosse."],
+          job: { id: "job-1", artistId: "artist-1" },
+        }),
+        updateMany: async () => ({ count: 1 }),
+        findMany: async () => [{ status: "approved" }],
+      },
+      contact: {
+        findUnique: async () => ({ id: "identity-contact" }),
+        findMany: async () => [],
+        update: async (value: {
+          where: { id: string };
+          data: Record<string, unknown>;
+        }) => {
+          updates.push(value);
+          return { id: value.where.id };
+        },
+      },
+      contactResearchCandidate: { findMany: async () => [] },
+      contactResearchJob: { update: async () => ({}) },
+    }),
+  );
+
+  assert.deepEqual(result, { ok: true, contactId: "active-note-contact" });
+  assert.equal(updates.length, 2);
+  assert.deepEqual(updates[0].where, { id: "identity-contact" });
+  assert.equal(updates[0].data.state, "quarantined");
+  assert.equal(updates[0].data.directOutreachIdentity, null);
+  assert.deepEqual(updates[1].where, { id: "active-note-contact" });
+  assert.equal(updates[1].data.state, "active");
+  assert.equal(updates[1].data.directOutreachRuleText, canonicalRule);
 });
 
 test("email candidates and direct outreach persist together without collapsing review", async () => {

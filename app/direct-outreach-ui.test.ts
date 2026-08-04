@@ -98,3 +98,20 @@ test("agent-created direct outreach provenance appears on research and contact s
   assert.match(editor, /clearsAgentProvenance/);
   assert.match(editor, /CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/);
 });
+
+test("direct outreach writes reuse matching history and inactive notes remain visible", () => {
+  const addContact = source("app/dashboard/add-contact/[artistId]/page.tsx");
+  const editor = source("app/dashboard/contact/[contactId]/page.tsx");
+  const research = source("lib/contactResearch.ts");
+  const artist = source("app/artists/[id]/page.tsx");
+
+  for (const contents of [addContact, editor, research]) {
+    assert.match(contents, /findMatchingDirectOutreachContact/);
+  }
+  assert.match(addContact, /CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE/);
+  assert.match(editor, /duplicate_direct_outreach/);
+  assert.match(artist, /Inactive contact history/);
+  assert.match(artist, /contact\.auditJobs\[0\]/);
+  assert.match(artist, /audit\.evidence/);
+  assert.match(artist, /audit\.sourceUrls\.map/);
+});

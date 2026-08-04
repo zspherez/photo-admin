@@ -45,6 +45,8 @@ import {
   resolveContactResearchTrustConfig,
   type WorkflowTrustConfig,
 } from "@/lib/appConfig";
+import { findMatchingDirectOutreachContact } from "@/lib/directOutreachContact";
+import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
 
 export const CONTACT_RESEARCH_WINDOW_DAYS = 90;
 export const CONTACT_RESEARCH_DEFAULT_CLAIM_LIMIT = 3;
@@ -1391,16 +1393,57 @@ async function applyApprovedDirectOutreach(
     directOutreachEvidenceUrls: proposal.sourceUrls,
     directOutreachEvidence: proposal.evidenceQuotes.join("\n"),
   };
+  const matchingDirectOutreach = await findMatchingDirectOutreachContact(tx, {
+    artistId: job.artistId,
+    directOutreachNote: proposal.note,
+  });
   const existingIdentity = await tx.contact.findUnique({
     where: { directOutreachIdentity },
     select: { id: true },
   });
   if (existingIdentity) {
+    if (
+      matchingDirectOutreach &&
+      matchingDirectOutreach.id !== existingIdentity.id
+    ) {
+      await tx.contact.update({
+        where: { id: existingIdentity.id },
+        data: {
+          state: "quarantined",
+          ...CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE,
+        },
+      });
+      await tx.contact.update({
+        where: { id: matchingDirectOutreach.id },
+        data: {
+          name: proposal.managerName,
+          role: "management",
+          source: "agent",
+          state: "active",
+          ...provenance,
+        },
+      });
+      return matchingDirectOutreach;
+    }
     await tx.contact.update({
       where: { id: existingIdentity.id },
       data: { ...provenance, state: "active" },
     });
     return existingIdentity;
+  }
+
+  if (matchingDirectOutreach) {
+    await tx.contact.update({
+      where: { id: matchingDirectOutreach.id },
+      data: {
+        name: proposal.managerName,
+        role: "management",
+        source: "agent",
+        state: "active",
+        ...provenance,
+      },
+    });
+    return matchingDirectOutreach;
   }
 
   const attachableContacts = await tx.contact.findMany({

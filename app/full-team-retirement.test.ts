@@ -47,7 +47,7 @@ test("new snapshots omit full-team and include research and audit evidence", () 
   const snapshot = source("lib/contactSnapshot.ts");
   assert.match(
     snapshot,
-    /CONTACT_SNAPSHOT_VISIBLE_HEADERS = \[\s*"artist_name",\s*"name",\s*"role",\s*"email",\s*"phone",\s*"direct_outreach",\s*"source",\s*"created_at",\s*"updated_at"/,
+    /CONTACT_SNAPSHOT_VISIBLE_HEADERS = \[\s*"artist_name",\s*"email",\s*"phone",\s*\]/,
   );
   assert.doesNotMatch(
     snapshot.slice(
