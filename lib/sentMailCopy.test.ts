@@ -13,6 +13,7 @@ import {
   SENT_MAIL_COPY_MAX_ATTEMPTS,
   sentMailCopyFailureState,
   sentMailCopyDeadlineReleaseData,
+  sentMailCopyStaleRecovery,
   type SentMailCopyBatchDependencies,
   type SentMailImapClient,
 } from "./sentMailCopy";
@@ -518,6 +519,61 @@ test("configuration, mismatch, and thrown failures share the bounded retry cap",
       ) ?? []
     ).length,
     3,
+  );
+});
+
+test("stale crash recovery stops at the cap and reclaims only below it", () => {
+  const staleBefore = new Date("2026-08-04T18:00:00.000Z");
+  const staleClaimedAt = new Date("2026-08-04T17:59:59.000Z");
+  assert.equal(
+    sentMailCopyStaleRecovery(
+      {
+        status: "copying",
+        claimedAt: staleClaimedAt,
+        attemptCount: SENT_MAIL_COPY_MAX_ATTEMPTS,
+      },
+      staleBefore,
+    ),
+    "manual_review",
+  );
+  assert.equal(
+    sentMailCopyStaleRecovery(
+      {
+        status: "copying",
+        claimedAt: staleClaimedAt,
+        attemptCount: SENT_MAIL_COPY_MAX_ATTEMPTS - 1,
+      },
+      staleBefore,
+    ),
+    "reclaim",
+  );
+  assert.equal(
+    sentMailCopyStaleRecovery(
+      {
+        status: "copying",
+        claimedAt: new Date("2026-08-04T18:00:01.000Z"),
+        attemptCount: SENT_MAIL_COPY_MAX_ATTEMPTS,
+      },
+      staleBefore,
+    ),
+    null,
+  );
+
+  const source = readFileSync(
+    new URL("./sentMailCopy.ts", import.meta.url),
+    "utf8",
+  );
+  const claim = source.slice(
+    source.indexOf("async function claimSentMailCopy"),
+    source.indexOf("export function sentMailCopyDeadlineReleaseData"),
+  );
+  assert.match(
+    claim,
+    /staleRecovery === "manual_review"[\s\S]*status: "manual_review"[\s\S]*claimedAt: null[\s\S]*claimToken: null/,
+  );
+  assert.ok(
+    claim.indexOf('staleRecovery === "manual_review"') <
+      claim.indexOf("row.attemptCount + 1"),
   );
 });
 

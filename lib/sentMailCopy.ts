@@ -373,6 +373,26 @@ function operationalError(error: unknown): string {
   return "IMAP Sent copy failed; verify connectivity, mailbox mapping, and the app password";
 }
 
+export function sentMailCopyStaleRecovery(
+  row: {
+    status: string;
+    claimedAt: Date | null;
+    attemptCount: number;
+  },
+  staleBefore: Date,
+): "manual_review" | "reclaim" | null {
+  if (
+    row.status !== "copying" ||
+    row.claimedAt === null ||
+    row.claimedAt > staleBefore
+  ) {
+    return null;
+  }
+  return row.attemptCount >= SENT_MAIL_COPY_MAX_ATTEMPTS
+    ? "manual_review"
+    : "reclaim";
+}
+
 async function claimSentMailCopy(
   id: string,
   now: Date,
@@ -404,12 +424,28 @@ async function claimSentMailCopy(
           result: { id, ok: true, skipped: true },
         };
       }
+      const staleRecovery = sentMailCopyStaleRecovery(row, staleBefore);
+      if (staleRecovery === "manual_review") {
+        const error = `Stale Sent copy claim reached the automatic attempt cap (${SENT_MAIL_COPY_MAX_ATTEMPTS}); review manually`;
+        await tx.sentMailCopy.update({
+          where: { id },
+          data: {
+            status: "manual_review",
+            error,
+            nextAttemptAt: now,
+            claimedAt: null,
+            claimToken: null,
+          },
+        });
+        return {
+          ok: false as const,
+          result: { id, ok: false, error },
+        };
+      }
       const claimable =
         ((row.status === "pending" || row.status === "retry_scheduled") &&
           row.nextAttemptAt <= now) ||
-        (row.status === "copying" &&
-          row.claimedAt !== null &&
-          row.claimedAt <= staleBefore);
+        staleRecovery === "reclaim";
       if (!claimable) {
         return {
           ok: false as const,
