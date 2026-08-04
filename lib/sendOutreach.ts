@@ -307,6 +307,8 @@ interface StoredAttempt {
   requestHash: string | null;
   testSend: boolean | null;
   sentMailboxCopyRequested: boolean | null;
+  sentMailboxTargetScope: string | null;
+  sentMailboxCopyConfigurationError: string | null;
   providerCredentialScope: string | null;
   providerMessageId: string | null;
   firstAttemptAt: Date | null;
@@ -1201,6 +1203,7 @@ export interface EvaluateOutreachDeliveryPolicyInput {
   testOverride: string | null;
   bccEmails: string[];
   sentMailCopyRequested?: boolean;
+  sentMailboxTargetScope?: string | null;
   sentMailCopyConfigurationError?: string | null;
   suppressedEmails: readonly string[];
   configurationError?: string | null;
@@ -1231,8 +1234,6 @@ function deliveryPolicyConfigurationError(error: string): boolean {
   return (
     error === "Missing RESEND_FROM_EMAIL" ||
     error.startsWith("Invalid RESEND_FROM_EMAIL;") ||
-    error.startsWith("Sent mailbox copy") ||
-    error.startsWith("SENT_MAIL_IMAP_") ||
     error === "Test override email is invalid" ||
     error === "Test override email is suppressed"
   );
@@ -1252,6 +1253,7 @@ export function evaluateOutreachDeliveryPolicy({
   testOverride,
   bccEmails,
   sentMailCopyRequested = false,
+  sentMailboxTargetScope = null,
   sentMailCopyConfigurationError = null,
   suppressedEmails,
   configurationError = null,
@@ -1355,6 +1357,7 @@ export function evaluateOutreachDeliveryPolicy({
     suppressedEmails,
     allowMissingFrom: allowMissingFrom || !!configurationError,
     sentMailCopyRequested,
+    sentMailboxTargetScope,
     sentMailCopyConfigurationError,
   });
   if (!resolved.ok) {
@@ -1801,6 +1804,7 @@ async function evaluateLockedOutreachDeliveryPolicy(
       testOverride,
       bccEmails,
       sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+      sentMailboxTargetScope: deliverySettings.sentMailboxTargetScope,
       sentMailCopyConfigurationError:
         deliverySettings.sentMailCopyConfigurationError,
       suppressedEmails: suppressions.map(
@@ -2024,6 +2028,7 @@ export async function getOutreachSendabilityBatch(
       testOverride,
       bccEmails,
       sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+      sentMailboxTargetScope: deliverySettings.sentMailboxTargetScope,
       sentMailCopyConfigurationError:
         deliverySettings.sentMailCopyConfigurationError,
       suppressedEmails,
@@ -2113,6 +2118,7 @@ export async function getOutreachSendabilityBatch(
           testOverride,
           bccEmails,
           sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+          sentMailboxTargetScope: deliverySettings.sentMailboxTargetScope,
           sentMailCopyConfigurationError:
             deliverySettings.sentMailCopyConfigurationError,
           suppressedEmails,
@@ -2311,6 +2317,7 @@ export async function getOutreachSendabilityBatch(
       testOverride,
       bccEmails,
       sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+      sentMailboxTargetScope: deliverySettings.sentMailboxTargetScope,
       sentMailCopyConfigurationError:
         deliverySettings.sentMailCopyConfigurationError,
       suppressedEmails,
@@ -2757,6 +2764,7 @@ export async function getFollowUpEligibilityBatch(
       testOverride: deliverySettings.testOverride,
       bccEmails: deliverySettings.bccEmails,
       sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+      sentMailboxTargetScope: deliverySettings.sentMailboxTargetScope,
       sentMailCopyConfigurationError:
         deliverySettings.sentMailCopyConfigurationError,
       suppressedEmails,
@@ -3573,6 +3581,8 @@ async function finishAlreadyAccepted(
     id: attempt.id,
     providerMessageId: attempt.providerMessageId,
     requested: attempt.sentMailboxCopyRequested,
+    targetScope: attempt.sentMailboxTargetScope,
+    configurationError: attempt.sentMailboxCopyConfigurationError,
     testSend: attempt.testSend,
   });
   await tx.outreach.updateMany({
@@ -3836,6 +3846,7 @@ async function preparedDeliveryPolicyBlockingReason(
     testOverride: deliverySettings.testOverride,
     bccEmails: deliverySettings.bccEmails,
     sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+    sentMailboxTargetScope: deliverySettings.sentMailboxTargetScope,
     sentMailCopyConfigurationError:
       deliverySettings.sentMailCopyConfigurationError,
     suppressedEmails: suppressions.map(
@@ -4824,6 +4835,9 @@ async function ensureAttempt(outreachInput: ClaimedOutreach): Promise<AttemptRes
           requestHash: prepared.requestHash,
           testSend: prepared.testSend,
           sentMailboxCopyRequested: prepared.sentMailboxCopyRequested,
+          sentMailboxTargetScope: prepared.sentMailboxTargetScope,
+          sentMailboxCopyConfigurationError:
+            prepared.sentMailboxCopyConfigurationError,
         },
       }));
     return {
@@ -5456,6 +5470,8 @@ async function finishClaimedSend(
         id: attempt.id,
         providerMessageId,
         requested: attempt.sentMailboxCopyRequested,
+        targetScope: attempt.sentMailboxTargetScope,
+        configurationError: attempt.sentMailboxCopyConfigurationError,
         testSend: attempt.testSend,
       });
       if (attempt.status === "delivery_failed") {

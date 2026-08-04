@@ -60,7 +60,7 @@ async function retryFailedSentMailCopies() {
   "use server";
   await requireServerActionAuth("/settings/sent-mail");
   await db.sentMailCopy.updateMany({
-    where: { status: "manual_review" },
+    where: { status: "manual_review", targetScope: { not: null } },
     data: {
       status: "retry_scheduled",
       attemptCount: 0,

@@ -58,10 +58,17 @@ interface MemoryTransaction {
       where: { normalizedEmail: { in: string[] } };
     }) => Promise<Array<{ normalizedEmail: string }>>;
   };
+  sentMailCopy: {
+    upsert: (args: {
+      create: Record<string, unknown>;
+      update: Record<string, unknown>;
+    }) => Promise<Record<string, unknown>>;
+  };
 }
 
 class MemoryArbitraryEmailDatabase {
   record: Record<string, unknown> | null = null;
+  sentMailCopyRecord: Record<string, unknown> | null = null;
   createCount = 0;
   transactionFailuresRemaining = 0;
   readonly suppressed = new Set<string>();
@@ -208,6 +215,17 @@ class MemoryArbitraryEmailDatabase {
             .filter((email) => this.suppressed.has(email))
             .map((normalizedEmail) => ({ normalizedEmail })),
       },
+      sentMailCopy: {
+        upsert: async ({ create }) => {
+          this.sentMailCopyRecord ??= {
+            outreachAttemptId: null,
+            arbitraryEmailId: null,
+            targetScope: null,
+            ...create,
+          };
+          return this.sentMailCopyRecord;
+        },
+      },
     };
     try {
       return await work(tx);
@@ -267,6 +285,10 @@ function prepareWithSettings(
       testOverride: settings.testOverride,
       bccEmails: settings.bccEmails,
       suppressedEmails: [],
+      sentMailCopyRequested: settings.sentMailCopyRequested,
+      sentMailboxTargetScope: settings.sentMailboxTargetScope,
+      sentMailCopyConfigurationError:
+        settings.sentMailCopyConfigurationError,
     });
     if (!resolved.ok) {
       throw new Error(resolved.error);
@@ -292,6 +314,9 @@ function prepareWithSettings(
       requestHash: hashResendRequestSnapshot(request),
       testSend: resolved.policy.testSend,
       sentMailboxCopyRequested: resolved.policy.sentMailCopyRequested,
+      sentMailboxTargetScope: resolved.policy.sentMailboxTargetScope,
+      sentMailboxCopyConfigurationError:
+        resolved.policy.sentMailboxCopyConfigurationError,
       intendedRecipients: resolved.policy.intendedRecipients,
       attachmentBlobs: [],
       warnings: [],
@@ -330,6 +355,90 @@ const REAL_SETTINGS: ResendDeliverySettingsSnapshot = {
   testOverride: null,
   bccEmails: ["audit@example.com"],
 };
+
+const SENT_TARGET_SCOPE = `sent-mail:target-sha256:${"c".repeat(64)}`;
+const MISCONFIGURED_SENT_SETTINGS: ResendDeliverySettingsSnapshot = {
+  ...REAL_SETTINGS,
+  sentMailCopyRequested: true,
+  sentMailboxTargetScope: SENT_TARGET_SCOPE,
+  sentMailCopyConfigurationError:
+    "Sent mailbox copy is enabled but SENT_MAIL_IMAP_PASSWORD is missing",
+};
+
+test("immediate arbitrary delivery succeeds when Sent archival is misconfigured", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  let submissions = 0;
+  const result = await sendArbitraryEmailWithDependencies(
+    INPUT,
+    dependencies(database, MISCONFIGURED_SENT_SETTINGS, async () => {
+      submissions += 1;
+      return {
+        providerMessageId: "message-sent-config-missing",
+        error: null,
+        failureDisposition: null,
+      };
+    }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(submissions, 1);
+  assert.equal(database.record?.status, "sent");
+  assert.equal(database.sentMailCopyRecord?.status, "retry_scheduled");
+  assert.equal(
+    database.sentMailCopyRecord?.targetScope,
+    SENT_TARGET_SCOPE,
+  );
+  assert.match(
+    String(database.sentMailCopyRecord?.error),
+    /SENT_MAIL_IMAP_PASSWORD/,
+  );
+});
+
+test("scheduled arbitrary retries submit despite Sent archival misconfiguration", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  const now = { value: new Date("2026-07-20T20:00:00.000Z") };
+  let submissions = 0;
+  const deps = dependencies(
+    database,
+    MISCONFIGURED_SENT_SETTINGS,
+    async () => {
+      submissions += 1;
+      return submissions === 1
+        ? {
+            providerMessageId: null,
+            error: "temporary Resend failure",
+            failureDisposition: "retryable",
+          }
+        : {
+            providerMessageId: "message-scheduled-sent-config-missing",
+            error: null,
+            failureDisposition: null,
+          };
+    },
+  );
+  deps.now = () => now.value;
+  const id = "sent-copy-config-retry";
+  const queued = await queueArbitraryEmailWithDependencies(
+    INPUT,
+    new Date("2026-07-20T20:01:00.000Z"),
+    id,
+    deps,
+  );
+  assert.equal(queued.ok, true);
+
+  now.value = new Date("2026-07-20T20:01:01.000Z");
+  const first = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
+  assert.equal(first.retryScheduled, true);
+  now.value = first.nextAttemptAt ?? new Date("2026-07-20T20:02:01.000Z");
+  const second = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
+  assert.equal(second.ok, true);
+  assert.equal(submissions, 2);
+  assert.equal(database.sentMailCopyRecord?.status, "retry_scheduled");
+  assert.equal(
+    database.sentMailCopyRecord?.targetScope,
+    SENT_TARGET_SCOPE,
+  );
+});
 
 test("a suppression that wins the recipient lock blocks the stale real request", async () => {
   const database = new MemoryArbitraryEmailDatabase();

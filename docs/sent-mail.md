@@ -21,6 +21,10 @@ SENT_MAIL_IMAP_USERNAME=
 SENT_MAIL_IMAP_PASSWORD=
 ```
 
+`SENT_MAIL_IMAP_SECURE` must be `true`. Photo Admin supports implicit TLS only;
+it rejects plaintext and opportunistic STARTTLS configurations rather than
+risking downgrade or credential exposure.
+
 Then open **Settings → Sent mailbox copy**, optionally enter a mailbox override,
 and enable the integration. Enabling fails closed when required configuration
 is missing or malformed.
@@ -52,9 +56,11 @@ Apple's current server settings are documented at
 
 ## Reliability and privacy
 
-Provider acceptance and mailbox append are separate operations. Photo Admin
-durably queues the Sent copy after Resend acceptance, retries it independently,
-and never resubmits the outbound email to repair a mailbox copy.
+Provider acceptance and mailbox append are separate operations. Missing,
+invalid, unavailable, or mismatched IMAP configuration never blocks the Resend
+submission. Photo Admin durably records the Sent-copy failure after Resend
+acceptance, retries it independently, and never resubmits the outbound email to
+repair a mailbox copy.
 After the bounded automatic retry limit, Settings shows a manual-review count
 and provides a safe retry action.
 
@@ -62,6 +68,12 @@ Every stored copy receives a deterministic internal header. Before each IMAP
 `APPEND`, the worker searches the Sent mailbox for that header. This makes
 recovery idempotent even if the connection drops after the server stores the
 message but before acknowledging the append.
+
+At acceptance, Photo Admin also stores an immutable non-secret SHA-256 target
+scope derived from the normalized IMAP host, username, port/TLS mode, and
+mailbox mapping. Password rotation does not change the scope. Account, host, or
+mailbox changes do; pending copies remain visibly retryable and are never
+redirected to the new target.
 
 The IMAP password remains in server-side environment configuration. Message
 content and credentials are not written to application logs.

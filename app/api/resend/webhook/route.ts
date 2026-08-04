@@ -343,6 +343,9 @@ async function processEvent(
                 id: arbitraryEmail.id,
                 providerMessageId: arbitraryEmail.providerMessageId,
                 requested: arbitraryEmail.sentMailboxCopyRequested,
+                targetScope: arbitraryEmail.sentMailboxTargetScope,
+                configurationError:
+                  arbitraryEmail.sentMailboxCopyConfigurationError,
                 testSend: arbitraryTestSend as boolean,
               });
             }
@@ -537,6 +540,8 @@ async function processEvent(
               id: attempt.id,
               providerMessageId: attempt.providerMessageId,
               requested: attempt.sentMailboxCopyRequested,
+              targetScope: attempt.sentMailboxTargetScope,
+              configurationError: attempt.sentMailboxCopyConfigurationError,
               testSend: attempt.testSend,
             });
             const acceptedAt = earlier(attempt.acceptedAt, providerCreatedAt);

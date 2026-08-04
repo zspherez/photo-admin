@@ -10,6 +10,7 @@ import {
 } from "./sentMailCopy";
 import {
   getSentMailImapConfiguration,
+  getSentMailTarget,
   resolveSentMailCopyRequestState,
   type SentMailImapConfiguration,
 } from "./sentMailConfig";
@@ -57,14 +58,30 @@ const REQUEST: ResendRequestSnapshot = {
   ],
 };
 
-test("Sent copy configuration supports Gmail, iCloud, and fail-closed enablement", () => {
+test("Sent copy configuration supports Gmail, iCloud, and nonblocking failure capture", () => {
   assert.deepEqual(resolveSentMailCopyRequestState("false", null, EMPTY_ENV), {
     requested: false,
+    targetScope: null,
     configurationError: null,
   });
   const missing = resolveSentMailCopyRequestState("true", null, EMPTY_ENV);
   assert.equal(missing.requested, true);
+  assert.equal(missing.targetScope, null);
   assert.match(missing.configurationError ?? "", /SENT_MAIL_IMAP_HOST/);
+
+  const missingPassword = resolveSentMailCopyRequestState("true", null, {
+    ...ENV,
+    SENT_MAIL_IMAP_PASSWORD: "",
+  });
+  assert.equal(missingPassword.requested, true);
+  assert.match(
+    missingPassword.targetScope ?? "",
+    /^sent-mail:target-sha256:[0-9a-f]{64}$/,
+  );
+  assert.match(
+    missingPassword.configurationError ?? "",
+    /SENT_MAIL_IMAP_PASSWORD/,
+  );
 
   const gmail = getSentMailImapConfiguration(null, ENV);
   assert.equal(gmail.ok, true);
@@ -72,6 +89,10 @@ test("Sent copy configuration supports Gmail, iCloud, and fail-closed enablement
     assert.equal(gmail.config.provider, "gmail");
     assert.equal(gmail.config.mailbox, null);
     assert.equal(gmail.config.secure, true);
+    assert.match(
+      gmail.config.targetScope,
+      /^sent-mail:target-sha256:[0-9a-f]{64}$/,
+    );
   }
   const icloud = getSentMailImapConfiguration("Sent Messages", {
     ...ENV,
@@ -81,6 +102,67 @@ test("Sent copy configuration supports Gmail, iCloud, and fail-closed enablement
   if (icloud.ok) {
     assert.equal(icloud.config.provider, "icloud");
     assert.equal(icloud.config.mailbox, "Sent Messages");
+  }
+
+  const plaintext = getSentMailImapConfiguration(null, {
+    ...ENV,
+    SENT_MAIL_IMAP_SECURE: "false",
+  });
+  assert.equal(plaintext.ok, false);
+  if (!plaintext.ok) {
+    assert.match(plaintext.error, /must be true/);
+  }
+});
+
+test("Sent target scope excludes passwords and binds account and mailbox identity", () => {
+  const original = getSentMailTarget(null, ENV);
+  const rotatedPassword = getSentMailTarget(null, {
+    ...ENV,
+    SENT_MAIL_IMAP_PASSWORD: "rotated-password",
+  });
+  const normalizedUsername = getSentMailTarget(null, {
+    ...ENV,
+    SENT_MAIL_IMAP_USERNAME: "  sender@example.com  ",
+  });
+  const caseChangedUsername = getSentMailTarget(null, {
+    ...ENV,
+    SENT_MAIL_IMAP_USERNAME: "Sender@example.com",
+  });
+  const otherAccount = getSentMailTarget(null, {
+    ...ENV,
+    SENT_MAIL_IMAP_USERNAME: "other@example.com",
+  });
+  const otherMailbox = getSentMailTarget("[Gmail]/Other Sent", ENV);
+  assert.equal(original.ok, true);
+  assert.equal(rotatedPassword.ok, true);
+  assert.equal(otherAccount.ok, true);
+  assert.equal(otherMailbox.ok, true);
+  if (
+    original.ok &&
+    rotatedPassword.ok &&
+    normalizedUsername.ok &&
+    caseChangedUsername.ok &&
+    otherAccount.ok &&
+    otherMailbox.ok
+  ) {
+    assert.equal(
+      original.target.targetScope,
+      rotatedPassword.target.targetScope,
+    );
+    assert.equal(
+      original.target.targetScope,
+      normalizedUsername.target.targetScope,
+    );
+    assert.notEqual(
+      original.target.targetScope,
+      caseChangedUsername.target.targetScope,
+    );
+    assert.notEqual(original.target.targetScope, otherAccount.target.targetScope);
+    assert.notEqual(original.target.targetScope, otherMailbox.target.targetScope);
+    assert.equal(
+      original.target.targetScope.includes("sender@example.com"),
+      false,
+    );
   }
 });
 
@@ -176,20 +258,18 @@ class MemoryImapClient implements SentMailImapClient {
   }
 }
 
-const CONFIG: SentMailImapConfiguration = {
-  host: "imap.gmail.com",
-  port: 993,
-  secure: true,
-  username: "sender@example.com",
-  password: "app-password",
-  mailbox: null,
-  provider: "gmail",
-};
+const CONFIG_RESULT = getSentMailImapConfiguration(null, ENV);
+assert.equal(CONFIG_RESULT.ok, true);
+const CONFIG = (CONFIG_RESULT as {
+  ok: true;
+  config: SentMailImapConfiguration;
+}).config;
 
 test("IMAP append searches the Sent mailbox first and is recovery-idempotent", async () => {
   const existing = new MemoryImapClient([99]);
   const recovered = await appendSentMailCopy(
     CONFIG,
+    CONFIG.targetScope,
     "copy-1",
     Buffer.from("message"),
     new Date(),
@@ -204,6 +284,7 @@ test("IMAP append searches the Sent mailbox first and is recovery-idempotent", a
   const fresh = new MemoryImapClient([]);
   const appended = await appendSentMailCopy(
     CONFIG,
+    CONFIG.targetScope,
     "copy-2",
     Buffer.from("message"),
     new Date(),
@@ -213,6 +294,26 @@ test("IMAP append searches the Sent mailbox first and is recovery-idempotent", a
   assert.equal(appended.uid, 42);
   assert.equal(appended.uidValidity, BigInt(7));
   assert.equal(fresh.appendCount, 1);
+
+  let created = false;
+  const mismatchedScope = `${CONFIG.targetScope.slice(0, -1)}${
+    CONFIG.targetScope.endsWith("0") ? "1" : "0"
+  }`;
+  await assert.rejects(
+    appendSentMailCopy(
+      CONFIG,
+      mismatchedScope,
+      "copy-mismatch",
+      Buffer.from("message"),
+      new Date(),
+      () => {
+        created = true;
+        return new MemoryImapClient([]);
+      },
+    ),
+    /does not match the immutable target/,
+  );
+  assert.equal(created, false);
 });
 
 test("queueing excludes test or disabled sends and upserts one real source", async () => {
@@ -225,6 +326,9 @@ test("queueing excludes test or disabled sends and upserts one real source", asy
           providerMessageId: string;
           outreachAttemptId?: string;
           arbitraryEmailId?: string;
+          targetScope?: string | null;
+          status?: string;
+          error?: string | null;
         };
       }) => {
         calls.push(args);
@@ -241,6 +345,8 @@ test("queueing excludes test or disabled sends and upserts one real source", asy
     id: "attempt-disabled",
     providerMessageId: "message-disabled",
     requested: false,
+    targetScope: null,
+    configurationError: null,
     testSend: false,
   });
   await ensureSentMailCopyQueued(tx, {
@@ -248,6 +354,8 @@ test("queueing excludes test or disabled sends and upserts one real source", asy
     id: "email-test",
     providerMessageId: "message-test",
     requested: true,
+    targetScope: CONFIG.targetScope,
+    configurationError: null,
     testSend: true,
   });
   await ensureSentMailCopyQueued(tx, {
@@ -255,10 +363,27 @@ test("queueing excludes test or disabled sends and upserts one real source", asy
     id: "attempt-real",
     providerMessageId: "message-real",
     requested: true,
+    targetScope: CONFIG.targetScope,
+    configurationError:
+      "Sent mailbox copy is enabled but SENT_MAIL_IMAP_PASSWORD is missing",
     testSend: false,
   });
-  assert.equal(calls.length, 1);
+  await ensureSentMailCopyQueued(tx, {
+    kind: "arbitrary",
+    id: "email-unbound",
+    providerMessageId: "message-unbound",
+    requested: true,
+    targetScope: null,
+    configurationError:
+      "Sent mailbox copy is enabled but SENT_MAIL_IMAP_HOST is missing",
+    testSend: false,
+  });
+  assert.equal(calls.length, 2);
   assert.match(JSON.stringify(calls[0]), /outreach-attempt\/attempt-real/);
+  assert.match(JSON.stringify(calls[0]), /retry_scheduled/);
+  assert.match(JSON.stringify(calls[0]), /sent-mail:target-sha256/);
+  assert.match(JSON.stringify(calls[1]), /manual_review/);
+  assert.match(JSON.stringify(calls[1]), /SENT_MAIL_IMAP_HOST/);
 });
 
 test("all accepted outbound and reconciliation paths enqueue Sent copies", () => {
@@ -278,10 +403,33 @@ test("all accepted outbound and reconciliation paths enqueue Sent copies", () =>
     new URL("../app/api/cron/send-scheduled/route.ts", import.meta.url),
     "utf8",
   );
+  const sentCopy = readFileSync(
+    new URL("./sentMailCopy.ts", import.meta.url),
+    "utf8",
+  );
   assert.ok((outreach.match(/ensureSentMailCopyQueued\(/g) ?? []).length >= 2);
   assert.ok((arbitrary.match(/ensureSentMailCopyQueued\(/g) ?? []).length >= 2);
   assert.ok((webhook.match(/ensureSentMailCopyQueued\(/g) ?? []).length >= 2);
+  assert.ok(
+    (webhook.match(/targetScope: .*sentMailboxTargetScope/g) ?? []).length >= 2,
+  );
+  assert.ok(
+    (webhook.match(/sentMailboxCopyConfigurationError/g) ?? []).length >= 2,
+  );
   assert.match(cron, /dispatchDueSentMailCopies\(/);
+  assert.match(
+    sentCopy,
+    /!configuration\.ok[\s\S]*status: "retry_scheduled"[\s\S]*retryScheduled: true/,
+  );
+  assert.match(
+    sentCopy,
+    /configuration\.config\.targetScope !== loaded\.row\.targetScope[\s\S]*does not match the immutable target[\s\S]*status: "retry_scheduled"/,
+  );
+  assert.ok(
+    sentCopy.indexOf(
+      "configuration.config.targetScope !== loaded.row.targetScope",
+    ) < sentCopy.indexOf("await appendSentMailCopy("),
+  );
 });
 
 test("Sent copy persistence constrains one immutable source and retry state", () => {
@@ -298,4 +446,19 @@ test("Sent copy persistence constrains one immutable source and retry state", ()
   assert.match(migration, /SentMailCopy_identity_immutable/);
   assert.match(migration, /sentMailboxCopyRequested/);
   assert.match(migration, /COMMIT;\s*$/);
+
+  const scopeMigration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260804174500_sent_mail_target_scope/migration.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(scopeMigration, /^BEGIN;/);
+  assert.match(scopeMigration, /SentMailCopy_targetScope_format_check/);
+  assert.match(scopeMigration, /SentMailCopy_targetScope_status_check/);
+  assert.match(scopeMigration, /SentMailCopy_normalize_unbound_insert/);
+  assert.match(scopeMigration, /targetScope" IS DISTINCT FROM OLD\."targetScope/);
+  assert.match(scopeMigration, /sentMailboxCopyConfigurationError/);
+  assert.match(scopeMigration, /COMMIT;\s*$/);
 });

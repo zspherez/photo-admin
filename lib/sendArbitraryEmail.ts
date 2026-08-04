@@ -335,6 +335,9 @@ export async function sendArbitraryEmailWithDependencies(
       requestHash: prepared.requestHash,
       testSend: prepared.testSend,
       sentMailboxCopyRequested: prepared.sentMailboxCopyRequested,
+      sentMailboxTargetScope: prepared.sentMailboxTargetScope,
+      sentMailboxCopyConfigurationError:
+        prepared.sentMailboxCopyConfigurationError,
     },
   });
 
@@ -404,6 +407,7 @@ export async function sendArbitraryEmailWithDependencies(
           testOverride: deliverySettings.testOverride,
           bccEmails: deliverySettings.bccEmails,
           sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+          sentMailboxTargetScope: deliverySettings.sentMailboxTargetScope,
           sentMailCopyConfigurationError:
             deliverySettings.sentMailCopyConfigurationError,
           suppressedEmails: suppressions.map(
@@ -468,6 +472,8 @@ export async function sendArbitraryEmailWithDependencies(
             id,
             providerMessageId: submission.providerMessageId,
             requested: stored.sentMailboxCopyRequested,
+            targetScope: stored.sentMailboxTargetScope,
+            configurationError: stored.sentMailboxCopyConfigurationError,
             testSend: stored.testSend,
           });
           return { ok: true, id, testSend: stored.testSend };
@@ -777,6 +783,9 @@ async function ensureScheduledArbitraryRequest(
       requestHash: prepared.requestHash,
       testSend: prepared.testSend,
       sentMailboxCopyRequested: prepared.sentMailboxCopyRequested,
+      sentMailboxTargetScope: prepared.sentMailboxTargetScope,
+      sentMailboxCopyConfigurationError:
+        prepared.sentMailboxCopyConfigurationError,
     },
   });
   if (persisted.count !== 1) {
@@ -1026,6 +1035,7 @@ async function submitScheduledArbitraryEmail(
             testOverride: deliverySettings.testOverride,
             bccEmails: deliverySettings.bccEmails,
             sentMailCopyRequested: deliverySettings.sentMailCopyRequested,
+            sentMailboxTargetScope: deliverySettings.sentMailboxTargetScope,
             sentMailCopyConfigurationError:
               deliverySettings.sentMailCopyConfigurationError,
             suppressedEmails: suppressions.map(
@@ -1143,6 +1153,8 @@ async function submitScheduledArbitraryEmail(
               id,
               providerMessageId: submission.providerMessageId,
               requested: stored.sentMailboxCopyRequested,
+              targetScope: stored.sentMailboxTargetScope,
+              configurationError: stored.sentMailboxCopyConfigurationError,
               testSend: stored.testSend,
             });
             return { ok: true, id };

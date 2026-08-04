@@ -27,6 +27,8 @@ export type SentMailCopySource =
       id: string;
       providerMessageId: string;
       requested: boolean | null;
+      targetScope: string | null;
+      configurationError: string | null;
       testSend: boolean | null;
     }
   | {
@@ -34,6 +36,8 @@ export type SentMailCopySource =
       id: string;
       providerMessageId: string;
       requested: boolean | null;
+      targetScope: string | null;
+      configurationError: string | null;
       testSend: boolean | null;
     };
 
@@ -60,11 +64,23 @@ export async function ensureSentMailCopyQueued(
     source.kind === "outreach"
       ? `outreach-attempt/${source.id}`
       : `arbitrary-email/${source.id}`;
+  const configurationError =
+    source.configurationError ??
+    (source.targetScope
+      ? null
+      : "Sent mailbox copy has no immutable target because configuration was invalid at acceptance");
   const queued = await tx.sentMailCopy.upsert({
     where: { id },
     create: {
       id,
       providerMessageId: source.providerMessageId,
+      targetScope: source.targetScope,
+      status: source.targetScope
+        ? configurationError
+          ? "retry_scheduled"
+          : "pending"
+        : "manual_review",
+      error: configurationError,
       ...(source.kind === "outreach"
         ? { outreachAttemptId: source.id }
         : { arbitraryEmailId: source.id }),
@@ -75,6 +91,7 @@ export async function ensureSentMailCopyQueued(
   });
   if (
     queued.providerMessageId !== source.providerMessageId ||
+    queued.targetScope !== source.targetScope ||
     (source.kind === "outreach"
       ? queued.outreachAttemptId !== source.id ||
         queued.arbitraryEmailId !== null
@@ -202,6 +219,7 @@ export interface SentMailAppendResult {
 
 export async function appendSentMailCopy(
   config: SentMailImapConfiguration,
+  expectedTargetScope: string,
   copyId: string,
   rawMessage: Buffer,
   acceptedAt: Date,
@@ -209,6 +227,11 @@ export async function appendSentMailCopy(
     config: SentMailImapConfiguration,
   ) => SentMailImapClient = defaultImapClient,
 ): Promise<SentMailAppendResult> {
+  if (config.targetScope !== expectedTargetScope) {
+    throw new Error(
+      "Current IMAP mailbox target does not match the immutable target captured at acceptance",
+    );
+  }
   const client = createClient(config);
   let lock: { release(): void } | null = null;
   try {
@@ -359,6 +382,8 @@ async function loadSentMailCopyMessage(id: string) {
     source.providerMessageId !== row.providerMessageId ||
     source.testSend !== false ||
     source.sentMailboxCopyRequested !== true ||
+    source.sentMailboxTargetScope !== row.targetScope ||
+    !row.targetScope ||
     !source.providerRequest ||
     !source.requestHash
   ) {
@@ -431,10 +456,7 @@ export async function dispatchSentMailCopy(
     await db.sentMailCopy.updateMany({
       where: { id, status: "copying", claimToken: claim.claimToken },
       data: {
-        status:
-          claim.attemptCount >= SENT_MAIL_COPY_MAX_ATTEMPTS
-            ? "manual_review"
-            : "retry_scheduled",
+        status: "retry_scheduled",
         error: configuration.error,
         nextAttemptAt,
         claimedAt: null,
@@ -445,7 +467,29 @@ export async function dispatchSentMailCopy(
       id,
       ok: false,
       error: configuration.error,
-      retryScheduled: claim.attemptCount < SENT_MAIL_COPY_MAX_ATTEMPTS,
+      retryScheduled: true,
+      nextAttemptAt,
+    };
+  }
+  if (configuration.config.targetScope !== loaded.row.targetScope) {
+    const nextAttemptAt = retryAt(claim.attemptCount, now);
+    const error =
+      "Current IMAP mailbox target does not match the immutable target captured at acceptance";
+    await db.sentMailCopy.updateMany({
+      where: { id, status: "copying", claimToken: claim.claimToken },
+      data: {
+        status: "retry_scheduled",
+        error,
+        nextAttemptAt,
+        claimedAt: null,
+        claimToken: null,
+      },
+    });
+    return {
+      id,
+      ok: false,
+      error,
+      retryScheduled: true,
       nextAttemptAt,
     };
   }
@@ -478,6 +522,7 @@ export async function dispatchSentMailCopy(
   try {
     const appended = await appendSentMailCopy(
       configuration.config,
+      loaded.row.targetScope,
       id,
       rawMessage,
       loaded.acceptedAt,

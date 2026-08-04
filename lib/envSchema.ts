@@ -373,7 +373,11 @@ export const ENV_SCHEMA: readonly EnvVarDefinition[] = [
     key: "SENT_MAIL_IMAP_SECURE",
     group: "sent-mail",
     secret: false,
-    summary: "Use implicit TLS for IMAP (defaults to true).",
+    summary: "Require implicit TLS for IMAP; must remain true.",
+    notes: [
+      "Plaintext and opportunistic STARTTLS modes are rejected to prevent downgrade",
+      "or credential exposure.",
+    ],
     defaultValue: "true",
   },
   {

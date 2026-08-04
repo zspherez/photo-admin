@@ -922,6 +922,8 @@ model OutreachSendAttempt {
   requestHash             String?
   testSend                Boolean?
   sentMailboxCopyRequested Boolean?
+  sentMailboxTargetScope  String?
+  sentMailboxCopyConfigurationError String?
   /// Stable SHA-256 fingerprint of the Resend API credential; never the secret key.
   providerCredentialScope String?
   providerMessageId       String?              @unique
@@ -1016,6 +1018,8 @@ model ArbitraryEmail {
   requestHash             String?
   testSend                Boolean?
   sentMailboxCopyRequested Boolean?
+  sentMailboxTargetScope  String?
+  sentMailboxCopyConfigurationError String?
   scheduledFor            DateTime?
   nextAttemptAt           DateTime?
   claimedAt               DateTime?
@@ -1056,6 +1060,7 @@ model SentMailCopy {
   arbitraryEmailId  String?              @unique
   arbitraryEmail    ArbitraryEmail?      @relation(fields: [arbitraryEmailId], references: [id], onDelete: Cascade)
   providerMessageId String               @unique
+  targetScope       String?
   status            String               @default("pending")
   attemptCount      Int                  @default(0)
   nextAttemptAt     DateTime             @default(now())

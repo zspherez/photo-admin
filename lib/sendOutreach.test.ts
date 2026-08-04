@@ -1748,6 +1748,38 @@ test("delivery policy revalidation classifies contact, suppression, and configur
     error:
       "Invalid RESEND_FROM_EMAIL; expected email@example.com or Name <email@example.com>",
   });
+
+  const targetScope = `sent-mail:target-sha256:${"b".repeat(64)}`;
+  for (const path of [
+    "normal",
+    "festival",
+    "follow-up",
+    "customized",
+  ] as const) {
+    const archivalMisconfigured = evaluateOutreachDeliveryPolicy(
+      deliveryPolicyFixture({
+        sentMailCopyRequested: true,
+        sentMailboxTargetScope: targetScope,
+        sentMailCopyConfigurationError:
+          "Sent mailbox copy is enabled but SENT_MAIL_IMAP_PASSWORD is missing",
+      }),
+    );
+    assert.equal(
+      archivalMisconfigured.ok,
+      true,
+      `${path} outreach must remain deliverable`,
+    );
+    if (archivalMisconfigured.ok) {
+      assert.equal(
+        archivalMisconfigured.policy.sentMailboxTargetScope,
+        targetScope,
+      );
+      assert.match(
+        archivalMisconfigured.policy.sentMailboxCopyConfigurationError ?? "",
+        /SENT_MAIL_IMAP_PASSWORD/,
+      );
+    }
+  }
 });
 
 test("delivery policy revalidation detects membership and immutable request drift", () => {

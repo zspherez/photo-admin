@@ -111,7 +111,7 @@ _Optional integration._
 |---|---|---|
 | `SENT_MAIL_IMAP_HOST` | no | IMAP hostname used to append successful sends to the Sent mailbox. |
 | `SENT_MAIL_IMAP_PORT` | no | IMAP port (defaults to 993). |
-| `SENT_MAIL_IMAP_SECURE` | no | Use implicit TLS for IMAP (defaults to true). |
+| `SENT_MAIL_IMAP_SECURE` | no | Require implicit TLS for IMAP; must remain true. |
 | `SENT_MAIL_IMAP_USERNAME` | yes | IMAP login username for the target mailbox. |
 | `SENT_MAIL_IMAP_PASSWORD` | yes | Provider-issued IMAP app password; never use the primary account password. |
 

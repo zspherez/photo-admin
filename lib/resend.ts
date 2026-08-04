@@ -137,6 +137,8 @@ export type PrepareResendRequestResult =
       requestHash: string;
       testSend: boolean;
       sentMailboxCopyRequested: boolean;
+      sentMailboxTargetScope: string | null;
+      sentMailboxCopyConfigurationError: string | null;
       intendedRecipients: string[];
       attachmentBlobs: ResendAttachmentBlob[];
       warnings: string[];
@@ -236,6 +238,7 @@ export interface ResendDeliverySettingsSnapshot {
   testOverride: string | null;
   bccEmails: string[];
   sentMailCopyRequested?: boolean;
+  sentMailboxTargetScope?: string | null;
   sentMailCopyConfigurationError?: string | null;
 }
 
@@ -262,6 +265,7 @@ export async function getResendDeliverySettingsSnapshot(
       ),
       bccEmails: parseBccEmails(settings.bccEmailsValue),
       sentMailCopyRequested: sentMailCopy.requested,
+      sentMailboxTargetScope: sentMailCopy.targetScope,
       sentMailCopyConfigurationError: sentMailCopy.configurationError,
     };
   };
@@ -276,6 +280,8 @@ export interface ResendDeliveryPolicy {
   subject: string;
   testSend: boolean;
   sentMailCopyRequested: boolean;
+  sentMailboxTargetScope: string | null;
+  sentMailboxCopyConfigurationError: string | null;
 }
 
 export type ResendDeliveryPolicyResult =
@@ -291,6 +297,7 @@ export interface BuildResendDeliveryPolicyArgs {
   suppressedEmails: Iterable<string>;
   allowMissingFrom?: boolean;
   sentMailCopyRequested?: boolean;
+  sentMailboxTargetScope?: string | null;
   sentMailCopyConfigurationError?: string | null;
 }
 
@@ -303,11 +310,9 @@ export function buildResendDeliveryPolicy({
   suppressedEmails,
   allowMissingFrom = false,
   sentMailCopyRequested = false,
+  sentMailboxTargetScope = null,
   sentMailCopyConfigurationError = null,
 }: BuildResendDeliveryPolicyArgs): ResendDeliveryPolicyResult {
-  if (sentMailCopyConfigurationError) {
-    return { ok: false, error: sentMailCopyConfigurationError };
-  }
   const normalizedFrom = from?.trim();
   if (!normalizedFrom && !allowMissingFrom) {
     return { ok: false, error: "Missing RESEND_FROM_EMAIL" };
@@ -354,6 +359,14 @@ export function buildResendDeliveryPolicy({
         : subject,
       testSend: !!overrideEmail,
       sentMailCopyRequested: !!sentMailCopyRequested && !overrideEmail,
+      sentMailboxTargetScope:
+        sentMailCopyRequested && !overrideEmail
+          ? sentMailboxTargetScope
+          : null,
+      sentMailboxCopyConfigurationError:
+        sentMailCopyRequested && !overrideEmail
+          ? sentMailCopyConfigurationError
+          : null,
     },
   };
 }
@@ -384,6 +397,7 @@ export async function resolveResendDeliveryPolicy(
     testOverride,
     bccEmails,
     sentMailCopyRequested,
+    sentMailboxTargetScope,
     sentMailCopyConfigurationError,
   } = await getResendDeliverySettingsSnapshot();
   const candidates = normalizeEmails([
@@ -406,6 +420,7 @@ export async function resolveResendDeliveryPolicy(
     bccEmails,
     suppressedEmails: suppressed.map((row) => row.normalizedEmail),
     sentMailCopyRequested,
+    sentMailboxTargetScope,
     sentMailCopyConfigurationError,
   });
 }
@@ -419,6 +434,7 @@ export async function resolveArbitraryResendDeliveryPolicy(
     testOverride,
     bccEmails,
     sentMailCopyRequested,
+    sentMailboxTargetScope,
     sentMailCopyConfigurationError,
   } = await getResendDeliverySettingsSnapshot();
   const candidates = normalizeEmails([
@@ -442,6 +458,7 @@ export async function resolveArbitraryResendDeliveryPolicy(
     bccEmails,
     suppressedEmails: suppressed.map((row) => row.normalizedEmail),
     sentMailCopyRequested,
+    sentMailboxTargetScope,
     sentMailCopyConfigurationError,
   });
 }
@@ -548,6 +565,9 @@ export async function prepareResendRequest({
     requestHash: hashResendRequestSnapshot(request),
     testSend: policy.testSend,
     sentMailboxCopyRequested: policy.sentMailCopyRequested,
+    sentMailboxTargetScope: policy.sentMailboxTargetScope,
+    sentMailboxCopyConfigurationError:
+      policy.sentMailboxCopyConfigurationError,
     intendedRecipients: policy.intendedRecipients,
     attachmentBlobs: [],
     warnings: [],
@@ -591,6 +611,9 @@ export async function prepareArbitraryResendRequest({
     requestHash: hashResendRequestSnapshot(request),
     testSend: policy.testSend,
     sentMailboxCopyRequested: policy.sentMailCopyRequested,
+    sentMailboxTargetScope: policy.sentMailboxTargetScope,
+    sentMailboxCopyConfigurationError:
+      policy.sentMailboxCopyConfigurationError,
     intendedRecipients: policy.intendedRecipients,
     attachmentBlobs: [],
     warnings: [],
