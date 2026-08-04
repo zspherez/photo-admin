@@ -20,6 +20,13 @@ test("professional contact UI confirms exact scope and shows standalone safety",
   assert.match(page, /public professional or business email addresses/);
   assert.match(page, /Artist manager research/);
   assert.match(nav, /p === "\/professional-contacts"/);
+  assert.match(
+    page,
+    /createProfessionalContactRequest[\s\S]*dispatchProfessionalContactRequest/,
+  );
+  assert.match(page, /The trusted worker trigger was accepted/);
+  assert.match(page, /Jobs will show running as soon as they are claimed/);
+  assert.match(page, /ProfessionalContactAutoRefresh/);
 });
 
 test("professional contact UI exposes queue states, evidence, review, and copy", () => {
@@ -42,7 +49,12 @@ test("professional contact UI exposes queue states, evidence, review, and copy",
   assert.match(page, /CopyProfessionalEmailButton/);
   assert.match(page, /Approve/);
   assert.match(page, /Reject/);
-  assert.match(page, /Requeue research/);
+  assert.match(page, /Requeue and start research/);
+  assert.match(page, /Retry worker trigger/);
+  assert.match(page, /dispatchUpdatedAt/);
+  assert.match(page, /worker trigger failed/);
+  assert.match(page, /durable jobs remain queued/);
+  assert.match(page, /no duplicate trigger was sent/);
   assert.match(page, /rel="noopener noreferrer"/);
 });
 
@@ -51,6 +63,7 @@ test("every professional contact Server Action authenticates", () => {
     "createRequestAction",
     "decideCandidateAction",
     "requeueJobAction",
+    "retryDispatchAction",
   ];
   for (let index = 0; index < actionNames.length; index += 1) {
     const start = page.indexOf(`async function ${actionNames[index]}`);

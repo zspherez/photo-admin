@@ -7,6 +7,7 @@ import { requireServerActionAuth } from "@/lib/auth";
 import {
   createProfessionalContactRequest,
   decideProfessionalContactCandidate,
+  dispatchProfessionalContactRequest,
   PROFESSIONAL_CONTACT_WORKFLOW_REF,
   requeueProfessionalContactJob,
 } from "@/lib/professionalContactResearch";
@@ -16,6 +17,7 @@ import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button, LinkButton } from "@/components/ui/button";
 import { ProfessionalContactRequestForm } from "@/components/professional-contact-request-form";
 import { CopyProfessionalEmailButton } from "@/components/copy-professional-email-button";
+import { ProfessionalContactAutoRefresh } from "@/components/professional-contact-auto-refresh";
 import {
   firstSearchParam,
   type SearchParamValue,
@@ -71,11 +73,29 @@ async function createRequestAction(formData: FormData) {
       )}`,
     );
   }
+  let dispatch;
+  try {
+    dispatch = await dispatchProfessionalContactRequest(result.requestId, {
+      mode: "submit",
+    });
+  } catch (error) {
+    dispatch = {
+      state: "failed",
+      error: (error instanceof Error ? error.message : String(error)).slice(
+        0,
+        240,
+      ),
+    };
+  }
   revalidatePath("/professional-contacts");
   redirect(
-    `/professional-contacts?queued=${result.jobCount}&duplicate=${
+    `/professional-contacts?request=${encodeURIComponent(
+      result.requestId,
+    )}&queued=${result.jobCount}&duplicate=${
       result.duplicate ? "1" : "0"
-    }#queue`,
+    }&dispatch=${encodeURIComponent(dispatch.state)}#request-${encodeURIComponent(
+      result.requestId,
+    )}`,
   );
 }
 
@@ -102,10 +122,68 @@ async function requeueJobAction(formData: FormData) {
   "use server";
   await requireServerActionAuth("/professional-contacts");
   const jobId = formValue(formData, "jobId").trim();
-  if (!jobId || !(await requeueProfessionalContactJob(jobId))) {
+  const job = jobId
+    ? await db.professionalContactJob.findUnique({
+        where: { id: jobId },
+        select: {
+          requestId: true,
+          request: {
+            select: {
+              dispatch: { select: { updatedAt: true } },
+            },
+          },
+        },
+      })
+    : null;
+  if (!job || !(await requeueProfessionalContactJob(jobId))) {
     redirect("/professional-contacts?error=Job%20is%20not%20eligible%20for%20requeue");
   }
+  let dispatch: { state: string };
+  try {
+    dispatch = job.request.dispatch
+      ? await dispatchProfessionalContactRequest(job.requestId, {
+          mode: "retry",
+          expectedUpdatedAt: job.request.dispatch.updatedAt,
+        })
+      : { state: "failed" };
+  } catch {
+    dispatch = { state: "failed" };
+  }
   revalidatePath("/professional-contacts");
+  redirect(
+    `/professional-contacts?request=${encodeURIComponent(
+      job.requestId,
+    )}&dispatch=${encodeURIComponent(dispatch.state)}#request-${encodeURIComponent(
+      job.requestId,
+    )}`,
+  );
+}
+
+async function retryDispatchAction(formData: FormData) {
+  "use server";
+  await requireServerActionAuth("/professional-contacts");
+  const requestId = formValue(formData, "requestId").trim();
+  const expected = new Date(formValue(formData, "dispatchUpdatedAt"));
+  if (!requestId || Number.isNaN(expected.getTime())) {
+    redirect("/professional-contacts?error=Invalid%20dispatch%20retry");
+  }
+  let dispatch: { state: string };
+  try {
+    dispatch = await dispatchProfessionalContactRequest(requestId, {
+      mode: "retry",
+      expectedUpdatedAt: expected,
+    });
+  } catch {
+    dispatch = { state: "failed" };
+  }
+  revalidatePath("/professional-contacts");
+  redirect(
+    `/professional-contacts?request=${encodeURIComponent(
+      requestId,
+    )}&dispatch=${encodeURIComponent(dispatch.state)}#request-${encodeURIComponent(
+      requestId,
+    )}`,
+  );
 }
 
 export default async function ProfessionalContactsPage({
@@ -115,6 +193,8 @@ export default async function ProfessionalContactsPage({
     status?: SearchParamValue;
     queued?: SearchParamValue;
     duplicate?: SearchParamValue;
+    dispatch?: SearchParamValue;
+    request?: SearchParamValue;
     error?: SearchParamValue;
   }>;
 }) {
@@ -123,6 +203,9 @@ export default async function ProfessionalContactsPage({
   const queued = firstSearchParam(query.queued);
   const duplicate = firstSearchParam(query.duplicate);
   const error = firstSearchParam(query.error);
+  const dispatchNotice = firstSearchParam(query.dispatch);
+  const selectedRequestId = firstSearchParam(query.request);
+  const now = new Date();
   const statusWhere =
     filter === "all"
       ? undefined
@@ -153,6 +236,17 @@ export default async function ProfessionalContactsPage({
             notes: true,
             personNames: true,
             createdAt: true,
+            dispatch: {
+              select: {
+                status: true,
+                attemptCount: true,
+                leaseExpiresAt: true,
+                lastAttemptAt: true,
+                lastDispatchedAt: true,
+                lastError: true,
+                updatedAt: true,
+              },
+            },
           },
         },
         candidates: {
@@ -189,9 +283,16 @@ export default async function ProfessionalContactsPage({
     ]),
   );
   const workflowUrl = workflowActionsUrl(PROFESSIONAL_CONTACT_WORKFLOW_REF);
+  const selectedDispatch = jobs.find(
+    (job) => job.request.id === selectedRequestId,
+  )?.request.dispatch;
+  const hasActiveJobs = jobs.some(
+    (job) => job.status === "pending" || job.status === "claimed",
+  );
 
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-6 sm:py-8">
+      <ProfessionalContactAutoRefresh enabled={hasActiveJobs} />
       <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-sm text-zinc-500">Research / standalone people</p>
@@ -226,11 +327,59 @@ export default async function ProfessionalContactsPage({
         </p>
       )}
       {queued && (
-        <p role="status" className="rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
-          {duplicate === "1"
-            ? `This exact scope was already queued (${queued} people); no duplicate jobs were created.`
-            : `Queued ${queued} people for professional contact research.`}
-        </p>
+        <div
+          role={dispatchNotice === "failed" ? "alert" : "status"}
+          className={`rounded-md border p-3 text-sm ${
+            dispatchNotice === "failed"
+              ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
+              : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
+          }`}
+        >
+          <p>
+            {duplicate === "1"
+              ? `This exact scope was already saved (${queued} people); no duplicate jobs were created.`
+              : `Saved and queued ${queued} people for professional contact research.`}
+          </p>
+          <p className="mt-1">
+            {dispatchNotice === "dispatched"
+              ? "The trusted worker trigger was accepted. Jobs will show running as soon as they are claimed."
+              : dispatchNotice === "in_progress"
+                ? "The trusted worker is already being started."
+                : dispatchNotice === "already_dispatched"
+                  ? "The existing request already has a worker trigger; it was not dispatched twice."
+                  : dispatchNotice === "failed"
+                    ? `The durable jobs are safe, but the worker trigger failed${
+                        selectedDispatch?.lastError
+                          ? `: ${selectedDispatch.lastError}`
+                          : "."
+                      } Retry the worker trigger below.`
+                    : "The durable request is visible below."}
+          </p>
+        </div>
+      )}
+      {dispatchNotice && !queued && (
+        <div
+          role={dispatchNotice === "failed" ? "alert" : "status"}
+          className={`rounded-md border p-3 text-sm ${
+            dispatchNotice === "failed"
+              ? "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
+              : "border-blue-300 bg-blue-50 text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200"
+          }`}
+        >
+          {dispatchNotice === "dispatched"
+            ? "The trusted worker trigger was accepted again."
+            : dispatchNotice === "in_progress"
+              ? "A worker trigger is already in progress; no duplicate trigger was sent."
+              : dispatchNotice === "stale"
+                ? "The trigger state changed before this action completed; refresh before retrying."
+                : dispatchNotice === "no_work"
+                  ? "No queued work currently needs another worker trigger."
+                  : `The durable jobs remain queued, but the worker trigger failed${
+                      selectedDispatch?.lastError
+                        ? `: ${selectedDispatch.lastError}`
+                        : "."
+                    }`}
+        </div>
       )}
 
       <Card>
@@ -301,7 +450,15 @@ export default async function ProfessionalContactsPage({
               job.status === "exhausted" ||
               (job.status === "completed" && !hasApproval);
             return (
-              <Card key={job.id}>
+              <Card
+                key={job.id}
+                id={`request-${job.request.id}`}
+                className={
+                  job.request.id === selectedRequestId
+                    ? "ring-2 ring-blue-500"
+                    : undefined
+                }
+              >
                 <CardBody className="space-y-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
@@ -341,15 +498,63 @@ export default async function ProfessionalContactsPage({
                           Request notes: {job.request.notes}
                         </p>
                       )}
+                      {job.request.dispatch && (
+                        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                          <Badge
+                            tone={
+                              job.request.dispatch.status === "failed"
+                                ? "danger"
+                                : job.request.dispatch.status === "dispatching"
+                                  ? "info"
+                                  : "muted"
+                            }
+                          >
+                            Worker trigger: {job.request.dispatch.status}
+                          </Badge>
+                          <span>
+                            {job.request.dispatch.attemptCount} trigger attempt
+                            {job.request.dispatch.attemptCount === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                      )}
                     </div>
-                    {canRequeue && (
-                      <form action={requeueJobAction}>
-                        <input type="hidden" name="jobId" value={job.id} />
-                        <Button type="submit" variant="secondary" size="sm">
-                          Requeue research
-                        </Button>
-                      </form>
-                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {job.request.dispatch &&
+                        job.status === "pending" &&
+                        (job.request.dispatch.status === "pending" ||
+                          job.request.dispatch.status === "failed" ||
+                          (job.request.dispatch.status === "dispatching" &&
+                            job.request.dispatch.leaseExpiresAt &&
+                            job.request.dispatch.leaseExpiresAt <= now) ||
+                          (job.request.dispatch.status === "dispatched" &&
+                            job.request.dispatch.lastAttemptAt &&
+                            job.request.dispatch.lastAttemptAt.getTime() <=
+                              now.getTime() - 2 * 60 * 1_000)) && (
+                          <form action={retryDispatchAction}>
+                            <input
+                              type="hidden"
+                              name="requestId"
+                              value={job.request.id}
+                            />
+                            <input
+                              type="hidden"
+                              name="dispatchUpdatedAt"
+                              value={job.request.dispatch.updatedAt.toISOString()}
+                            />
+                            <Button type="submit" variant="secondary" size="sm">
+                              Retry worker trigger
+                            </Button>
+                          </form>
+                        )}
+                      {canRequeue && (
+                        <form action={requeueJobAction}>
+                          <input type="hidden" name="jobId" value={job.id} />
+                          <Button type="submit" variant="secondary" size="sm">
+                            Requeue and start research
+                          </Button>
+                        </form>
+                      )}
+                    </div>
                   </div>
 
                   {job.status === "claimed" && job.claimExpiresAt && (

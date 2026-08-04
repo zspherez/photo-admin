@@ -142,6 +142,7 @@ test("the npm test environment replaces inherited database and auth secrets", ()
     CONTACT_RESEARCH_AGENT_TOKEN: "research-secret",
     CONTACT_AUDIT_AGENT_TOKEN: "audit-secret",
     PROFESSIONAL_CONTACT_RESEARCH_AGENT_TOKEN: "professional-secret",
+    PROFESSIONAL_CONTACT_RESEARCH_DISPATCH_TOKEN: "dispatch-secret",
     CRON_SECRET: "cron-secret",
   });
 
@@ -152,6 +153,7 @@ test("the npm test environment replaces inherited database and auth secrets", ()
   assert.equal(sanitized.CONTACT_RESEARCH_AGENT_TOKEN, "");
   assert.equal(sanitized.CONTACT_AUDIT_AGENT_TOKEN, "");
   assert.equal(sanitized.PROFESSIONAL_CONTACT_RESEARCH_AGENT_TOKEN, "");
+  assert.equal(sanitized.PROFESSIONAL_CONTACT_RESEARCH_DISPATCH_TOKEN, "");
   assert.equal(sanitized.CRON_SECRET, "");
   assert.equal(sanitized.TEST_DATABASE_ALLOWED_HOSTS, "");
   assert.equal(sanitized.TEST_DATABASE_ALLOWED_DATABASES, "");

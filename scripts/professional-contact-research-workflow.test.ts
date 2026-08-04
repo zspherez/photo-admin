@@ -22,8 +22,10 @@ const agent = readFileSync(
 );
 
 test("professional contact workflow is recurring, manual, OIDC-scoped, and bounded", () => {
-  assert.match(workflow, /cron: "7,17,27,37,47,57 \* \* \* \*"/);
+  assert.match(workflow, /Recovery only: normal requests dispatch this workflow immediately/);
+  assert.match(workflow, /cron: "37 \* \* \* \*"/);
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /request_id:/);
   assert.match(workflow, /id-token: write/);
   assert.match(workflow, /copilot-requests: write/);
   assert.match(workflow, /audience=photo-admin-professional-contact-research/);

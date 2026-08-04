@@ -35,6 +35,42 @@ CREATE TABLE "ProfessionalContactJob" (
     CHECK ("attemptCount" >= 0)
 );
 
+CREATE TABLE "ProfessionalContactDispatch" (
+  "id" TEXT NOT NULL,
+  "requestId" TEXT NOT NULL,
+  "status" TEXT NOT NULL DEFAULT 'pending',
+  "attemptCount" INTEGER NOT NULL DEFAULT 0,
+  "leaseToken" TEXT,
+  "leaseExpiresAt" TIMESTAMP(3),
+  "lastAttemptAt" TIMESTAMP(3),
+  "lastDispatchedAt" TIMESTAMP(3),
+  "lastError" TEXT,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL,
+  CONSTRAINT "ProfessionalContactDispatch_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "ProfessionalContactDispatch_status_check"
+    CHECK ("status" IN ('pending', 'dispatching', 'dispatched', 'failed')),
+  CONSTRAINT "ProfessionalContactDispatch_attemptCount_check"
+    CHECK ("attemptCount" >= 0)
+);
+
+CREATE TABLE "ProfessionalContactDispatchAttempt" (
+  "id" TEXT NOT NULL,
+  "dispatchId" TEXT NOT NULL,
+  "attemptNumber" INTEGER NOT NULL,
+  "status" TEXT NOT NULL,
+  "error" TEXT,
+  "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "completedAt" TIMESTAMP(3),
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL,
+  CONSTRAINT "ProfessionalContactDispatchAttempt_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "ProfessionalContactDispatchAttempt_status_check"
+    CHECK ("status" IN ('dispatching', 'succeeded', 'failed')),
+  CONSTRAINT "ProfessionalContactDispatchAttempt_number_check"
+    CHECK ("attemptNumber" >= 1)
+);
+
 CREATE TABLE "ProfessionalContactCandidate" (
   "id" TEXT NOT NULL,
   "jobId" TEXT NOT NULL,
@@ -85,7 +121,7 @@ CREATE TABLE "ProfessionalContactEvent" (
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "ProfessionalContactEvent_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "ProfessionalContactEvent_kind_check"
-    CHECK ("kind" IN ('request_created', 'job_claimed', 'result_submitted', 'job_exhausted', 'job_requeued', 'candidate_approved', 'candidate_rejected'))
+    CHECK ("kind" IN ('request_created', 'dispatch_started', 'dispatch_succeeded', 'dispatch_failed', 'job_claimed', 'result_submitted', 'job_exhausted', 'job_requeued', 'candidate_approved', 'candidate_rejected'))
 );
 
 CREATE UNIQUE INDEX "ProfessionalContactRequest_requestKey_key"
@@ -100,6 +136,18 @@ CREATE INDEX "ProfessionalContactJob_status_createdAt_idx"
   ON "ProfessionalContactJob"("status", "createdAt");
 CREATE INDEX "ProfessionalContactJob_status_claimExpiresAt_idx"
   ON "ProfessionalContactJob"("status", "claimExpiresAt");
+CREATE UNIQUE INDEX "ProfessionalContactDispatch_requestId_key"
+  ON "ProfessionalContactDispatch"("requestId");
+CREATE UNIQUE INDEX "ProfessionalContactDispatch_leaseToken_key"
+  ON "ProfessionalContactDispatch"("leaseToken");
+CREATE INDEX "ProfessionalContactDispatch_status_updatedAt_idx"
+  ON "ProfessionalContactDispatch"("status", "updatedAt");
+CREATE INDEX "ProfessionalContactDispatch_leaseExpiresAt_idx"
+  ON "ProfessionalContactDispatch"("leaseExpiresAt");
+CREATE UNIQUE INDEX "ProfessionalContactDispatchAttempt_dispatchId_attemptNumber_key"
+  ON "ProfessionalContactDispatchAttempt"("dispatchId", "attemptNumber");
+CREATE INDEX "ProfessionalContactDispatchAttempt_status_startedAt_idx"
+  ON "ProfessionalContactDispatchAttempt"("status", "startedAt");
 CREATE UNIQUE INDEX "ProfessionalContactCandidate_jobId_normalizedEmail_key"
   ON "ProfessionalContactCandidate"("jobId", "normalizedEmail");
 CREATE INDEX "ProfessionalContactCandidate_jobId_createdAt_idx"
@@ -116,6 +164,14 @@ CREATE INDEX "ProfessionalContactEvent_candidateId_createdAt_idx"
 ALTER TABLE "ProfessionalContactJob"
   ADD CONSTRAINT "ProfessionalContactJob_requestId_fkey"
   FOREIGN KEY ("requestId") REFERENCES "ProfessionalContactRequest"("id")
+  ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "ProfessionalContactDispatch"
+  ADD CONSTRAINT "ProfessionalContactDispatch_requestId_fkey"
+  FOREIGN KEY ("requestId") REFERENCES "ProfessionalContactRequest"("id")
+  ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "ProfessionalContactDispatchAttempt"
+  ADD CONSTRAINT "ProfessionalContactDispatchAttempt_dispatchId_fkey"
+  FOREIGN KEY ("dispatchId") REFERENCES "ProfessionalContactDispatch"("id")
   ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "ProfessionalContactCandidate"
   ADD CONSTRAINT "ProfessionalContactCandidate_jobId_fkey"

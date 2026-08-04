@@ -695,9 +695,45 @@ model ProfessionalContactRequest {
   personNames       String[]
   jobs              ProfessionalContactJob[]
   events            ProfessionalContactEvent[]
+  dispatch          ProfessionalContactDispatch?
   createdAt         DateTime                   @default(now())
 
   @@index([createdAt])
+}
+
+model ProfessionalContactDispatch {
+  id               String                               @id @default(cuid())
+  requestId        String                               @unique
+  request          ProfessionalContactRequest           @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  status           String                               @default("pending")
+  attemptCount     Int                                  @default(0)
+  leaseToken       String?                              @unique
+  leaseExpiresAt   DateTime?
+  lastAttemptAt    DateTime?
+  lastDispatchedAt DateTime?
+  lastError        String?
+  attempts         ProfessionalContactDispatchAttempt[]
+  createdAt        DateTime                             @default(now())
+  updatedAt        DateTime                             @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([leaseExpiresAt])
+}
+
+model ProfessionalContactDispatchAttempt {
+  id            String                      @id @default(cuid())
+  dispatchId    String
+  dispatch      ProfessionalContactDispatch @relation(fields: [dispatchId], references: [id], onDelete: Restrict)
+  attemptNumber Int
+  status        String
+  error         String?
+  startedAt     DateTime                    @default(now())
+  completedAt   DateTime?
+  createdAt     DateTime                    @default(now())
+  updatedAt     DateTime                    @updatedAt
+
+  @@unique([dispatchId, attemptNumber])
+  @@index([status, startedAt])
 }
 
 model ProfessionalContactJob {

@@ -2,8 +2,14 @@ name: Research professional contacts
 
 on:
   schedule:
-    - cron: "7,17,27,37,47,57 * * * *"
+    # Recovery only: normal requests dispatch this workflow immediately.
+    - cron: "37 * * * *"
   workflow_dispatch:
+    inputs:
+      request_id:
+        description: Durable professional contact request that triggered this run
+        required: false
+        type: string
 
 permissions:
   contents: read

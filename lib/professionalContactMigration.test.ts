@@ -31,6 +31,8 @@ test("professional contact persistence is separate, constrained, and immutable",
   for (const table of [
     "ProfessionalContactRequest",
     "ProfessionalContactJob",
+    "ProfessionalContactDispatch",
+    "ProfessionalContactDispatchAttempt",
     "ProfessionalContactCandidate",
     "ProfessionalContactDecision",
     "ProfessionalContactEvent",
@@ -41,6 +43,18 @@ test("professional contact persistence is separate, constrained, and immutable",
   assert.match(migration, /ProfessionalContactJob_requestId_normalizedPersonName_key/);
   assert.match(migration, /ProfessionalContactCandidate_jobId_normalizedEmail_key/);
   assert.match(migration, /ProfessionalContactDecision_candidateId_key/);
+  assert.match(
+    migration,
+    /ProfessionalContactDispatchAttempt_dispatchId_attemptNumber_key/,
+  );
+  assert.match(
+    migration,
+    /pending', 'dispatching', 'dispatched', 'failed'/,
+  );
+  assert.match(
+    migration,
+    /dispatch_started', 'dispatch_succeeded', 'dispatch_failed'/,
+  );
   assert.match(migration, /Professional contact request snapshots are immutable/);
   assert.match(migration, /Professional contact decisions are immutable/);
   assert.match(migration, /Professional contact audit events are immutable/);
@@ -49,4 +63,5 @@ test("professional contact persistence is separate, constrained, and immutable",
   assert.match(migration, /COMMIT;\s*$/);
   assert.match(schema, /model ProfessionalContactRequest \{/);
   assert.match(schema, /model ProfessionalContactDecision \{/);
+  assert.match(schema, /model ProfessionalContactDispatch \{/);
 });

@@ -5,7 +5,9 @@ import type { Prisma } from "@prisma/client";
 import {
   type ProfessionalContactTransactionRunner,
   claimProfessionalContactJobs,
+  createProfessionalContactRequest,
   decideProfessionalContactCandidate,
+  dispatchProfessionalContactRequest,
   isTrustedProfessionalContactOidcClaims,
   isValidProfessionalContactAuthorization,
   parseProfessionalContactClaimLimit,
@@ -39,6 +41,53 @@ const validSubmission = {
   notes: "Official team page.",
   candidates: [validCandidate],
 } as const;
+
+test("form submission durably creates jobs and dispatch state before triggering", async () => {
+  let createdData: Record<string, unknown> | null = null;
+  const dispatchUpdatedAt = new Date("2026-08-04T18:00:00.000Z");
+  const tx = {
+    professionalContactRequest: {
+      findUnique: async () => null,
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        createdData = data;
+        return {
+          id: "request-1",
+          dispatch: {
+            status: "pending",
+            attemptCount: 0,
+            updatedAt: dispatchUpdatedAt,
+          },
+        };
+      },
+    },
+    professionalContactEvent: { create: async () => ({}) },
+  };
+  const result = await createProfessionalContactRequest(
+    {
+      organizationName: "LED Presents",
+      website: "https://ledpresents.com/",
+      locationContext: "San Diego",
+      notes: "Founders",
+      personNames: "Jane Doe\nJohn Smith",
+    },
+    transactionRunner(tx),
+  );
+  assert.equal(result.requestId, "request-1");
+  assert.equal(result.jobCount, 2);
+  assert.equal(result.dispatchStatus, "pending");
+  assert.deepEqual(
+    (createdData as { dispatch?: unknown } | null)?.dispatch,
+    { create: {} },
+  );
+  assert.equal(
+    (
+      createdData as {
+        jobs?: { create?: unknown[] };
+      } | null
+    )?.jobs?.create?.length,
+    2,
+  );
+});
 
 test("professional contact submission rejects personal, generic, duplicate, and weak candidates", () => {
   assert.throws(
@@ -328,6 +377,175 @@ test("human decisions are immutable and repeated same decisions are idempotent",
     ).error ?? "",
     /immutable/,
   );
+});
+
+function createDispatchHarness() {
+  const state = {
+    id: "dispatch-1",
+    requestId: "request-1",
+    status: "pending",
+    attemptCount: 0,
+    leaseToken: null as string | null,
+    leaseExpiresAt: null as Date | null,
+    lastError: null as string | null,
+    updatedAt: new Date("2026-08-04T18:00:00.000Z"),
+  };
+  const attempts: Array<Record<string, unknown>> = [];
+  const events: Array<Record<string, unknown>> = [];
+  let updateTick = 0;
+  const tx = {
+    professionalContactDispatch: {
+      findUnique: async () => ({
+        ...state,
+        request: {
+          jobs: [{ status: "pending", claimExpiresAt: null }],
+        },
+      }),
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: { updatedAt: Date };
+        data: Record<string, unknown>;
+      }) => {
+        if (where.updatedAt.getTime() !== state.updatedAt.getTime()) {
+          return { count: 0 };
+        }
+        state.status = String(data.status);
+        state.attemptCount += 1;
+        state.leaseToken = String(data.leaseToken);
+        state.leaseExpiresAt = data.leaseExpiresAt as Date;
+        state.lastError = null;
+        updateTick += 1;
+        state.updatedAt = new Date(
+          Date.parse("2026-08-04T18:00:00.000Z") + updateTick,
+        );
+        return { count: 1 };
+      },
+      update: async ({ data }: { data: Record<string, unknown> }) => {
+        state.status = String(data.status);
+        state.leaseToken = null;
+        state.leaseExpiresAt = null;
+        state.lastError =
+          typeof data.lastError === "string" ? data.lastError : null;
+        updateTick += 1;
+        state.updatedAt = new Date(
+          Date.parse("2026-08-04T18:00:00.000Z") + updateTick,
+        );
+        return { updatedAt: state.updatedAt };
+      },
+    },
+    professionalContactDispatchAttempt: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        attempts.push({ ...data });
+        return {};
+      },
+      update: async ({ data }: { data: Record<string, unknown> }) => {
+        Object.assign(attempts.at(-1)!, data);
+        return {};
+      },
+    },
+    professionalContactEvent: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        events.push({ ...data });
+        return {};
+      },
+    },
+  };
+  return { state, attempts, events, runner: transactionRunner(tx) };
+}
+
+test("form dispatch immediately triggers the trusted workflow once", async () => {
+  const harness = createDispatchHarness();
+  let fetchCalls = 0;
+  const result = await dispatchProfessionalContactRequest("request-1", {
+    now: new Date("2026-08-04T18:00:00.000Z"),
+    token: "dispatch-token",
+    fetchImpl: async (url, init) => {
+      fetchCalls += 1;
+      assert.match(String(url), /professional-contact-research\.yml\/dispatches$/);
+      assert.deepEqual(JSON.parse(String(init?.body)), {
+        ref: "main",
+        inputs: { request_id: "request-1" },
+      });
+      return new Response(null, { status: 204 });
+    },
+    runTransaction: harness.runner,
+  });
+  assert.equal(fetchCalls, 1);
+  assert.equal(result.state, "dispatched");
+  assert.equal(result.triggered, true);
+  assert.equal(harness.state.attemptCount, 1);
+  assert.equal(harness.attempts[0].status, "succeeded");
+  assert.deepEqual(
+    harness.events.map((event) => event.kind),
+    ["dispatch_started", "dispatch_succeeded"],
+  );
+
+  const duplicate = await dispatchProfessionalContactRequest("request-1", {
+    token: "dispatch-token",
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return new Response(null, { status: 204 });
+    },
+    runTransaction: harness.runner,
+  });
+  assert.equal(duplicate.state, "already_dispatched");
+  assert.equal(duplicate.triggered, false);
+  assert.equal(fetchCalls, 1);
+});
+
+test("dispatch failure preserves queued work and a versioned manual retry triggers again", async () => {
+  const harness = createDispatchHarness();
+  let fetchCalls = 0;
+  const failed = await dispatchProfessionalContactRequest("request-1", {
+    now: new Date("2026-08-04T18:00:00.000Z"),
+    token: "dispatch-token",
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return Response.json(
+        { message: "workflow dispatch denied" },
+        { status: 403 },
+      );
+    },
+    runTransaction: harness.runner,
+  });
+  assert.equal(failed.state, "failed");
+  assert.equal(failed.triggered, true);
+  assert.match(failed.error ?? "", /403.*denied/);
+  assert.equal(harness.state.status, "failed");
+  assert.equal(harness.state.attemptCount, 1);
+
+  const retryVersion = harness.state.updatedAt;
+  const retried = await dispatchProfessionalContactRequest("request-1", {
+    mode: "retry",
+    expectedUpdatedAt: retryVersion,
+    now: new Date("2026-08-04T18:01:00.000Z"),
+    token: "dispatch-token",
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return new Response(null, { status: 204 });
+    },
+    runTransaction: harness.runner,
+  });
+  assert.equal(retried.state, "dispatched");
+  assert.equal(retried.triggered, true);
+  assert.equal(fetchCalls, 2);
+  assert.equal(harness.state.attemptCount, 2);
+
+  const repeatedRetry = await dispatchProfessionalContactRequest("request-1", {
+    mode: "retry",
+    expectedUpdatedAt: retryVersion,
+    token: "dispatch-token",
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return new Response(null, { status: 204 });
+    },
+    runTransaction: harness.runner,
+  });
+  assert.equal(repeatedRetry.state, "stale");
+  assert.equal(repeatedRetry.triggered, false);
+  assert.equal(fetchCalls, 2);
 });
 
 test("professional contact service has no Artist Contact mutation path", () => {

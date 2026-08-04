@@ -25,6 +25,7 @@ export const PROFESSIONAL_CONTACT_OIDC_AUDIENCE =
 export const PROFESSIONAL_CONTACT_OIDC_ISSUER =
   "https://token.actions.githubusercontent.com";
 export const PROFESSIONAL_CONTACT_CLAIM_TTL_MS = 60 * 60 * 1_000;
+export const PROFESSIONAL_CONTACT_DISPATCH_LEASE_MS = 2 * 60 * 1_000;
 export const PROFESSIONAL_CONTACT_MAX_CLAIM_LIMIT = 10;
 export const PROFESSIONAL_CONTACT_WORKFLOW_REF =
   resolveProfessionalContactResearchTrustConfig()?.workflowRef ??
@@ -486,20 +487,36 @@ function submissionFingerprint(submission: ProfessionalContactSubmission) {
 export async function createProfessionalContactRequest(
   value: Record<string, unknown>,
   runTransaction: ProfessionalContactTransactionRunner = withSerializableRetry,
-): Promise<{ requestId: string; duplicate: boolean; jobCount: number }> {
+): Promise<{
+  requestId: string;
+  duplicate: boolean;
+  jobCount: number;
+  dispatchStatus: string;
+  dispatchAttemptCount: number;
+  dispatchUpdatedAt: Date;
+}> {
   const input = parseProfessionalContactRequestInput(value);
   const requestKey = requestFingerprint(input);
   try {
     return await runTransaction(async (tx) => {
       const existing = await tx.professionalContactRequest.findUnique({
         where: { requestKey },
-        select: { id: true, _count: { select: { jobs: true } } },
+        select: {
+          id: true,
+          _count: { select: { jobs: true } },
+          dispatch: {
+            select: { status: true, attemptCount: true, updatedAt: true },
+          },
+        },
       });
-      if (existing) {
+      if (existing?.dispatch) {
         return {
           requestId: existing.id,
           duplicate: true,
           jobCount: existing._count.jobs,
+          dispatchStatus: existing.dispatch.status,
+          dispatchAttemptCount: existing.dispatch.attemptCount,
+          dispatchUpdatedAt: existing.dispatch.updatedAt,
         };
       }
       const request = await tx.professionalContactRequest.create({
@@ -517,9 +534,18 @@ export async function createProfessionalContactRequest(
               normalizedPersonName: normalizeProfessionalIdentity(personName),
             })),
           },
+          dispatch: { create: {} },
         },
-        select: { id: true },
+        select: {
+          id: true,
+          dispatch: {
+            select: { status: true, attemptCount: true, updatedAt: true },
+          },
+        },
       });
+      if (!request.dispatch) {
+        throw new Error("professional contact dispatch state was not created");
+      }
       await tx.professionalContactEvent.create({
         data: {
           requestId: request.id,
@@ -532,6 +558,9 @@ export async function createProfessionalContactRequest(
         requestId: request.id,
         duplicate: false,
         jobCount: input.personNames.length,
+        dispatchStatus: request.dispatch.status,
+        dispatchAttemptCount: request.dispatch.attemptCount,
+        dispatchUpdatedAt: request.dispatch.updatedAt,
       };
     });
   } catch (error) {
@@ -541,12 +570,24 @@ export async function createProfessionalContactRequest(
     ) {
       const existing = await db.professionalContactRequest.findUniqueOrThrow({
         where: { requestKey },
-        select: { id: true, _count: { select: { jobs: true } } },
+        select: {
+          id: true,
+          _count: { select: { jobs: true } },
+          dispatch: {
+            select: { status: true, attemptCount: true, updatedAt: true },
+          },
+        },
       });
+      if (!existing.dispatch) {
+        throw new Error("professional contact dispatch state is missing");
+      }
       return {
         requestId: existing.id,
         duplicate: true,
         jobCount: existing._count.jobs,
+        dispatchStatus: existing.dispatch.status,
+        dispatchAttemptCount: existing.dispatch.attemptCount,
+        dispatchUpdatedAt: existing.dispatch.updatedAt,
       };
     }
     throw error;
@@ -680,6 +721,322 @@ export function countClaimableProfessionalContactJobs(now = new Date()) {
         },
       ],
     },
+  });
+}
+
+export type ProfessionalContactDispatchState =
+  | "dispatched"
+  | "failed"
+  | "in_progress"
+  | "already_dispatched"
+  | "no_work"
+  | "stale";
+
+export interface ProfessionalContactDispatchResult {
+  requestId: string;
+  state: ProfessionalContactDispatchState;
+  triggered: boolean;
+  error: string | null;
+  updatedAt: Date | null;
+}
+
+interface ProfessionalContactDispatchOptions {
+  mode?: "submit" | "retry";
+  expectedUpdatedAt?: Date;
+  now?: Date;
+  token?: string;
+  fetchImpl?: typeof fetch;
+  runTransaction?: ProfessionalContactTransactionRunner;
+}
+
+function existingDispatchState(
+  status: string,
+): ProfessionalContactDispatchState {
+  if (status === "dispatching") return "in_progress";
+  if (status === "dispatched") return "already_dispatched";
+  if (status === "failed") return "failed";
+  return "stale";
+}
+
+async function githubDispatchError(response: Response): Promise<string> {
+  let detail = "";
+  try {
+    const text = (await response.text()).slice(0, 2_000);
+    const parsed = text ? (JSON.parse(text) as unknown) : null;
+    detail =
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      typeof Reflect.get(parsed, "message") === "string"
+        ? String(Reflect.get(parsed, "message"))
+        : text;
+  } catch {
+    detail = "";
+  }
+  const normalized = detail.replace(/\s+/g, " ").trim().slice(0, 240);
+  return normalized
+    ? `GitHub workflow dispatch returned ${response.status}: ${normalized}`
+    : `GitHub workflow dispatch returned ${response.status}`;
+}
+
+export async function dispatchProfessionalContactRequest(
+  requestId: string,
+  options: ProfessionalContactDispatchOptions = {},
+): Promise<ProfessionalContactDispatchResult> {
+  const now = options.now ?? new Date();
+  const mode = options.mode ?? "submit";
+  const runTransaction = options.runTransaction ?? withSerializableRetry;
+  const claimed = await runTransaction(async (tx) => {
+    const dispatch = await tx.professionalContactDispatch.findUnique({
+      where: { requestId },
+      select: {
+        id: true,
+        requestId: true,
+        status: true,
+        attemptCount: true,
+        leaseExpiresAt: true,
+        lastError: true,
+        updatedAt: true,
+        request: {
+          select: {
+            jobs: {
+              select: {
+                status: true,
+                claimExpiresAt: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!dispatch) {
+      return {
+        kind: "existing" as const,
+        result: {
+          requestId,
+          state: "stale" as const,
+          triggered: false,
+          error: "Dispatch state was not found",
+          updatedAt: null,
+        },
+      };
+    }
+    const hasClaimableWork = dispatch.request.jobs.some(
+      (job) =>
+        job.status === "pending" ||
+        (job.status === "claimed" &&
+          (!job.claimExpiresAt || job.claimExpiresAt <= now)),
+    );
+    if (!hasClaimableWork) {
+      return {
+        kind: "existing" as const,
+        result: {
+          requestId,
+          state: "no_work" as const,
+          triggered: false,
+          error: null,
+          updatedAt: dispatch.updatedAt,
+        },
+      };
+    }
+    if (mode === "submit" && dispatch.attemptCount > 0) {
+      return {
+        kind: "existing" as const,
+        result: {
+          requestId,
+          state: existingDispatchState(dispatch.status),
+          triggered: false,
+          error: dispatch.lastError,
+          updatedAt: dispatch.updatedAt,
+        },
+      };
+    }
+    if (
+      mode === "retry" &&
+      (!options.expectedUpdatedAt ||
+        dispatch.updatedAt.getTime() !== options.expectedUpdatedAt.getTime())
+    ) {
+      return {
+        kind: "existing" as const,
+        result: {
+          requestId,
+          state: "stale" as const,
+          triggered: false,
+          error: "Dispatch state changed; refresh before retrying",
+          updatedAt: dispatch.updatedAt,
+        },
+      };
+    }
+    if (
+      dispatch.status === "dispatching" &&
+      dispatch.leaseExpiresAt &&
+      dispatch.leaseExpiresAt > now
+    ) {
+      return {
+        kind: "existing" as const,
+        result: {
+          requestId,
+          state: "in_progress" as const,
+          triggered: false,
+          error: null,
+          updatedAt: dispatch.updatedAt,
+        },
+      };
+    }
+    const leaseToken = randomUUID();
+    const leaseExpiresAt = new Date(
+      now.getTime() + PROFESSIONAL_CONTACT_DISPATCH_LEASE_MS,
+    );
+    const attemptNumber = dispatch.attemptCount + 1;
+    const updated = await tx.professionalContactDispatch.updateMany({
+      where: { id: dispatch.id, updatedAt: dispatch.updatedAt },
+      data: {
+        status: "dispatching",
+        attemptCount: { increment: 1 },
+        leaseToken,
+        leaseExpiresAt,
+        lastAttemptAt: now,
+        lastError: null,
+      },
+    });
+    if (updated.count !== 1) {
+      return {
+        kind: "existing" as const,
+        result: {
+          requestId,
+          state: "stale" as const,
+          triggered: false,
+          error: "Dispatch was already claimed by another request",
+          updatedAt: dispatch.updatedAt,
+        },
+      };
+    }
+    await tx.professionalContactDispatchAttempt.create({
+      data: {
+        dispatchId: dispatch.id,
+        attemptNumber,
+        status: "dispatching",
+        startedAt: now,
+      },
+    });
+    await tx.professionalContactEvent.create({
+      data: {
+        requestId,
+        kind: "dispatch_started",
+        actor: "admin",
+        details: { attempt: attemptNumber, mode },
+      },
+    });
+    return {
+      kind: "claimed" as const,
+      dispatchId: dispatch.id,
+      attemptNumber,
+      leaseToken,
+    };
+  });
+  if (claimed.kind === "existing") return claimed.result;
+
+  let dispatchError: string | null = null;
+  try {
+    const token =
+      options.token ??
+      process.env.PROFESSIONAL_CONTACT_RESEARCH_DISPATCH_TOKEN?.trim();
+    if (!token) {
+      throw new Error(
+        "Professional contact worker trigger is not configured",
+      );
+    }
+    const fetchImpl = options.fetchImpl ?? fetch;
+    const response = await fetchImpl(
+      `https://api.github.com/repos/${encodeURIComponent(
+        appConfig.repository.owner,
+      )}/${encodeURIComponent(
+        appConfig.repository.name,
+      )}/actions/workflows/${encodeURIComponent(
+        PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_FILE,
+      )}/dispatches`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          "x-github-api-version": "2022-11-28",
+        },
+        body: JSON.stringify({
+          ref: "main",
+          inputs: { request_id: requestId },
+        }),
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    if (response.status !== 204) {
+      dispatchError = await githubDispatchError(response);
+    }
+  } catch (error) {
+    dispatchError = (error instanceof Error ? error.message : String(error))
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 240);
+  }
+
+  return runTransaction(async (tx) => {
+    const current = await tx.professionalContactDispatch.findUnique({
+      where: { id: claimed.dispatchId },
+      select: { leaseToken: true },
+    });
+    if (current?.leaseToken !== claimed.leaseToken) {
+      return {
+        requestId,
+        state: "stale",
+        triggered: false,
+        error: "Dispatch lease changed before completion",
+        updatedAt: null,
+      };
+    }
+    const status = dispatchError ? "failed" : "dispatched";
+    const dispatch = await tx.professionalContactDispatch.update({
+      where: { id: claimed.dispatchId },
+      data: {
+        status,
+        leaseToken: null,
+        leaseExpiresAt: null,
+        lastError: dispatchError,
+        ...(dispatchError ? {} : { lastDispatchedAt: now }),
+      },
+      select: { updatedAt: true },
+    });
+    await tx.professionalContactDispatchAttempt.update({
+      where: {
+        dispatchId_attemptNumber: {
+          dispatchId: claimed.dispatchId,
+          attemptNumber: claimed.attemptNumber,
+        },
+      },
+      data: {
+        status: dispatchError ? "failed" : "succeeded",
+        error: dispatchError,
+        completedAt: now,
+      },
+    });
+    await tx.professionalContactEvent.create({
+      data: {
+        requestId,
+        kind: dispatchError ? "dispatch_failed" : "dispatch_succeeded",
+        actor: "admin",
+        details: {
+          attempt: claimed.attemptNumber,
+          error: dispatchError,
+        },
+      },
+    });
+    return {
+      requestId,
+      state: dispatchError ? "failed" : "dispatched",
+      triggered: true,
+      error: dispatchError,
+      updatedAt: dispatch.updatedAt,
+    };
   });
 }
 

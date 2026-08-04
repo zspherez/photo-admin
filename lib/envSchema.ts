@@ -259,6 +259,18 @@ export const ENV_SCHEMA: readonly EnvVarDefinition[] = [
     defaultValue: "",
   },
   {
+    key: "PROFESSIONAL_CONTACT_RESEARCH_DISPATCH_TOKEN",
+    group: "contact-agents",
+    secret: true,
+    summary: "Dedicated fine-grained GitHub token used by the app to trigger professional contact research immediately.",
+    notes: [
+      "Required for immediate form-triggered research in deployed environments.",
+      "Use a fine-grained repository token limited to Actions: write for this repository.",
+      "The token stays server-side and is never passed to the research worker or browser.",
+    ],
+    defaultValue: "",
+  },
+  {
     key: "TRAJECTORY_INGEST_AUTH_MODE",
     group: "trajectory",
     secret: false,

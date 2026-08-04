@@ -57,6 +57,7 @@ _Optional integration._
 | `CONTACT_RESEARCH_LIMIT` | no | Optional local worker batch size (1-10, default 3). |
 | `CONTACT_AUDIT_AGENT_TOKEN` | yes | Optional dedicated token for running the review-only contact audit worker locally. |
 | `PROFESSIONAL_CONTACT_RESEARCH_AGENT_TOKEN` | yes | Optional dedicated token for local/development professional contact research workers. |
+| `PROFESSIONAL_CONTACT_RESEARCH_DISPATCH_TOKEN` | yes | Dedicated fine-grained GitHub token used by the app to trigger professional contact research immediately. |
 
 ## Artist trajectory promotion
 
