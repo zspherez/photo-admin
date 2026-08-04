@@ -3,12 +3,18 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { z } from "zod";
 import {
   fetchReadablePage,
   searchWeb,
 } from "./contact-research-web.mjs";
+import {
+  canonicalPublicHttpsUrl,
+  normalizedIdentityTokens,
+  validateProfessionalContactProvenance,
+} from "../lib/professionalContactProvenance.mjs";
 
 const baseUrl = process.env.APP_BASE_URL?.trim().replace(/\/+$/, "");
 const staticToken =
@@ -52,6 +58,16 @@ const candidateSchema = z
     sourceUrls: z.array(httpsUrl).min(1).max(5),
     patternEvidence: z.string().min(40).max(2_000).nullable(),
     patternEvidenceUrl: httpsUrl.nullable(),
+    patternExamples: z
+      .array(
+        z
+          .object({
+            email: z.string().email().max(320),
+            personName: z.string().min(1).max(120),
+          })
+          .strict(),
+      )
+      .max(5),
   })
   .strict();
 const submissionBase = {
@@ -164,7 +180,13 @@ function persistMetrics() {
 function stateFor(sessionId) {
   const existing = sessions.get(sessionId);
   if (existing) return existing;
-  const state = { claim: null, completed: false };
+  const state = {
+    claim: null,
+    claimContext: null,
+    completed: false,
+    searches: [],
+    fetchedSources: new Map(),
+  };
   sessions.set(sessionId, state);
   metrics.sessions[sessionId] = {
     artist: null,
@@ -174,6 +196,126 @@ function stateFor(sessionId) {
     stale: false,
   };
   return state;
+}
+
+function contentTokens(result) {
+  return Array.from(
+    new Set(
+      normalizedIdentityTokens(`${result.title ?? ""} ${result.text ?? ""}`),
+    ),
+  ).slice(0, 5_000);
+}
+
+function recordSearch(state, query, results) {
+  if (state.searches.length >= 20) {
+    throw new BrokerConflictError("search limit reached for this claim");
+  }
+  state.searches.push({
+    query,
+    resultUrls: results.flatMap((result) => {
+      try {
+        return [canonicalPublicHttpsUrl(result.url)];
+      } catch {
+        return [];
+      }
+    }).slice(0, 10),
+  });
+}
+
+function recordFetch(state, result) {
+  if (
+    !state.fetchedSources.has(result.url) &&
+    state.fetchedSources.size >= 12
+  ) {
+    throw new BrokerConflictError("fetch limit reached for this claim");
+  }
+  const url = canonicalPublicHttpsUrl(result.url);
+  const observedEmails = Array.from(
+    new Set(
+      (Array.isArray(result.emails) ? result.emails : []).map((email) =>
+        String(email).trim().toLowerCase(),
+      ),
+    ),
+  );
+  state.fetchedSources.set(url, {
+    url,
+    observedEmails,
+    contentTokens: contentTokens(result),
+    contentSha256: createHash("sha256")
+      .update(
+        JSON.stringify({
+          url,
+          title: result.title ?? "",
+          text: result.text ?? "",
+          observedEmails,
+        }),
+      )
+      .digest("hex"),
+  });
+}
+
+function brokerProvenance(state, submission) {
+  if (!state.claim?.provenanceToken || !state.claimContext) {
+    throw new BrokerConflictError("claim provenance is unavailable");
+  }
+  const relevantEmails = new Set();
+  const relevantTokens = new Set([
+    ...normalizedIdentityTokens(state.claimContext.personName),
+    ...normalizedIdentityTokens(state.claimContext.organizationName),
+  ]);
+  const selectedUrls = new Set();
+  if (submission.outcome === "candidates") {
+    for (const candidate of submission.candidates) {
+      relevantEmails.add(candidate.email.toLowerCase());
+      normalizedIdentityTokens(candidate.roleTitle).forEach((token) =>
+        relevantTokens.add(token),
+      );
+      candidate.sourceUrls.forEach((url) =>
+        selectedUrls.add(canonicalPublicHttpsUrl(url)),
+      );
+      for (const example of candidate.patternExamples) {
+        relevantEmails.add(example.email.toLowerCase());
+        normalizedIdentityTokens(example.personName).forEach((token) =>
+          relevantTokens.add(token),
+        );
+      }
+    }
+  } else {
+    for (const url of state.fetchedSources.keys()) selectedUrls.add(url);
+  }
+  const provenance = {
+    claimProvenanceToken: state.claim.provenanceToken,
+    searches: state.searches,
+    fetchedSources: [...selectedUrls].map((url) => {
+      const source = state.fetchedSources.get(url);
+      if (!source) {
+        throw new BrokerConflictError(
+          "every submitted source URL must be fetched in this claim",
+        );
+      }
+      return {
+        url: source.url,
+        contentSha256: source.contentSha256,
+        observedEmails: source.observedEmails.filter((email) =>
+          relevantEmails.has(email),
+        ),
+        contentTokens: source.contentTokens.filter((token) =>
+          relevantTokens.has(token),
+        ),
+      };
+    }),
+  };
+  validateProfessionalContactProvenance(
+    submission,
+    provenance,
+    {
+      claimProvenanceToken: state.claim.provenanceToken,
+      personName: state.claimContext.personName,
+      organizationName: state.claimContext.organizationName,
+      website: state.claimContext.website,
+    },
+  );
+  return provenance;
 }
 
 function requireClaim(state, input) {
@@ -208,11 +350,24 @@ async function runTool(name, input, sessionId) {
     if (
       typeof job.jobId !== "string" ||
       typeof job.claimToken !== "string" ||
-      typeof job.personName !== "string"
+      typeof job.provenanceToken !== "string" ||
+      typeof job.personName !== "string" ||
+      !job.request ||
+      typeof job.request !== "object" ||
+      typeof job.request.organizationName !== "string"
     ) {
       throw new Error("claim returned an invalid job");
     }
-    state.claim = { jobId: job.jobId, claimToken: job.claimToken };
+    state.claim = {
+      jobId: job.jobId,
+      claimToken: job.claimToken,
+      provenanceToken: job.provenanceToken,
+    };
+    state.claimContext = {
+      personName: job.personName,
+      organizationName: job.request?.organizationName,
+      website: job.request?.website ?? null,
+    };
     metrics.sessions[sessionId] = {
       artist: job.personName,
       claimed: true,
@@ -221,19 +376,39 @@ async function runTool(name, input, sessionId) {
       stale: false,
     };
     persistMetrics();
-    return { jobs: [job] };
+    const publicJob = { ...job };
+    delete publicJob.provenanceToken;
+    return { jobs: [publicJob] };
   }
   if (!state.claim || state.completed) {
     throw new BrokerConflictError(`${name} requires an active claimed job`);
   }
-  if (name === "search") return searchWeb(input.query, input.limit);
-  if (name === "fetch") return fetchReadablePage(input.url);
+  if (name === "search") {
+    const result = await searchWeb(input.query, input.limit);
+    recordSearch(state, input.query, result);
+    return result;
+  }
+  if (name === "fetch") {
+    const result = await fetchReadablePage(input.url);
+    recordFetch(state, result);
+    return result;
+  }
   if (name === "validate-result") {
     const payload = schemas[input.action].parse(input.payload);
     requireClaim(state, payload);
+    const submission =
+      input.action === "submit-candidates"
+        ? { outcome: "candidates", ...payload }
+        : { outcome: "exhausted", ...payload, candidates: [] };
+    brokerProvenance(state, submission);
     return { ok: true, action: input.action };
   }
   requireClaim(state, input);
+  const submission =
+    name === "submit-candidates"
+      ? { outcome: "candidates", ...input }
+      : { outcome: "exhausted", ...input, candidates: [] };
+  const provenance = brokerProvenance(state, submission);
   const body =
     name === "submit-candidates"
       ? {
@@ -241,12 +416,14 @@ async function runTool(name, input, sessionId) {
           claimToken: input.claimToken,
           notes: input.notes ?? null,
           candidates: input.candidates,
+          provenance,
         }
       : {
           outcome: "exhausted",
           claimToken: input.claimToken,
           notes: input.notes,
           candidates: [],
+          provenance,
         };
   try {
     const result = await photoAdminRequest(

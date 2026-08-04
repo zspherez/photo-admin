@@ -747,6 +747,7 @@ model ProfessionalContactJob {
   claimedAt            DateTime?
   claimExpiresAt       DateTime?
   claimToken           String?                        @unique
+  claimProvenanceToken String?                        @unique
   resultFingerprint    String?
   agentNotes           String?
   completedAt          DateTime?
@@ -775,6 +776,7 @@ model ProfessionalContactCandidate {
   sourceUrls             String[]
   patternEvidence        String?
   patternEvidenceUrl     String?
+  patternExamples        Json?
   decision               ProfessionalContactDecision?
   events                 ProfessionalContactEvent[]
   createdAt              DateTime                     @default(now())

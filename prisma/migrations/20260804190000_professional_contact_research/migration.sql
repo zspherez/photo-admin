@@ -23,6 +23,7 @@ CREATE TABLE "ProfessionalContactJob" (
   "claimedAt" TIMESTAMP(3),
   "claimExpiresAt" TIMESTAMP(3),
   "claimToken" TEXT,
+  "claimProvenanceToken" TEXT,
   "resultFingerprint" TEXT,
   "agentNotes" TEXT,
   "completedAt" TIMESTAMP(3),
@@ -85,6 +86,7 @@ CREATE TABLE "ProfessionalContactCandidate" (
   "sourceUrls" TEXT[] NOT NULL,
   "patternEvidence" TEXT,
   "patternEvidenceUrl" TEXT,
+  "patternExamples" JSONB,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "ProfessionalContactCandidate_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "ProfessionalContactCandidate_confidence_check"
@@ -130,6 +132,8 @@ CREATE INDEX "ProfessionalContactRequest_createdAt_idx"
   ON "ProfessionalContactRequest"("createdAt");
 CREATE UNIQUE INDEX "ProfessionalContactJob_claimToken_key"
   ON "ProfessionalContactJob"("claimToken");
+CREATE UNIQUE INDEX "ProfessionalContactJob_claimProvenanceToken_key"
+  ON "ProfessionalContactJob"("claimProvenanceToken");
 CREATE UNIQUE INDEX "ProfessionalContactJob_requestId_normalizedPersonName_key"
   ON "ProfessionalContactJob"("requestId", "normalizedPersonName");
 CREATE INDEX "ProfessionalContactJob_status_createdAt_idx"

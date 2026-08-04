@@ -51,7 +51,7 @@ export async function POST(
   } catch (error) {
     if (
       error instanceof Error &&
-      /does not match the claimed|evidence|candidate email|domain-pattern/.test(
+      /does not match the claimed|evidence|candidate email|domain-pattern|broker provenance|broker-fetched|business domain|published organization email pattern|sourceUrls|patternExamples|public or disposable|generic or role inbox/.test(
         error.message,
       )
     ) {

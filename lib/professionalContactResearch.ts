@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { isIP } from "node:net";
 import { Prisma } from "@prisma/client";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import { db } from "@/lib/db";
@@ -19,6 +18,11 @@ import {
   parseProfessionalContactRequestInput,
   type ProfessionalContactRequestInput,
 } from "@/lib/professionalContactInput";
+import {
+  assertNamedBusinessEmail,
+  canonicalPublicHttpsUrl,
+  validateProfessionalContactProvenance,
+} from "@/lib/professionalContactProvenance.mjs";
 
 export const PROFESSIONAL_CONTACT_OIDC_AUDIENCE =
   "photo-admin-professional-contact-research";
@@ -38,43 +42,6 @@ const TRUST_CONFIG = resolveProfessionalContactResearchTrustConfig();
 const githubActionsJwks = createRemoteJWKSet(
   new URL(`${PROFESSIONAL_CONTACT_OIDC_ISSUER}/.well-known/jwks`),
 );
-const EMAIL_PATTERN = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
-const PERSONAL_EMAIL_DOMAINS = new Set([
-  "aol.com",
-  "gmail.com",
-  "hotmail.com",
-  "icloud.com",
-  "live.com",
-  "outlook.com",
-  "proton.me",
-  "protonmail.com",
-  "yahoo.com",
-]);
-const GENERIC_LOCAL_PARTS = new Set([
-  "admin",
-  "booking",
-  "bookings",
-  "careers",
-  "contact",
-  "events",
-  "hello",
-  "info",
-  "jobs",
-  "legal",
-  "marketing",
-  "media",
-  "office",
-  "press",
-  "privacy",
-  "sales",
-  "support",
-  "team",
-]);
-const RESERVED_SOURCE_HOSTS = new Set([
-  "example.com",
-  "example.net",
-  "example.org",
-]);
 const DISCOVERY_METHODS = new Set([
   "official",
   "professional_profile",
@@ -103,6 +70,7 @@ export interface ProfessionalContactCandidateInput {
   sourceUrls: string[];
   patternEvidence: string | null;
   patternEvidenceUrl: string | null;
+  patternExamples: Array<{ email: string; personName: string }>;
 }
 
 export type ProfessionalContactSubmission =
@@ -111,12 +79,14 @@ export type ProfessionalContactSubmission =
       claimToken: string;
       notes: string | null;
       candidates: ProfessionalContactCandidateInput[];
+      provenance: unknown;
     }
   | {
       outcome: "exhausted";
       claimToken: string;
       notes: string;
       candidates: [];
+      provenance: unknown;
     };
 
 async function withSerializableRetry<T>(
@@ -169,52 +139,15 @@ function normalizeProfessionalEmail(value: unknown): {
   normalizedEmail: string;
 } {
   const email = boundedString(value, "candidate email", 320);
-  const normalizedEmail = email.toLowerCase();
-  if (!EMAIL_PATTERN.test(normalizedEmail)) {
-    throw new Error("candidate email is invalid");
-  }
-  const [localPart, domain] = normalizedEmail.split("@");
-  if (
-    PERSONAL_EMAIL_DOMAINS.has(domain) ||
-    GENERIC_LOCAL_PARTS.has(localPart)
-  ) {
-    throw new Error(
-      "candidate email must be a named professional/business address, not a personal or generic inbox",
-    );
-  }
+  const normalizedEmail = assertNamedBusinessEmail(
+    email,
+    "candidate email",
+  );
   return { email, normalizedEmail };
 }
 
 function normalizeSourceUrl(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.length > 1_000) {
-    throw new Error(`${field} must be a URL string`);
-  }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error(`${field} is invalid`);
-  }
-  const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
-  if (
-    url.protocol !== "https:" ||
-    url.username ||
-    url.password ||
-    !hostname.includes(".") ||
-    isIP(hostname) !== 0 ||
-    hostname === "localhost" ||
-    hostname.endsWith(".localhost") ||
-    hostname.endsWith(".local") ||
-    hostname.endsWith(".internal") ||
-    RESERVED_SOURCE_HOSTS.has(hostname) ||
-    hostname.endsWith(".example") ||
-    hostname.endsWith(".invalid") ||
-    hostname.endsWith(".test")
-  ) {
-    throw new Error(`${field} must be a real public HTTPS URL`);
-  }
-  url.hash = "";
-  return url.toString();
+  return canonicalPublicHttpsUrl(value, field);
 }
 
 function evidenceContainsIdentity(
@@ -267,6 +200,7 @@ function parseCandidate(
     "sourceUrls",
     "patternEvidence",
     "patternEvidenceUrl",
+    "patternExamples",
   ]);
   for (const key of allowed) {
     if (!(key in input)) {
@@ -355,6 +289,37 @@ function parseCandidate(
           input.patternEvidenceUrl,
           `candidates[${index}].patternEvidenceUrl`,
         );
+  if (!Array.isArray(input.patternExamples)) {
+    throw new Error(`candidates[${index}].patternExamples must be an array`);
+  }
+  const patternExamples = input.patternExamples.map((example, exampleIndex) => {
+    if (!example || typeof example !== "object" || Array.isArray(example)) {
+      throw new Error(
+        `candidates[${index}].patternExamples[${exampleIndex}] must be an object`,
+      );
+    }
+    const record = example as Record<string, unknown>;
+    if (
+      Object.keys(record).some(
+        (key) => key !== "email" && key !== "personName",
+      )
+    ) {
+      throw new Error(
+        `candidates[${index}].patternExamples[${exampleIndex}] contains unsupported fields`,
+      );
+    }
+    return {
+      email: assertNamedBusinessEmail(
+        record.email,
+        `candidates[${index}].patternExamples[${exampleIndex}].email`,
+      ),
+      personName: boundedString(
+        record.personName,
+        `candidates[${index}].patternExamples[${exampleIndex}].personName`,
+        120,
+      ),
+    };
+  });
   if (discoveryMethod === "business_directory" && confidence === "high") {
     throw new Error(
       `candidates[${index}] business-directory evidence cannot be high confidence`,
@@ -366,13 +331,19 @@ function parseCandidate(
       !patternEvidence ||
       patternEvidence.length < 40 ||
       !patternEvidenceUrl ||
-      !sourceUrls.includes(patternEvidenceUrl)
+      !sourceUrls.includes(patternEvidenceUrl) ||
+      patternExamples.length < 2 ||
+      patternExamples.length > 5
     ) {
       throw new Error(
         `candidates[${index}] domain-pattern inference requires low confidence and published pattern evidence from a listed source`,
       );
     }
-  } else if (patternEvidence || patternEvidenceUrl) {
+  } else if (
+    patternEvidence ||
+    patternEvidenceUrl ||
+    patternExamples.length > 0
+  ) {
     throw new Error(
       `candidates[${index}] pattern evidence is only valid for domain-pattern inference`,
     );
@@ -389,6 +360,7 @@ function parseCandidate(
     sourceUrls,
     patternEvidence,
     patternEvidenceUrl,
+    patternExamples,
   };
 }
 
@@ -400,7 +372,13 @@ export function parseProfessionalContactSubmission(
     throw new Error("request body must be an object");
   }
   const input = value as Record<string, unknown>;
-  const allowed = new Set(["outcome", "claimToken", "notes", "candidates"]);
+  const allowed = new Set([
+    "outcome",
+    "claimToken",
+    "notes",
+    "candidates",
+    "provenance",
+  ]);
   for (const key of Object.keys(input)) {
     if (!allowed.has(key)) throw new Error(`${key} is not allowed`);
   }
@@ -411,6 +389,13 @@ export function parseProfessionalContactSubmission(
     )
   ) {
     throw new Error("claimToken must be a UUID");
+  }
+  if (
+    !input.provenance ||
+    typeof input.provenance !== "object" ||
+    Array.isArray(input.provenance)
+  ) {
+    throw new Error("broker provenance is required");
   }
   if (input.outcome === "exhausted") {
     const notes = boundedString(input.notes, "notes", 4_000);
@@ -425,6 +410,7 @@ export function parseProfessionalContactSubmission(
       claimToken: input.claimToken,
       notes,
       candidates: [],
+      provenance: input.provenance,
     };
   }
   if (input.outcome !== "candidates") {
@@ -451,6 +437,7 @@ export function parseProfessionalContactSubmission(
     claimToken: input.claimToken,
     notes,
     candidates,
+    provenance: input.provenance,
   };
 }
 
@@ -636,14 +623,18 @@ export async function claimProfessionalContactJobs(
     `);
     if (selected.length === 0) return [];
     const tokenById = new Map<string, string>();
+    const provenanceTokenById = new Map<string, string>();
     for (const row of selected) {
       const claimToken = randomUUID();
+      const claimProvenanceToken = randomUUID();
       tokenById.set(row.id, claimToken);
+      provenanceTokenById.set(row.id, claimProvenanceToken);
       await tx.professionalContactJob.update({
         where: { id: row.id },
         data: {
           status: "claimed",
           claimToken,
+          claimProvenanceToken,
           claimedAt: now,
           claimExpiresAt,
           resultFingerprint: null,
@@ -692,6 +683,7 @@ export async function claimProfessionalContactJobs(
       return [{
         jobId: job.id,
         claimToken: tokenById.get(job.id)!,
+        provenanceToken: provenanceTokenById.get(job.id)!,
         claimExpiresAt,
         attemptCount: job.attemptCount,
         personName: job.personName,
@@ -1059,9 +1051,12 @@ export async function submitProfessionalContactResult(
         personName: true,
         status: true,
         claimToken: true,
+        claimProvenanceToken: true,
         claimExpiresAt: true,
         resultFingerprint: true,
-        request: { select: { organizationName: true } },
+        request: {
+          select: { organizationName: true, website: true },
+        },
         attemptCount: true,
       },
     });
@@ -1070,6 +1065,19 @@ export async function submitProfessionalContactResult(
       personName: job.personName,
       organizationName: job.request.organizationName,
     });
+    if (!job.claimProvenanceToken) {
+      return { accepted: false, status: "conflict", idempotent: false };
+    }
+    validateProfessionalContactProvenance(
+      submission,
+      submission.provenance,
+      {
+        claimProvenanceToken: job.claimProvenanceToken,
+        personName: job.personName,
+        organizationName: job.request.organizationName,
+        website: job.request.website,
+      },
+    );
     const fingerprint = submissionFingerprint(submission);
     if (
       job.claimToken === submission.claimToken &&
@@ -1127,6 +1135,7 @@ export async function submitProfessionalContactResult(
           sourceUrls: candidate.sourceUrls,
           patternEvidence: candidate.patternEvidence,
           patternEvidenceUrl: candidate.patternEvidenceUrl,
+          patternExamples: candidate.patternExamples,
         })),
       });
       await tx.professionalContactJob.update({
@@ -1296,6 +1305,7 @@ export async function requeueProfessionalContactJob(
         claimedAt: null,
         claimExpiresAt: null,
         claimToken: null,
+        claimProvenanceToken: null,
         resultFingerprint: null,
         completedAt: null,
       },

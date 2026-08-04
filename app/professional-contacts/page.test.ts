@@ -45,6 +45,7 @@ test("professional contact UI exposes queue states, evidence, review, and copy",
   assert.match(page, /candidate\.organization/);
   assert.match(page, /candidate\.confidence/);
   assert.match(page, /candidate\.evidence/);
+  assert.match(page, /displayedPatternExamples/);
   assert.match(page, /candidate\.sourceUrls\.map/);
   assert.match(page, /CopyProfessionalEmailButton/);
   assert.match(page, /Approve/);

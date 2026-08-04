@@ -33,13 +33,33 @@ const validCandidate = {
   sourceUrls: ["https://ledpresents.com/team/jane-doe"],
   patternEvidence: null,
   patternEvidenceUrl: null,
+  patternExamples: [],
 } as const;
 
+const claimProvenanceToken = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const validProvenance = {
+  claimProvenanceToken,
+  searches: [
+    {
+      query: "\"Jane Doe\" \"LED Presents\"",
+      resultUrls: ["https://ledpresents.com/team/jane-doe"],
+    },
+  ],
+  fetchedSources: [
+    {
+      url: "https://ledpresents.com/team/jane-doe",
+      contentSha256: "a".repeat(64),
+      observedEmails: ["jane.doe@ledpresents.com"],
+      contentTokens: ["led", "presents", "jane", "doe", "founder"],
+    },
+  ],
+};
 const validSubmission = {
   outcome: "candidates",
   claimToken: "11111111-1111-4111-8111-111111111111",
   notes: "Official team page.",
   candidates: [validCandidate],
+  provenance: validProvenance,
 } as const;
 
 test("form submission durably creates jobs and dispatch state before triggering", async () => {
@@ -96,7 +116,7 @@ test("professional contact submission rejects personal, generic, duplicate, and 
         ...validSubmission,
         candidates: [{ ...validCandidate, email: "jane.doe@gmail.com" }],
       }),
-    /personal or generic/,
+    /public or disposable email provider/,
   );
   assert.throws(
     () =>
@@ -106,7 +126,7 @@ test("professional contact submission rejects personal, generic, duplicate, and 
           { ...validCandidate, email: "info@ledpresents.com" },
         ],
       }),
-    /personal or generic/,
+    /generic or role inbox/,
   );
   assert.throws(
     () =>
@@ -143,6 +163,16 @@ test("domain pattern inference is explicit and low confidence", () => {
             sourceUrls: [
               "https://ledpresents.com/team/jane-doe",
               "https://ledpresents.com/team/email-pattern",
+            ],
+            patternExamples: [
+              {
+                email: "alex.lee@ledpresents.com",
+                personName: "Alex Lee",
+              },
+              {
+                email: "maria.garcia@ledpresents.com",
+                personName: "Maria Garcia",
+              },
             ],
           },
         ],
@@ -239,6 +269,8 @@ test("queue claims use a lease, increment attempts, and snapshot only request sc
   assert.equal(claim.attemptCount, 2);
   assert.equal(claim.claimExpiresAt.toISOString(), "2026-08-04T19:00:00.000Z");
   assert.match(claim.claimToken, /^[0-9a-f-]{36}$/);
+  assert.match(claim.provenanceToken, /^[0-9a-f-]{36}$/);
+  assert.notEqual(claim.provenanceToken, claim.claimToken);
   assert.equal(claim.policy.noAutomaticOutreach, true);
   assert.equal(updates.length, 1);
   assert.equal(events.length, 1);
@@ -249,10 +281,12 @@ test("result submission requires the current lease and is idempotent", async () 
   const state = {
     status: "claimed" as string,
     claimToken: validSubmission.claimToken as string,
+    claimProvenanceToken,
     claimExpiresAt: new Date("2026-08-04T19:00:00.000Z"),
     resultFingerprint: null as string | null,
   };
   let createdCandidates = 0;
+  let createdRows: unknown[] = [];
   const tx = {
     professionalContactJob: {
       findUnique: async () => ({
@@ -260,7 +294,10 @@ test("result submission requires the current lease and is idempotent", async () 
         requestId: "request-1",
         personName: "Jane Doe",
         ...state,
-        request: { organizationName: "LED Presents" },
+        request: {
+          organizationName: "LED Presents",
+          website: "https://ledpresents.com/",
+        },
       }),
       update: async ({ data }: { data: Record<string, unknown> }) => {
         Object.assign(state, data);
@@ -271,6 +308,7 @@ test("result submission requires the current lease and is idempotent", async () 
       findMany: async () => [],
       createMany: async ({ data }: { data: unknown[] }) => {
         createdCandidates += data.length;
+        createdRows = data;
         return { count: data.length };
       },
     },
@@ -290,6 +328,10 @@ test("result submission requires the current lease and is idempotent", async () 
     idempotent: false,
   });
   assert.equal(createdCandidates, 1);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(createdRows[0] ?? {}, "provenance"),
+    false,
+  );
   const repeated = await submitProfessionalContactResult(
     "job-1",
     validSubmission,

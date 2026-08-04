@@ -47,6 +47,8 @@ test("professional contact persistence is separate, constrained, and immutable",
     migration,
     /ProfessionalContactDispatchAttempt_dispatchId_attemptNumber_key/,
   );
+  assert.match(migration, /ProfessionalContactJob_claimProvenanceToken_key/);
+  assert.match(migration, /"patternExamples" JSONB/);
   assert.match(
     migration,
     /pending', 'dispatching', 'dispatched', 'failed'/,

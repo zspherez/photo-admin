@@ -54,6 +54,25 @@ function formValue(formData: FormData, key: string) {
   return String(formData.get(key) ?? "");
 }
 
+function displayedPatternExamples(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      Array.isArray(entry) ||
+      typeof Reflect.get(entry, "email") !== "string" ||
+      typeof Reflect.get(entry, "personName") !== "string"
+    ) {
+      return [];
+    }
+    return [{
+      email: String(Reflect.get(entry, "email")),
+      personName: String(Reflect.get(entry, "personName")),
+    }];
+  });
+}
+
 async function createRequestAction(formData: FormData) {
   "use server";
   await requireServerActionAuth("/professional-contacts");
@@ -263,6 +282,7 @@ export default async function ProfessionalContactsPage({
             sourceUrls: true,
             patternEvidence: true,
             patternEvidenceUrl: true,
+            patternExamples: true,
             createdAt: true,
             decision: {
               select: { action: true, decidedAt: true },
@@ -618,9 +638,24 @@ export default async function ProfessionalContactsPage({
                       </div>
                       <p className="text-sm">{candidate.evidence}</p>
                       {candidate.patternEvidence && (
-                        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                          Published pattern evidence: {candidate.patternEvidence}
-                        </p>
+                        <div className="text-sm text-zinc-600 dark:text-zinc-400">
+                          <p>
+                            Published pattern evidence: {candidate.patternEvidence}
+                          </p>
+                          {displayedPatternExamples(
+                            candidate.patternExamples,
+                          ).length > 0 && (
+                            <ul className="mt-1 list-inside list-disc">
+                              {displayedPatternExamples(
+                                candidate.patternExamples,
+                              ).map((example) => (
+                                <li key={example.email}>
+                                  {example.personName}: {example.email}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
                       )}
                       <ul className="space-y-1 text-sm">
                         {candidate.sourceUrls.map((sourceUrl) => (

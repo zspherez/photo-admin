@@ -47,6 +47,12 @@ role/title, and email. Evidence must contain the exact email plus recognizable
 person and organization names. Include one to five real public HTTPS source
 URLs.
 
+Every submitted source URL must first be opened with `fetch`. Search snippets
+and invented citations are never sufficient. For a directly published
+candidate, the exact email must appear in the fetched page content. The broker
+records claim-bound search/fetch provenance and rejects sources or addresses
+that were not actually observed.
+
 Confidence:
 
 - `high`: exact email is published by the official organization or an official professional profile.
@@ -56,11 +62,14 @@ Confidence:
 For domain-pattern inference, require a published organization-domain pattern
 supported by public addresses, set `discoveryMethod` to `domain_pattern`,
 `confidence` to `low`, and provide `patternEvidence` plus its listed
-`patternEvidenceUrl`. Never present inference as verified.
+`patternEvidenceUrl`. Provide two to five `patternExamples`, each with the
+published named person's email and name from that fetched source. All examples
+must use the same organization business domain and establish one consistent
+name pattern that the candidate follows. Never present inference as verified.
 
 Candidate JSON is exactly:
 
-`{"jobId":"...","claimToken":"...","notes":"short research summary","candidates":[{"email":"named.person@business-domain.com","personName":"exact claimed person","roleTitle":"published title","organization":"exact claimed organization","confidence":"high|medium|low","discoveryMethod":"official|professional_profile|business_directory|domain_pattern","evidence":"substantive positive evidence containing the exact email, person, and organization","sourceUrls":["https://..."],"patternEvidence":null,"patternEvidenceUrl":null}]}`
+`{"jobId":"...","claimToken":"...","notes":"short research summary","candidates":[{"email":"named.person@business-domain.com","personName":"exact claimed person","roleTitle":"published title","organization":"exact claimed organization","confidence":"high|medium|low","discoveryMethod":"official|professional_profile|business_directory|domain_pattern","evidence":"substantive positive evidence containing the exact email, person, and organization","sourceUrls":["https://..."],"patternEvidence":null,"patternEvidenceUrl":null,"patternExamples":[]}]}`
 
 For a domain-pattern candidate, replace the final null values with substantive
 published pattern evidence and its source URL. Deduplicate candidates.

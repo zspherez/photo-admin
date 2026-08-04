@@ -43,6 +43,9 @@ test("professional contact agent has only narrow tools and privacy constraints",
   assert.match(agent, /Never submit free-mail addresses/);
   assert.match(agent, /domain-pattern inference only as a last resort/i);
   assert.match(agent, /human review/i);
+  assert.match(agent, /Every submitted source URL must first be opened with `fetch`/);
+  assert.match(agent, /exact email must appear in the fetched page content/);
+  assert.match(agent, /two to five `patternExamples`/);
   assert.match(agent, /Do not inspect files or environment variables, call curl/);
   assert.match(runner, /professional-contact-research-broker\.mjs/);
   assert.match(runner, /professional-contact-research-agent-tool/);
