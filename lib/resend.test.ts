@@ -8,6 +8,7 @@ import {
   RESEND_FROM_EMAIL_INVALID_CONFIGURATION_ERROR,
   RESEND_FULL_CONFIGURATION_ERROR,
   buildArbitraryResendDeliveryPolicy,
+  bindProviderMessageIdAtIndex,
   buildResendRequestBatchSnapshot,
   buildResendDeliveryPolicy,
   canBindResendWebhookProviderMessage,
@@ -753,6 +754,29 @@ test("conflicting accepted provider IDs preserve the prior acceptance and flag p
   assert.equal(
     merged.results[0].providerMessageId,
     "message-webhook",
+  );
+});
+
+test("same-index webhook provider conflicts preserve the original immutable ID", () => {
+  assert.deepEqual(
+    bindProviderMessageIdAtIndex(
+      ["message-original", ""],
+      2,
+      0,
+      "message-conflict",
+    ),
+    {
+      providerMessageIds: ["message-original", ""],
+      conflict:
+        "Provider message ID conflict for request 1: message-original != message-conflict",
+    },
+  );
+  assert.deepEqual(
+    bindProviderMessageIdAtIndex(["message-original", ""], 2, 0, "message-original"),
+    {
+      providerMessageIds: ["message-original", ""],
+      conflict: null,
+    },
   );
 });
 

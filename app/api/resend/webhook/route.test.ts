@@ -57,13 +57,30 @@ test("webhooks correlate every message in an immutable outreach batch", () => {
   const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
   assert.match(source, /providerMessageIds: \{ has: messageId \}/);
   assert.match(source, /findMessageIndex\(parsed\)/);
-  assert.match(source, /providerMessageIds\[messageIndex\] = messageId/);
+  assert.match(source, /bindProviderMessageIdAtIndex/);
   assert.match(source, /providerAcceptanceComplete/);
   assert.match(source, /providerMessageIds,/);
   assert.match(source, /outreachWebhookRecipientImpact/);
   assert.match(
     source,
     /auxiliary outreach recipient webhook recorded without aggregate mutation/,
+  );
+});
+
+test("same-index webhook ID conflicts preserve immutable identity and stop retries", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(source, /bindProviderMessageIdAtIndex/);
+  assert.match(
+    source,
+    /if \(binding\.conflict\)[\s\S]*status: "manual_review"[\s\S]*failureDisposition: "policy"[\s\S]*nextAttemptAt: null/,
+  );
+  assert.match(
+    source,
+    /outreach\?\.idempotencyKey === attempt\.idempotencyKey[\s\S]*status: "manual_review"/,
+  );
+  assert.match(
+    source,
+    /if \(correlation\.status === "matched"\) \{[\s\S]*providerMessageIds,[\s\S]*providerRequestResults:/,
   );
 });
 

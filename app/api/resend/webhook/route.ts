@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Webhook, WebhookVerificationError } from "svix";
 import { db } from "@/lib/db";
 import {
+  bindProviderMessageIdAtIndex,
   canBindResendWebhookProviderMessage,
   correlateResendWebhookAttempt,
   getResendWebhookFailurePolicy,
@@ -477,7 +478,7 @@ async function processEvent(
                   "batched provider message is missing its immutable message index",
               };
             } else {
-              const providerMessageIds = [
+              let providerMessageIds = [
                 ...(correlation.attempt.providerMessageIds ?? []),
               ];
               if (
@@ -485,57 +486,93 @@ async function processEvent(
                 messageIndex !== null &&
                 messageIndex < expectedRequests
               ) {
-                while (providerMessageIds.length < expectedRequests) {
-                  providerMessageIds.push("");
+                const binding = bindProviderMessageIdAtIndex(
+                  providerMessageIds,
+                  expectedRequests,
+                  messageIndex,
+                  messageId,
+                );
+                providerMessageIds = binding.providerMessageIds;
+                if (binding.conflict) {
+                  const attempt = await tx.outreachSendAttempt.update({
+                    where: { id: correlation.attempt.id },
+                    data: {
+                      status: "manual_review",
+                      error: binding.conflict,
+                      failureDisposition: "policy",
+                      nextAttemptAt: null,
+                    },
+                  });
+                  const outreach = await tx.outreach.findUnique({
+                    where: { id: attempt.outreachId },
+                    select: { id: true, idempotencyKey: true },
+                  });
+                  if (outreach?.idempotencyKey === attempt.idempotencyKey) {
+                    await tx.outreach.update({
+                      where: { id: outreach.id },
+                      data: {
+                        status: "manual_review",
+                        error: binding.conflict,
+                        nextAttemptAt: null,
+                        claimedAt: null,
+                        claimToken: null,
+                      },
+                    });
+                  }
+                  correlation = {
+                    status: "conflict",
+                    reason: binding.conflict,
+                  };
                 }
-                providerMessageIds[messageIndex] = messageId;
               } else if (!providerMessageIds.includes(messageId)) {
                 providerMessageIds.push(messageId);
               }
-              await tx.outreachSendAttempt.update({
-                where: { id: correlation.attempt.id },
-                data: {
-                  providerMessageIds,
-                  providerRequestResults:
-                    expectedRequests && messageIndex !== null
-                      ? (parseResendRequestResultSnapshot(
-                          correlation.attempt.providerRequestResults,
-                          expectedRequests,
-                          providerMessageIds,
-                        ).map((result, index) =>
-                          index === messageIndex
-                            ? {
-                                providerMessageId: messageId,
-                                error: null,
-                                failureDisposition: null,
-                              }
-                            : result,
-                        ) as Prisma.InputJsonValue)
-                      : undefined,
-                  ...(expectedRequests === 1
-                    ? { providerMessageId: messageId }
-                    : {}),
-                },
-              });
-              const rebound = await tx.outreachSendAttempt.findUnique({
-                where: { id: correlation.attempt.id },
-              });
-              if (
-                !rebound ||
-                (!rebound.providerMessageIds.includes(messageId) &&
-                  rebound.providerMessageId !== messageId)
-              ) {
-                correlation = {
-                  status: "conflict",
-                  reason:
-                    "provider message could not be bound to the immutable attempt",
-                };
-              } else {
-                correlation = {
-                  status: "matched",
-                  attempt: rebound,
-                  bindProviderMessageId: false,
-                };
+              if (correlation.status === "matched") {
+                await tx.outreachSendAttempt.update({
+                  where: { id: correlation.attempt.id },
+                  data: {
+                    providerMessageIds,
+                    providerRequestResults:
+                      expectedRequests && messageIndex !== null
+                        ? (parseResendRequestResultSnapshot(
+                            correlation.attempt.providerRequestResults,
+                            expectedRequests,
+                            providerMessageIds,
+                          ).map((result, index) =>
+                            index === messageIndex
+                              ? {
+                                  providerMessageId: messageId,
+                                  error: null,
+                                  failureDisposition: null,
+                                }
+                              : result,
+                          ) as Prisma.InputJsonValue)
+                        : undefined,
+                    ...(expectedRequests === 1
+                      ? { providerMessageId: messageId }
+                      : {}),
+                  },
+                });
+                const rebound = await tx.outreachSendAttempt.findUnique({
+                  where: { id: correlation.attempt.id },
+                });
+                if (
+                  !rebound ||
+                  (!rebound.providerMessageIds.includes(messageId) &&
+                    rebound.providerMessageId !== messageId)
+                ) {
+                  correlation = {
+                    status: "conflict",
+                    reason:
+                      "provider message could not be bound to the immutable attempt",
+                  };
+                } else {
+                  correlation = {
+                    status: "matched",
+                    attempt: rebound,
+                    bindProviderMessageId: false,
+                  };
+                }
               }
             }
           }

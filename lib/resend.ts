@@ -381,6 +381,29 @@ export function resendRequestResultsAreResolved(
   );
 }
 
+export function bindProviderMessageIdAtIndex(
+  current: readonly string[],
+  requestCount: number,
+  index: number,
+  providerMessageId: string,
+): { providerMessageIds: string[]; conflict: string | null } {
+  const providerMessageIds = [...current];
+  while (providerMessageIds.length < requestCount) {
+    providerMessageIds.push("");
+  }
+  const existing = providerMessageIds[index];
+  if (existing && existing !== providerMessageId) {
+    return {
+      providerMessageIds,
+      conflict:
+        `Provider message ID conflict for request ${index + 1}: ` +
+        `${existing} != ${providerMessageId}`,
+    };
+  }
+  providerMessageIds[index] = existing || providerMessageId;
+  return { providerMessageIds, conflict: null };
+}
+
 function normalizeMailboxAddress(value: string): string | null {
   const normalized = value.trim().toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : null;
