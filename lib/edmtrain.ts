@@ -639,8 +639,19 @@ async function reconcileEdmtrainSnapshots(
             await acquireShowArtistMembershipLock(tx);
             membershipLockAcquired = true;
           }
+          const reconciledShowIds = persistedShows.map((show) => show.id);
           await tx.showArtist.deleteMany({
-            where: { showId: { in: persistedShows.map((show) => show.id) } },
+            where: {
+              showId: { in: reconciledShowIds },
+              manuallyAdded: false,
+            },
+          });
+          await tx.showArtist.updateMany({
+            where: {
+              showId: { in: reconciledShowIds },
+              manuallyAdded: true,
+            },
+            data: { providerManaged: false },
           });
         }
         const lineupRows = rows.flatMap(({ event }) => {
@@ -659,10 +670,33 @@ async function reconcileEdmtrainSnapshots(
           });
         });
         for (const lineupChunk of chunkItems(lineupRows, 2_000)) {
-          await tx.showArtist.createMany({
-            data: lineupChunk,
-            skipDuplicates: true,
-          });
+          const values = Prisma.join(
+            lineupChunk.map(
+              (lineup) =>
+                Prisma.sql`(
+                  ${lineup.showId},
+                  ${lineup.artistId},
+                  ${lineup.headliner},
+                  TRUE,
+                  FALSE
+                )`,
+            ),
+          );
+          await tx.$executeRaw(
+            Prisma.sql`
+              INSERT INTO "ShowArtist" (
+                "showId",
+                "artistId",
+                "headliner",
+                "providerManaged",
+                "manuallyAdded"
+              )
+              VALUES ${values}
+              ON CONFLICT ("showId", "artistId") DO UPDATE SET
+                "headliner" = EXCLUDED."headliner",
+                "providerManaged" = TRUE
+            `,
+          );
         }
 
         const scopeFestival = snapshot.scope === "festivals";
