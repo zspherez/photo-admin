@@ -117,6 +117,14 @@ test("contact snapshots contain the documented fields in deterministic order", (
   ]);
 });
 
+test("new snapshots canonicalize valid legacy email formatting", () => {
+  const snapshot = buildContactSnapshot(
+    [contact("contact-a", { email: " Manager@Example.com " })],
+    metadata,
+  );
+  assert.equal(snapshot.rows[0][3], "manager@example.com");
+});
+
 test("canonical contact query excludes rows without an email or phone", async () => {
   let contactQuery: Record<string, unknown> | null = null;
   const rows = await readCanonicalContactRows({
@@ -135,6 +143,31 @@ test("canonical contact query excludes rows without an email or phone", async ()
       { email: { not: null } },
       { phone: { not: null } },
     ],
+  );
+});
+
+test("canonical contact rows exclude malformed legacy email values", async () => {
+  const valid = contact("valid");
+  const phoneOnly = contact("phone", {
+    email: null,
+    phone: "+1 212 555 0101",
+  });
+  const malformed = contact("malformed", {
+    email: "talk with asher after ultra",
+    phone: null,
+  });
+  const rows = await readCanonicalContactRows({
+    contact: {
+      findMany: async () => [malformed, phoneOnly, valid],
+    },
+    contactResearchCandidate: {
+      findMany: async () => [],
+    },
+    $queryRaw: async () => [],
+  } as never);
+  assert.deepEqual(
+    rows.map((row) => row.id),
+    ["phone", "valid"],
   );
 });
 

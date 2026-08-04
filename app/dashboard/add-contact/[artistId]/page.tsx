@@ -27,6 +27,7 @@ import {
 import { satisfiesFestivalLeadTime } from "@/lib/festivalEligibility";
 import { findMatchingDirectOutreachContact } from "@/lib/directOutreachContact";
 import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
+import { normalizeContactEmail } from "@/lib/contactEmail";
 
 export const dynamic = "force-dynamic";
 
@@ -59,8 +60,8 @@ function parseEmails(raw: string): string[] {
     new Set(
       raw
         .split(/[\s,;]+/)
-        .map((e) => e.trim().toLowerCase())
-        .filter((e) => e.includes("@") && e.length >= 5)
+        .map(normalizeContactEmail)
+        .filter((email): email is string => email !== null)
     )
   );
 }

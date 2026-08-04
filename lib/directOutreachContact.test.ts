@@ -59,3 +59,33 @@ test("migration quarantines duplicates and enforces one normalized active note",
   assert.match(migration, /WHERE "state" = 'active'/);
   assert.doesNotMatch(migration, /\bDELETE FROM "Contact"/);
 });
+
+test("forward repair moves malformed legacy emails into direct outreach history", () => {
+  const migration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260804050500_repair_invalid_contact_emails/migration.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(migration, /DROP INDEX "Contact_active_direct_outreach_note_key"/);
+  assert.match(
+    migration,
+    /SET[\s\S]*"directOutreachNote" = COALESCE\([\s\S]*invalid_contacts\.email_value/,
+  );
+  assert.match(migration, /"email" = NULL/);
+  assert.match(migration, /Legacy invalid email value:/);
+  assert.match(migration, /\^\[\[:space:\]\]\+/);
+  assert.match(migration, /\[\[:space:\]\]\+\$/);
+  assert.match(migration, /email_value !~/);
+  assert.match(migration, /ranked_valid_emails/);
+  assert.match(migration, /Legacy duplicate email value:/);
+  assert.match(migration, /ranked_valid_emails\.duplicate_rank > 1/);
+  assert.match(migration, /SET "email" = canonical_emails\.canonical_email/);
+  assert.match(migration, /duplicate_rank > 1/);
+  assert.match(
+    migration,
+    /CREATE UNIQUE INDEX "Contact_active_direct_outreach_note_key"/,
+  );
+  assert.doesNotMatch(migration, /\bDELETE FROM "Contact"/);
+});

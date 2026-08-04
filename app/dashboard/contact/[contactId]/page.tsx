@@ -32,6 +32,7 @@ import {
 } from "@/app/dashboard/actions";
 import { CLEAR_AGENT_DIRECT_OUTREACH_PROVENANCE } from "@/lib/directOutreachProvenance";
 import { findMatchingDirectOutreachContact } from "@/lib/directOutreachContact";
+import { normalizeContactEmail } from "@/lib/contactEmail";
 
 export const dynamic = "force-dynamic";
 
@@ -114,7 +115,8 @@ async function saveContact(formData: FormData) {
   const contactId = formData.get("contactId") as string;
   const returnTo = workflowReturnPath(formData.get("returnTo"));
   const historyPage = parseHistoryPage(formData.get("historyPage") ?? undefined);
-  const email = ((formData.get("email") as string) ?? "").trim().toLowerCase() || null;
+  const rawEmail = ((formData.get("email") as string) ?? "").trim();
+  const email = rawEmail ? normalizeContactEmail(rawEmail) : null;
   const phone = ((formData.get("phone") as string) ?? "").trim() || null;
   const directOutreachNote =
     ((formData.get("directOutreachNote") as string) ?? "").trim() || null;
@@ -123,6 +125,14 @@ async function saveContact(formData: FormData) {
   const customPrice = ((formData.get("customPrice") as string) ?? "").trim() || null;
   const notes = ((formData.get("notes") as string) ?? "").trim() || null;
 
+  if (rawEmail && !email) {
+    redirect(
+      contactPageHref(contactId, returnTo, {
+        error: "invalid_email",
+        historyPage,
+      }),
+    );
+  }
   if (
     !contactId ||
     (!email && !phone && !directOutreachNote)
@@ -347,6 +357,8 @@ export default async function ContactEditPage({
             ? "Provide an email, phone number, or direct outreach details."
             : error === "duplicate_email"
                 ? "That artist already has this email address."
+                : error === "invalid_email"
+                  ? "Enter a valid email address."
                 : error === "duplicate_direct_outreach"
                   ? detail ??
                     "That artist already has this direct outreach contact."
