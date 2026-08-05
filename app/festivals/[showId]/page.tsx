@@ -98,6 +98,10 @@ import {
   FESTIVAL_UTM_CAMPAIGN_MAX_LENGTH,
   normalizeFestivalUtmCampaign,
 } from "@/lib/festivalUtm";
+import {
+  DEFAULT_RECIPIENT_DELIVERY_MODE,
+  isSelectableRecipientDeliveryMode,
+} from "@/lib/recipientDelivery";
 import { ManualFestivalArtistForm } from "./manual-lineup-form";
 import { removeManualFestivalArtist } from "./manual-lineup-actions";
 
@@ -372,6 +376,12 @@ async function bulkSend(formData: FormData) {
         .filter(Boolean)
     )
   );
+  const requestedDeliveryMode = formData.get("recipientDeliveryMode");
+  const recipientDeliveryMode = isSelectableRecipientDeliveryMode(
+    requestedDeliveryMode,
+  )
+    ? requestedDeliveryMode
+    : DEFAULT_RECIPIENT_DELIVERY_MODE;
   const now = new Date();
   const candidates = await festivalBulkCandidates(showId, now);
   if (!candidates) {
@@ -407,6 +417,11 @@ async function bulkSend(formData: FormData) {
     return [
       {
         ...target,
+        recipientDeliveryMode:
+          result.mode === "retry"
+            ? result.recipientDeliveryMode ??
+              DEFAULT_RECIPIENT_DELIVERY_MODE
+            : recipientDeliveryMode,
         email:
           !result.fullTeamSend &&
           recipients.length === 1 &&
@@ -469,6 +484,8 @@ async function bulkSend(formData: FormData) {
                     showId,
                     contactId: group.contactId,
                     festivalAllContacts: true,
+                    recipientDeliveryMode:
+                      group.recipientDeliveryMode,
                   },
                   scheduledFor,
                 )
@@ -476,6 +493,8 @@ async function bulkSend(formData: FormData) {
                   showId,
                   contactId: group.contactId,
                   festivalAllContacts: true,
+                  recipientDeliveryMode:
+                    group.recipientDeliveryMode,
                 });
         return { group, result };
       } catch (error) {
@@ -1066,6 +1085,14 @@ export default async function FestivalDetailPage({
                 ? contactEmail
                 : `contact:${row.contact.id}`,
               emailLabel: recipients.join(", "),
+              recipients,
+              primaryRecipientEmail:
+                row.sendability.primaryRecipientEmail ??
+                contactEmail,
+              recipientDeliveryMode:
+                row.sendability.recipientDeliveryMode ??
+                DEFAULT_RECIPIENT_DELIVERY_MODE,
+              immutableDeliveryMode: row.sendability.mode === "retry",
               selectedByDefault: filter === "unsent",
             },
           ];
@@ -1443,6 +1470,7 @@ export default async function FestivalDetailPage({
             returnTo,
           }}
           candidates={bulkConfirmationCandidates}
+          testOverride={testOverride}
         />
       )}
 

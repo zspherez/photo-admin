@@ -207,7 +207,7 @@ test("send snapshots and settings previews share the tracked HTML renderer", () 
   );
   assert.match(
     sendSource,
-    /prepareResendRequest\(\{[\s\S]*?html: outreach\.finalHtml/,
+    /prepareResendRequestBatch\(\{[\s\S]*?html: outreach\.finalHtml/,
   );
   assert.match(
     previewSource,

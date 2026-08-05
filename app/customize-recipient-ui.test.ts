@@ -134,7 +134,20 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
   assert.match(page, /Follow-up sent\. The delivered content is shown below\./);
   assert.match(actions, /scheduleFollowUp\(/);
   assert.match(actions, /sendFollowUp\(/);
-  assert.match(actions, /\{ subjectOverride, htmlOverride \}/);
+  assert.match(actions, /recipientDeliveryMode: recipientDeliveryModeValue/);
+  assert.match(actions, /isRecipientDeliveryMode\(recipientDeliveryModeValue\)/);
+  assert.match(
+    actions,
+    /immutableRetryDeliveryMode !== null[\s\S]*recipientDeliveryModeValue !== immutableRetryDeliveryMode/,
+  );
+  assert.match(
+    actions,
+    /recipientDeliveryModeValue === "legacy_multi_to"[\s\S]*immutableRetryDeliveryMode !== "legacy_multi_to"/,
+  );
+  assert.match(
+    actions,
+    /Legacy multi-recipient delivery is allowed only for its immutable retry/,
+  );
   assert.match(form, /followUpMode/);
   assert.match(
     form,
@@ -145,6 +158,12 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
     /This follow-up uses the immutable recipient snapshot/,
   );
   assert.match(form, /Send follow-up now/);
+  assert.match(form, /Keep recipients on one email thread/);
+  assert.match(form, /<b>To:<\/b>/);
+  assert.match(form, /<b>CC:<\/b>/);
+  assert.match(form, /selected\.testSend/);
+  assert.match(form, /selected\.providerLayouts/);
+  assert.match(form, /Test override is active; this is the resolved provider layout/);
   assert.match(
     send,
     /eligibility\.mode === "new" && normalizedSubjectOverride/,

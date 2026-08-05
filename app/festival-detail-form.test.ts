@@ -253,6 +253,22 @@ test("festival individual outreach snapshots all active management contacts", ()
   );
 });
 
+test("festival confirmation submits the optional immutable CC delivery mode", () => {
+  assert.match(source, /recipientDeliveryMode/);
+  assert.match(source, /isSelectableRecipientDeliveryMode/);
+  assert.match(
+    source,
+    /festivalAllContacts: true,[\s\S]*recipientDeliveryMode/,
+  );
+  const form = readFileSync(
+    new URL("../components/festival-bulk-outreach-form.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(form, /Keep management contacts on one email thread/);
+  assert.match(form, /name="recipientDeliveryMode"/);
+  assert.match(form, /recipientDeliveryLayout/);
+});
+
 test("covered artists keep shared outreach status and actions without a current contact", () => {
   assert.match(source, /const coveredOutreach =/);
   assert.match(source, /storedOutreachLabel\(r\.coveredOutreach\)/);
