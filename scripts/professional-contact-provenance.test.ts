@@ -8,6 +8,26 @@ import {
 } from "./professional-contact-provenance.mjs";
 import { validateProfessionalContactProvenance } from "../lib/professionalContactProvenance.mjs";
 
+test("fetched records preserve evidence URL queries and separate dedupe identity", () => {
+  const source = buildFetchedSourceRecord({
+    url:
+      "https://ledpresents.com/team?canonical=1&utm_source=test#founders",
+    title: "LED Presents Team",
+    text: "LED Presents Team",
+    emails: [],
+    links: [],
+    blocks: ["LED Presents Team"],
+  });
+  assert.equal(
+    source.url,
+    "https://ledpresents.com/team?canonical=1&utm_source=test",
+  );
+  assert.equal(
+    source.identityUrl,
+    "https://ledpresents.com/team?canonical=1",
+  );
+});
+
 test("compact adjacent staff records cannot bind another person's email", () => {
   const source = buildFetchedSourceRecord({
     url: "https://ledpresents.com/team",

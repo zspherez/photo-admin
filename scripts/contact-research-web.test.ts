@@ -189,3 +189,62 @@ Jane Doe jane@trusted.example.com`,
     ),
   );
 });
+
+test("readable fetch allows only default-port HTTP to HTTPS upgrades", async (t) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      `Title: Team
+URL Source: https://trusted.example.com/team
+Markdown Content:
+Jane Doe jane@trusted.example.com`,
+      {
+        status: 200,
+        headers: { "content-type": "text/markdown" },
+      },
+    )) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const page = await fetchReadablePage(
+    "http://trusted.example.com:80/old-team",
+  );
+  assert.equal(page.url, "https://trusted.example.com/team");
+});
+
+test("readable fetch rejects custom-port redirect changes", async (t) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      `Title: Team
+URL Source: https://trusted.example.com:8443/team
+Markdown Content:
+Jane Doe jane@trusted.example.com`,
+      {
+        status: 200,
+        headers: { "content-type": "text/markdown" },
+      },
+    )) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  await assert.rejects(
+    fetchReadablePage("http://trusted.example.com:80/old-team"),
+    /redirected to a different origin/,
+  );
+  globalThis.fetch = (async () =>
+    new Response(
+      `Title: Team
+URL Source: https://trusted.example.com/team
+Markdown Content:
+Jane Doe jane@trusted.example.com`,
+      {
+        status: 200,
+        headers: { "content-type": "text/markdown" },
+      },
+    )) as typeof fetch;
+  await assert.rejects(
+    fetchReadablePage("http://trusted.example.com:8080/old-team"),
+    /redirected to a different origin/,
+  );
+});

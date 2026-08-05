@@ -318,11 +318,17 @@ async function assertSafeReaderDestination(requested, finalValue) {
   const destinationPort =
     destination.port ||
     (destination.protocol === "https:" ? "443" : "80");
+  const httpUpgrade =
+    requestedUrl.protocol === "http:" &&
+    destination.protocol === "https:";
   if (
     destination.hostname.toLowerCase() !==
       requestedUrl.hostname.toLowerCase() ||
     (destination.protocol === requestedUrl.protocol &&
       destinationPort !== requestedPort) ||
+    (httpUpgrade &&
+      (requestedPort !== "80" || destinationPort !== "443")) ||
+    (destination.protocol !== requestedUrl.protocol && !httpUpgrade) ||
     (requestedUrl.protocol === "https:" &&
       destination.protocol !== "https:")
   ) {

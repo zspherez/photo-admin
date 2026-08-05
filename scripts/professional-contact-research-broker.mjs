@@ -10,6 +10,7 @@ import {
   searchWeb,
 } from "./contact-research-web.mjs";
 import {
+  canonicalEvidenceIdentityUrl,
   canonicalPublicHttpsUrl,
   normalizedIdentityTokens,
   validateProfessionalContactProvenance,
@@ -228,12 +229,12 @@ function recordSearch(state, query, results) {
 function recordFetch(state, result) {
   const source = buildFetchedSourceRecord(result);
   if (
-    !state.fetchedSources.has(source.url) &&
+    !state.fetchedSources.has(source.identityUrl) &&
     state.fetchedSources.size >= 12
   ) {
     throw new BrokerConflictError("fetch limit reached for this claim");
   }
-  state.fetchedSources.set(source.url, source);
+  state.fetchedSources.set(source.identityUrl, source);
 }
 
 function brokerProvenance(state, submission) {
@@ -261,7 +262,7 @@ function brokerProvenance(state, submission) {
         relevantTokens.add(token),
       );
       candidate.sourceUrls.forEach((url) =>
-        selectedUrls.add(canonicalPublicHttpsUrl(url)),
+        selectedUrls.add(canonicalEvidenceIdentityUrl(url)),
       );
       for (const example of candidate.patternExamples) {
         relevantEmails.add(example.email.toLowerCase());
@@ -277,7 +278,9 @@ function brokerProvenance(state, submission) {
       }
     }
   } else {
-    for (const url of state.fetchedSources.keys()) selectedUrls.add(url);
+    for (const identityUrl of state.fetchedSources.keys()) {
+      selectedUrls.add(identityUrl);
+    }
   }
   const provenance = {
     claimProvenanceToken: state.claim.provenanceToken,

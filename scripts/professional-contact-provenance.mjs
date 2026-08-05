@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  canonicalEvidenceIdentityUrl,
   canonicalPublicHttpsUrl,
   normalizedEntityTokens,
   normalizedIdentityTokens,
@@ -243,6 +244,7 @@ export function buildFetchedSourceRecord(result) {
   );
   return {
     url,
+    identityUrl: canonicalEvidenceIdentityUrl(url),
     observedEmails,
     observedDomains: observedDomains(result, observedEmails),
     primaryEntityTokens: primaryEntityTokens(result, url),

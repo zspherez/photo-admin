@@ -8,6 +8,10 @@ export function canonicalPublicHttpsUrl(
   value: unknown,
   field?: string,
 ): string;
+export function canonicalEvidenceIdentityUrl(
+  value: unknown,
+  field?: string,
+): string;
 export function normalizedIdentityTokens(value: unknown): string[];
 export function normalizedEntityTokens(value: unknown): string[];
 export function emailPatternMatches(

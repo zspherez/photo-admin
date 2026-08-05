@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertNamedBusinessEmail,
+  canonicalEvidenceIdentityUrl,
+  canonicalPublicHttpsUrl,
   validateProfessionalContactProvenance,
 } from "./professionalContactProvenance.mjs";
 
@@ -50,6 +52,29 @@ const directProvenance = {
     },
   ],
 };
+
+test("evidence URLs retain content queries while identity removes only tracking", () => {
+  assert.equal(
+    canonicalPublicHttpsUrl(
+      "https://ledpresents.com/team?canonical=1&utm_source=test#founders",
+    ),
+    "https://ledpresents.com/team?canonical=1&utm_source=test",
+  );
+  assert.equal(
+    canonicalEvidenceIdentityUrl(
+      "https://ledpresents.com/team?utm_source=test&canonical=1&fbclid=abc",
+    ),
+    "https://ledpresents.com/team?canonical=1",
+  );
+  assert.notEqual(
+    canonicalEvidenceIdentityUrl(
+      "https://ledpresents.com/team?canonical=1",
+    ),
+    canonicalEvidenceIdentityUrl(
+      "https://ledpresents.com/team?canonical=2",
+    ),
+  );
+});
 
 test("exact published business email passes claim-bound fetched provenance", () => {
   assert.doesNotThrow(() =>
