@@ -99,6 +99,7 @@ export interface SendOutreachInput {
   subjectOverride?: string;
   htmlOverride?: string;
   singleRecipient?: boolean;
+  allContacts?: boolean;
   expectedRecipientIdentity?: CustomizeRecipientIdentity;
   trajectoryContext?: TrajectoryActionContext;
   festivalCoveredArtistIds?: string[];
@@ -1378,6 +1379,7 @@ export interface EvaluateOutreachDeliveryPolicyInput {
   requestedFestivalAllContactsSend?: boolean;
   requestedRecipientEmails?: readonly string[];
   requestedRecipientDeliveryMode?: RecipientDeliveryMode;
+  requireSelectedRecipient?: boolean;
   allowUnmarkedFullTeamSend?: boolean;
   preserveFestivalAllContactsSend?: boolean;
 }
@@ -1448,6 +1450,7 @@ export function evaluateOutreachDeliveryPolicy({
   requestedFestivalAllContactsSend,
   requestedRecipientEmails,
   requestedRecipientDeliveryMode,
+  requireSelectedRecipient = false,
   preserveFestivalAllContactsSend = false,
 }: EvaluateOutreachDeliveryPolicyInput): OutreachDeliveryPolicyDecision {
   if (showSyncStatus === null) {
@@ -1529,6 +1532,17 @@ export function evaluateOutreachDeliveryPolicy({
       ok: false,
       state: "cancelled",
       error: "Selected contact has no valid active recipient addresses",
+    };
+  }
+  const selectedRecipient = normalizeEmails([contact.email ?? ""])[0];
+  if (
+    requireSelectedRecipient &&
+    normalizeEmails([...suppressedEmails]).includes(selectedRecipient)
+  ) {
+    return {
+      ok: false,
+      state: stored ? "manual_review" : "cancelled",
+      error: "Selected primary recipient is no longer eligible",
     };
   }
 
@@ -1789,6 +1803,7 @@ export interface OutreachSendabilityInput {
   showId: string;
   contactId: string;
   singleRecipient?: boolean;
+  allContacts?: boolean;
   festivalAllContacts?: boolean;
   recipientDeliveryMode?: RecipientDeliveryMode;
 }
@@ -2170,7 +2185,7 @@ export async function getOutreachSendabilityBatch(
     ...inputs.flatMap((input) => {
       const contact = targetById.get(input.contactId);
       if (!contact) return [];
-      return input.festivalAllContacts
+      return input.festivalAllContacts || input.allContacts
         ? emailsByArtist.get(contact.artistId) ?? []
         : contact.state === "active" && contact.email
           ? [contact.email]
@@ -2284,11 +2299,12 @@ export async function getOutreachSendabilityBatch(
       allowMissingFrom: true,
       requestedFullTeamSend: input.singleRecipient
         ? false
-        : input.festivalAllContacts
+        : input.festivalAllContacts || input.allContacts
           ? true
           : undefined,
       requestedFestivalAllContactsSend: input.festivalAllContacts,
       requestedRecipientDeliveryMode: input.recipientDeliveryMode,
+      requireSelectedRecipient: input.allContacts === true,
     });
     if (!initialPolicy.ok) {
       return blockedSendability(input, initialPolicy.error, {
@@ -3188,6 +3204,7 @@ async function prepareOriginalOutreach(
     subjectOverride,
     htmlOverride,
     singleRecipient,
+    allContacts,
     expectedRecipientIdentity,
     trajectoryContext,
     festivalCoveredArtistIds,
@@ -3199,6 +3216,7 @@ async function prepareOriginalOutreach(
       showId,
       contactId,
       singleRecipient,
+      allContacts,
       festivalAllContacts,
       recipientDeliveryMode,
     },
@@ -4319,6 +4337,10 @@ async function preparedDeliveryPolicyBlockingReason(
     requestedRecipientEmails:
       currentFollowUpRecipients ?? undefined,
     requestedRecipientDeliveryMode: prep.recipientDeliveryMode,
+    requireSelectedRecipient:
+      prep.expectedRecipientIdentity !== null &&
+      prep.fullTeamSend &&
+      !prep.festivalAllContactsSend,
     preserveFestivalAllContactsSend: prep.kind === "follow_up",
   });
   if (!decision.ok) return decision.error;

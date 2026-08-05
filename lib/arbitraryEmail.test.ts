@@ -531,7 +531,7 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
     migrationNames.indexOf(contactAuditArtistDecisionMigrationName) <
       migrationNames.indexOf(monthlyContactAuditMigrationName),
   );
-  assert.deepEqual(migrationNames.slice(-27), [
+  assert.deepEqual(migrationNames.slice(-28), [
     monthlyContactAuditMigrationName,
     "20260723040000_rolling_monthly_contact_audits",
     "20260723180000_contact_export_snapshots",
@@ -559,6 +559,7 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
     "20260804190000_professional_contact_research",
     "20260804193000_immediate_arbitrary_sent_target",
     "20260805004500_sent_mail_batch_copies",
+    "20260805160500_customize_all_recipients_no_manager_greeting",
   ]);
 
   const migration = readFileSync(

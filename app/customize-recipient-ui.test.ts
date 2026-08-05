@@ -16,7 +16,7 @@ test("Customize defaults to the URL contact and preserves editor navigation stat
   );
 
   assert.match(page, /contextContactId=\{contactId\}/);
-  assert.match(page, /singleRecipient: true/);
+  assert.match(page, /allContacts: true/);
   assert.match(page, /eligibleCustomizeRecipientContacts\(/);
   assert.match(form, /useState\(contextContactId\)/);
   assert.match(form, /const \[drafts, setDrafts\]/);
@@ -65,12 +65,13 @@ test("Customize actions validate the selected contact and preserve failures in p
   assert.match(actions, /workflowReturnPath\(context\.returnTo\)/);
   assert.match(actions, /customizeRecipientSelectionError\(/);
   assert.match(actions, /customizeRecipientIdentityError\(/);
-  assert.match(actions, /emailSuppression\.findUnique/);
   assert.match(actions, /expectedRecipientIdentity/);
   assert.match(
     actions,
-    /getOutreachSendabilityBatch\(\[[\s\S]*singleRecipient: true/,
+    /getOutreachSendabilityBatch\(\[[\s\S]*allContacts: true/,
   );
+  assert.match(actions, /recipientDeliveryMode: recipientDeliveryModeValue/);
+  assert.match(actions, /emailSuppression\.findMany/);
   assert.match(actions, /sendOutreach\(\{/);
   assert.match(actions, /scheduleOutreach\([\s\S]*getNextMondaySlot\(\)/);
   assert.match(
@@ -132,6 +133,8 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
     /!followUpMode && contact\.state !== "active"/,
   );
   assert.match(page, /Follow-up sent\. The delivered content is shown below\./);
+  assert.match(page, /candidateSuppressed/);
+  assert.match(page, /This recipient address is suppressed\./);
   assert.match(actions, /scheduleFollowUp\(/);
   assert.match(actions, /sendFollowUp\(/);
   assert.match(actions, /recipientDeliveryMode: recipientDeliveryModeValue/);
@@ -159,6 +162,14 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
   );
   assert.match(form, /Send follow-up now/);
   assert.match(form, /Keep recipients on one email thread/);
+  assert.doesNotMatch(
+    form.slice(
+      form.indexOf("const canChooseDeliveryMode"),
+      form.indexOf("const primaryRecipientEmail"),
+    ),
+    /followUpMode/,
+  );
+  assert.match(form, /Primary email recipient/);
   assert.match(form, /<b>To:<\/b>/);
   assert.match(form, /<b>CC:<\/b>/);
   assert.match(form, /selected\.testSend/);

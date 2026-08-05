@@ -77,7 +77,7 @@ test("immediate and scheduled claims recheck template purpose before snapshots",
   );
 });
 
-test("Customize uses the festival template and still personalizes each selected manager", () => {
+test("Customize uses the festival template with neutral greetings", () => {
   const page = source(
     "app/dashboard/customize/[showId]/[contactId]/page.tsx",
   );
@@ -96,10 +96,6 @@ test("Customize uses the festival template and still personalizes each selected 
   assert.ok(
     pageBody.indexOf("redirect(capturedTemplate.errorHref)") <
       pageBody.indexOf("const template = capturedTemplate.value"),
-  );
-  assert.match(
-    page,
-    /eligibleContacts\.map\(async \(candidate\)[\s\S]*managerName: candidate\.name/,
   );
   assert.match(page, /eventName: show\.eventName/);
   assert.match(page, /renderCustomizeRecipientContent\(template, vars\)/);

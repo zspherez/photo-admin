@@ -22,7 +22,7 @@ import {
   sendFollowUp,
   sendOutreach,
 } from "@/lib/sendOutreach";
-import { normalizeEmail } from "@/lib/resend";
+import { normalizeEmail, normalizeEmails } from "@/lib/resend";
 import {
   formatScheduledTime,
   getNextMondaySlot,
@@ -166,18 +166,26 @@ export async function sendCustom(
       "Outreach artist context changed since this page loaded",
     );
   }
-  const normalizedSelectedEmail = normalizeEmail(selectedContact?.email ?? "");
-  const suppression = normalizedSelectedEmail
-    ? await db.emailSuppression.findUnique({
-        where: { normalizedEmail: normalizedSelectedEmail },
-        select: { normalizedEmail: true },
-      })
-    : null;
+  const candidateEmails = normalizeEmails(
+    artistContacts.flatMap((candidate) =>
+      candidate.email ? [candidate.email] : [],
+    ),
+  );
+  const suppressions =
+    candidateEmails.length === 0
+      ? []
+      : await db.emailSuppression.findMany({
+          where: { normalizedEmail: { in: candidateEmails } },
+          select: { normalizedEmail: true },
+        });
+  const suppressedEmails = suppressions.map(
+    (suppression) => suppression.normalizedEmail,
+  );
   const selectionError = customizeRecipientSelectionError({
     contextContact,
     selectedContact,
     artistContacts,
-    suppressedEmails: suppression ? [suppression.normalizedEmail] : [],
+    suppressedEmails,
   });
   if (selectionError) {
     return actionError(selectedContactId, selectionError);
@@ -225,7 +233,7 @@ export async function sendCustom(
     }
   } else {
     const [sendability] = await getOutreachSendabilityBatch([
-      { showId, contactId: selectedContactId, singleRecipient: true },
+      { showId, contactId: selectedContactId, allContacts: true },
     ]);
     if (!sendability?.sendable) {
       return actionError(
@@ -303,7 +311,8 @@ export async function sendCustom(
               contactId: selectedContactId,
               subjectOverride,
               htmlOverride,
-              singleRecipient: true,
+              allContacts: true,
+              recipientDeliveryMode: recipientDeliveryModeValue,
               expectedRecipientIdentity,
               trajectoryContext: context.trajectoryContext ?? undefined,
             },
@@ -316,7 +325,8 @@ export async function sendCustom(
                 contactId: selectedContactId,
                 subjectOverride,
                 htmlOverride,
-                singleRecipient: true,
+                allContacts: true,
+                recipientDeliveryMode: recipientDeliveryModeValue,
                 expectedRecipientIdentity,
                 trajectoryContext: context.trajectoryContext ?? undefined,
               },
@@ -327,7 +337,8 @@ export async function sendCustom(
               contactId: selectedContactId,
               subjectOverride,
               htmlOverride,
-              singleRecipient: true,
+              allContacts: true,
+              recipientDeliveryMode: recipientDeliveryModeValue,
               expectedRecipientIdentity,
               trajectoryContext: context.trajectoryContext ?? undefined,
             }),

@@ -249,7 +249,7 @@ export default async function CustomizePage({
         eligibleContacts.map((candidate) => ({
           showId,
           contactId: candidate.id,
-          singleRecipient: true,
+          allContacts: true,
         })),
       );
   const sendabilityByContact = new Map(
@@ -306,6 +306,9 @@ export default async function CustomizePage({
     (candidate) => {
       if (followUpMode) {
         const identity = customizeRecipientIdentity(candidate)!;
+        const candidateSuppressed = suppressedEmails.includes(
+          identity.normalizedEmail,
+        );
         const storedFollowUp = followUpParent?.followUp ?? null;
         const storedContent =
           storedFollowUp?.recipientSnapshotState === "verified"
@@ -331,10 +334,14 @@ export default async function CustomizePage({
           eligible: true,
           selectable: false,
           sendable:
-            followUpEligibility?.eligible === true && content !== null,
+            followUpEligibility?.eligible === true &&
+            !candidateSuppressed &&
+            content !== null,
           mode: followUpEligibility?.mode ?? null,
           reason:
-            followUpEligibility?.reason ??
+            (candidateSuppressed
+              ? "This recipient address is suppressed."
+              : followUpEligibility?.reason) ??
             (content ? null : "Follow-up content is unavailable."),
           recipients:
             followUpEligibility && followUpEligibility.recipients.length > 0

@@ -1697,6 +1697,93 @@ test("follow-up recipient snapshots can include multiple unmarked current contac
   }
 });
 
+test("Customize can request all active contacts without festival-only mode", () => {
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /allContacts\?: boolean/);
+  assert.match(
+    source,
+    /input\.festivalAllContacts \|\| input\.allContacts[\s\S]*emailsByArtist/,
+  );
+  assert.match(
+    source,
+    /input\.festivalAllContacts \|\| input\.allContacts[\s\S]*\? true/,
+  );
+});
+
+test("all-contact delivery fails closed when the selected primary is suppressed", () => {
+  const selected = {
+    id: "contact-primary",
+    artistId: "artist-1",
+    email: "primary@example.com",
+    state: "active" as const,
+    isFullTeam: false,
+  };
+  const decision = evaluateOutreachDeliveryPolicy(
+    deliveryPolicyFixture({
+      contactId: selected.id,
+      contact: selected,
+      artistContacts: [
+        selected,
+        {
+          id: "contact-secondary",
+          artistId: "artist-1",
+          email: "secondary@example.com",
+          state: "active",
+          isFullTeam: false,
+        },
+      ],
+      stored: null,
+      attempt: null,
+      requestedFullTeamSend: true,
+      requestedRecipientDeliveryMode: "cc_thread",
+      requireSelectedRecipient: true,
+      suppressedEmails: ["primary@example.com"],
+    }),
+  );
+  assert.deepEqual(decision, {
+    ok: false,
+    state: "cancelled",
+    error: "Selected primary recipient is no longer eligible",
+  });
+
+  test("festival bulk all-contact delivery can continue after one suppression", () => {
+    const selected = {
+      id: "contact-primary",
+      artistId: "artist-1",
+      email: "primary@example.com",
+      state: "active" as const,
+      isFullTeam: false,
+    };
+    const decision = evaluateOutreachDeliveryPolicy(
+      deliveryPolicyFixture({
+        contactId: selected.id,
+        contact: selected,
+        artistContacts: [
+          selected,
+          {
+            id: "contact-secondary",
+            artistId: "artist-1",
+            email: "secondary@example.com",
+            state: "active",
+            isFullTeam: false,
+          },
+        ],
+        stored: null,
+        attempt: null,
+        requestedFestivalAllContactsSend: true,
+        suppressedEmails: ["primary@example.com"],
+      }),
+    );
+    assert.equal(decision.ok, true);
+    if (decision.ok) {
+      assert.deepEqual(decision.policy.to, ["secondary@example.com"]);
+    }
+  });
+});
+
 test("festival all-contacts follow-ups preserve mode when one current email remains", () => {
   const contact = {
     id: "contact-current",
