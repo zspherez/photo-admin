@@ -47,7 +47,7 @@ export const ENV_VAR_GROUPS: Record<EnvVarGroup, EnvVarGroupInfo> = {
     heading: "Deployment profile (local readiness check only)",
     kind: "optional",
   },
-  "contact-agents": { heading: "Contact research agent", kind: "optional" },
+  "contact-agents": { heading: "Contact research agents", kind: "optional" },
   trajectory: { heading: "Artist trajectory promotion", kind: "optional" },
   spotify: { heading: "Spotify OAuth", kind: "optional" },
   statsfm: { heading: "Stats.fm Plus", kind: "optional" },
@@ -161,7 +161,7 @@ export const ENV_SCHEMA: readonly EnvVarDefinition[] = [
     notes: [
       "Optional. Defaults to this deployment's own repository. Set to your fork's",
       "`owner/name` (e.g. \"your-org/your-fork\") to rebrand repository links and",
-      "retarget the contact research/audit OIDC trust boundary below. Malformed",
+      "retarget the contact research, professional contact, and audit OIDC trust boundaries below. Malformed",
       "values are rejected: the app fails closed rather than trusting an invalid repo.",
     ],
     defaultValue: "",
@@ -185,6 +185,18 @@ export const ENV_SCHEMA: readonly EnvVarDefinition[] = [
     summary: "Overrides the exact workflow_ref trusted to run contact audits via OIDC.",
     notes: [
       "Optional. Defaults to `<REPOSITORY_SLUG>/.github/workflows/contact-audit.yml@refs/heads/main`.",
+      "Must reference a `.yml`/`.yaml` file under that repository's `.github/workflows/`",
+      "on `refs/heads/main`; malformed values are rejected (fail closed).",
+    ],
+    defaultValue: "",
+  },
+  {
+    key: "PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_REF",
+    group: "fork-identity",
+    secret: false,
+    summary: "Overrides the exact workflow_ref trusted to run professional contact research via OIDC.",
+    notes: [
+      "Optional. Defaults to `<REPOSITORY_SLUG>/.github/workflows/professional-contact-research.yml@refs/heads/main`.",
       "Must reference a `.yml`/`.yaml` file under that repository's `.github/workflows/`",
       "on `refs/heads/main`; malformed values are rejected (fail closed).",
     ],
@@ -231,6 +243,30 @@ export const ENV_SCHEMA: readonly EnvVarDefinition[] = [
     notes: [
       "Optional dedicated token for running the review-only contact audit worker",
       "locally/development only. Production ignores it and uses GitHub Actions OIDC.",
+    ],
+    defaultValue: "",
+  },
+  {
+    key: "PROFESSIONAL_CONTACT_RESEARCH_AGENT_TOKEN",
+    group: "contact-agents",
+    secret: true,
+    summary: "Optional dedicated token for local/development professional contact research workers.",
+    notes: [
+      "Optional dedicated token for local/development workers only. Production agent",
+      "mutation endpoints ignore static tokens and accept only workflow-scoped",
+      "GitHub Actions OIDC.",
+    ],
+    defaultValue: "",
+  },
+  {
+    key: "PROFESSIONAL_CONTACT_RESEARCH_DISPATCH_TOKEN",
+    group: "contact-agents",
+    secret: true,
+    summary: "Dedicated fine-grained GitHub token used by the app to trigger professional contact research immediately.",
+    notes: [
+      "Required for immediate form-triggered research in deployed environments.",
+      "Use a fine-grained repository token limited to Actions: write for this repository.",
+      "The token stays server-side and is never passed to the research worker or browser.",
     ],
     defaultValue: "",
   },

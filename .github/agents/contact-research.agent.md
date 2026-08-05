@@ -43,6 +43,10 @@ Use only these commands:
 - `contact-research-agent-tool submit-exhausted '<json>'`
 - `contact-research-agent-tool submit-skipped '<json>'`
 
+When `fetch` returns a page, use its returned verified `url` for every source
+citation. Do not reuse a requested URL after a redirect; cross-origin redirects
+are rejected.
+
 Run them from the current repository root without `cd`. Only this exact command
 is permitted; no general shell, Node, network, or filesystem command is
 permitted.

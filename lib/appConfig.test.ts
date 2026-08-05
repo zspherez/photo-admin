@@ -5,9 +5,11 @@ import {
   buildWorkflowRef,
   CONTACT_AUDIT_WORKFLOW_FILE,
   CONTACT_RESEARCH_WORKFLOW_FILE,
+  PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_FILE,
   loadAppConfig,
   resolveContactAuditTrustConfig,
   resolveContactResearchTrustConfig,
+  resolveProfessionalContactResearchTrustConfig,
   resolveRepositoryIdentity,
   workflowActionsRunUrl,
   workflowActionsUrl,
@@ -82,6 +84,16 @@ test("resolveContactAuditTrustConfig defaults to this deployment's workflow", ()
   });
 });
 
+test("resolveProfessionalContactResearchTrustConfig defaults to the standalone workflow", () => {
+  const trust = resolveProfessionalContactResearchTrustConfig({});
+  assert.deepEqual(trust, {
+    repository: "zspherez/photo-admin",
+    owner: "zspherez",
+    workflowRef:
+      "zspherez/photo-admin/.github/workflows/professional-contact-research.yml@refs/heads/main",
+  });
+});
+
 test("contact research/audit trust config follows a valid REPOSITORY_SLUG override", () => {
   const env = { REPOSITORY_SLUG: "my-org/my-fork" };
   assert.equal(
@@ -92,12 +104,17 @@ test("contact research/audit trust config follows a valid REPOSITORY_SLUG overri
     resolveContactAuditTrustConfig(env)?.workflowRef,
     "my-org/my-fork/.github/workflows/contact-audit.yml@refs/heads/main"
   );
+  assert.equal(
+    resolveProfessionalContactResearchTrustConfig(env)?.workflowRef,
+    "my-org/my-fork/.github/workflows/professional-contact-research.yml@refs/heads/main"
+  );
 });
 
 test("contact research/audit trust config fails closed on an invalid REPOSITORY_SLUG", () => {
   const env = { REPOSITORY_SLUG: "not a slug" };
   assert.equal(resolveContactResearchTrustConfig(env), null);
   assert.equal(resolveContactAuditTrustConfig(env), null);
+  assert.equal(resolveProfessionalContactResearchTrustConfig(env), null);
 });
 
 test("contact research trust config fails closed on a malformed workflow ref override", () => {
@@ -129,6 +146,16 @@ test("contact audit trust config fails closed on a malformed workflow ref overri
   );
 });
 
+test("professional contact trust config fails closed on a malformed workflow ref override", () => {
+  assert.equal(
+    resolveProfessionalContactResearchTrustConfig({
+      PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_REF:
+        "zspherez/photo-admin/.github/workflows/professional-contact-research.yml@refs/heads/side-branch",
+    }),
+    null,
+  );
+});
+
 test("contact research/audit trust config accepts an explicit valid override matching the default", () => {
   assert.equal(
     resolveContactResearchTrustConfig({
@@ -151,6 +178,17 @@ test("workflowActionsUrl builds a repo-scoped Actions link from a workflow ref",
   assert.equal(
     workflowActionsUrl(ref),
     "https://github.com/zspherez/photo-admin/actions/workflows/contact-audit.yml"
+  );
+});
+
+test("professional contact workflow URL is repository scoped", () => {
+  const ref = buildWorkflowRef(
+    appConfig.repository,
+    PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_FILE,
+  );
+  assert.equal(
+    workflowActionsUrl(ref),
+    "https://github.com/zspherez/photo-admin/actions/workflows/professional-contact-research.yml",
   );
 });
 
