@@ -102,7 +102,10 @@ import {
   DEFAULT_RECIPIENT_DELIVERY_MODE,
   isSelectableRecipientDeliveryMode,
 } from "@/lib/recipientDelivery";
-import { ManualFestivalArtistForm } from "./manual-lineup-form";
+import {
+  BulkManualFestivalArtistForm,
+  ManualFestivalArtistForm,
+} from "./manual-lineup-form";
 import { removeManualFestivalArtist } from "./manual-lineup-actions";
 
 export const dynamic = "force-dynamic";
@@ -1244,13 +1247,22 @@ export default async function FestivalDetailPage({
 
       <Card className="mt-4 p-4">
         <div className="mb-3">
-          <h2 className="text-sm font-semibold">Add a missing lineup artist</h2>
+          <h2 className="text-sm font-semibold">Merge artists into the lineup</h2>
           <p className="mt-1 text-xs text-zinc-500">
-            Add an artist omitted by EDMTrain. Manual lineup entries survive
-            provider refreshes and use the same research and outreach flows.
+            Paste the latest lineup when EDMTrain is behind. Names are
+            deduplicated, existing artists are reused, and manual ownership is
+            merged with provider ownership so refreshes cannot remove them.
           </p>
         </div>
+        <BulkManualFestivalArtistForm showId={showId} returnTo={returnTo} />
+        <details className="mt-5 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+          <summary className="cursor-pointer text-sm font-medium">
+            Add or resolve one artist
+          </summary>
+          <div className="mt-3">
         <ManualFestivalArtistForm showId={showId} returnTo={returnTo} />
+          </div>
+        </details>
       </Card>
 
       <div className="mt-4 space-y-2">

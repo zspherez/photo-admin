@@ -49,6 +49,7 @@ test("festival outreach forms are valid and explicitly associated", () => {
   let managerResearchFormFound = false;
   let queueOutreachFormFound = false;
   let manualArtistFormFound = false;
+  let bulkManualArtistFormFound = false;
   let manualRemovalFormFound = false;
   let contactCheckboxFound = false;
 
@@ -131,6 +132,12 @@ test("festival outreach forms are valid and explicitly associated", () => {
     ) {
       manualArtistFormFound = true;
     }
+    if (
+      ts.isJsxSelfClosingElement(node) &&
+      tagName(node.tagName) === "BulkManualFestivalArtistForm"
+    ) {
+      bulkManualArtistFormFound = true;
+    }
 
     ts.forEachChild(node, (child) => visit(child, childFormDepth));
   };
@@ -161,6 +168,11 @@ test("festival outreach forms are valid and explicitly associated", () => {
     manualArtistFormFound,
     true,
     "Festival pages need an independent manual-artist form",
+  );
+  assert.equal(
+    bulkManualArtistFormFound,
+    true,
+    "Festival pages need an independent bulk manual-lineup form",
   );
   assert.equal(
     manualRemovalFormFound,

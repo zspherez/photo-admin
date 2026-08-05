@@ -2,9 +2,15 @@
 
 import { useActionState } from "react";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
-import { Field } from "@/components/ui/field";
-import { addManualFestivalArtist } from "./manual-lineup-actions";
-import { INITIAL_MANUAL_FESTIVAL_ARTIST_STATE } from "./manual-lineup-state";
+import { Field, TextArea } from "@/components/ui/field";
+import {
+  addManualFestivalArtist,
+  addManualFestivalArtists,
+} from "./manual-lineup-actions";
+import {
+  INITIAL_BULK_MANUAL_FESTIVAL_ARTIST_STATE,
+  INITIAL_MANUAL_FESTIVAL_ARTIST_STATE,
+} from "./manual-lineup-state";
 
 function candidateLabel(candidate: {
   id: string;
@@ -13,6 +19,7 @@ function candidateLabel(candidate: {
   statsfmId: string | null;
   edmtrainId: number | null;
   onLineup: boolean;
+  manuallyAdded: boolean;
 }): string {
   const identities = [
     candidate.spotifyId ? `Spotify ${candidate.spotifyId}` : null,
@@ -69,7 +76,6 @@ export function ManualFestivalArtistForm({
               <option
                 key={candidate.id}
                 value={candidate.id}
-                disabled={candidate.onLineup}
               >
                 {candidateLabel(candidate)}
               </option>
@@ -88,6 +94,64 @@ export function ManualFestivalArtistForm({
       )}
       <PendingSubmitButton pendingLabel="Adding artist…">
         Add to lineup
+      </PendingSubmitButton>
+    </form>
+  );
+}
+
+export function BulkManualFestivalArtistForm({
+  showId,
+  returnTo,
+}: {
+  showId: string;
+  returnTo: string;
+}) {
+  const [state, formAction] = useActionState(
+    addManualFestivalArtists,
+    INITIAL_BULK_MANUAL_FESTIVAL_ARTIST_STATE,
+  );
+
+  return (
+    <form action={formAction} className="space-y-3">
+      <input type="hidden" name="showId" value={showId} />
+      <input type="hidden" name="returnTo" value={returnTo} />
+      <TextArea
+        name="artistNames"
+        label="Artist names"
+        description="Paste one artist per line. Duplicate names and artists already on the lineup are merged, not duplicated."
+        placeholder={"Artist One\nArtist Two\nArtist Three"}
+        rows={8}
+        defaultValue={state.artistNames}
+        maxLength={60_000}
+        required
+      />
+      {state.message && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+        >
+          <p>{state.message}</p>
+          {(state.addedCount > 0 ||
+            state.preservedCount > 0 ||
+            state.existingCount > 0 ||
+            state.duplicateCount > 0) && (
+            <p className="mt-1 text-xs text-zinc-500">
+              {state.addedCount} added · {state.preservedCount} existing EDMTrain
+              entries preserved manually · {state.existingCount} already
+              manual · {state.duplicateCount} duplicate input
+              {state.duplicateCount === 1 ? "" : "s"} skipped
+            </p>
+          )}
+          {state.ambiguousNames.length > 0 && (
+            <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+              Ambiguous: {state.ambiguousNames.join(", ")}
+            </p>
+          )}
+        </div>
+      )}
+      <PendingSubmitButton pendingLabel="Merging artists…">
+        Merge artist list into lineup
       </PendingSubmitButton>
     </form>
   );
