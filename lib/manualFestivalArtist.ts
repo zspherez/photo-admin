@@ -1,4 +1,5 @@
 import { chooseFestivalLineupCandidate } from "@/lib/festivalLineup";
+import { normalizeArtistName } from "@/lib/normalize";
 
 export interface ManualFestivalArtistCandidate {
   id: string;
@@ -7,6 +8,67 @@ export interface ManualFestivalArtistCandidate {
   statsfmId: string | null;
   edmtrainId: number | null;
   onLineup: boolean;
+  manuallyAdded: boolean;
+}
+
+export const MANUAL_FESTIVAL_ARTIST_LIST_LIMIT = 200;
+export const MANUAL_FESTIVAL_ARTIST_NAME_MAX_LENGTH = 300;
+
+export interface ParsedManualFestivalArtistList {
+  artists: Array<{ name: string; normalizedName: string }>;
+  duplicateCount: number;
+  error: string | null;
+}
+
+export function parseManualFestivalArtistList(
+  value: string,
+): ParsedManualFestivalArtistList {
+  const rawNames = value
+    .split(/\r?\n/)
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (rawNames.length === 0) {
+    return {
+      artists: [],
+      duplicateCount: 0,
+      error: "Enter at least one artist name.",
+    };
+  }
+  if (rawNames.length > MANUAL_FESTIVAL_ARTIST_LIST_LIMIT) {
+    return {
+      artists: [],
+      duplicateCount: 0,
+      error: `Add at most ${MANUAL_FESTIVAL_ARTIST_LIST_LIMIT} artists at a time.`,
+    };
+  }
+
+  const artists: ParsedManualFestivalArtistList["artists"] = [];
+  const seen = new Set<string>();
+  let duplicateCount = 0;
+  for (const name of rawNames) {
+    if (name.length > MANUAL_FESTIVAL_ARTIST_NAME_MAX_LENGTH) {
+      return {
+        artists: [],
+        duplicateCount,
+        error: `Artist names must be ${MANUAL_FESTIVAL_ARTIST_NAME_MAX_LENGTH} characters or fewer.`,
+      };
+    }
+    const normalizedName = normalizeArtistName(name);
+    if (!normalizedName) {
+      return {
+        artists: [],
+        duplicateCount,
+        error: `"${name}" must contain letters or numbers.`,
+      };
+    }
+    if (seen.has(normalizedName)) {
+      duplicateCount += 1;
+      continue;
+    }
+    seen.add(normalizedName);
+    artists.push({ name, normalizedName });
+  }
+  return { artists, duplicateCount, error: null };
 }
 
 export type ManualFestivalArtistDecision =
@@ -19,12 +81,6 @@ export function chooseManualFestivalArtist(
   candidates: readonly ManualFestivalArtistCandidate[],
   selectedId: string | null,
 ): ManualFestivalArtistDecision {
-  if (
-    candidates.length > 1 &&
-    candidates.every((candidate) => candidate.onLineup)
-  ) {
-    return { kind: "already-on-lineup", candidate: candidates[0] };
-  }
   const decision = chooseFestivalLineupCandidate(candidates, selectedId);
   if (decision.kind !== "use") return decision;
   return decision.candidate.onLineup

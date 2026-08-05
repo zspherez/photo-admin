@@ -73,6 +73,32 @@ test("manual lineup actions authenticate, normalize, and serialize identity chan
   assert.match(action, /acquireShowArtistMembershipLock\(tx\)/);
   assert.match(action, /providerManaged: false/);
   assert.match(action, /manuallyAdded: true/);
+  assert.match(action, /export async function addManualFestivalArtists/);
+  assert.match(action, /parseManualFestivalArtistList\(artistNames\)/);
+  assert.match(
+    action,
+    /existingArtist\.shows\[0\]\.manuallyAdded[\s\S]*manuallyAdded: true/,
+  );
+  assert.match(action, /candidates\.length > 1 && onLineup\.length !== 1/);
+  assert.match(
+    action,
+    /decision\.kind === "already-on-lineup"[\s\S]*manuallyAdded: true/,
+  );
+  const form = readFileSync(
+    new URL(
+      "../app/festivals/[showId]/manual-lineup-form.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.doesNotMatch(form, /disabled=\{candidate\.onLineup\}/);
+  assert.match(action, /artist\.createMany/);
+  assert.match(action, /showArtist\.updateMany/);
+  assert.match(action, /showArtist\.createMany/);
+  assert.match(action, /transactionDeadline = Date\.now\(\) \+ 270_000/);
+  assert.match(action, /const maxWait = Math\.min/);
+  assert.match(action, /const timeout = Math\.min/);
+  assert.match(action, /code === "P2028"/);
 });
 
 test("manual lineup removal is exposed only for manually owned rows", () => {

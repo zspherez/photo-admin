@@ -2,9 +2,44 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   chooseManualFestivalArtist,
+  parseManualFestivalArtistList,
   manualFestivalArtistRemoval,
   type ManualFestivalArtistCandidate,
 } from "./manualFestivalArtist";
+
+test("manual festival artist lists normalize and deduplicate pasted names", () => {
+  assert.deepEqual(
+    parseManualFestivalArtistList(
+      "Artist One\n artist   one \nARTIST TWO\n\nArtist Three",
+    ),
+    {
+      artists: [
+        { name: "Artist One", normalizedName: "artist one" },
+        { name: "ARTIST TWO", normalizedName: "artist two" },
+        { name: "Artist Three", normalizedName: "artist three" },
+      ],
+      duplicateCount: 1,
+      error: null,
+    },
+  );
+});
+
+test("manual festival artist lists are bounded and reject invalid names", () => {
+  assert.match(
+    parseManualFestivalArtistList("").error ?? "",
+    /at least one/i,
+  );
+  assert.match(
+    parseManualFestivalArtistList("!!!").error ?? "",
+    /letters or numbers/i,
+  );
+  assert.match(
+    parseManualFestivalArtistList(
+      Array.from({ length: 201 }, (_, index) => `Artist ${index}`).join("\n"),
+    ).error ?? "",
+    /at most 200/i,
+  );
+});
 
 const candidate = (
   id: string,
@@ -16,6 +51,7 @@ const candidate = (
   statsfmId: null,
   edmtrainId: null,
   onLineup,
+  manuallyAdded: false,
 });
 
 test("manual festival artists create only when no normalized match exists", () => {
@@ -47,16 +83,18 @@ test("manual festival artists report an existing lineup association", () => {
     kind: "already-on-lineup",
     candidate: existing,
   });
-  assert.deepEqual(
-    chooseManualFestivalArtist(
-      [candidate("one", true), candidate("two", true)],
-      null,
-    ),
-    {
-      kind: "already-on-lineup",
-      candidate: candidate("one", true),
-    },
-  );
+});
+
+test("ambiguous existing lineup rows can be explicitly selected", () => {
+  const candidates = [candidate("one", true), candidate("two", true)];
+  assert.deepEqual(chooseManualFestivalArtist(candidates, null), {
+    kind: "ambiguous",
+    candidates,
+  });
+  assert.deepEqual(chooseManualFestivalArtist(candidates, "two"), {
+    kind: "already-on-lineup",
+    candidate: candidates[1],
+  });
 });
 
 test("manual removal never deletes provider ownership", () => {
