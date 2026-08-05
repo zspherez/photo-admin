@@ -327,7 +327,9 @@ test("stored request-result acceptance requires a nonblank JSON string ID", () =
     ["message"],
     { id: "message" },
     null,
-    " \n\t ",
+    "\t",
+    "\n",
+    " \t\r\n ",
   ]) {
     assert.equal(
       hasAcceptedProviderRequestResult([{ providerMessageId }]),
@@ -932,13 +934,9 @@ test("Sent copy persistence constrains one immutable source and retry state", ()
     batchMigration,
     /OLD\."providerMessageId" IS NOT NULL/,
   );
-  assert.match(
-    batchMigration,
-    /NULLIF\(btrim\(OLD\."providerMessageId"\), ''\) IS NOT NULL/,
-  );
-  assert.match(
-    batchMigration,
-    /unnest\([\s\S]*providerMessageIds[\s\S]*NULLIF\(btrim\("providerMessageIdValue"\), ''\) IS NOT NULL/,
+  assert.doesNotMatch(batchMigration, /btrim\(/);
+  assert.ok(
+    batchMigration.split("'^[[:space:]]+|[[:space:]]+$'").length - 1 >= 4,
   );
   assert.match(
     batchMigration,
@@ -947,6 +945,10 @@ test("Sent copy persistence constrains one immutable source and retry state", ()
   assert.match(
     refreshMigration,
     /jsonb_typeof\([\s\S]*providerRequestResult" -> 'providerMessageId'[\s\S]*= 'string'[\s\S]*providerRequestResult" ->> 'providerMessageId'/,
+  );
+  assert.doesNotMatch(refreshMigration, /btrim\(/);
+  assert.ok(
+    refreshMigration.split("'^[[:space:]]+|[[:space:]]+$'").length - 1 >= 4,
   );
   assert.match(batchMigration, /COMMIT;\s*$/);
 });

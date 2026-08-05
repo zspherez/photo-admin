@@ -22,7 +22,15 @@ BEGIN
     OR NEW."sentMailboxCopyConfigurationError"
       IS DISTINCT FROM OLD."sentMailboxCopyConfigurationError"
   ) AND (
-    NULLIF(btrim(OLD."providerMessageId"), '') IS NOT NULL
+    NULLIF(
+      regexp_replace(
+        COALESCE(OLD."providerMessageId", ''),
+        '^[[:space:]]+|[[:space:]]+$',
+        '',
+        'g'
+      ),
+      ''
+    ) IS NOT NULL
     OR EXISTS (
       SELECT 1
       FROM jsonb_array_elements(
@@ -37,7 +45,15 @@ BEGIN
           "providerRequestResult" -> 'providerMessageId'
         ) = 'string'
         AND NULLIF(
-          btrim("providerRequestResult" ->> 'providerMessageId'),
+          regexp_replace(
+            COALESCE(
+              "providerRequestResult" ->> 'providerMessageId',
+              ''
+            ),
+            '^[[:space:]]+|[[:space:]]+$',
+            '',
+            'g'
+          ),
           ''
         ) IS NOT NULL
     )
@@ -74,7 +90,15 @@ BEGIN
     RAISE EXCEPTION 'OutreachSendAttempt firstAttemptAt is immutable once set';
   END IF;
 
-  IF NULLIF(btrim(OLD."providerMessageId"), '') IS NOT NULL
+  IF NULLIF(
+    regexp_replace(
+      COALESCE(OLD."providerMessageId", ''),
+      '^[[:space:]]+|[[:space:]]+$',
+      '',
+      'g'
+    ),
+    ''
+  ) IS NOT NULL
     AND NEW."providerMessageId" IS DISTINCT FROM OLD."providerMessageId"
   THEN
     RAISE EXCEPTION 'OutreachSendAttempt providerMessageId is immutable once set';
@@ -105,7 +129,15 @@ BEGIN
     OR NEW."sentMailboxCopyConfigurationError"
       IS DISTINCT FROM OLD."sentMailboxCopyConfigurationError"
   ) AND (
-    NULLIF(btrim(OLD."providerMessageId"), '') IS NOT NULL
+    NULLIF(
+      regexp_replace(
+        COALESCE(OLD."providerMessageId", ''),
+        '^[[:space:]]+|[[:space:]]+$',
+        '',
+        'g'
+      ),
+      ''
+    ) IS NOT NULL
     OR NOT (
       (
         OLD."firstAttemptAt" IS NULL
