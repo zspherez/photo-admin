@@ -1,14 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { Button } from "@/components/ui/button";
+import {
+  recipientDeliveryLayout,
+  type RecipientDeliveryMode,
+} from "@/lib/recipientDelivery";
 
 export interface FestivalBulkConfirmationCandidate {
   contactId: string;
   artistName: string;
   groupKey: string;
   emailLabel: string;
+  recipients: string[];
+  primaryRecipientEmail: string | null;
+  recipientDeliveryMode: RecipientDeliveryMode;
+  immutableDeliveryMode: boolean;
   selectedByDefault: boolean;
 }
 
@@ -16,6 +24,10 @@ interface ConfirmationGroup {
   groupKey: string;
   emailLabel: string;
   artistNames: string[];
+  recipients: string[];
+  primaryRecipientEmail: string | null;
+  recipientDeliveryMode: RecipientDeliveryMode;
+  immutableDeliveryMode: boolean;
 }
 
 export function buildFestivalConfirmationGroups(
@@ -34,6 +46,10 @@ export function buildFestivalConfirmationGroups(
         groupKey: candidate.groupKey,
         emailLabel: candidate.emailLabel,
         artistNames: [candidate.artistName],
+        recipients: candidate.recipients,
+        primaryRecipientEmail: candidate.primaryRecipientEmail,
+        recipientDeliveryMode: candidate.recipientDeliveryMode,
+        immutableDeliveryMode: candidate.immutableDeliveryMode,
       });
     }
   }
@@ -53,11 +69,13 @@ export function FestivalBulkOutreachForm({
   formId,
   hiddenFields,
   candidates,
+  testOverride,
 }: {
   action: (formData: FormData) => void | Promise<void>;
   formId: string;
   hiddenFields: Record<string, string>;
   candidates: FestivalBulkConfirmationCandidate[];
+  testOverride: string | null;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -68,14 +86,16 @@ export function FestivalBulkOutreachForm({
   );
   const [confirming, setConfirming] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [recipientDeliveryMode, setRecipientDeliveryMode] =
+    useState<RecipientDeliveryMode>("individual_threads");
 
-  const refreshSelection = () => {
+  const refreshSelection = useCallback(() => {
     setSelectedIds(
       selectedCheckboxes(formId)
         .filter((checkbox) => checkbox.checked)
         .map((checkbox) => checkbox.value),
     );
-  };
+  }, [formId]);
 
   useEffect(() => {
     const onChange = (event: Event) => {
@@ -90,7 +110,7 @@ export function FestivalBulkOutreachForm({
     };
     document.addEventListener("change", onChange);
     return () => document.removeEventListener("change", onChange);
-  }, [formId]);
+  }, [formId, refreshSelection]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -101,6 +121,9 @@ export function FestivalBulkOutreachForm({
   const confirmationGroups = useMemo(() => {
     return buildFestivalConfirmationGroups(candidates, selectedIds);
   }, [candidates, selectedIds]);
+  const hasMultipleRecipientGroup = confirmationGroups.some(
+    (group) => group.recipients.length > 1 && !group.immutableDeliveryMode,
+  );
 
   const selectAll = () => {
     for (const checkbox of selectedCheckboxes(formId)) {
@@ -112,12 +135,24 @@ export function FestivalBulkOutreachForm({
 
   const openConfirmation = () => {
     refreshSelection();
-    if (
-      selectedCheckboxes(formId).every((checkbox) => !checkbox.checked)
-    ) {
+    const selectedContactIds = selectedCheckboxes(formId)
+      .filter((checkbox) => checkbox.checked)
+      .map((checkbox) => checkbox.value);
+    if (selectedContactIds.length === 0) {
       setSelectionError("Select at least one sendable artist.");
       return;
     }
+    const selected = new Set(selectedContactIds);
+    setRecipientDeliveryMode(
+      candidates.some(
+        (candidate) =>
+          selected.has(candidate.contactId) &&
+          !candidate.immutableDeliveryMode &&
+          candidate.recipientDeliveryMode === "cc_thread",
+      )
+        ? "cc_thread"
+        : "individual_threads",
+    );
     setSelectionError(null);
     setConfirming(true);
   };
@@ -133,6 +168,11 @@ export function FestivalBulkOutreachForm({
       {Object.entries(hiddenFields).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
       ))}
+      <input
+        type="hidden"
+        name="recipientDeliveryMode"
+        value={recipientDeliveryMode}
+      />
       <div className="z-20 -mx-1 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white/95 px-4 py-2 shadow-sm backdrop-blur sm:sticky sm:top-12 dark:border-zinc-800 dark:bg-zinc-950/95">
         <span className="text-sm text-zinc-600 dark:text-zinc-400">
           {candidates.length} sendable · <b>{selectedIds.length}</b> selected
@@ -184,31 +224,98 @@ export function FestivalBulkOutreachForm({
             <p className="mt-1 text-sm text-zinc-500">
               Shared rows send one email covering every listed artist.
             </p>
+            {hasMultipleRecipientGroup && (
+              <label className="mt-4 flex items-start gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                <input
+                  type="checkbox"
+                  checked={recipientDeliveryMode === "cc_thread"}
+                  onChange={(event) =>
+                    setRecipientDeliveryMode(
+                      event.target.checked
+                        ? "cc_thread"
+                        : "individual_threads",
+                    )
+                  }
+                  className="mt-0.5 h-4 w-4 accent-zinc-900 dark:accent-zinc-100"
+                />
+                <span>
+                  <span className="block text-sm font-medium">
+                    Keep management contacts on one email thread
+                  </span>
+                  <span className="mt-1 block text-xs text-zinc-500">
+                    Put the primary contact in To and the remaining contacts in
+                    CC. Off by default, each To recipient receives a separate
+                    thread.
+                  </span>
+                </span>
+              </label>
+            )}
             <div className="mt-4 overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
               <table className="w-full text-left text-sm">
                 <thead className="bg-zinc-50 text-xs uppercase text-zinc-500 dark:bg-zinc-900">
                   <tr>
-                    <th className="px-3 py-2">Email</th>
+                    <th className="px-3 py-2">To</th>
+                    <th className="px-3 py-2">CC</th>
                     <th className="px-3 py-2">Associated artists</th>
                     <th className="px-3 py-2">Email format</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                  {confirmationGroups.map((group) => (
-                    <tr key={group.groupKey}>
-                      <td className="break-all px-3 py-2">
-                        {group.emailLabel}
-                      </td>
-                      <td className="px-3 py-2">
-                        {group.artistNames.join(", ")}
-                      </td>
-                      <td className="px-3 py-2 font-medium">
-                        {group.artistNames.length > 1
-                          ? "Shared"
-                          : "Individual"}
-                      </td>
-                    </tr>
-                  ))}
+                  {confirmationGroups.map((group) => {
+                    const layout = recipientDeliveryLayout(
+                      group.recipients,
+                      group.primaryRecipientEmail,
+                      group.immutableDeliveryMode
+                        ? group.recipientDeliveryMode
+                        : recipientDeliveryMode,
+                    );
+                    const effectiveMode = group.immutableDeliveryMode
+                      ? group.recipientDeliveryMode
+                      : recipientDeliveryMode;
+                    const providerLayouts = testOverride
+                      ? [{ to: [testOverride], cc: [] }]
+                      : effectiveMode === "individual_threads"
+                        ? group.recipients.map((email) => ({
+                            to: [email],
+                            cc: [],
+                          }))
+                        : [layout];
+                    return (
+                      <tr key={group.groupKey}>
+                        <td className="break-all px-3 py-2">
+                          {providerLayouts.map((providerLayout, index) => (
+                            <div key={`${providerLayout.to.join(",")}:${index}`}>
+                              {providerLayouts.length > 1
+                                ? `Message ${index + 1}: `
+                                : ""}
+                              {providerLayout.to.join(", ")}
+                            </div>
+                          ))}
+                        </td>
+                        <td className="break-all px-3 py-2">
+                          {providerLayouts.map((providerLayout, index) => (
+                            <div key={`${providerLayout.cc.join(",")}:${index}`}>
+                              {providerLayout.cc.join(", ") || "—"}
+                            </div>
+                          ))}
+                        </td>
+                        <td className="px-3 py-2">
+                          {group.artistNames.join(", ")}
+                        </td>
+                        <td className="px-3 py-2 font-medium">
+                          {group.recipients.length > 1
+                            ? group.immutableDeliveryMode
+                              ? "Immutable retry"
+                              : recipientDeliveryMode === "cc_thread"
+                              ? "One thread"
+                              : "Separate threads"
+                            : group.artistNames.length > 1
+                              ? "Shared"
+                              : "Individual"}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

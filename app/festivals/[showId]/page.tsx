@@ -98,6 +98,12 @@ import {
   FESTIVAL_UTM_CAMPAIGN_MAX_LENGTH,
   normalizeFestivalUtmCampaign,
 } from "@/lib/festivalUtm";
+import {
+  DEFAULT_RECIPIENT_DELIVERY_MODE,
+  isSelectableRecipientDeliveryMode,
+} from "@/lib/recipientDelivery";
+import { ManualFestivalArtistForm } from "./manual-lineup-form";
+import { removeManualFestivalArtist } from "./manual-lineup-actions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -124,6 +130,8 @@ const getFestivalDetails = cache(async (showId: string) =>
       dismissedAt: true,
       artists: {
         select: {
+          providerManaged: true,
+          manuallyAdded: true,
           artist: {
             select: {
               id: true,
@@ -368,6 +376,12 @@ async function bulkSend(formData: FormData) {
         .filter(Boolean)
     )
   );
+  const requestedDeliveryMode = formData.get("recipientDeliveryMode");
+  const recipientDeliveryMode = isSelectableRecipientDeliveryMode(
+    requestedDeliveryMode,
+  )
+    ? requestedDeliveryMode
+    : DEFAULT_RECIPIENT_DELIVERY_MODE;
   const now = new Date();
   const candidates = await festivalBulkCandidates(showId, now);
   if (!candidates) {
@@ -403,6 +417,11 @@ async function bulkSend(formData: FormData) {
     return [
       {
         ...target,
+        recipientDeliveryMode:
+          result.mode === "retry"
+            ? result.recipientDeliveryMode ??
+              DEFAULT_RECIPIENT_DELIVERY_MODE
+            : recipientDeliveryMode,
         email:
           !result.fullTeamSend &&
           recipients.length === 1 &&
@@ -465,6 +484,8 @@ async function bulkSend(formData: FormData) {
                     showId,
                     contactId: group.contactId,
                     festivalAllContacts: true,
+                    recipientDeliveryMode:
+                      group.recipientDeliveryMode,
                   },
                   scheduledFor,
                 )
@@ -472,6 +493,8 @@ async function bulkSend(formData: FormData) {
                   showId,
                   contactId: group.contactId,
                   festivalAllContacts: true,
+                  recipientDeliveryMode:
+                    group.recipientDeliveryMode,
                 });
         return { group, result };
       } catch (error) {
@@ -784,6 +807,10 @@ export default async function FestivalDetailPage({
     includeInternational?: SearchParamValue;
     dismissed?: SearchParamValue;
     utm_saved?: SearchParamValue;
+    lineup_added?: SearchParamValue;
+    lineup_removed?: SearchParamValue;
+    lineup_manual_cleared?: SearchParamValue;
+    lineup_error?: SearchParamValue;
   }>;
 }) {
   const { showId } = await params;
@@ -818,6 +845,10 @@ export default async function FestivalDetailPage({
     queueFailed: firstSearchParam(sp.queue_failed),
     queueSkipped: firstSearchParam(sp.queue_skipped),
     utmSaved: firstSearchParam(sp.utm_saved),
+    lineupAdded: firstSearchParam(sp.lineup_added),
+    lineupRemoved: firstSearchParam(sp.lineup_removed),
+    lineupManualCleared: firstSearchParam(sp.lineup_manual_cleared),
+    lineupError: firstSearchParam(sp.lineup_error),
   };
   const now = new Date();
   const weekend = isWeekendET();
@@ -922,6 +953,10 @@ export default async function FestivalDetailPage({
       ) ??
       null;
     return {
+      association: {
+        providerManaged: sa.providerManaged,
+        manuallyAdded: sa.manuallyAdded,
+      },
       artist: a,
       topSignal,
       matched,
@@ -1050,6 +1085,14 @@ export default async function FestivalDetailPage({
                 ? contactEmail
                 : `contact:${row.contact.id}`,
               emailLabel: recipients.join(", "),
+              recipients,
+              primaryRecipientEmail:
+                row.sendability.primaryRecipientEmail ??
+                contactEmail,
+              recipientDeliveryMode:
+                row.sendability.recipientDeliveryMode ??
+                DEFAULT_RECIPIENT_DELIVERY_MODE,
+              immutableDeliveryMode: row.sendability.mode === "retry",
               selectedByDefault: filter === "unsent",
             },
           ];
@@ -1199,10 +1242,48 @@ export default async function FestivalDetailPage({
         </form>
       </Card>
 
+      <Card className="mt-4 p-4">
+        <div className="mb-3">
+          <h2 className="text-sm font-semibold">Add a missing lineup artist</h2>
+          <p className="mt-1 text-xs text-zinc-500">
+            Add an artist omitted by EDMTrain. Manual lineup entries survive
+            provider refreshes and use the same research and outreach flows.
+          </p>
+        </div>
+        <ManualFestivalArtistForm showId={showId} returnTo={returnTo} />
+      </Card>
+
       <div className="mt-4 space-y-2">
         {notices.utmSaved && (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
             Festival UTM campaign saved.
+          </div>
+        )}
+        {notices.lineupAdded && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Artist added to the festival lineup.
+          </div>
+        )}
+        {notices.lineupRemoved && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Manual lineup artist removed.
+          </div>
+        )}
+        {notices.lineupManualCleared && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Manual ownership removed. EDMTrain still owns this lineup entry.
+          </div>
+        )}
+        {notices.lineupError && (
+          <div
+            role="alert"
+            className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+          >
+            {notices.lineupError === "provider_owned"
+              ? "EDMTrain owns this lineup entry, so it cannot be removed manually."
+              : notices.lineupError === "invalid_artist"
+                ? "The lineup artist selection was invalid."
+                : "Unable to remove the manual lineup artist. Please try again."}
           </div>
         )}
         {!festivalActive && (
@@ -1389,6 +1470,7 @@ export default async function FestivalDetailPage({
             returnTo,
           }}
           candidates={bulkConfirmationCandidates}
+          testOverride={testOverride}
         />
       )}
 
@@ -1468,6 +1550,13 @@ export default async function FestivalDetailPage({
                             r.topSignal.source,
                             r.topSignal.rank
                           )}
+                        </Badge>
+                      )}
+                      {r.association.manuallyAdded && (
+                        <Badge tone="info" size="xs">
+                          {r.association.providerManaged
+                            ? "manual + EDMTrain"
+                            : "manual lineup"}
                         </Badge>
                       )}
                       {r.genres.slice(0, 2).map((g) => (
@@ -1626,6 +1715,29 @@ export default async function FestivalDetailPage({
                         pendingLabel="Marking…"
                       >
                         Mark sent
+                      </PendingSubmitButton>
+                    </form>
+                  )}
+                  {r.association.manuallyAdded && (
+                    <form action={removeManualFestivalArtist}>
+                      <input type="hidden" name="showId" value={showId} />
+                      <input
+                        type="hidden"
+                        name="artistId"
+                        value={r.artist.id}
+                      />
+                      <input
+                        type="hidden"
+                        name="returnTo"
+                        value={returnTo}
+                      />
+                      <PendingSubmitButton
+                        variant="danger"
+                        size="sm"
+                        pendingLabel="Removing…"
+                        aria-label={`Remove ${artistDisplayName(r.artist)} from the manual lineup`}
+                      >
+                        Remove
                       </PendingSubmitButton>
                     </form>
                   )}

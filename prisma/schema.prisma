@@ -911,11 +911,13 @@ model EdmtrainVenue {
 }
 
 model ShowArtist {
-  showId    String
-  artistId  String
-  show      Show    @relation(fields: [showId], references: [id], onDelete: Cascade)
-  artist    Artist  @relation(fields: [artistId], references: [id], onDelete: Cascade)
-  headliner Boolean @default(false)
+  showId          String
+  artistId        String
+  show            Show    @relation(fields: [showId], references: [id], onDelete: Cascade)
+  artist          Artist  @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  headliner       Boolean @default(false)
+  providerManaged Boolean @default(true)
+  manuallyAdded   Boolean @default(false)
 
   @@id([showId, artistId])
   @@index([artistId])
@@ -985,6 +987,8 @@ model Outreach {
   finalHtml                  String
   recipientEmails            String[]              @default([])
   recipientSnapshotState     String                @default("legacy_unknown")
+  recipientDeliveryMode      String                @default("individual_threads")
+  primaryRecipientEmail      String?
   fullTeamSend               Boolean               @default(false)
   festivalAllContactsSend    Boolean               @default(false)
   expectedRecipientContactId String?
@@ -994,6 +998,7 @@ model Outreach {
   status                     String
   error                      String?
   providerMessageId          String?
+  providerMessageIds         String[]              @default([])
   idempotencyKey             String                @unique @default(dbgenerated("('outreach/'::text || md5(((random())::text || (clock_timestamp())::text)))"))
   attemptCount               Int                   @default(0)
   claimedAt                  DateTime?
@@ -1052,6 +1057,8 @@ model OutreachSendAttempt {
   /// Stable SHA-256 fingerprint of the Resend API credential; never the secret key.
   providerCredentialScope String?
   providerMessageId       String?              @unique
+  providerMessageIds      String[]              @default([])
+  providerRequestResults  Json?
   firstAttemptAt          DateTime?
   lastAttemptAt           DateTime?
   attemptCount            Int                  @default(0)

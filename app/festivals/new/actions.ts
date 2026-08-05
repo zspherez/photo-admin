@@ -180,6 +180,8 @@ async function persistFestival(
                 showId: festival.id,
                 artistId,
                 headliner: false,
+                providerManaged: false,
+                manuallyAdded: true,
               })),
             });
           }

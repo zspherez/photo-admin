@@ -35,6 +35,10 @@ import {
   captureTrajectoryAction,
   trajectoryActionResultHref,
 } from "@/lib/trajectoryActionError";
+import {
+  isRecipientDeliveryMode,
+  isSelectableRecipientDeliveryMode,
+} from "@/lib/recipientDelivery";
 
 export interface CustomizeActionState {
   error: string | null;
@@ -82,6 +86,12 @@ export async function sendCustom(
   ).trim();
   const subjectOverride = String(formData.get("subject") ?? "");
   const htmlOverride = String(formData.get("html") ?? "");
+  const recipientDeliveryModeValue = String(
+    formData.get("recipientDeliveryMode") ?? "",
+  );
+  if (!isRecipientDeliveryMode(recipientDeliveryModeValue)) {
+    return actionError(selectedContactId, "Unknown recipient delivery mode");
+  }
   const intent = String(formData.get("intent") ?? "send");
   if (intent !== "send" && intent !== "queue") {
     return actionError(selectedContactId, "Unknown email action");
@@ -198,6 +208,7 @@ export async function sendCustom(
     return actionError(selectedContactId, identityError);
   }
 
+  let immutableRetryDeliveryMode: string | null = null;
   if (context.parentOutreachId) {
     const [eligibility] = await getFollowUpEligibilityBatch([
       context.parentOutreachId,
@@ -207,6 +218,10 @@ export async function sendCustom(
         selectedContactId,
         eligibility?.reason ?? "Follow-up is unavailable",
       );
+    }
+    if (eligibility.mode === "retry") {
+      immutableRetryDeliveryMode =
+        eligibility.recipientDeliveryMode ?? null;
     }
   } else {
     const [sendability] = await getOutreachSendabilityBatch([
@@ -218,6 +233,34 @@ export async function sendCustom(
         sendability?.reason ?? "Email outreach is unavailable",
       );
     }
+    if (sendability.mode === "retry") {
+      immutableRetryDeliveryMode =
+        sendability.recipientDeliveryMode ?? null;
+    }
+  }
+  if (
+    immutableRetryDeliveryMode !== null &&
+    recipientDeliveryModeValue !== immutableRetryDeliveryMode
+  ) {
+    return actionError(
+      selectedContactId,
+      "An immutable retry must use its original recipient delivery mode",
+    );
+  }
+  if (
+    recipientDeliveryModeValue === "legacy_multi_to" &&
+    immutableRetryDeliveryMode !== "legacy_multi_to"
+  ) {
+    return actionError(
+      selectedContactId,
+      "Legacy multi-recipient delivery is allowed only for its immutable retry",
+    );
+  }
+  if (
+    recipientDeliveryModeValue !== "legacy_multi_to" &&
+    !isSelectableRecipientDeliveryMode(recipientDeliveryModeValue)
+  ) {
+    return actionError(selectedContactId, "Unknown recipient delivery mode");
   }
 
   const capturedResult = await captureTrajectoryAction(returnTo, () =>
@@ -227,19 +270,31 @@ export async function sendCustom(
             context.parentOutreachId,
             getNextNormalOutreachDispatch(),
             context.trajectoryContext ?? undefined,
-            { subjectOverride, htmlOverride },
+            {
+              subjectOverride,
+              htmlOverride,
+              recipientDeliveryMode: recipientDeliveryModeValue,
+            },
           )
         : isWeekendET()
           ? scheduleFollowUp(
               context.parentOutreachId,
               getNextMondaySlot(),
               context.trajectoryContext ?? undefined,
-              { subjectOverride, htmlOverride },
+              {
+                subjectOverride,
+                htmlOverride,
+                recipientDeliveryMode: recipientDeliveryModeValue,
+              },
             )
           : sendFollowUp(
               context.parentOutreachId,
               context.trajectoryContext ?? undefined,
-              { subjectOverride, htmlOverride },
+              {
+                subjectOverride,
+                htmlOverride,
+                recipientDeliveryMode: recipientDeliveryModeValue,
+              },
             )
       : intent === "queue"
         ? scheduleOutreach(

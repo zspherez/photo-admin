@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { Resend, type ErrorResponse } from "resend";
 import { db } from "@/lib/db";
 import { readGeneralDeliverySettingsInTransaction } from "@/lib/generalSettings";
+import {
+  DEFAULT_RECIPIENT_DELIVERY_MODE,
+  recipientDeliveryLayout,
+  type RecipientDeliveryMode,
+} from "@/lib/recipientDelivery";
 
 export const RESEND_IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const RESEND_CONFIGURATION_ERROR =
@@ -15,6 +20,32 @@ export const RESEND_FULL_CONFIGURATION_ERROR =
   "Resend is unavailable because RESEND_API_KEY and RESEND_FROM_EMAIL are missing or blank";
 export const RESEND_PROVIDER_REQUEST_TIMEOUT_MS = 20_000;
 export const RESEND_CREDENTIAL_SCOPE_PREFIX = "resend:key-sha256:";
+export const RESEND_WEBHOOK_LOCK_CLASS = 1_380_273_301;
+
+export function resendProviderMessageLockKeys(
+  providerMessageIds: readonly string[],
+): string[] {
+  return Array.from(
+    new Set(providerMessageIds.filter(Boolean).map((id) => `message:${id}`)),
+  ).sort();
+}
+
+export async function acquireResendProviderMessageLocks(
+  tx: Prisma.TransactionClient,
+  providerMessageIds: readonly string[],
+): Promise<void> {
+  for (const key of resendProviderMessageLockKeys(providerMessageIds)) {
+    await tx.$queryRaw<Array<{ locked: number }>>(Prisma.sql`
+      SELECT 1 AS "locked"
+      FROM (
+        SELECT pg_advisory_xact_lock(
+          CAST(${RESEND_WEBHOOK_LOCK_CLASS} AS INTEGER),
+          CAST(hashtext(${key}) AS INTEGER)
+        )
+      ) AS "resendProviderMessageLock"
+    `);
+  }
+}
 
 let _client: Resend | null = null;
 let _clientApiKey: string | null = null;
@@ -30,6 +61,16 @@ class DeadlineResend extends Resend {
       : deadlineSignal;
     return super.fetchRequest<T>(path, { ...requestOptions, signal });
   }
+
+}
+
+export const PROVIDER_MESSAGE_ID_CONFLICT_PREFIX =
+  "Provider message ID conflict for request ";
+
+export function isProviderMessageIdConflictError(
+  error: string | null | undefined,
+): boolean {
+  return error?.startsWith(PROVIDER_MESSAGE_ID_CONFLICT_PREFIX) ?? false;
 }
 
 export function getResendConfigurationError(
@@ -109,8 +150,15 @@ export interface ResendRequestSnapshot {
   attachments: ResendAttachmentSnapshot[];
 }
 
+export interface ResendRequestBatchSnapshot {
+  version: 1;
+  requests: ResendRequestSnapshot[];
+}
+
 export interface PrepareResendRequestArgs {
   to: string[];
+  recipientDeliveryMode?: RecipientDeliveryMode;
+  primaryRecipientEmail?: string | null;
   subject: string;
   html: string;
   outreachId: string;
@@ -145,6 +193,22 @@ export type PrepareResendRequestResult =
       preparationDisposition: ResendPreparationDisposition;
     };
 
+export type PrepareResendRequestBatchResult =
+  | {
+      ok: true;
+      requestBatch: ResendRequestBatchSnapshot;
+      requestHash: string;
+      testSend: boolean;
+      intendedRecipients: string[];
+      attachmentBlobs: ResendAttachmentBlob[];
+      warnings: string[];
+    }
+  | {
+      ok: false;
+      error: string;
+      preparationDisposition: ResendPreparationDisposition;
+    };
+
 export type ResendFailureDisposition =
   | "configuration"
   | "in_flight"
@@ -157,6 +221,274 @@ export interface SendResult {
   providerMessageId: string | null;
   error: string | null;
   failureDisposition: ResendFailureDisposition | null;
+  deliveryFailure?: string | null;
+}
+
+export interface SendBatchResult {
+  results: SendResult[];
+}
+
+export interface ResendWebhookRecipientFields {
+  to?: unknown;
+  cc?: unknown;
+  bcc?: unknown;
+}
+
+function webhookStringRecipients(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+export function outreachWebhookRecipientImpact(
+  request: ResendRequestSnapshot,
+  fields: ResendWebhookRecipientFields,
+): { impactedRecipients: string[]; affectsAggregate: boolean } {
+  const impactedRecipients = normalizeEmails([
+    ...webhookStringRecipients(fields.to),
+    ...webhookStringRecipients(fields.cc),
+    ...webhookStringRecipients(fields.bcc),
+  ]);
+  const intended = new Set(normalizeEmails([...request.to, ...request.cc]));
+  return {
+    impactedRecipients,
+    affectsAggregate: impactedRecipients.some((email) => intended.has(email)),
+  };
+}
+
+export type ResendRequestResultSnapshot = Array<SendResult | null>;
+
+export function parseResendRequestResultSnapshot(
+  value: unknown,
+  requestCount: number,
+  providerMessageIds: readonly string[] = [],
+): ResendRequestResultSnapshot {
+  if (
+    Array.isArray(value) &&
+    value.length === requestCount &&
+    value.every(
+      (entry) =>
+        entry === null ||
+        (isRecord(entry) &&
+          (entry.providerMessageId === null ||
+            typeof entry.providerMessageId === "string") &&
+          (entry.error === null || typeof entry.error === "string") &&
+          (!("deliveryFailure" in entry) ||
+            entry.deliveryFailure === null ||
+            typeof entry.deliveryFailure === "string") &&
+          (entry.failureDisposition === null ||
+            [
+              "configuration",
+              "in_flight",
+              "retryable",
+              "permanent",
+              "uncertain",
+              "policy",
+            ].includes(String(entry.failureDisposition)))),
+    )
+  ) {
+    return value.map((entry) =>
+      entry === null
+        ? null
+        : {
+            providerMessageId: entry.providerMessageId as string | null,
+            error: entry.error as string | null,
+            failureDisposition:
+              entry.failureDisposition as ResendFailureDisposition | null,
+            ...("deliveryFailure" in entry
+              ? {
+                  deliveryFailure:
+                    entry.deliveryFailure as string | null,
+                }
+              : {}),
+          },
+    );
+  }
+  return Array.from({ length: requestCount }, (_, index) =>
+    providerMessageIds[index]
+      ? {
+          providerMessageId: providerMessageIds[index],
+          error: null,
+          failureDisposition: null,
+        }
+      : null,
+  );
+}
+
+export function summarizeResendRequestResults(
+  results: readonly SendResult[],
+): SendResult {
+  const failures = results
+    .map((result, index) => ({ ...result, index }))
+    .filter((result) => result.providerMessageId === null);
+  if (failures.length === 0) {
+    return {
+      providerMessageId: results[0]?.providerMessageId ?? null,
+      error: null,
+      failureDisposition: null,
+    };
+  }
+
+  const priority: ResendFailureDisposition[] = [
+    "uncertain",
+    "in_flight",
+    "policy",
+    "retryable",
+    "configuration",
+    "permanent",
+  ];
+  const failureDisposition =
+    priority.find((candidate) =>
+      failures.some((failure) => failure.failureDisposition === candidate),
+    ) ?? "uncertain";
+  const matching = failures.filter(
+    (failure) => failure.failureDisposition === failureDisposition,
+  );
+  return {
+    providerMessageId: null,
+    error: matching
+      .map(
+        (failure) =>
+          `message ${failure.index + 1}: ${
+            failure.error ?? "provider request failed"
+          }`,
+      )
+      .join(" | "),
+    failureDisposition,
+  };
+}
+
+export function mergeResendRequestResults(
+  prior: readonly (SendResult | null)[],
+  current: readonly SendResult[],
+): { results: SendResult[]; conflict: string | null } {
+  let conflict: string | null = null;
+  const results = current.map((result, index) => {
+    const previous = prior[index];
+    if (previous?.providerMessageId) {
+      if (
+        result.providerMessageId &&
+        result.providerMessageId !== previous.providerMessageId
+      ) {
+        conflict ??=
+          `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
+          `${previous.providerMessageId} != ${result.providerMessageId}`;
+      }
+      return previous;
+    }
+    return {
+      ...result,
+      ...(previous?.deliveryFailure
+        ? { deliveryFailure: previous.deliveryFailure }
+        : {}),
+    };
+  });
+  return { results, conflict };
+}
+
+export function markResendRequestDeliveryFailure(
+  results: readonly (SendResult | null)[],
+  index: number,
+  providerMessageId: string,
+  error: string,
+): ResendRequestResultSnapshot {
+  return results.map((result, candidateIndex) =>
+    candidateIndex === index
+      ? {
+          providerMessageId:
+            result?.providerMessageId ?? providerMessageId,
+          error: result?.error ?? null,
+          failureDisposition: result?.failureDisposition ?? null,
+          deliveryFailure: error,
+        }
+      : result,
+  );
+}
+
+export function resendRequestResultsAreResolved(
+  results: readonly (SendResult | null)[],
+): boolean {
+  return results.every(
+    (result) =>
+      result !== null &&
+      (result.providerMessageId !== null ||
+        result.failureDisposition === "permanent" ||
+        result.failureDisposition === "policy"),
+  );
+}
+
+export function bindProviderMessageIdAtIndex(
+  current: readonly string[],
+  requestCount: number,
+  index: number,
+  providerMessageId: string,
+): { providerMessageIds: string[]; conflict: string | null } {
+  const providerMessageIds = [...current];
+  while (providerMessageIds.length < requestCount) {
+    providerMessageIds.push("");
+  }
+  const conflict = validateProviderMessageIndex(
+    providerMessageIds,
+    requestCount,
+    index,
+    providerMessageId,
+  );
+  if (conflict) return { providerMessageIds, conflict };
+  const existing = current[index];
+  providerMessageIds[index] = existing || providerMessageId;
+  return { providerMessageIds, conflict: null };
+}
+
+export function validateProviderMessageIndex(
+  current: readonly string[],
+  requestCount: number,
+  index: number | null,
+  providerMessageId: string,
+): string | null {
+  const duplicateConflict = duplicateProviderMessageIdConflict(current);
+  if (duplicateConflict) return duplicateConflict;
+  if (index === null || index < 0 || index >= requestCount) {
+    return (
+      `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${
+        index === null ? "unknown" : index + 1
+      }: message index is outside the immutable request batch`
+    );
+  }
+  const knownIndex = current.findIndex(
+    (candidate) => candidate === providerMessageId,
+  );
+  if (knownIndex >= 0 && knownIndex !== index) {
+    return (
+      `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
+      `${providerMessageId} already belongs to request ${knownIndex + 1}`
+    );
+  }
+  const existing = current[index];
+  if (existing && existing !== providerMessageId) {
+    return (
+      `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
+      `${existing} != ${providerMessageId}`
+    );
+  }
+  return null;
+}
+
+export function duplicateProviderMessageIdConflict(
+  providerMessageIds: readonly string[],
+): string | null {
+  const firstIndex = new Map<string, number>();
+  for (const [index, providerMessageId] of providerMessageIds.entries()) {
+    if (!providerMessageId) continue;
+    const priorIndex = firstIndex.get(providerMessageId);
+    if (priorIndex !== undefined) {
+      return (
+        `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
+        `${providerMessageId} already belongs to request ${priorIndex + 1}`
+      );
+    }
+    firstIndex.set(providerMessageId, index);
+  }
+  return null;
 }
 
 function normalizeMailboxAddress(value: string): string | null {
@@ -261,7 +593,9 @@ export async function getResendDeliverySettingsSnapshot(
 export interface ResendDeliveryPolicy {
   from: string;
   intendedRecipients: string[];
+  primaryIntendedRecipient: string;
   to: string[];
+  cc: string[];
   bcc: string[];
   subject: string;
   testSend: boolean;
@@ -278,6 +612,8 @@ export interface BuildResendDeliveryPolicyArgs {
   testOverride: string | null;
   bccEmails: string[];
   suppressedEmails: Iterable<string>;
+  recipientDeliveryMode?: RecipientDeliveryMode;
+  primaryRecipientEmail?: string | null;
   allowMissingFrom?: boolean;
 }
 
@@ -288,6 +624,8 @@ export function buildResendDeliveryPolicy({
   testOverride,
   bccEmails,
   suppressedEmails,
+  recipientDeliveryMode = DEFAULT_RECIPIENT_DELIVERY_MODE,
+  primaryRecipientEmail = null,
   allowMissingFrom = false,
 }: BuildResendDeliveryPolicyArgs): ResendDeliveryPolicyResult {
   const normalizedFrom = from?.trim();
@@ -324,13 +662,30 @@ export function buildResendDeliveryPolicy({
   const allowedBcc = overrideEmail
     ? []
     : normalizeEmails(bccEmails).filter((email) => !blocked.has(email));
+  const normalizedPrimary = normalizeEmail(primaryRecipientEmail ?? "");
+  const primaryIntendedRecipient =
+    (normalizedPrimary && allowedIntended.includes(normalizedPrimary)
+      ? normalizedPrimary
+      : allowedIntended[0])!;
+  const layout = overrideEmail
+    ? { to: [overrideEmail], cc: [] }
+    : recipientDeliveryLayout(
+        allowedIntended,
+        primaryIntendedRecipient,
+        recipientDeliveryMode,
+      );
   return {
     ok: true,
     policy: {
       from: normalizedFrom ?? "",
       intendedRecipients: allowedIntended,
-      to: overrideEmail ? [overrideEmail] : allowedIntended,
-      bcc: allowedBcc,
+      primaryIntendedRecipient,
+      to: layout.to,
+      cc: layout.cc,
+      bcc:
+        recipientDeliveryMode === "cc_thread"
+          ? allowedBcc.filter((email) => !allowedIntended.includes(email))
+          : allowedBcc,
       subject: overrideEmail
         ? `[TEST → ${allowedIntended.join(", ")}] ${subject}`
         : subject,
@@ -359,6 +714,9 @@ export function buildArbitraryResendDeliveryPolicy(
 export async function resolveResendDeliveryPolicy(
   intendedRecipients: string[],
   subject: string,
+  recipientDeliveryMode: RecipientDeliveryMode =
+    DEFAULT_RECIPIENT_DELIVERY_MODE,
+  primaryRecipientEmail: string | null = null,
 ): Promise<ResendDeliveryPolicyResult> {
   const { from, testOverride, bccEmails } =
     await getResendDeliverySettingsSnapshot();
@@ -381,6 +739,8 @@ export async function resolveResendDeliveryPolicy(
     testOverride,
     bccEmails,
     suppressedEmails: suppressed.map((row) => row.normalizedEmail),
+    recipientDeliveryMode,
+    primaryRecipientEmail,
   });
 }
 
@@ -431,14 +791,67 @@ export function compareResendRequestToPolicy(
       ? "test mode is now enabled"
       : "test mode is now disabled";
   }
+
   if (!sameStrings(request.to, policy.to)) {
     return "recipient or test-override policy changed";
   }
+  if (!sameStrings(request.cc, policy.cc)) return "CC policy changed";
   if (!sameStrings(request.bcc, policy.bcc)) return "BCC policy changed";
-  if (request.cc.length > 0 || request.replyTo.length > 0) {
-    return "stored CC or reply-to fields are not allowed by current policy";
+  if (request.replyTo.length > 0) {
+    return "stored reply-to fields are not allowed by current policy";
   }
   if (request.subject !== policy.subject) return "test-mode subject policy changed";
+  return null;
+}
+
+export function compareResendRequestBatchToPolicy(
+  batch: ResendRequestBatchSnapshot,
+  testSend: boolean,
+  policy: ResendDeliveryPolicy,
+  deliveryMode: RecipientDeliveryMode,
+): string | null {
+  const expectedLayouts =
+    policy.testSend ||
+    deliveryMode === "cc_thread" ||
+    deliveryMode === "legacy_multi_to"
+      ? [{ to: policy.to, cc: policy.cc }]
+      : policy.intendedRecipients.map((email) => ({ to: [email], cc: [] }));
+  if (batch.requests.length !== expectedLayouts.length) {
+    return "provider request count changed";
+  }
+  const requests =
+    deliveryMode === "individual_threads" && !policy.testSend
+      ? expectedLayouts.map((layout) =>
+          batch.requests.find(
+            (request) =>
+              request.to.length === 1 &&
+              request.to[0] === layout.to[0] &&
+              request.cc.length === 0,
+          ),
+        )
+      : batch.requests;
+  if (requests.some((request) => !request)) {
+    return "individual recipient request identity changed";
+  }
+  for (const [index, request] of requests.entries()) {
+    const layout = expectedLayouts[index];
+    const conflict = compareResendRequestToPolicy(
+      request!,
+      testSend,
+      {
+        ...policy,
+        to: layout.to,
+        cc: layout.cc,
+        bcc: policy.bcc.filter(
+          (email) =>
+            !policy.intendedRecipients.includes(email) &&
+            !layout.to.includes(email) &&
+            !layout.cc.includes(email),
+        ),
+      },
+    );
+    if (conflict) return `provider request ${index + 1}: ${conflict}`;
+  }
   return null;
 }
 
@@ -447,10 +860,15 @@ export async function evaluateResendRetryPolicy(
   intendedRecipients: string[],
   baseSubject: string,
   testSend: boolean,
+  recipientDeliveryMode: RecipientDeliveryMode =
+    DEFAULT_RECIPIENT_DELIVERY_MODE,
+  primaryRecipientEmail: string | null = null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const resolved = await resolveResendDeliveryPolicy(
     intendedRecipients,
     baseSubject,
+    recipientDeliveryMode,
+    primaryRecipientEmail,
   );
   if (!resolved.ok) {
     return {
@@ -473,19 +891,45 @@ export async function evaluateResendRetryPolicy(
 
 export async function prepareResendRequest({
   to,
+  recipientDeliveryMode,
+  primaryRecipientEmail,
   subject,
   html,
   outreachId,
   attemptId,
   idempotencyKey,
 }: PrepareResendRequestArgs): Promise<PrepareResendRequestResult> {
-  const resolvedPolicy = await resolveResendDeliveryPolicy(to, subject);
+  const { from, testOverride, bccEmails } =
+    await getResendDeliverySettingsSnapshot();
+  const candidates = normalizeEmails([
+    ...to,
+    ...bccEmails,
+    ...(testOverride ? [testOverride] : []),
+  ]);
+  const suppressed =
+    candidates.length === 0
+      ? []
+      : await db.emailSuppression.findMany({
+          where: { normalizedEmail: { in: candidates } },
+          select: { normalizedEmail: true },
+        });
+  const resolvedPolicy = buildResendDeliveryPolicy({
+    from,
+    intendedRecipients: to,
+    subject,
+    testOverride,
+    bccEmails,
+    suppressedEmails: suppressed.map((row) => row.normalizedEmail),
+    recipientDeliveryMode,
+    primaryRecipientEmail,
+  });
   if (!resolvedPolicy.ok) {
     return {
       ...resolvedPolicy,
       preparationDisposition: "permanent",
     };
   }
+
   const { policy } = resolvedPolicy;
 
   const request: ResendRequestSnapshot = {
@@ -493,7 +937,7 @@ export async function prepareResendRequest({
     idempotencyKey,
     from: policy.from,
     to: policy.to,
-    cc: [],
+    cc: policy.cc,
     bcc: policy.bcc,
     replyTo: [],
     subject: policy.subject,
@@ -520,6 +964,114 @@ export async function prepareResendRequest({
   };
 }
 
+export async function prepareResendRequestBatch({
+  to,
+  recipientDeliveryMode = DEFAULT_RECIPIENT_DELIVERY_MODE,
+  primaryRecipientEmail,
+  subject,
+  html,
+  outreachId,
+  attemptId,
+  idempotencyKey,
+}: PrepareResendRequestArgs): Promise<PrepareResendRequestBatchResult> {
+  const { from, testOverride, bccEmails } =
+    await getResendDeliverySettingsSnapshot();
+  const candidates = normalizeEmails([
+    ...to,
+    ...bccEmails,
+    ...(testOverride ? [testOverride] : []),
+  ]);
+  const suppressed =
+    candidates.length === 0
+      ? []
+      : await db.emailSuppression.findMany({
+          where: { normalizedEmail: { in: candidates } },
+          select: { normalizedEmail: true },
+        });
+  const resolvedPolicy = buildResendDeliveryPolicy({
+    from,
+    intendedRecipients: to,
+    subject,
+    testOverride,
+    bccEmails,
+    suppressedEmails: suppressed.map((row) => row.normalizedEmail),
+    recipientDeliveryMode,
+    primaryRecipientEmail,
+  });
+  if (!resolvedPolicy.ok) {
+    return { ...resolvedPolicy, preparationDisposition: "permanent" };
+  }
+  const { policy } = resolvedPolicy;
+  const requestBatch = buildResendRequestBatchSnapshot({
+    policy,
+    recipientDeliveryMode,
+    html,
+    outreachId,
+    attemptId,
+    idempotencyKey,
+  });
+  return {
+    ok: true,
+    requestBatch,
+    requestHash: hashResendRequestBatchSnapshot(requestBatch),
+    testSend: policy.testSend,
+    intendedRecipients: policy.intendedRecipients,
+    attachmentBlobs: [],
+    warnings: [],
+  };
+}
+
+export function buildResendRequestBatchSnapshot({
+  policy,
+  recipientDeliveryMode,
+  html,
+  outreachId,
+  attemptId,
+  idempotencyKey,
+}: {
+  policy: ResendDeliveryPolicy;
+  recipientDeliveryMode: RecipientDeliveryMode;
+  html: string;
+  outreachId: string;
+  attemptId: string;
+  idempotencyKey: string;
+}): ResendRequestBatchSnapshot {
+  const layouts =
+    policy.testSend ||
+    recipientDeliveryMode === "cc_thread" ||
+    recipientDeliveryMode === "legacy_multi_to"
+      ? [{ to: policy.to, cc: policy.cc }]
+      : policy.intendedRecipients.map((email) => ({ to: [email], cc: [] }));
+  const requests = layouts.map((layout, index): ResendRequestSnapshot => ({
+    version: 1,
+    idempotencyKey: `${idempotencyKey}/message/${index}`,
+    from: policy.from,
+    to: layout.to,
+    cc: layout.cc,
+    bcc: policy.bcc.filter(
+      (email) =>
+        !policy.intendedRecipients.includes(email) &&
+        !layout.to.includes(email) &&
+        !layout.cc.includes(email),
+    ),
+    replyTo: [],
+    subject: policy.subject,
+    html,
+    headers: {
+      "X-Outreach-Id": outreachId,
+      "X-Outreach-Attempt-Id": attemptId,
+      "X-Outreach-Message-Index": String(index),
+    },
+    tags: [
+      { name: "outreach_id", value: outreachId },
+      { name: "outreach_attempt_id", value: attemptId },
+      { name: "outreach_message_index", value: String(index) },
+    ],
+    attachments: [],
+  }));
+  return { version: 1, requests };
+}
+
 export async function prepareArbitraryResendRequest({
   to,
   subject,
@@ -541,7 +1093,7 @@ export async function prepareArbitraryResendRequest({
     idempotencyKey,
     from: policy.from,
     to: policy.to,
-    cc: [],
+    cc: policy.cc,
     bcc: policy.bcc,
     replyTo: [],
     subject: policy.subject,
@@ -575,6 +1127,12 @@ function stableJson(value: unknown): string {
 
 export function hashResendRequestSnapshot(request: ResendRequestSnapshot): string {
   return createHash("sha256").update(stableJson(request)).digest("hex");
+}
+
+export function hashResendRequestBatchSnapshot(
+  batch: ResendRequestBatchSnapshot,
+): string {
+  return createHash("sha256").update(stableJson(batch)).digest("hex");
 }
 
 export function hashAttachmentContent(
@@ -699,6 +1257,28 @@ export function parseResendRequestSnapshot(value: unknown): ResendRequestSnapsho
   };
 }
 
+export function parseResendRequestBatchSnapshot(
+  value: unknown,
+): ResendRequestBatchSnapshot | null {
+  const legacy = parseResendRequestSnapshot(value);
+  if (legacy) return { version: 1, requests: [legacy] };
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["version", "requests"]) ||
+    value.version !== 1 ||
+    !Array.isArray(value.requests) ||
+    value.requests.length === 0
+  ) {
+    return null;
+  }
+  const requests = value.requests.map(parseResendRequestSnapshot);
+  return requests.every(
+    (request): request is ResendRequestSnapshot => request !== null,
+  )
+    ? { version: 1, requests }
+    : null;
+}
+
 export function canRetryResendRequest(
   firstAttemptAt: Date | null,
   now: Date = new Date(),
@@ -788,6 +1368,7 @@ export async function sendPreparedEmailViaResend(
       failureDisposition: "policy",
     };
   }
+
   const blobsByHash = new Map(attachmentBlobs.map((blob) => [blob.sha256, blob]));
   const resolvedAttachments = [];
   for (const attachment of request.attachments) {
@@ -895,13 +1476,59 @@ export async function sendPreparedEmailViaResend(
   }
 }
 
+export async function sendPreparedEmailBatchViaResend(
+  batch: ResendRequestBatchSnapshot,
+  expectedHash: string,
+  attachmentBlobs: ResendAttachmentBlob[],
+  submissionCredential: ResendSubmissionCredential | null,
+  priorResults: readonly (SendResult | null)[] = [],
+  sendRequest: typeof sendPreparedEmailViaResend =
+    sendPreparedEmailViaResend,
+): Promise<SendBatchResult> {
+  if (
+    hashResendRequestBatchSnapshot(batch) !== expectedHash &&
+    !(
+      batch.requests.length === 1 &&
+      hashResendRequestSnapshot(batch.requests[0]) === expectedHash
+    )
+  ) {
+    return {
+      results: batch.requests.map(() => ({
+        providerMessageId: null,
+        error: "Stored Resend request batch failed its integrity check",
+        failureDisposition: "policy" as const,
+      })),
+    };
+  }
+  return {
+    results: await Promise.all(
+      batch.requests.map((request, index) =>
+        priorResults[index]?.providerMessageId ||
+        ["permanent", "policy", "uncertain"].includes(
+          priorResults[index]?.failureDisposition ?? "",
+        )
+          ? Promise.resolve(priorResults[index]!)
+          : sendRequest(
+              request,
+              hashResendRequestSnapshot(request),
+              attachmentBlobs,
+              submissionCredential,
+            ),
+      ),
+    ),
+  };
+}
+
 export interface ResendAttemptIdentity {
   id: string;
   outreachId: string;
   providerMessageId: string | null;
+  providerMessageIds?: string[];
   status?: string;
   testSend?: boolean | null;
   providerCredentialScope?: string | null;
+  providerRequest?: unknown;
+  providerRequestResults?: unknown;
 }
 
 export interface ResendCorrelationClaims {
@@ -965,22 +1592,33 @@ export function shouldMirrorResendAttempt(
   outreach: {
     idempotencyKey: string;
     providerMessageId: string | null;
+    providerMessageIds?: string[];
     status?: string;
   },
   attempt: {
     idempotencyKey: string;
     providerMessageId: string | null;
+    providerMessageIds?: string[];
   },
 ): boolean {
   if (
     outreach.idempotencyKey !== attempt.idempotencyKey ||
-    !attempt.providerMessageId
+    (!attempt.providerMessageId &&
+      (attempt.providerMessageIds?.length ?? 0) === 0)
   ) {
     return false;
   }
+  const attemptIds = new Set([
+    ...(attempt.providerMessageId ? [attempt.providerMessageId] : []),
+    ...(attempt.providerMessageIds ?? []).filter(Boolean),
+  ]);
+  const outreachIds = new Set([
+    ...(outreach.providerMessageId ? [outreach.providerMessageId] : []),
+    ...(outreach.providerMessageIds ?? []).filter(Boolean),
+  ]);
   return (
-    outreach.providerMessageId === null ||
-    outreach.providerMessageId === attempt.providerMessageId
+    outreachIds.size === 0 ||
+    [...outreachIds].every((id) => attemptIds.has(id))
   );
 }
 
@@ -1034,10 +1672,21 @@ export function correlateResendWebhookAttempt(
   if (claims.outreachId && claims.outreachId !== attempt.outreachId) {
     return { status: "conflict", reason: "outreach tag contradicts matched attempt" };
   }
+  const knownProviderIds = new Set([
+    ...(attempt.providerMessageId ? [attempt.providerMessageId] : []),
+    ...(attempt.providerMessageIds ?? []).filter(Boolean),
+  ]);
+  const expectedProviderMessages =
+    parseResendRequestBatchSnapshot(attempt.providerRequest)?.requests.length ??
+    1;
+  const canResolveIndexedBatchConflict =
+    expectedProviderMessages > 1 && taggedAttempt?.id === attempt.id;
   if (
     claims.providerMessageId &&
-    attempt.providerMessageId &&
-    claims.providerMessageId !== attempt.providerMessageId
+    knownProviderIds.size > 0 &&
+    knownProviderIds.size >= expectedProviderMessages &&
+    !canResolveIndexedBatchConflict &&
+    !knownProviderIds.has(claims.providerMessageId)
   ) {
     return {
       status: "conflict",
@@ -1049,6 +1698,7 @@ export function correlateResendWebhookAttempt(
     status: "matched",
     attempt,
     bindProviderMessageId:
-      !!claims.providerMessageId && attempt.providerMessageId === null,
+      !!claims.providerMessageId &&
+      !knownProviderIds.has(claims.providerMessageId),
   };
 }
