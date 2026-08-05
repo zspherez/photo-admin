@@ -44,6 +44,21 @@ export function hasAcceptedProviderMessageId(
   return nonemptyProviderMessageIds(providerMessageIds).length > 0;
 }
 
+export function hasAcceptedProviderRequestResult(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        !Array.isArray(entry) &&
+        isNonemptyProviderMessageId(
+          (entry as Record<string, unknown>).providerMessageId,
+        ),
+    )
+  );
+}
+
 export function providerMessageIdsAreComplete(
   providerMessageIds: readonly string[],
   expectedCount: number,
@@ -1731,8 +1746,8 @@ export function shouldMirrorResendAttempt(
 ): boolean {
   if (
     outreach.idempotencyKey !== attempt.idempotencyKey ||
-    (!attempt.providerMessageId &&
-      (attempt.providerMessageIds?.length ?? 0) === 0)
+    (!isNonemptyProviderMessageId(attempt.providerMessageId) &&
+      !hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []))
   ) {
     return false;
   }
@@ -1816,7 +1831,7 @@ export function correlateResendWebhookAttempt(
   const canResolveIndexedBatchConflict =
     expectedProviderMessages > 1 && taggedAttempt?.id === attempt.id;
   if (
-    claims.providerMessageId &&
+    isNonemptyProviderMessageId(claims.providerMessageId) &&
     knownProviderIds.size > 0 &&
     knownProviderIds.size >= expectedProviderMessages &&
     !canResolveIndexedBatchConflict &&

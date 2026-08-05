@@ -23,6 +23,21 @@ BEGIN
       IS DISTINCT FROM OLD."sentMailboxCopyConfigurationError"
   ) AND (
     NULLIF(btrim(OLD."providerMessageId"), '') IS NOT NULL
+    OR EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(
+        CASE
+          WHEN jsonb_typeof(OLD."providerRequestResults") = 'array'
+            THEN OLD."providerRequestResults"
+          ELSE '[]'::JSONB
+        END
+      ) AS "providerRequestResult"
+      WHERE jsonb_typeof("providerRequestResult") = 'object'
+        AND NULLIF(
+          btrim("providerRequestResult" ->> 'providerMessageId'),
+          ''
+        ) IS NOT NULL
+    )
     OR NOT (
       (
         OLD."firstAttemptAt" IS NULL

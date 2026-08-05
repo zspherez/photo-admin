@@ -1601,6 +1601,18 @@ test("blank scalar and request-result provider IDs do not freeze safe retries", 
     failureDisposition: "retryable",
   };
   assert.equal(isDefinitivelyUnsentOutreachAttempt(retryable), true);
+  assert.deepEqual(
+    evaluateAttemptRetryEligibility(
+      retryableAttempt({
+        providerMessageId: " ",
+        providerMessageIds: ["", ""],
+        providerRequestResults: retryable.providerRequestResults,
+      }),
+      NOW,
+      CREDENTIAL_SCOPE,
+    ),
+    { ok: true },
+  );
   assert.equal(
     isDefinitivelyUnsentOutreachAttempt({
       ...retryable,
@@ -1622,6 +1634,25 @@ test("blank scalar and request-result provider IDs do not freeze safe retries", 
     }),
     false,
   );
+  const acceptedResultAttempt = retryableAttempt({
+    providerMessageIds: ["", ""],
+    providerRequestResults: [
+      {
+        providerMessageId: "accepted-result",
+        error: null,
+        failureDisposition: null,
+      },
+    ],
+  });
+  const acceptedResultDecision = evaluateAttemptRetryEligibility(
+    acceptedResultAttempt,
+    NOW,
+    CREDENTIAL_SCOPE,
+  );
+  assert.equal(acceptedResultDecision.ok, false);
+  if (!acceptedResultDecision.ok) {
+    assert.match(acceptedResultDecision.error, /already accepted/i);
+  }
 });
 
 test("follow-up recipient snapshots can include multiple unmarked current contacts", () => {

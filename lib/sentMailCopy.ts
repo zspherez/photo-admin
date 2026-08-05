@@ -13,6 +13,7 @@ import {
   hashResendRequestBatchSnapshot,
   hashResendRequestSnapshot,
   hasAcceptedProviderMessageId,
+  hasAcceptedProviderRequestResult,
   isNonemptyProviderMessageId,
   parseResendRequestBatchSnapshot,
   parseResendRequestSnapshot,
@@ -79,13 +80,15 @@ export function canRefreshSentMailboxTargetBeforeSubmission(state: {
   status: string;
   providerMessageId: string | null;
   providerMessageIds?: readonly string[];
+  providerRequestResults?: unknown;
   firstAttemptAt: Date | null;
   attemptCount: number;
   failureDisposition: string | null;
 }): boolean {
   if (
     isNonemptyProviderMessageId(state.providerMessageId) ||
-    hasAcceptedProviderMessageId(state.providerMessageIds ?? [])
+    hasAcceptedProviderMessageId(state.providerMessageIds ?? []) ||
+    hasAcceptedProviderRequestResult(state.providerRequestResults)
   ) {
     return false;
   }

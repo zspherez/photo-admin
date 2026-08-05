@@ -313,13 +313,12 @@ async function processEvent(
               !conflict &&
               arbitraryEmail &&
               messageId &&
-              !arbitraryEmail.providerMessageId
+              !isNonemptyProviderMessageId(
+                arbitraryEmail.providerMessageId,
+              )
             ) {
-              await tx.arbitraryEmail.updateMany({
-                where: {
-                  id: arbitraryEmail.id,
-                  providerMessageId: null,
-                },
+              await tx.arbitraryEmail.update({
+                where: { id: arbitraryEmail.id },
                 data: { providerMessageId: messageId },
               });
               const rebound = await tx.arbitraryEmail.findUnique({

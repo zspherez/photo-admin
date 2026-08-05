@@ -36,6 +36,7 @@ import {
   hashResendRequestBatchSnapshot,
   hashResendRequestSnapshot,
   hasAcceptedProviderMessageId,
+  hasAcceptedProviderRequestResult,
   isNonemptyProviderMessageId,
   isProviderMessageIdConflictError,
   nonemptyProviderMessageIds,
@@ -977,14 +978,6 @@ function requestResultEntries(
     : [];
 }
 
-function hasAcceptedRequestResult(
-  value: Prisma.JsonValue | null | undefined,
-): boolean {
-  return requestResultEntries(value).some(
-    (entry) => isNonemptyProviderMessageId(entry.providerMessageId),
-  );
-}
-
 function hasUncertainRequestResult(
   value: Prisma.JsonValue | null | undefined,
 ): boolean {
@@ -1001,6 +994,7 @@ export function isProviderAcceptanceUnresolvedAttempt(
     | "status"
     | "providerMessageId"
     | "providerMessageIds"
+    | "providerMessageIds"
     | "providerRequestResults"
     | "providerCredentialScope"
     | "firstAttemptAt"
@@ -1012,7 +1006,7 @@ export function isProviderAcceptanceUnresolvedAttempt(
   if (
     isNonemptyProviderMessageId(attempt.providerMessageId) ||
     hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) ||
-    hasAcceptedRequestResult(attempt.providerRequestResults)
+    hasAcceptedProviderRequestResult(attempt.providerRequestResults)
   ) {
     return false;
   }
@@ -1073,7 +1067,7 @@ export function isDefinitivelyUnsentOutreachAttempt(
   if (
     isNonemptyProviderMessageId(attempt.providerMessageId) ||
     hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) ||
-    hasAcceptedRequestResult(attempt.providerRequestResults) ||
+    hasAcceptedProviderRequestResult(attempt.providerRequestResults) ||
     hasUncertainRequestResult(attempt.providerRequestResults)
   ) {
     return false;
@@ -1120,7 +1114,7 @@ export function isDefinitiveConfigurationRejection(
     !!attempt &&
     !isNonemptyProviderMessageId(attempt.providerMessageId) &&
     !hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) &&
-    !hasAcceptedRequestResult(attempt.providerRequestResults) &&
+    !hasAcceptedProviderRequestResult(attempt.providerRequestResults) &&
     !hasUncertainRequestResult(attempt.providerRequestResults) &&
     attempt.firstAttemptAt !== null &&
     attempt.attemptCount > 0 &&
@@ -1138,6 +1132,7 @@ export function evaluateAttemptRetryEligibility(
     StoredAttempt,
     | "status"
     | "providerMessageId"
+    | "providerMessageIds"
     | "providerRequestResults"
     | "providerRequest"
     | "requestHash"
@@ -1153,7 +1148,11 @@ export function evaluateAttemptRetryEligibility(
   if (hasUncertainRequestResult(attempt.providerRequestResults)) {
     return { ok: false, state: "manual_review", error: MANUAL_REVIEW_UNCERTAIN };
   }
-  if (isNonemptyProviderMessageId(attempt.providerMessageId)) {
+  if (
+    isNonemptyProviderMessageId(attempt.providerMessageId) ||
+    hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) ||
+    hasAcceptedProviderRequestResult(attempt.providerRequestResults)
+  ) {
     return {
       ok: false,
       state: "manual_review",
@@ -3001,7 +3000,7 @@ export async function getFollowUpEligibilityBatch(
     if (child) {
       if (
         childAttempt &&
-        childAttempt.providerMessageId &&
+        isNonemptyProviderMessageId(childAttempt.providerMessageId) &&
         childAttempt.testSend !== true
       ) {
         return followUpResult(
@@ -3035,7 +3034,7 @@ export async function getFollowUpEligibilityBatch(
         (child.status === "cancelled" &&
           !!childAttempt &&
           isDefinitivelyUnsentOutreachAttempt(childAttempt)) ||
-        (childAttempt?.providerMessageId &&
+        (isNonemptyProviderMessageId(childAttempt?.providerMessageId) &&
           childAttempt.testSend === true &&
           ["accepted", "delivery_failed"].includes(childAttempt.status))
       ) {
@@ -4697,7 +4696,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
     }
     if (
       existing &&
-      existingAttempt?.providerMessageId &&
+      isNonemptyProviderMessageId(existingAttempt?.providerMessageId) &&
       existingAttempt.testSend !== true
     ) {
       return finishAlreadyAccepted(tx, existing, existingAttempt);
@@ -6923,7 +6922,7 @@ async function schedulePreparedOutreach(
       : null;
     if (
       existing &&
-      existingAttempt?.providerMessageId &&
+      isNonemptyProviderMessageId(existingAttempt?.providerMessageId) &&
       existingAttempt.testSend !== true
     ) {
       return (await finishAlreadyAccepted(tx, existing, existingAttempt)).result;

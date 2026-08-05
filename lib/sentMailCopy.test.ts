@@ -225,6 +225,51 @@ test("Sent target refresh is limited to proven-unsent pre-acceptance states", ()
       }),
       false,
     );
+    assert.equal(
+      canRefreshSentMailboxTargetBeforeSubmission({
+        ...base,
+        status: "request_failed",
+        providerMessageId: "",
+        providerMessageIds: ["", ""],
+        providerRequestResults: [
+          {
+            providerMessageId: " \n ",
+            failureDisposition: "retryable",
+          },
+        ],
+        failureDisposition: "retryable",
+      }),
+      true,
+    );
+    assert.equal(
+      canRefreshSentMailboxTargetBeforeSubmission({
+        ...base,
+        status: "request_failed",
+        providerMessageId: "",
+        providerMessageIds: ["", ""],
+        providerRequestResults: [
+          {
+            providerMessageId: "accepted-result",
+            failureDisposition: null,
+          },
+        ],
+        failureDisposition: "retryable",
+      }),
+      false,
+    );
+    for (const providerRequestResults of [null, {}, ["malformed"]]) {
+      assert.equal(
+        canRefreshSentMailboxTargetBeforeSubmission({
+          ...base,
+          status: "request_failed",
+          providerMessageId: "",
+          providerMessageIds: [],
+          providerRequestResults,
+          failureDisposition: "retryable",
+        }),
+        true,
+      );
+    }
   }
   assert.equal(
     canRefreshSentMailboxTargetBeforeSubmission({
@@ -871,6 +916,10 @@ test("Sent copy persistence constrains one immutable source and retry state", ()
   assert.match(
     batchMigration,
     /unnest\([\s\S]*providerMessageIds[\s\S]*NULLIF\(btrim\("providerMessageIdValue"\), ''\) IS NOT NULL/,
+  );
+  assert.match(
+    batchMigration,
+    /jsonb_array_elements\([\s\S]*jsonb_typeof\(OLD\."providerRequestResults"\) = 'array'[\s\S]*providerRequestResult" ->> 'providerMessageId'[\s\S]*IS NOT NULL/,
   );
   assert.match(batchMigration, /COMMIT;\s*$/);
 });
