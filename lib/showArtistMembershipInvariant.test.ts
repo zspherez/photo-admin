@@ -245,7 +245,10 @@ test("EDMTrain replacement locks before deletion and checks final state", () => 
   const source = readFileSync(new URL("./edmtrain.ts", import.meta.url), "utf8");
   const lock = source.indexOf("await acquireShowArtistMembershipLock(tx)");
   const deletion = source.indexOf("await tx.showArtist.deleteMany");
-  const insertion = source.indexOf("await tx.showArtist.createMany");
+  const insertion = source.indexOf(
+    'INSERT INTO "ShowArtist"',
+    deletion,
+  );
   const invalidation = source.indexOf(
     "await staleReadyTrajectoryRunsWithMissingMembership(tx)",
   );

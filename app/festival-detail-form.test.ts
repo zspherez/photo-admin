@@ -48,6 +48,8 @@ test("festival outreach forms are valid and explicitly associated", () => {
   let cancelFormFound = false;
   let managerResearchFormFound = false;
   let queueOutreachFormFound = false;
+  let manualArtistFormFound = false;
+  let manualRemovalFormFound = false;
   let contactCheckboxFound = false;
 
   const visit = (node: ts.Node, formDepth: number) => {
@@ -89,6 +91,14 @@ test("festival outreach forms are valid and explicitly associated", () => {
       ) {
         queueOutreachFormFound = true;
       }
+      if (
+        isIdentifierExpression(
+          attribute(attributes, "action"),
+          "removeManualFestivalArtist",
+        )
+      ) {
+        manualRemovalFormFound = true;
+      }
     }
 
     if (
@@ -115,6 +125,12 @@ test("festival outreach forms are valid and explicitly associated", () => {
         isIdentifierExpression(attribute(node.attributes, "action"), "bulkSend") &&
         isIdentifierExpression(attribute(node.attributes, "formId"), "bulkFormId");
     }
+    if (
+      ts.isJsxSelfClosingElement(node) &&
+      tagName(node.tagName) === "ManualFestivalArtistForm"
+    ) {
+      manualArtistFormFound = true;
+    }
 
     ts.forEachChild(node, (child) => visit(child, childFormDepth));
   };
@@ -140,6 +156,16 @@ test("festival outreach forms are valid and explicitly associated", () => {
     queueOutreachFormFound,
     true,
     "Festival pages need a one-click queue-outreach action",
+  );
+  assert.equal(
+    manualArtistFormFound,
+    true,
+    "Festival pages need an independent manual-artist form",
+  );
+  assert.equal(
+    manualRemovalFormFound,
+    true,
+    "Manual lineup rows need an independent removal action",
   );
 });
 

@@ -783,11 +783,13 @@ model EdmtrainVenue {
 }
 
 model ShowArtist {
-  showId    String
-  artistId  String
-  show      Show    @relation(fields: [showId], references: [id], onDelete: Cascade)
-  artist    Artist  @relation(fields: [artistId], references: [id], onDelete: Cascade)
-  headliner Boolean @default(false)
+  showId          String
+  artistId        String
+  show            Show    @relation(fields: [showId], references: [id], onDelete: Cascade)
+  artist          Artist  @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  headliner       Boolean @default(false)
+  providerManaged Boolean @default(true)
+  manuallyAdded   Boolean @default(false)
 
   @@id([showId, artistId])
   @@index([artistId])

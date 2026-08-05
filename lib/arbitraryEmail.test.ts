@@ -532,84 +532,88 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
       migrationNames.indexOf(monthlyContactAuditMigrationName),
   );
   assert.equal(
-    migrationNames.at(-20),
+    migrationNames.at(-21),
     monthlyContactAuditMigrationName,
   );
   assert.equal(
-    migrationNames.at(-19),
+    migrationNames.at(-20),
     "20260723040000_rolling_monthly_contact_audits",
   );
   assert.equal(
-    migrationNames.at(-18),
+    migrationNames.at(-19),
     "20260723180000_contact_export_snapshots",
   );
   assert.equal(
-    migrationNames.at(-17),
+    migrationNames.at(-18),
     "20260723200000_contact_export_destination",
   );
   assert.equal(
-    migrationNames.at(-16),
+    migrationNames.at(-17),
     "20260723210000_contact_audit_agent_rules",
   );
   assert.equal(
-    migrationNames.at(-15),
+    migrationNames.at(-16),
     "20260726190000_trajectory_seven_day_validity",
   );
   assert.equal(
-    migrationNames.at(-14),
+    migrationNames.at(-15),
     "20260727124500_targeted_contact_audit_requests",
   );
   assert.equal(
-    migrationNames.at(-13),
+    migrationNames.at(-14),
     "20260729023000_artist_custom_display_name",
   );
   assert.equal(
-    migrationNames.at(-12),
+    migrationNames.at(-13),
     "20260729031000_festival_multi_artist_outreach",
   );
   assert.equal(
-    migrationNames.at(-11),
+    migrationNames.at(-12),
     "20260729110000_arbitrary_email_dismissal",
   );
   assert.equal(
-    migrationNames.at(-10),
+    migrationNames.at(-11),
     "20260729113000_outreach_email_dismissal",
   );
   assert.equal(
-    migrationNames.at(-9),
+    migrationNames.at(-10),
     "20260729133000_festival_all_contacts_send",
   );
   assert.equal(
-    migrationNames.at(-8),
+    migrationNames.at(-9),
     "20260729194500_email_template_multi_artist_constraint",
   );
   assert.equal(
-    migrationNames.at(-7),
+    migrationNames.at(-8),
     "20260730174000_follow_up_current_contact",
   );
   assert.equal(
-    migrationNames.at(-6),
+    migrationNames.at(-7),
     "20260731013000_festival_utm_campaign",
   );
   assert.equal(
-    migrationNames.at(-5),
+    migrationNames.at(-6),
     "20260731155000_outreach_click_stream",
   );
   assert.equal(
-    migrationNames.at(-4),
+    migrationNames.at(-5),
     "20260804033000_retire_contact_full_team",
   );
   assert.equal(
-    migrationNames.at(-3),
+    migrationNames.at(-4),
     "20260804044500_dedupe_direct_outreach_contacts",
   );
   assert.equal(
-    migrationNames.at(-2),
+    migrationNames.at(-3),
     "20260804050500_repair_invalid_contact_emails",
   );
   assert.equal(
-    migrationNames.at(-1),
+    migrationNames.at(-2),
     "20260804162000_outreach_recipient_delivery_mode",
+  );
+  assert.equal(
+    migrationNames.at(-1),
+    "20260804170000_manual_festival_lineup_artists",
   );
 
   const migration = readFileSync(
