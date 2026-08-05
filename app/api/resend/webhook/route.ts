@@ -12,10 +12,13 @@ import {
   getResendWebhookFailurePolicy,
   isProviderMessageIdConflictError,
   markResendRequestDeliveryFailure,
+  hasAcceptedProviderMessageId,
+  nonemptyProviderMessageIds,
   outreachWebhookRecipientImpact,
   parseResendRequestBatchSnapshot,
   parseResendRequestResultSnapshot,
   resendRequestResultsAreResolved,
+  providerMessageIdsAreComplete,
   shouldMirrorResendAttempt,
   validateProviderMessageIndex,
 } from "@/lib/resend";
@@ -759,14 +762,17 @@ async function processEvent(
               .length ?? 1;
           const providerMessageIds = Array.from(
             new Set([
-              ...attempt.providerMessageIds.filter(Boolean),
+              ...nonemptyProviderMessageIds(attempt.providerMessageIds),
               ...(attempt.providerMessageId
                 ? [attempt.providerMessageId]
                 : []),
             ]),
           );
           const providerAcceptanceComplete =
-            providerMessageIds.length === expectedProviderMessages;
+            providerMessageIdsAreComplete(
+              providerMessageIds,
+              expectedProviderMessages,
+            );
           const primaryProviderMessageId =
             attempt.providerMessageId ?? providerMessageIds[0] ?? null;
           const indexedProviderMessageIds =
@@ -828,7 +834,7 @@ async function processEvent(
             };
           };
 
-          if (indexedProviderMessageIds.some(Boolean)) {
+          if (hasAcceptedProviderMessageId(indexedProviderMessageIds)) {
             await ensureOutreachSentMailCopiesQueued(tx, {
               id: attempt.id,
               providerMessageIds: indexedProviderMessageIds,

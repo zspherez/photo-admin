@@ -23,11 +23,35 @@ export const RESEND_PROVIDER_REQUEST_TIMEOUT_MS = 20_000;
 export const RESEND_CREDENTIAL_SCOPE_PREFIX = "resend:key-sha256:";
 export const RESEND_WEBHOOK_LOCK_CLASS = 1_380_273_301;
 
+export function nonemptyProviderMessageIds(
+  providerMessageIds: readonly string[],
+): string[] {
+  return providerMessageIds.filter(
+    (providerMessageId) => providerMessageId.trim().length > 0,
+  );
+}
+
+export function hasAcceptedProviderMessageId(
+  providerMessageIds: readonly string[],
+): boolean {
+  return nonemptyProviderMessageIds(providerMessageIds).length > 0;
+}
+
+export function providerMessageIdsAreComplete(
+  providerMessageIds: readonly string[],
+  expectedCount: number,
+): boolean {
+  return (
+    providerMessageIds.length === expectedCount &&
+    nonemptyProviderMessageIds(providerMessageIds).length === expectedCount
+  );
+}
+
 export function resendProviderMessageLockKeys(
   providerMessageIds: readonly string[],
 ): string[] {
   return Array.from(
-    new Set(providerMessageIds.filter(Boolean).map((id) => `message:${id}`)),
+    new Set(nonemptyProviderMessageIds(providerMessageIds).map((id) => `message:${id}`)),
   ).sort();
 }
 
@@ -1693,11 +1717,11 @@ export function shouldMirrorResendAttempt(
   }
   const attemptIds = new Set([
     ...(attempt.providerMessageId ? [attempt.providerMessageId] : []),
-    ...(attempt.providerMessageIds ?? []).filter(Boolean),
+    ...nonemptyProviderMessageIds(attempt.providerMessageIds ?? []),
   ]);
   const outreachIds = new Set([
     ...(outreach.providerMessageId ? [outreach.providerMessageId] : []),
-    ...(outreach.providerMessageIds ?? []).filter(Boolean),
+    ...nonemptyProviderMessageIds(outreach.providerMessageIds ?? []),
   ]);
   return (
     outreachIds.size === 0 ||
@@ -1757,7 +1781,7 @@ export function correlateResendWebhookAttempt(
   }
   const knownProviderIds = new Set([
     ...(attempt.providerMessageId ? [attempt.providerMessageId] : []),
-    ...(attempt.providerMessageIds ?? []).filter(Boolean),
+    ...nonemptyProviderMessageIds(attempt.providerMessageIds ?? []),
   ]);
   const expectedProviderMessages =
     parseResendRequestBatchSnapshot(attempt.providerRequest)?.requests.length ??

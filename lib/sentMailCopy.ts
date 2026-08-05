@@ -12,6 +12,7 @@ import {
   hashAttachmentContent,
   hashResendRequestBatchSnapshot,
   hashResendRequestSnapshot,
+  hasAcceptedProviderMessageId,
   parseResendRequestBatchSnapshot,
   parseResendRequestSnapshot,
   type ResendAttachmentBlob,
@@ -83,7 +84,7 @@ export function canRefreshSentMailboxTargetBeforeSubmission(state: {
 }): boolean {
   if (
     state.providerMessageId ||
-    state.providerMessageIds?.some(Boolean)
+    hasAcceptedProviderMessageId(state.providerMessageIds ?? [])
   ) {
     return false;
   }

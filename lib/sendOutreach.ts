@@ -35,11 +35,14 @@ import {
   hashAttachmentContent,
   hashResendRequestBatchSnapshot,
   hashResendRequestSnapshot,
+  hasAcceptedProviderMessageId,
   isProviderMessageIdConflictError,
+  nonemptyProviderMessageIds,
   normalizeEmails,
   parseResendRequestBatchSnapshot,
   parseResendRequestResultSnapshot,
   prepareResendRequestBatch,
+  providerMessageIdsAreComplete,
   sendPreparedEmailBatchViaResend,
   mergeResendRequestResults,
   summarizeResendRequestResults,
@@ -935,7 +938,7 @@ export function isNonBlockingLegacyUnknownAttempt(
   ) {
     return (
       (attempt.providerMessageId === null &&
-        !(attempt.providerMessageIds ?? []).some(Boolean) &&
+        !hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) &&
         attempt.attemptCount === 0 &&
         attempt.bouncedAt === null &&
         attempt.complainedAt === null) ||
@@ -1007,7 +1010,7 @@ export function isProviderAcceptanceUnresolvedAttempt(
   if (hasUncertainRequestResult(attempt.providerRequestResults)) return true;
   if (
     attempt.providerMessageId ||
-    (attempt.providerMessageIds ?? []).some(Boolean) ||
+    hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) ||
     hasAcceptedRequestResult(attempt.providerRequestResults)
   ) {
     return false;
@@ -1068,7 +1071,7 @@ export function isDefinitivelyUnsentOutreachAttempt(
 ): boolean {
   if (
     attempt.providerMessageId ||
-    (attempt.providerMessageIds ?? []).some(Boolean) ||
+    hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) ||
     hasAcceptedRequestResult(attempt.providerRequestResults) ||
     hasUncertainRequestResult(attempt.providerRequestResults)
   ) {
@@ -1115,7 +1118,7 @@ export function isDefinitiveConfigurationRejection(
   return (
     !!attempt &&
     attempt.providerMessageId === null &&
-    !(attempt.providerMessageIds ?? []).some(Boolean) &&
+    !hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) &&
     !hasAcceptedRequestResult(attempt.providerRequestResults) &&
     !hasUncertainRequestResult(attempt.providerRequestResults) &&
     attempt.firstAttemptAt !== null &&
@@ -6016,7 +6019,9 @@ async function finishClaimedSend(
       });
       return { ok: false, outreachId: current.id, error, ...outputMetadata };
     }
-    const returnedProviderIds = providerMessageIds.filter(Boolean);
+    const returnedProviderIds = nonemptyProviderMessageIds(
+      providerMessageIds,
+    );
     await acquireResendProviderMessageLocks(tx, returnedProviderIds);
     const providerOwners =
       returnedProviderIds.length === 0
@@ -6063,7 +6068,10 @@ async function finishClaimedSend(
     const result = aggregateResult;
     const allRequestsAccepted =
       failedResults.length === 0 &&
-      providerMessageIds.every(Boolean);
+      providerMessageIdsAreComplete(
+        providerMessageIds,
+        requestResults.length,
+      );
     const deliveryFailure = requestResults.find(
       (requestResult) => requestResult.deliveryFailure,
     )?.deliveryFailure;

@@ -66,7 +66,13 @@ BEGIN
       IS DISTINCT FROM OLD."sentMailboxCopyConfigurationError"
   ) AND (
     OLD."providerMessageId" IS NOT NULL
-    OR cardinality(OLD."providerMessageIds") > 0
+    OR EXISTS (
+      SELECT 1
+      FROM unnest(
+        COALESCE(OLD."providerMessageIds", ARRAY[]::TEXT[])
+      ) AS "providerMessageIdValue"
+      WHERE NULLIF(btrim("providerMessageIdValue"), '') IS NOT NULL
+    )
     OR NOT (
       (
         OLD."firstAttemptAt" IS NULL
