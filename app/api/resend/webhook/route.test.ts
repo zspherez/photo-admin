@@ -52,3 +52,186 @@ test("webhook event rows persist sanitized click metadata in every correlation p
   assert.ok((source.match(/\.\.\.clickMetadata/g)?.length ?? 0) >= 3);
   assert.doesNotMatch(source, /ipAddress|userAgent/);
 });
+
+test("webhooks correlate every message in an immutable outreach batch", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(source, /providerMessageIds: \{ has: messageId \}/);
+  assert.match(source, /findMessageIndex\(parsed\)/);
+  assert.match(source, /bindProviderMessageIdAtIndex/);
+  assert.match(source, /validateProviderMessageIndex/);
+  assert.match(source, /providerAcceptanceComplete/);
+  assert.match(source, /providerMessageIds,/);
+  assert.match(source, /outreachWebhookRecipientImpact/);
+  assert.match(
+    source,
+    /auxiliary outreach recipient webhook recorded without aggregate mutation/,
+  );
+});
+
+test("same-index webhook ID conflicts preserve immutable identity and stop retries", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(source, /bindProviderMessageIdAtIndex/);
+  assert.match(
+    source,
+    /quarantineProviderIdentityConflict[\s\S]*status: "manual_review"[\s\S]*failureDisposition: "policy"[\s\S]*nextAttemptAt: null/,
+  );
+  assert.match(
+    source,
+    /outreach\?\.idempotencyKey === attempt\.idempotencyKey[\s\S]*status: "manual_review"/,
+  );
+  assert.match(
+    source,
+    /if \(correlation\.status === "matched"\) \{[\s\S]*providerMessageIds,[\s\S]*providerRequestResults:/,
+  );
+  assert.match(source, /conflictedAttempt = attempt/);
+  assert.match(source, /eventAttempt = matchedAttempt \?\? conflictedAttempt/);
+  assert.match(source, /outreachId: eventAttempt\?\.outreachId/);
+  assert.match(source, /attemptId: eventAttempt\?\.id/);
+});
+
+test("cross-attempt provider conflicts quarantine the tagged current attempt", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /correlation\.status === "conflict"[\s\S]*taggedAttempt[\s\S]*messageAttempt[\s\S]*taggedAttempt\.id !== messageAttempt\.id/,
+  );
+  assert.match(
+    source,
+    /quarantineProviderIdentityConflict\(\s*taggedAttempt\.id/,
+  );
+  assert.match(
+    source,
+    /already belongs to another attempt/,
+  );
+  assert.match(source, /eventAttempt = matchedAttempt \?\? conflictedAttempt/);
+});
+
+test("every batch webhook validates index bounds and existing slot ownership", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  const validation = source.indexOf("validateProviderMessageIndex(");
+  const binding = source.indexOf("bindProviderMessageIdAtIndex(");
+  assert.ok(validation >= 0 && validation < binding);
+  assert.match(
+    source,
+    /correlation\.status === "matched" && messageId[\s\S]*expectedRequests > 1[\s\S]*validateProviderMessageIndex/,
+  );
+  assert.match(
+    source,
+    /quarantineProviderIdentityConflict\(\s*correlation\.attempt\.id,\s*conflict/,
+  );
+});
+
+test("duplicate provider IDs across batch indexes are quarantined before finalization", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  const duplicateCheck = source.indexOf(
+    "duplicateProviderMessageIdConflict(attempt.providerMessageIds)",
+  );
+  const completion = source.indexOf(
+    "providerAcceptanceComplete",
+    duplicateCheck,
+  );
+  assert.ok(duplicateCheck >= 0 && duplicateCheck < completion);
+  assert.match(
+    source,
+    /duplicateProviderIdentity[\s\S]*quarantineProviderIdentityConflict/,
+  );
+  assert.match(
+    source,
+    /resendWebhookEvent\.update\([\s\S]*correlationStatus: "conflict"/,
+  );
+  assert.match(
+    source,
+    /duplicate provider identity remains quarantined pending explicit resolution/,
+  );
+});
+
+test("individual-mode BCC opens, clicks, and failures record without aggregate mutation", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  const auxiliaryGuard = source.indexOf(
+    "auxiliary outreach recipient webhook recorded without aggregate mutation",
+  );
+  assert.ok(auxiliaryGuard >= 0);
+  const suppression = source.lastIndexOf("applySuppression(", auxiliaryGuard);
+  assert.ok(suppression >= 0 && suppression < auxiliaryGuard);
+  assert.ok(auxiliaryGuard < source.indexOf('case "email.opened"', auxiliaryGuard));
+  assert.ok(auxiliaryGuard < source.indexOf('case "email.clicked"', auxiliaryGuard));
+  assert.ok(auxiliaryGuard < source.indexOf('case "email.failed"', auxiliaryGuard));
+});
+
+test("BCC-only bounce and complaint events suppress before skipping aggregates", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  const auxiliaryGuard = source.indexOf(
+    "auxiliary outreach recipient webhook recorded without aggregate mutation",
+  );
+  const suppression = source.lastIndexOf("applySuppression(", auxiliaryGuard);
+  assert.ok(suppression >= 0 && suppression < auxiliaryGuard);
+  assert.match(source, /failurePolicy\.applySuppression/);
+  assert.match(source, /parsed\.type !== "email\.bounced"/);
+  assert.match(source, /parsed\.type !== "email\.complained"/);
+});
+
+test("provider identity quarantine remains sticky after later valid batch webhooks", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(source, /isProviderMessageIdConflictError\(attempt\.error\)/);
+  assert.match(
+    source,
+    /provider identity conflict remains quarantined pending explicit resolution/,
+  );
+  const stickyGuard = source.indexOf(
+    "provider identity conflict remains quarantined pending explicit resolution",
+  );
+  assert.ok(stickyGuard < source.indexOf("providerAcceptanceComplete", stickyGuard));
+});
+
+test("partial accepted delivery failures preserve unresolved batch retry state", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.match(source, /markResendRequestDeliveryFailure/);
+  assert.match(source, /resendRequestResultsAreResolved/);
+  assert.match(
+    source,
+    /status: deliveryFailure\.resolved[\s\S]*"delivery_failed"[\s\S]*attempt\.status/,
+  );
+  assert.match(
+    source,
+    /nextAttemptAt: deliveryFailure\.resolved[\s\S]*null[\s\S]*attempt\.nextAttemptAt/,
+  );
+  assert.match(
+    source,
+    /bouncedAt: earlier\(\s*attempt\.bouncedAt,\s*providerCreatedAt/,
+  );
+  assert.match(
+    source,
+    /complainedAt: earlier\(\s*attempt\.complainedAt,\s*providerCreatedAt/,
+  );
+  assert.match(
+    source,
+    /hadDeliveryFailure && attempt\.bouncedAt[\s\S]*outreach\.bouncedAt/,
+  );
+  assert.match(
+    source,
+    /hadDeliveryFailure && attempt\.complainedAt[\s\S]*outreach\.complainedAt/,
+  );
+});
+
+test("webhook completion merges delivery observed before final batch acceptance", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  assert.ok(
+    (source.match(/attempt\.deliveredAt/g)?.length ?? 0) >= 4,
+  );
+  assert.match(
+    source,
+    /deliveredAt: earlier\(\s*outreach\.deliveredAt,\s*attempt\.deliveredAt/,
+  );
+  assert.match(
+    source,
+    /deliveredAt: earlier\(\s*outreach\.deliveredAt,\s*deliveredAt/,
+  );
+  assert.match(
+    source,
+    /const acceptedAt = earlier\(\s*earlier\(\s*attempt\.acceptedAt,\s*attempt\.deliveredAt \?\? providerCreatedAt/,
+  );
+  assert.match(
+    source,
+    /sentAt: earlier\(\s*earlier\(outreach\.sentAt, acceptedAt\),\s*attempt\.deliveredAt \?\? acceptedAt/,
+  );
+});

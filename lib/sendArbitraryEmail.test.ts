@@ -219,6 +219,7 @@ class MemoryArbitraryEmailDatabase {
         upsert: async ({ create }) => {
           this.sentMailCopyRecord ??= {
             outreachAttemptId: null,
+            requestIndex: null,
             arbitraryEmailId: null,
             targetScope: null,
             ...create,
@@ -381,7 +382,7 @@ test("immediate arbitrary delivery succeeds when Sent archival is misconfigured"
     }),
   );
 
-  assert.equal(result.ok, true);
+  assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(submissions, 1);
   assert.equal(database.record?.status, "sent");
   assert.equal(database.sentMailCopyRecord?.status, "retry_scheduled");
@@ -419,7 +420,7 @@ test("immediate arbitrary delivery binds the locked current Sent target", async 
     ),
   );
 
-  assert.equal(result.ok, true);
+  assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(submissions, 1);
   assert.equal(database.record?.sentMailboxTargetScope, SENT_TARGET_SCOPE_B);
   assert.equal(database.record?.claimedAt, null);
@@ -470,7 +471,7 @@ test("proven-unsent arbitrary retries refresh the Sent target before acceptance"
   settings.sentMailboxTargetScope = SENT_TARGET_SCOPE_B;
   now.value = first.nextAttemptAt ?? new Date("2026-07-20T20:02:01.000Z");
   const second = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
-  assert.equal(second.ok, true);
+  assert.equal(second.ok, true, JSON.stringify(second));
   assert.equal(submissions, 2);
   assert.equal(database.sentMailCopyRecord?.status, "retry_scheduled");
   assert.equal(

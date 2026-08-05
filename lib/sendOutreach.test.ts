@@ -14,6 +14,7 @@ import {
   currentFollowUpRecipientEmails,
   evaluateAttemptRetryEligibility,
   evaluateOutreachDeliveryPolicy,
+  earliestDeliveryDate,
   festivalOutreachBlockingReason,
   followUpParentBlockingReason,
   getAcceptedDeliveryFailureOutreachState,
@@ -31,6 +32,7 @@ import {
   isNonBlockingLegacyUnknownAttempt,
   isProviderAcceptanceUnresolvedAttempt,
   recipientSnapshotConflict,
+  resolveFollowUpRecipientDeliveryMode,
   protectLegacyScheduledSnapshot,
   preparedTemplatePurposeBlockingReason,
   schedulingTimeTemplateProvenance,
@@ -1193,6 +1195,7 @@ test("accepted test-delivery failures stay reusable while real failures remain f
       status: "test",
       error: null,
       providerMessageId: "message-test",
+      providerMessageIds: ["message-test"],
       sentAt: acceptedAt,
       scheduledFor: null,
       nextAttemptAt: null,
@@ -1211,13 +1214,39 @@ test("accepted test-delivery failures stay reusable while real failures remain f
   );
 });
 
+test("batch recovery and finalization preserve the earliest delivered timestamp", () => {
+  const earlier = new Date("2026-07-16T04:00:00.000Z");
+  const later = new Date("2026-07-16T05:00:00.000Z");
+  assert.equal(earliestDeliveryDate(earlier, later), earlier);
+  assert.equal(earliestDeliveryDate(later, earlier), earlier);
+  assert.equal(earliestDeliveryDate(null, earlier), earlier);
+
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /finishAlreadyAccepted[\s\S]*earliestDeliveryDate\([\s\S]*attempt\.deliveredAt/,
+  );
+  assert.match(
+    source,
+    /finishClaimedSend[\s\S]*earliestDeliveryDate\(\s*current\.deliveredAt,\s*attempt\.deliveredAt/,
+  );
+  assert.ok((source.match(/deliveredAt,/g)?.length ?? 0) >= 4);
+  assert.ok((source.match(/acceptedAt: sentAt/g)?.length ?? 0) >= 2);
+});
+
 test("attachment preparation completes before an immutable provider attempt is persisted", () => {
   const source = readFileSync(
     new URL("./sendOutreach.ts", import.meta.url),
     "utf8",
   );
   const ensureStart = source.indexOf("async function ensureAttempt");
-  const preparation = source.indexOf("prepareResendRequest({", ensureStart);
+  const preparation = source.indexOf(
+    "prepareResendRequestBatch({",
+    ensureStart,
+  );
   const failureRelease = source.indexOf(
     "prepared.preparationDisposition",
     preparation,
@@ -1372,6 +1401,16 @@ test("full-team recipient snapshots exclude quarantined and direct-only contacts
     ]),
     ["active@example.com"],
   );
+  assert.deepEqual(
+    activeContactRecipientEmails([
+      { email: "z@example.com", state: "active" },
+      { email: "a@example.com", state: "active" },
+    ]),
+    activeContactRecipientEmails([
+      { email: "a@example.com", state: "active" },
+      { email: "z@example.com", state: "active" },
+    ]),
+  );
 });
 
 test("follow-ups use every current active email and shared coverage uses the intersection", () => {
@@ -1409,6 +1448,138 @@ test("follow-ups use every current active email and shared coverage uses the int
   assert.deepEqual(
     currentFollowUpRecipientEmails(["artist-1", "artist-2"], contacts),
     ["shared@example.com"],
+  );
+});
+
+test("new follow-ups inherit delivery mode while attempted retries keep the child snapshot", () => {
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /mode === "retry" && child[\s\S]*child\.recipientDeliveryMode[\s\S]*parent\.recipientDeliveryMode/,
+  );
+  assert.match(
+    source,
+    /resolveFollowUpRecipientDeliveryMode\(\s*eligibility,\s*overrides\.recipientDeliveryMode/,
+  );
+  assert.match(
+    source,
+    /recipientDeliveryMode: prep\.recipientDeliveryMode[\s\S]*primaryRecipientEmail: prep\.primaryRecipientEmail/,
+  );
+  assert.match(
+    source,
+    /prepareResendRequestBatch\(\{/,
+  );
+  assert.match(source, /recipientDeliveryMode:[\s\S]{0,100}outreach\.recipientDeliveryMode/);
+  assert.match(source, /primaryRecipientEmail: outreach\.primaryRecipientEmail/);
+});
+
+test("stale legacy follow-up overrides cannot escape current eligibility", () => {
+  assert.deepEqual(
+    resolveFollowUpRecipientDeliveryMode(
+      { mode: "new", recipientDeliveryMode: "individual_threads" },
+      "legacy_multi_to",
+    ),
+    {
+      ok: false,
+      error:
+        "Legacy multi-recipient delivery is allowed only for the current immutable retry",
+    },
+  );
+  assert.deepEqual(
+    resolveFollowUpRecipientDeliveryMode(
+      { mode: "retry", recipientDeliveryMode: "legacy_multi_to" },
+      "legacy_multi_to",
+    ),
+    { ok: true, recipientDeliveryMode: "legacy_multi_to" },
+  );
+});
+
+test("individual-thread delivery persists every provider message identity and retries only missing requests", () => {
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /prepareResendRequestBatch/);
+  assert.match(source, /sendPreparedEmailBatchViaResend/);
+  assert.match(
+    source,
+    /attempt\.providerMessageIds \?\? \[\]/,
+  );
+  assert.match(
+    source,
+    /providerMessageIds,/,
+  );
+  assert.match(source, /status: testSend \? "test" : "sent"/);
+  assert.match(source, /summarizeResendRequestResults/);
+  assert.match(source, /providerRequestResults:/);
+  assert.match(source, /if \(providerIdentityConflict\)/);
+  assert.match(
+    source,
+    /providerIdentityConflict[\s\S]*status: "manual_review"[\s\S]*failureDisposition: "policy"/,
+  );
+  assert.ok(
+    (source.match(/isProviderMessageIdConflictError\(attempt\.error\)/g)
+      ?.length ?? 0) >= 2,
+  );
+  assert.match(source, /duplicateProviderMessageIdConflict\(providerMessageIds\)/);
+  const identityConflictBlock = source.slice(
+    source.indexOf("if (providerIdentityConflict)"),
+    source.indexOf("const returnedProviderIds"),
+  );
+  assert.doesNotMatch(identityConflictBlock, /providerRequestResults:/);
+  assert.doesNotMatch(identityConflictBlock, /providerMessageIds,/);
+  const providerLock = source.indexOf(
+    "acquireResendProviderMessageLocks(tx, returnedProviderIds)",
+  );
+  const ownerQuery = source.indexOf(
+    "const providerOwners",
+    providerLock,
+  );
+  const providerPersistence = source.indexOf(
+    "providerMessageIds,",
+    ownerQuery,
+  );
+  assert.ok(
+    providerLock >= 0 &&
+      providerLock < ownerQuery &&
+      ownerQuery < providerPersistence,
+  );
+});
+
+test("partially accepted recipient batches are never treated as definitively unsent", () => {
+  const partial = {
+    status: "request_failed",
+    providerCredentialScope: CREDENTIAL_SCOPE,
+    providerMessageId: null,
+    providerMessageIds: ["message-first", ""],
+    firstAttemptAt: NOW,
+    attemptCount: 1,
+    failureDisposition: "configuration",
+  };
+  assert.equal(isDefinitivelyUnsentOutreachAttempt(partial), false);
+  assert.equal(isDefinitiveConfigurationRejection(partial), false);
+  assert.equal(
+    isDefinitivelyUnsentOutreachAttempt({
+      ...partial,
+      providerMessageIds: [],
+      failureDisposition: "permanent",
+      providerRequestResults: [
+        {
+          providerMessageId: null,
+          error: "invalid recipient",
+          failureDisposition: "permanent",
+        },
+        {
+          providerMessageId: null,
+          error: "connection reset",
+          failureDisposition: "uncertain",
+        },
+      ],
+    }),
+    false,
   );
 });
 
@@ -1609,6 +1780,43 @@ test("festival all-contacts mode includes every active email without a full-team
       "manager@example.com",
     ]);
   }
+});
+
+test("festival all-contacts CC mode keeps the selected manager on To", () => {
+  const primary = {
+    id: "contact-1",
+    artistId: "artist-1",
+    email: "manager@example.com",
+    state: "active" as const,
+    isFullTeam: false,
+  };
+  const decision = evaluateOutreachDeliveryPolicy(
+    deliveryPolicyFixture({
+      contact: primary,
+      artistContacts: [
+        primary,
+        {
+          id: "contact-2",
+          artistId: "artist-1",
+          email: "co-manager@example.com",
+          state: "active",
+          isFullTeam: false,
+        },
+      ],
+      stored: null,
+      attempt: null,
+      bccEmails: [],
+      requestedFullTeamSend: true,
+      requestedFestivalAllContactsSend: true,
+      requestedRecipientDeliveryMode: "cc_thread",
+    }),
+  );
+  assert.equal(decision.ok, true);
+  if (!decision.ok) return;
+  assert.equal(decision.recipientDeliveryMode, "cc_thread");
+  assert.equal(decision.primaryRecipientEmail, "manager@example.com");
+  assert.deepEqual(decision.policy.to, ["manager@example.com"]);
+  assert.deepEqual(decision.policy.cc, ["co-manager@example.com"]);
 });
 
 test("festival all-contacts mode stays off for one active email", () => {
@@ -2016,9 +2224,9 @@ test("sending transition revalidates and holds policy locks through provider sub
   const providerRevalidation = submission.indexOf(
     "evaluateLockedOutreachDeliveryPolicy(",
   );
-  const provider = submission.indexOf("sendPreparedEmailViaResend(");
+  const provider = submission.indexOf("sendPreparedEmailBatchViaResend(");
   assert.ok(revalidation >= 0 && revalidation < sending);
-  assert.equal(claim.includes("sendPreparedEmailViaResend("), false);
+  assert.equal(claim.includes("sendPreparedEmailBatchViaResend("), false);
   assert.ok(providerRevalidation >= 0 && providerRevalidation < provider);
   assert.match(
     claim,
@@ -2030,7 +2238,7 @@ test("sending transition revalidates and holds policy locks through provider sub
   );
   assert.match(
     submission,
-    /sendPreparedEmailViaResend\([\s\S]*attachmentBlobs,\s+submissionCredential/,
+    /sendPreparedEmailBatchViaResend\([\s\S]*attachmentBlobs,\s+submissionCredential/,
   );
   assert.match(
     submission,

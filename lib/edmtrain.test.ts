@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   createSerializedEdmtrainReconciliationScheduler,
+  dedupeProviderLineupRows,
   edmtrainEventGeography,
   edmtrainEventStatus,
   fetchEdmtrainEvents,
@@ -24,6 +25,28 @@ import {
   retryDelayMsBeforeDeadline,
   type IntegrationSyncLeaseGuard,
 } from "./integrationUtils";
+
+test("provider lineup upserts deduplicate repeated show and artist pairs", () => {
+  const first = {
+    showId: "show-1",
+    artistId: "artist-1",
+    headliner: false,
+  };
+  assert.deepEqual(
+    dedupeProviderLineupRows([
+      first,
+      { ...first },
+      { showId: "show-1", artistId: "artist-2", headliner: false },
+      { showId: "show-2", artistId: "artist-1", headliner: false },
+      { ...first },
+    ]),
+    [
+      first,
+      { showId: "show-1", artistId: "artist-2", headliner: false },
+      { showId: "show-2", artistId: "artist-1", headliner: false },
+    ],
+  );
+});
 
 const syncResult = (fetched: number): SyncResult => ({
   fetched,

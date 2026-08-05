@@ -10,7 +10,9 @@ import {
 } from "@/lib/sentMailConfig";
 import {
   hashAttachmentContent,
+  hashResendRequestBatchSnapshot,
   hashResendRequestSnapshot,
+  parseResendRequestBatchSnapshot,
   parseResendRequestSnapshot,
   type ResendAttachmentBlob,
   type ResendRequestSnapshot,
@@ -28,6 +30,7 @@ export type SentMailCopySource =
   | {
       kind: "outreach";
       id: string;
+      requestIndex: number;
       providerMessageId: string;
       requested: boolean | null;
       targetScope: string | null;
@@ -73,11 +76,17 @@ export function hasSentMailCopyAttemptBudget(
 export function canRefreshSentMailboxTargetBeforeSubmission(state: {
   status: string;
   providerMessageId: string | null;
+  providerMessageIds?: readonly string[];
   firstAttemptAt: Date | null;
   attemptCount: number;
   failureDisposition: string | null;
 }): boolean {
-  if (state.providerMessageId) return false;
+  if (
+    state.providerMessageId ||
+    state.providerMessageIds?.some(Boolean)
+  ) {
+    return false;
+  }
   if (state.firstAttemptAt === null && state.attemptCount === 0) {
     return state.status === "prepared" || state.status === "queued";
   }
@@ -98,7 +107,7 @@ export async function ensureSentMailCopyQueued(
   if (!source.requested || source.testSend !== false) return;
   const id =
     source.kind === "outreach"
-      ? `outreach-attempt/${source.id}`
+      ? `outreach-attempt/${source.id}/message/${source.requestIndex}`
       : `arbitrary-email/${source.id}`;
   const configurationError =
     source.configurationError ??
@@ -118,7 +127,10 @@ export async function ensureSentMailCopyQueued(
         : "manual_review",
       error: configurationError,
       ...(source.kind === "outreach"
-        ? { outreachAttemptId: source.id }
+        ? {
+            outreachAttemptId: source.id,
+            requestIndex: source.requestIndex,
+          }
         : { arbitraryEmailId: source.id }),
     },
     update: {
@@ -130,11 +142,39 @@ export async function ensureSentMailCopyQueued(
     queued.targetScope !== source.targetScope ||
     (source.kind === "outreach"
       ? queued.outreachAttemptId !== source.id ||
+        queued.requestIndex !== source.requestIndex ||
         queued.arbitraryEmailId !== null
       : queued.arbitraryEmailId !== source.id ||
-        queued.outreachAttemptId !== null)
+        queued.outreachAttemptId !== null ||
+        queued.requestIndex !== null)
   ) {
     throw new Error("Sent copy identity conflicts with its accepted source");
+  }
+}
+
+export async function ensureOutreachSentMailCopiesQueued(
+  tx: SentMailCopyTransaction,
+  source: {
+    id: string;
+    providerMessageIds: readonly string[];
+    requested: boolean | null;
+    targetScope: string | null;
+    configurationError: string | null;
+    testSend: boolean | null;
+  },
+): Promise<void> {
+  for (const [requestIndex, providerMessageId] of source.providerMessageIds.entries()) {
+    if (!providerMessageId) continue;
+    await ensureSentMailCopyQueued(tx, {
+      kind: "outreach",
+      id: source.id,
+      requestIndex,
+      providerMessageId,
+      requested: source.requested,
+      targetScope: source.targetScope,
+      configurationError: source.configurationError,
+      testSend: source.testSend,
+    });
   }
 }
 
@@ -516,33 +556,84 @@ async function loadSentMailCopyMessage(id: string) {
   });
   if (!row) return { ok: false as const, error: "Sent copy record was not found" };
 
-  const source = row.outreachAttempt ?? row.arbitraryEmail;
-  if (
-    !source ||
-    source.providerMessageId !== row.providerMessageId ||
-    source.testSend !== false ||
-    source.sentMailboxCopyRequested !== true ||
-    source.sentMailboxTargetScope !== row.targetScope ||
-    !row.targetScope ||
-    !source.providerRequest ||
-    !source.requestHash
-  ) {
+  if (!row.targetScope) {
     return {
       ok: false as const,
       error: "Sent copy source identity is incomplete or inconsistent",
     };
   }
-  const request = parseResendRequestSnapshot(source.providerRequest);
-  if (!request || hashResendRequestSnapshot(request) !== source.requestHash) {
+
+  let request: ResendRequestSnapshot | null = null;
+  let acceptedAt = row.createdAt;
+  if (row.outreachAttempt) {
+    const source = row.outreachAttempt;
+    const requestIndex = row.requestIndex;
+    const requestBatch = parseResendRequestBatchSnapshot(
+      source.providerRequest,
+    );
+    const batchIntegrityMatches =
+      !!requestBatch &&
+      (
+        hashResendRequestBatchSnapshot(requestBatch) === source.requestHash ||
+        (requestBatch.requests.length === 1 &&
+          hashResendRequestSnapshot(requestBatch.requests[0]!) ===
+            source.requestHash)
+      );
+    const indexedProviderMessageId =
+      source.providerMessageIds[requestIndex ?? -1] ??
+      (requestIndex === 0 ? source.providerMessageId : null);
+    if (
+      source.testSend !== false ||
+      source.sentMailboxCopyRequested !== true ||
+      source.sentMailboxTargetScope !== row.targetScope ||
+      !source.requestHash ||
+      !requestBatch ||
+      !batchIntegrityMatches ||
+      requestIndex === null ||
+      requestIndex < 0 ||
+      requestIndex >= requestBatch.requests.length ||
+      indexedProviderMessageId !== row.providerMessageId
+    ) {
+      return {
+        ok: false as const,
+        error: "Sent copy source identity is incomplete or inconsistent",
+      };
+    }
+    request = requestBatch.requests[requestIndex] ?? null;
+    acceptedAt = source.acceptedAt ?? row.createdAt;
+  } else if (row.arbitraryEmail) {
+    const source = row.arbitraryEmail;
+    if (
+      source.providerMessageId !== row.providerMessageId ||
+      source.testSend !== false ||
+      source.sentMailboxCopyRequested !== true ||
+      source.sentMailboxTargetScope !== row.targetScope ||
+      !source.providerRequest ||
+      !source.requestHash
+    ) {
+      return {
+        ok: false as const,
+        error: "Sent copy source identity is incomplete or inconsistent",
+      };
+    }
+    request = parseResendRequestSnapshot(source.providerRequest);
+    if (
+      !request ||
+      hashResendRequestSnapshot(request) !== source.requestHash
+    ) {
+      return {
+        ok: false as const,
+        error: "Sent copy source request failed its integrity check",
+      };
+    }
+    acceptedAt = source.sentAt ?? row.createdAt;
+  }
+  if (!request) {
     return {
       ok: false as const,
       error: "Sent copy source request failed its integrity check",
     };
   }
-  const acceptedAt =
-    row.outreachAttempt?.acceptedAt ??
-    row.arbitraryEmail?.sentAt ??
-    row.createdAt;
   const attachmentRows =
     request.attachments.length === 0
       ? []
@@ -559,7 +650,7 @@ async function loadSentMailCopyMessage(id: string) {
     ok: true as const,
     row,
     request,
-    expectedHash: source.requestHash,
+    expectedHash: hashResendRequestSnapshot(request),
     acceptedAt,
     attachmentBlobs: attachmentRows,
   };

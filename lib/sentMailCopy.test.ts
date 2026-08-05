@@ -7,6 +7,7 @@ import {
   buildSentMailCopyMime,
   canRefreshSentMailboxTargetBeforeSubmission,
   dispatchDueSentMailCopiesWithDependencies,
+  ensureOutreachSentMailCopiesQueued,
   ensureSentMailCopyQueued,
   hasSentMailCopyAttemptBudget,
   SENT_MAIL_COPY_DEADLINE_ERROR,
@@ -586,6 +587,7 @@ test("queueing excludes test or disabled sends and upserts one real source", asy
           id: string;
           providerMessageId: string;
           outreachAttemptId?: string;
+          requestIndex?: number;
           arbitraryEmailId?: string;
           targetScope?: string | null;
           status?: string;
@@ -596,6 +598,7 @@ test("queueing excludes test or disabled sends and upserts one real source", asy
         return {
           ...args.create,
           outreachAttemptId: args.create.outreachAttemptId ?? null,
+          requestIndex: args.create.requestIndex ?? null,
           arbitraryEmailId: args.create.arbitraryEmailId ?? null,
         };
       },
@@ -604,6 +607,7 @@ test("queueing excludes test or disabled sends and upserts one real source", asy
   await ensureSentMailCopyQueued(tx, {
     kind: "outreach",
     id: "attempt-disabled",
+    requestIndex: 0,
     providerMessageId: "message-disabled",
     requested: false,
     targetScope: null,
@@ -622,6 +626,7 @@ test("queueing excludes test or disabled sends and upserts one real source", asy
   await ensureSentMailCopyQueued(tx, {
     kind: "outreach",
     id: "attempt-real",
+    requestIndex: 0,
     providerMessageId: "message-real",
     requested: true,
     targetScope: CONFIG.targetScope,
@@ -640,11 +645,70 @@ test("queueing excludes test or disabled sends and upserts one real source", asy
     testSend: false,
   });
   assert.equal(calls.length, 2);
-  assert.match(JSON.stringify(calls[0]), /outreach-attempt\/attempt-real/);
+  assert.match(
+    JSON.stringify(calls[0]),
+    /outreach-attempt\/attempt-real\/message\/0/,
+  );
   assert.match(JSON.stringify(calls[0]), /retry_scheduled/);
   assert.match(JSON.stringify(calls[0]), /sent-mail:target-sha256/);
   assert.match(JSON.stringify(calls[1]), /manual_review/);
   assert.match(JSON.stringify(calls[1]), /SENT_MAIL_IMAP_HOST/);
+});
+
+test("outreach batches queue one immutable Sent copy per provider request", async () => {
+  const calls: Array<{
+    where: { id: string };
+    create: {
+      id: string;
+      outreachAttemptId?: string;
+      requestIndex?: number;
+      providerMessageId: string;
+      targetScope?: string | null;
+    };
+  }> = [];
+  const tx = {
+    sentMailCopy: {
+      upsert: async (args: (typeof calls)[number]) => {
+        calls.push(args);
+        return {
+          ...args.create,
+          outreachAttemptId: args.create.outreachAttemptId ?? null,
+          requestIndex: args.create.requestIndex ?? null,
+          arbitraryEmailId: null,
+          targetScope: args.create.targetScope ?? null,
+        };
+      },
+    },
+  } as unknown as Pick<Prisma.TransactionClient, "sentMailCopy">;
+
+  await ensureOutreachSentMailCopiesQueued(tx, {
+    id: "attempt-batch",
+    providerMessageIds: ["message-a", "message-b"],
+    requested: true,
+    targetScope: CONFIG.targetScope,
+    configurationError: null,
+    testSend: false,
+  });
+
+  assert.deepEqual(
+    calls.map((call) => ({
+      id: call.create.id,
+      requestIndex: call.create.requestIndex,
+      providerMessageId: call.create.providerMessageId,
+    })),
+    [
+      {
+        id: "outreach-attempt/attempt-batch/message/0",
+        requestIndex: 0,
+        providerMessageId: "message-a",
+      },
+      {
+        id: "outreach-attempt/attempt-batch/message/1",
+        requestIndex: 1,
+        providerMessageId: "message-b",
+      },
+    ],
+  );
 });
 
 test("all accepted outbound and reconciliation paths enqueue Sent copies", () => {
@@ -668,9 +732,15 @@ test("all accepted outbound and reconciliation paths enqueue Sent copies", () =>
     new URL("./sentMailCopy.ts", import.meta.url),
     "utf8",
   );
-  assert.ok((outreach.match(/ensureSentMailCopyQueued\(/g) ?? []).length >= 2);
+  assert.ok(
+    (outreach.match(/ensureOutreachSentMailCopiesQueued\(/g) ?? []).length >=
+      2,
+  );
   assert.ok((arbitrary.match(/ensureSentMailCopyQueued\(/g) ?? []).length >= 2);
-  assert.ok((webhook.match(/ensureSentMailCopyQueued\(/g) ?? []).length >= 2);
+  assert.ok((webhook.match(/ensureSentMailCopyQueued\(/g) ?? []).length >= 1);
+  assert.ok(
+    (webhook.match(/ensureOutreachSentMailCopiesQueued\(/g) ?? []).length >= 1,
+  );
   assert.ok(
     (webhook.match(/targetScope: .*sentMailboxTargetScope/g) ?? []).length >= 2,
   );
@@ -743,4 +813,20 @@ test("Sent copy persistence constrains one immutable source and retry state", ()
   );
   assert.match(immediateMigration, /possible provider acceptance/);
   assert.match(immediateMigration, /COMMIT;\s*$/);
+
+  const batchMigration = readFileSync(
+    new URL(
+      "../prisma/migrations/20260805004500_sent_mail_batch_copies/migration.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(batchMigration, /^BEGIN;/);
+  assert.match(batchMigration, /ADD COLUMN "requestIndex" INTEGER/);
+  assert.match(
+    batchMigration,
+    /SentMailCopy_outreachAttemptId_requestIndex_key/,
+  );
+  assert.match(batchMigration, /cardinality\(OLD\."providerMessageIds"\) > 0/);
+  assert.match(batchMigration, /COMMIT;\s*$/);
 });
