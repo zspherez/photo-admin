@@ -1026,7 +1026,7 @@ export async function dispatchProfessionalContactRequest(
         signal: AbortSignal.timeout(15_000),
       },
     );
-    if (response.status !== 204) {
+    if (!response.ok) {
       dispatchError = await githubDispatchError(response);
     }
   } catch (error) {

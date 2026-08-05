@@ -716,6 +716,36 @@ test("form dispatch immediately triggers the trusted workflow once", async () =>
   assert.equal(fetchCalls, 1);
 });
 
+test("workflow dispatch accepts GitHub success responses with run metadata", async () => {
+  const harness = createDispatchHarness();
+  const result = await dispatchProfessionalContactRequest("request-1", {
+    now: new Date("2026-08-04T18:00:00.000Z"),
+    token: "dispatch-token",
+    fetchImpl: async () =>
+      Response.json(
+        {
+          workflow_run_id: 31021072991,
+          run_url:
+            "https://api.github.com/repos/zspherez/photo-admin/actions/runs/31021072991",
+          html_url:
+            "https://github.com/zspherez/photo-admin/actions/runs/31021072991",
+        },
+        { status: 200 },
+      ),
+    runTransaction: harness.runner,
+  });
+
+  assert.equal(result.state, "dispatched");
+  assert.equal(result.triggered, true);
+  assert.equal(result.error, null);
+  assert.equal(harness.state.status, "dispatched");
+  assert.equal(harness.attempts[0].status, "succeeded");
+  assert.deepEqual(
+    harness.events.map((event) => event.kind),
+    ["dispatch_started", "dispatch_succeeded"],
+  );
+});
+
 test("configured trusted workflow override controls the dispatched filename", async () => {
   const harness = createDispatchHarness();
   let dispatchedUrl = "";
