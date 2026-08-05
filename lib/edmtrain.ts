@@ -98,6 +98,19 @@ export interface EdmtrainEvent {
   };
 }
 
+export function dedupeProviderLineupRows<
+  T extends { showId: string; artistId: string },
+>(rows: readonly T[]): T[] {
+  const artistIdsByShow = new Map<string, Set<string>>();
+  return rows.filter((row) => {
+    const artistIds = artistIdsByShow.get(row.showId) ?? new Set<string>();
+    if (artistIds.has(row.artistId)) return false;
+    artistIds.add(row.artistId);
+    artistIdsByShow.set(row.showId, artistIds);
+    return true;
+  });
+}
+
 export function edmtrainEventGeography(event: EdmtrainEvent): {
   city: string;
   state: string | null;
@@ -639,30 +652,72 @@ async function reconcileEdmtrainSnapshots(
             await acquireShowArtistMembershipLock(tx);
             membershipLockAcquired = true;
           }
+          const reconciledShowIds = persistedShows.map((show) => show.id);
           await tx.showArtist.deleteMany({
-            where: { showId: { in: persistedShows.map((show) => show.id) } },
+            where: {
+              showId: { in: reconciledShowIds },
+              manuallyAdded: false,
+            },
+          });
+          await tx.showArtist.updateMany({
+            where: {
+              showId: { in: reconciledShowIds },
+              manuallyAdded: true,
+            },
+            data: { providerManaged: false },
           });
         }
-        const lineupRows = rows.flatMap(({ event }) => {
-          const showId = showIdByEvent.get(event.id);
-          if (!showId) throw new Error(`EDMTrain event was not persisted: ${event.id}`);
-          return event.artistList.map((artist) => {
-            const resolvedArtist = resolved.artistsByKey.get(String(artist.id));
-            if (!resolvedArtist) {
-              throw new Error(`EDMTrain artist was not resolved: ${artist.id}`);
+        const lineupRows = dedupeProviderLineupRows(
+          rows.flatMap(({ event }) => {
+            const showId = showIdByEvent.get(event.id);
+            if (!showId) {
+              throw new Error(`EDMTrain event was not persisted: ${event.id}`);
             }
-            return {
-              showId,
-              artistId: resolvedArtist.id,
-              headliner: false,
-            };
-          });
-        });
+            return event.artistList.map((artist) => {
+              const resolvedArtist = resolved.artistsByKey.get(
+                String(artist.id),
+              );
+              if (!resolvedArtist) {
+                throw new Error(
+                  `EDMTrain artist was not resolved: ${artist.id}`,
+                );
+              }
+              return {
+                showId,
+                artistId: resolvedArtist.id,
+                headliner: false,
+              };
+            });
+          }),
+        );
         for (const lineupChunk of chunkItems(lineupRows, 2_000)) {
-          await tx.showArtist.createMany({
-            data: lineupChunk,
-            skipDuplicates: true,
-          });
+          const values = Prisma.join(
+            lineupChunk.map(
+              (lineup) =>
+                Prisma.sql`(
+                  ${lineup.showId},
+                  ${lineup.artistId},
+                  ${lineup.headliner},
+                  TRUE,
+                  FALSE
+                )`,
+            ),
+          );
+          await tx.$executeRaw(
+            Prisma.sql`
+              INSERT INTO "ShowArtist" (
+                "showId",
+                "artistId",
+                "headliner",
+                "providerManaged",
+                "manuallyAdded"
+              )
+              VALUES ${values}
+              ON CONFLICT ("showId", "artistId") DO UPDATE SET
+                "headliner" = EXCLUDED."headliner",
+                "providerManaged" = TRUE
+            `,
+          );
         }
 
         const scopeFestival = snapshot.scope === "festivals";

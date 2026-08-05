@@ -54,6 +54,10 @@ test("festival show, artists, and lineup links are created transactionally", () 
     "await tx.showArtist.createMany(",
     transactionStart
   );
+  const manualOwnership = source.indexOf(
+    "manuallyAdded: true",
+    lineupCreate
+  );
   const transactionEnd = source.indexOf(
     "isolationLevel: Prisma.TransactionIsolationLevel.Serializable",
     transactionStart
@@ -66,5 +70,6 @@ test("festival show, artists, and lineup links are created transactionally", () 
   assert.ok(countryPersisted > showCreate);
   assert.ok(geographyPersisted > countryPersisted);
   assert.ok(lineupCreate > showCreate);
+  assert.ok(manualOwnership > lineupCreate);
   assert.ok(transactionEnd > lineupCreate);
 });
