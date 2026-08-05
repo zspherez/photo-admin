@@ -10,15 +10,23 @@ import {
   correlateResendWebhookAttempt,
   duplicateProviderMessageIdConflict,
   getResendWebhookFailurePolicy,
+  isNonemptyProviderMessageId,
   isProviderMessageIdConflictError,
   markResendRequestDeliveryFailure,
+  hasAcceptedProviderMessageId,
+  nonemptyProviderMessageIds,
   outreachWebhookRecipientImpact,
   parseResendRequestBatchSnapshot,
   parseResendRequestResultSnapshot,
   resendRequestResultsAreResolved,
+  providerMessageIdsAreComplete,
   shouldMirrorResendAttempt,
   validateProviderMessageIndex,
 } from "@/lib/resend";
+import {
+  ensureOutreachSentMailCopiesQueued,
+  ensureSentMailCopyQueued,
+} from "@/lib/sentMailCopy";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
 import {
   arbitraryEmailEventUpdate,
@@ -235,7 +243,11 @@ async function processEvent(
           const attemptId = findAttemptId(parsed);
           const outreachId = findOutreachId(parsed);
           const arbitraryEmailId = findArbitraryEmailId(parsed);
-          const messageId = parsed.data.email_id ?? null;
+          const messageId = isNonemptyProviderMessageId(
+            parsed.data.email_id,
+          )
+            ? parsed.data.email_id
+            : null;
           const providerCreatedAt = eventDate(parsed);
           const clickMetadata = resendClickMetadata(
             parsed.type,
@@ -301,13 +313,12 @@ async function processEvent(
               !conflict &&
               arbitraryEmail &&
               messageId &&
-              !arbitraryEmail.providerMessageId
+              !isNonemptyProviderMessageId(
+                arbitraryEmail.providerMessageId,
+              )
             ) {
-              await tx.arbitraryEmail.updateMany({
-                where: {
-                  id: arbitraryEmail.id,
-                  providerMessageId: null,
-                },
+              await tx.arbitraryEmail.update({
+                where: { id: arbitraryEmail.id },
                 data: { providerMessageId: messageId },
               });
               const rebound = await tx.arbitraryEmail.findUnique({
@@ -360,6 +371,22 @@ async function processEvent(
                 providerCreatedAt,
                 impactedRecipients,
               );
+            }
+            if (
+              isNonemptyProviderMessageId(
+                arbitraryEmail.providerMessageId,
+              )
+            ) {
+              await ensureSentMailCopyQueued(tx, {
+                kind: "arbitrary",
+                id: arbitraryEmail.id,
+                providerMessageId: arbitraryEmail.providerMessageId,
+                requested: arbitraryEmail.sentMailboxCopyRequested,
+                targetScope: arbitraryEmail.sentMailboxTargetScope,
+                configurationError:
+                  arbitraryEmail.sentMailboxCopyConfigurationError,
+                testSend: arbitraryTestSend as boolean,
+              });
             }
             const intendedRecipientImpact =
               arbitraryEmailWebhookRecipientImpact(
@@ -743,16 +770,29 @@ async function processEvent(
               .length ?? 1;
           const providerMessageIds = Array.from(
             new Set([
-              ...attempt.providerMessageIds.filter(Boolean),
+              ...nonemptyProviderMessageIds(attempt.providerMessageIds),
               ...(attempt.providerMessageId
                 ? [attempt.providerMessageId]
                 : []),
             ]),
           );
           const providerAcceptanceComplete =
-            providerMessageIds.length === expectedProviderMessages;
+            providerMessageIdsAreComplete(
+              providerMessageIds,
+              expectedProviderMessages,
+            );
           const primaryProviderMessageId =
-            attempt.providerMessageId ?? providerMessageIds[0] ?? null;
+            (isNonemptyProviderMessageId(attempt.providerMessageId)
+              ? attempt.providerMessageId
+              : null) ??
+            providerMessageIds[0] ??
+            null;
+          const indexedProviderMessageIds =
+            attempt.providerMessageIds.length > 0
+              ? attempt.providerMessageIds
+              : isNonemptyProviderMessageId(primaryProviderMessageId)
+                ? [primaryProviderMessageId]
+                : [];
           const mirrorDeliveryProblem =
             mirror && failurePolicy.mirrorOutreachFailure;
           const requestResultIndex =
@@ -784,11 +824,17 @@ async function processEvent(
             persistedDeliveryFailure ??
             (attempt.status === "delivery_failed" ? attempt.error : null);
           const deliveryFailureState = (error: string) => {
-            const providerId =
-              messageId ??
-              currentRequestResults[requestResultIndex]?.providerMessageId ??
-              null;
-            if (requestResultIndex < 0 || !providerId) {
+            const storedProviderId =
+              currentRequestResults[requestResultIndex]?.providerMessageId;
+            const providerId = isNonemptyProviderMessageId(messageId)
+              ? messageId
+              : isNonemptyProviderMessageId(storedProviderId)
+                ? storedProviderId
+                : null;
+            if (
+              requestResultIndex < 0 ||
+              !isNonemptyProviderMessageId(providerId)
+            ) {
               return {
                 results: currentRequestResults,
                 resolved: false,
@@ -806,7 +852,20 @@ async function processEvent(
             };
           };
 
-          if (providerAcceptanceComplete && primaryProviderMessageId) {
+          if (hasAcceptedProviderMessageId(indexedProviderMessageIds)) {
+            await ensureOutreachSentMailCopiesQueued(tx, {
+              id: attempt.id,
+              providerMessageIds: indexedProviderMessageIds,
+              requested: attempt.sentMailboxCopyRequested,
+              targetScope: attempt.sentMailboxTargetScope,
+              configurationError: attempt.sentMailboxCopyConfigurationError,
+              testSend: attempt.testSend,
+            });
+          }
+          if (
+            providerAcceptanceComplete &&
+            isNonemptyProviderMessageId(primaryProviderMessageId)
+          ) {
             const acceptedAt = earlier(
               earlier(
                 attempt.acceptedAt,

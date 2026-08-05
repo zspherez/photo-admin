@@ -98,3 +98,15 @@ test("delayed normal polls still drain every due scheduled row", () => {
     /status: "scheduled",[\s\S]*lte: mode === "recovery" \? recoveryCutoff : now/,
   );
 });
+
+test("Sent copies use the remaining route deadline after scheduled outreach", () => {
+  const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+  const outreachDispatch = source.indexOf("dispatchScheduledOutreach(row.id)");
+  const sentCopyDispatch = source.indexOf("dispatchDueSentMailCopies(");
+  assert.ok(outreachDispatch >= 0);
+  assert.ok(sentCopyDispatch > outreachDispatch);
+  assert.match(
+    source,
+    /deadlineAtMs:[\s\S]*startedAt \+[\s\S]*SCHEDULED_DISPATCH_ROUTE_TIMEOUT_MS -[\s\S]*SCHEDULED_DISPATCH_TRANSACTION_RESPONSE_MARGIN_MS/,
+  );
+});

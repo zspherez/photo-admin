@@ -24,6 +24,7 @@ export type EnvVarGroup =
   | "statsfm"
   | "edmtrain"
   | "resend"
+  | "sent-mail"
   | "send-behavior"
   | "google-sheets";
 
@@ -53,6 +54,10 @@ export const ENV_VAR_GROUPS: Record<EnvVarGroup, EnvVarGroupInfo> = {
   statsfm: { heading: "Stats.fm Plus", kind: "optional" },
   edmtrain: { heading: "EDMTrain", kind: "optional" },
   resend: { heading: "Resend (transactional email)", kind: "optional" },
+  "sent-mail": {
+    heading: "Sent mailbox copy (optional IMAP integration)",
+    kind: "optional",
+  },
   "send-behavior": { heading: "Send-time behavior", kind: "optional" },
   "google-sheets": {
     heading: "Google Sheets (optional one-way contact export)",
@@ -382,6 +387,58 @@ export const ENV_SCHEMA: readonly EnvVarDefinition[] = [
     defaultValue: "",
   },
   {
+    key: "SENT_MAIL_IMAP_HOST",
+    group: "sent-mail",
+    secret: false,
+    summary: "IMAP hostname used to append successful sends to the Sent mailbox.",
+    notes: [
+      "Gmail: imap.gmail.com. iCloud: imap.mail.me.com.",
+      "The Settings → Sent mailbox copy toggle remains disabled until the required",
+      "IMAP values are present and valid.",
+    ],
+    defaultValue: "",
+  },
+  {
+    key: "SENT_MAIL_IMAP_PORT",
+    group: "sent-mail",
+    secret: false,
+    summary: "IMAP port (defaults to 993).",
+    defaultValue: "993",
+  },
+  {
+    key: "SENT_MAIL_IMAP_SECURE",
+    group: "sent-mail",
+    secret: false,
+    summary: "Require implicit TLS for IMAP; must remain true.",
+    notes: [
+      "Plaintext and opportunistic STARTTLS modes are rejected to prevent downgrade",
+      "or credential exposure.",
+    ],
+    defaultValue: "true",
+  },
+  {
+    key: "SENT_MAIL_IMAP_USERNAME",
+    group: "sent-mail",
+    secret: true,
+    summary: "IMAP login username for the target mailbox.",
+    notes: [
+      "Use the full Gmail address. For iCloud, Apple usually accepts the local",
+      "part and may require the full address for some accounts.",
+    ],
+    defaultValue: "",
+  },
+  {
+    key: "SENT_MAIL_IMAP_PASSWORD",
+    group: "sent-mail",
+    secret: true,
+    summary: "Provider-issued IMAP app password; never use the primary account password.",
+    notes: [
+      "Gmail and iCloud both require an app password for password-based IMAP.",
+      "Store it only as a server-side secret.",
+    ],
+    defaultValue: "",
+  },
+  {
     key: "SEND_TEST_OVERRIDE",
     group: "send-behavior",
     secret: false,
@@ -433,6 +490,7 @@ export const ENV_VAR_GROUP_ORDER: readonly EnvVarGroup[] = [
   "statsfm",
   "edmtrain",
   "resend",
+  "sent-mail",
   "send-behavior",
   "google-sheets",
 ];

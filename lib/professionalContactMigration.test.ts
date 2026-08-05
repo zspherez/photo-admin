@@ -15,7 +15,7 @@ const schema = readFileSync(
   "utf8",
 );
 
-test("professional contact migration is ordered after existing migrations", () => {
+test("professional contact migration is ordered after prior main migrations", () => {
   const migrations = readdirSync(
     new URL("../prisma/migrations", import.meta.url),
     { withFileTypes: true },
@@ -23,7 +23,14 @@ test("professional contact migration is ordered after existing migrations", () =
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  assert.equal(migrations.at(-1), migrationName);
+  assert.ok(
+    migrations.indexOf("20260804181500_sent_mail_retry_target_refresh") <
+      migrations.indexOf(migrationName),
+  );
+  assert.ok(
+    migrations.indexOf(migrationName) <
+      migrations.indexOf("20260804193000_immediate_arbitrary_sent_target"),
+  );
 });
 
 test("professional contact persistence is separate, constrained, and immutable", () => {

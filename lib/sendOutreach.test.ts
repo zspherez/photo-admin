@@ -1583,6 +1583,78 @@ test("partially accepted recipient batches are never treated as definitively uns
   );
 });
 
+test("blank scalar and request-result provider IDs do not freeze safe retries", () => {
+  const retryable = {
+    status: "request_failed",
+    providerCredentialScope: CREDENTIAL_SCOPE,
+    providerMessageId: "   ",
+    providerMessageIds: ["", ""],
+    providerRequestResults: [
+      {
+        providerMessageId: " \t ",
+        error: "temporary failure",
+        failureDisposition: "retryable",
+      },
+    ],
+    firstAttemptAt: NOW,
+    attemptCount: 1,
+    failureDisposition: "retryable",
+  };
+  assert.equal(isDefinitivelyUnsentOutreachAttempt(retryable), true);
+  assert.deepEqual(
+    evaluateAttemptRetryEligibility(
+      retryableAttempt({
+        providerMessageId: " ",
+        providerMessageIds: ["", ""],
+        providerRequestResults: retryable.providerRequestResults,
+      }),
+      NOW,
+      CREDENTIAL_SCOPE,
+    ),
+    { ok: true },
+  );
+  assert.equal(
+    isDefinitivelyUnsentOutreachAttempt({
+      ...retryable,
+      providerMessageId: "accepted-scalar",
+    }),
+    false,
+  );
+  assert.equal(
+    isDefinitivelyUnsentOutreachAttempt({
+      ...retryable,
+      providerMessageId: "",
+      providerRequestResults: [
+        {
+          providerMessageId: "accepted-result",
+          error: null,
+          failureDisposition: null,
+        },
+      ],
+    }),
+    false,
+  );
+  const acceptedResultAttempt = retryableAttempt({
+    providerMessageIds: ["", ""],
+    providerRequestResults: [
+      {
+        providerMessageId: "accepted-result",
+        error: null,
+        failureDisposition: null,
+      },
+    ],
+  });
+  const acceptedResultDecision = evaluateAttemptRetryEligibility(
+    acceptedResultAttempt,
+    NOW,
+    CREDENTIAL_SCOPE,
+  );
+  assert.equal(acceptedResultDecision.ok, false);
+  if (!acceptedResultDecision.ok) {
+    assert.match(acceptedResultDecision.error, /already accepted/i);
+  }
+});
+
 test("follow-up recipient snapshots can include multiple unmarked current contacts", () => {
   const contact = {
     id: "contact-new",
@@ -1956,6 +2028,38 @@ test("delivery policy revalidation classifies contact, suppression, and configur
     error:
       "Invalid RESEND_FROM_EMAIL; expected email@example.com or Name <email@example.com>",
   });
+
+  const targetScope = `sent-mail:target-sha256:${"b".repeat(64)}`;
+  for (const path of [
+    "normal",
+    "festival",
+    "follow-up",
+    "customized",
+  ] as const) {
+    const archivalMisconfigured = evaluateOutreachDeliveryPolicy(
+      deliveryPolicyFixture({
+        sentMailCopyRequested: true,
+        sentMailboxTargetScope: targetScope,
+        sentMailCopyConfigurationError:
+          "Sent mailbox copy is enabled but SENT_MAIL_IMAP_PASSWORD is missing",
+      }),
+    );
+    assert.equal(
+      archivalMisconfigured.ok,
+      true,
+      `${path} outreach must remain deliverable`,
+    );
+    if (archivalMisconfigured.ok) {
+      assert.equal(
+        archivalMisconfigured.policy.sentMailboxTargetScope,
+        targetScope,
+      );
+      assert.match(
+        archivalMisconfigured.policy.sentMailboxCopyConfigurationError ?? "",
+        /SENT_MAIL_IMAP_PASSWORD/,
+      );
+    }
+  }
 });
 
 test("delivery policy revalidation detects membership and immutable request drift", () => {
@@ -2014,6 +2118,29 @@ test("delivery policy revalidation detects membership and immutable request drif
   const clean = evaluateOutreachDeliveryPolicy(deliveryPolicyFixture());
   assert.equal(clean.ok, true);
   if (clean.ok) assert.equal(clean.request?.idempotencyKey, "outreach/outreach-1/attempt-1");
+});
+
+test("outreach refreshes Sent targets in the locked claim before submission", () => {
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  const claim = source.slice(
+    source.indexOf("async function claimAttemptForSending"),
+    source.indexOf("async function restoreUnsubmittedClaimFailure"),
+  );
+  assert.match(
+    claim,
+    /evaluateLockedOutreachDeliveryPolicy[\s\S]*canRefreshSentMailboxTargetBeforeSubmission\(attempt\)[\s\S]*sentMailboxTargetScope:\s+policy\.policy\.sentMailboxTargetScope[\s\S]*status: "sending"/,
+  );
+  assert.ok(
+    claim.indexOf("evaluateLockedOutreachDeliveryPolicy") <
+      claim.indexOf("canRefreshSentMailboxTargetBeforeSubmission(attempt)"),
+  );
+  assert.ok(
+    source.indexOf("canRefreshSentMailboxTargetBeforeSubmission(attempt)") <
+      source.indexOf("async function submitClaimedAttempt"),
+  );
 });
 
 test("recipient policy advisory locks serialize send claims and suppressions", async () => {

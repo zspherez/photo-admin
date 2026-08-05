@@ -58,10 +58,17 @@ interface MemoryTransaction {
       where: { normalizedEmail: { in: string[] } };
     }) => Promise<Array<{ normalizedEmail: string }>>;
   };
+  sentMailCopy: {
+    upsert: (args: {
+      create: Record<string, unknown>;
+      update: Record<string, unknown>;
+    }) => Promise<Record<string, unknown>>;
+  };
 }
 
 class MemoryArbitraryEmailDatabase {
   record: Record<string, unknown> | null = null;
+  sentMailCopyRecord: Record<string, unknown> | null = null;
   createCount = 0;
   transactionFailuresRemaining = 0;
   readonly suppressed = new Set<string>();
@@ -208,6 +215,18 @@ class MemoryArbitraryEmailDatabase {
             .filter((email) => this.suppressed.has(email))
             .map((normalizedEmail) => ({ normalizedEmail })),
       },
+      sentMailCopy: {
+        upsert: async ({ create }) => {
+          this.sentMailCopyRecord ??= {
+            outreachAttemptId: null,
+            requestIndex: null,
+            arbitraryEmailId: null,
+            targetScope: null,
+            ...create,
+          };
+          return this.sentMailCopyRecord;
+        },
+      },
     };
     try {
       return await work(tx);
@@ -267,6 +286,10 @@ function prepareWithSettings(
       testOverride: settings.testOverride,
       bccEmails: settings.bccEmails,
       suppressedEmails: [],
+      sentMailCopyRequested: settings.sentMailCopyRequested,
+      sentMailboxTargetScope: settings.sentMailboxTargetScope,
+      sentMailCopyConfigurationError:
+        settings.sentMailCopyConfigurationError,
     });
     if (!resolved.ok) {
       throw new Error(resolved.error);
@@ -291,6 +314,10 @@ function prepareWithSettings(
       request,
       requestHash: hashResendRequestSnapshot(request),
       testSend: resolved.policy.testSend,
+      sentMailboxCopyRequested: resolved.policy.sentMailCopyRequested,
+      sentMailboxTargetScope: resolved.policy.sentMailboxTargetScope,
+      sentMailboxCopyConfigurationError:
+        resolved.policy.sentMailboxCopyConfigurationError,
       intendedRecipients: resolved.policy.intendedRecipients,
       attachmentBlobs: [],
       warnings: [],
@@ -329,6 +356,130 @@ const REAL_SETTINGS: ResendDeliverySettingsSnapshot = {
   testOverride: null,
   bccEmails: ["audit@example.com"],
 };
+
+const SENT_TARGET_SCOPE = `sent-mail:target-sha256:${"c".repeat(64)}`;
+const SENT_TARGET_SCOPE_B = `sent-mail:target-sha256:${"d".repeat(64)}`;
+const MISCONFIGURED_SENT_SETTINGS: ResendDeliverySettingsSnapshot = {
+  ...REAL_SETTINGS,
+  sentMailCopyRequested: true,
+  sentMailboxTargetScope: SENT_TARGET_SCOPE,
+  sentMailCopyConfigurationError:
+    "Sent mailbox copy is enabled but SENT_MAIL_IMAP_PASSWORD is missing",
+};
+
+test("immediate arbitrary delivery succeeds when Sent archival is misconfigured", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  let submissions = 0;
+  const result = await sendArbitraryEmailWithDependencies(
+    INPUT,
+    dependencies(database, MISCONFIGURED_SENT_SETTINGS, async () => {
+      submissions += 1;
+      return {
+        providerMessageId: "message-sent-config-missing",
+        error: null,
+        failureDisposition: null,
+      };
+    }),
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(submissions, 1);
+  assert.equal(database.record?.status, "sent");
+  assert.equal(database.sentMailCopyRecord?.status, "retry_scheduled");
+  assert.equal(
+    database.sentMailCopyRecord?.targetScope,
+    SENT_TARGET_SCOPE,
+  );
+  assert.match(
+    String(database.sentMailCopyRecord?.error),
+    /SENT_MAIL_IMAP_PASSWORD/,
+  );
+});
+
+test("immediate arbitrary delivery binds the locked current Sent target", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  const currentSettings = {
+    ...MISCONFIGURED_SENT_SETTINGS,
+    sentMailboxTargetScope: SENT_TARGET_SCOPE_B,
+  };
+  let submissions = 0;
+  const result = await sendArbitraryEmailWithDependencies(
+    INPUT,
+    dependencies(
+      database,
+      currentSettings,
+      async () => {
+        submissions += 1;
+        return {
+          providerMessageId: "message-immediate-target-race",
+          error: null,
+          failureDisposition: null,
+        };
+      },
+      MISCONFIGURED_SENT_SETTINGS,
+    ),
+  );
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(submissions, 1);
+  assert.equal(database.record?.sentMailboxTargetScope, SENT_TARGET_SCOPE_B);
+  assert.equal(database.record?.claimedAt, null);
+  assert.equal(database.record?.claimToken, null);
+  assert.equal(
+    database.sentMailCopyRecord?.targetScope,
+    SENT_TARGET_SCOPE_B,
+  );
+});
+
+test("proven-unsent arbitrary retries refresh the Sent target before acceptance", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  const now = { value: new Date("2026-07-20T20:00:00.000Z") };
+  const settings = { ...MISCONFIGURED_SENT_SETTINGS };
+  let submissions = 0;
+  const deps = dependencies(
+    database,
+    settings,
+    async () => {
+      submissions += 1;
+      return submissions === 1
+        ? {
+            providerMessageId: null,
+            error: "temporary Resend failure",
+            failureDisposition: "retryable",
+          }
+        : {
+            providerMessageId: "message-scheduled-sent-config-missing",
+            error: null,
+            failureDisposition: null,
+          };
+    },
+  );
+  deps.now = () => now.value;
+  const id = "sent-copy-config-retry";
+  const queued = await queueArbitraryEmailWithDependencies(
+    INPUT,
+    new Date("2026-07-20T20:01:00.000Z"),
+    id,
+    deps,
+  );
+  assert.equal(queued.ok, true);
+
+  now.value = new Date("2026-07-20T20:01:01.000Z");
+  const first = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
+  assert.equal(first.retryScheduled, true);
+  assert.equal(database.record?.sentMailboxTargetScope, SENT_TARGET_SCOPE);
+  settings.sentMailboxTargetScope = SENT_TARGET_SCOPE_B;
+  now.value = first.nextAttemptAt ?? new Date("2026-07-20T20:02:01.000Z");
+  const second = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
+  assert.equal(second.ok, true, JSON.stringify(second));
+  assert.equal(submissions, 2);
+  assert.equal(database.sentMailCopyRecord?.status, "retry_scheduled");
+  assert.equal(
+    database.sentMailCopyRecord?.targetScope,
+    SENT_TARGET_SCOPE_B,
+  );
+  assert.equal(database.record?.sentMailboxTargetScope, SENT_TARGET_SCOPE_B);
+});
 
 test("a suppression that wins the recipient lock blocks the stale real request", async () => {
   const database = new MemoryArbitraryEmailDatabase();
@@ -652,7 +803,10 @@ test("scheduled retries retain their committed credential scope", async () => {
 test("credential rotation after an in-flight scheduled attempt fails closed", async () => {
   const database = new MemoryArbitraryEmailDatabase();
   const now = { value: new Date("2026-07-20T12:00:00.000Z") };
-  const settings = { ...REAL_SETTINGS, apiKey: "re_initial_scope" };
+  const settings = {
+    ...MISCONFIGURED_SENT_SETTINGS,
+    apiKey: "re_initial_scope",
+  };
   let submissions = 0;
   const deps = dependencies(database, settings, async () => {
     submissions += 1;
@@ -674,8 +828,10 @@ test("credential rotation after an in-flight scheduled attempt fails closed", as
   const first = await dispatchScheduledArbitraryEmailWithDependencies(id, deps);
   assert.equal(first.retryScheduled, true);
   const originalScope = database.record?.providerCredentialScope;
+  const originalSentTarget = database.record?.sentMailboxTargetScope;
 
   settings.apiKey = "re_rotated_scope";
+  settings.sentMailboxTargetScope = SENT_TARGET_SCOPE_B;
   now.value = new Date("2026-07-20T13:01:01.000Z");
   const rotated = await dispatchScheduledArbitraryEmailWithDependencies(
     id,
@@ -685,6 +841,7 @@ test("credential rotation after an in-flight scheduled attempt fails closed", as
   assert.equal(submissions, 1);
   assert.equal(database.record?.status, "manual_review");
   assert.equal(database.record?.providerCredentialScope, originalScope);
+  assert.equal(database.record?.sentMailboxTargetScope, originalSentTarget);
   assert.match(String(database.record?.error), /credential scope changed/i);
 });
 

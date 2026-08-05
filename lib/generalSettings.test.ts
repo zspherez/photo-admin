@@ -259,6 +259,8 @@ test("delivery policy readers observe the complete old or new settings snapshot"
   assert.deepEqual(await read, {
     testOverrideValue: "new-test@example.com",
     bccEmailsValue: "new-bcc@example.com",
+    sentMailCopyEnabledValue: null,
+    sentMailCopyMailboxValue: null,
   });
 
   const readerFirstStore = new MemorySettingStore(oldValues);
@@ -291,6 +293,8 @@ test("delivery policy readers observe the complete old or new settings snapshot"
   assert.deepEqual(await oldRead, {
     testOverrideValue: "old-test@example.com",
     bccEmailsValue: "old-bcc@example.com",
+    sentMailCopyEnabledValue: null,
+    sentMailCopyMailboxValue: null,
   });
   await laterSave;
   assert.deepEqual(readerFirstStore.values(), {

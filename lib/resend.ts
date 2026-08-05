@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { Resend, type ErrorResponse } from "resend";
 import { db } from "@/lib/db";
 import { readGeneralDeliverySettingsInTransaction } from "@/lib/generalSettings";
+import { resolveSentMailCopyRequestState } from "@/lib/sentMailConfig";
 import {
   DEFAULT_RECIPIENT_DELIVERY_MODE,
   recipientDeliveryLayout,
@@ -22,11 +23,57 @@ export const RESEND_PROVIDER_REQUEST_TIMEOUT_MS = 20_000;
 export const RESEND_CREDENTIAL_SCOPE_PREFIX = "resend:key-sha256:";
 export const RESEND_WEBHOOK_LOCK_CLASS = 1_380_273_301;
 
+export function isNonemptyProviderMessageId(
+  providerMessageId: unknown,
+): providerMessageId is string {
+  return (
+    typeof providerMessageId === "string" &&
+    providerMessageId.trim().length > 0
+  );
+}
+
+export function nonemptyProviderMessageIds(
+  providerMessageIds: readonly string[],
+): string[] {
+  return providerMessageIds.filter(isNonemptyProviderMessageId);
+}
+
+export function hasAcceptedProviderMessageId(
+  providerMessageIds: readonly string[],
+): boolean {
+  return nonemptyProviderMessageIds(providerMessageIds).length > 0;
+}
+
+export function hasAcceptedProviderRequestResult(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        !Array.isArray(entry) &&
+        isNonemptyProviderMessageId(
+          (entry as Record<string, unknown>).providerMessageId,
+        ),
+    )
+  );
+}
+
+export function providerMessageIdsAreComplete(
+  providerMessageIds: readonly string[],
+  expectedCount: number,
+): boolean {
+  return (
+    providerMessageIds.length === expectedCount &&
+    nonemptyProviderMessageIds(providerMessageIds).length === expectedCount
+  );
+}
+
 export function resendProviderMessageLockKeys(
   providerMessageIds: readonly string[],
 ): string[] {
   return Array.from(
-    new Set(providerMessageIds.filter(Boolean).map((id) => `message:${id}`)),
+    new Set(nonemptyProviderMessageIds(providerMessageIds).map((id) => `message:${id}`)),
   ).sort();
 }
 
@@ -183,6 +230,9 @@ export type PrepareResendRequestResult =
       request: ResendRequestSnapshot;
       requestHash: string;
       testSend: boolean;
+      sentMailboxCopyRequested: boolean;
+      sentMailboxTargetScope: string | null;
+      sentMailboxCopyConfigurationError: string | null;
       intendedRecipients: string[];
       attachmentBlobs: ResendAttachmentBlob[];
       warnings: string[];
@@ -199,6 +249,9 @@ export type PrepareResendRequestBatchResult =
       requestBatch: ResendRequestBatchSnapshot;
       requestHash: string;
       testSend: boolean;
+      sentMailboxCopyRequested: boolean;
+      sentMailboxTargetScope: string | null;
+      sentMailboxCopyConfigurationError: string | null;
       intendedRecipients: string[];
       attachmentBlobs: ResendAttachmentBlob[];
       warnings: string[];
@@ -305,7 +358,7 @@ export function parseResendRequestResultSnapshot(
     );
   }
   return Array.from({ length: requestCount }, (_, index) =>
-    providerMessageIds[index]
+    isNonemptyProviderMessageId(providerMessageIds[index])
       ? {
           providerMessageId: providerMessageIds[index],
           error: null,
@@ -320,7 +373,9 @@ export function summarizeResendRequestResults(
 ): SendResult {
   const failures = results
     .map((result, index) => ({ ...result, index }))
-    .filter((result) => result.providerMessageId === null);
+    .filter(
+      (result) => !isNonemptyProviderMessageId(result.providerMessageId),
+    );
   if (failures.length === 0) {
     return {
       providerMessageId: results[0]?.providerMessageId ?? null,
@@ -365,9 +420,9 @@ export function mergeResendRequestResults(
   let conflict: string | null = null;
   const results = current.map((result, index) => {
     const previous = prior[index];
-    if (previous?.providerMessageId) {
+    if (isNonemptyProviderMessageId(previous?.providerMessageId)) {
       if (
-        result.providerMessageId &&
+        isNonemptyProviderMessageId(result.providerMessageId) &&
         result.providerMessageId !== previous.providerMessageId
       ) {
         conflict ??=
@@ -396,7 +451,9 @@ export function markResendRequestDeliveryFailure(
     candidateIndex === index
       ? {
           providerMessageId:
-            result?.providerMessageId ?? providerMessageId,
+            isNonemptyProviderMessageId(result?.providerMessageId)
+              ? result.providerMessageId
+              : providerMessageId,
           error: result?.error ?? null,
           failureDisposition: result?.failureDisposition ?? null,
           deliveryFailure: error,
@@ -411,7 +468,7 @@ export function resendRequestResultsAreResolved(
   return results.every(
     (result) =>
       result !== null &&
-      (result.providerMessageId !== null ||
+      (isNonemptyProviderMessageId(result.providerMessageId) ||
         result.failureDisposition === "permanent" ||
         result.failureDisposition === "policy"),
   );
@@ -435,7 +492,9 @@ export function bindProviderMessageIdAtIndex(
   );
   if (conflict) return { providerMessageIds, conflict };
   const existing = current[index];
-  providerMessageIds[index] = existing || providerMessageId;
+  providerMessageIds[index] = isNonemptyProviderMessageId(existing)
+    ? existing
+    : providerMessageId;
   return { providerMessageIds, conflict: null };
 }
 
@@ -445,6 +504,9 @@ export function validateProviderMessageIndex(
   index: number | null,
   providerMessageId: string,
 ): string | null {
+  if (!isNonemptyProviderMessageId(providerMessageId)) {
+    return `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index === null ? "unknown" : index + 1}: provider message ID is blank`;
+  }
   const duplicateConflict = duplicateProviderMessageIdConflict(current);
   if (duplicateConflict) return duplicateConflict;
   if (index === null || index < 0 || index >= requestCount) {
@@ -464,7 +526,10 @@ export function validateProviderMessageIndex(
     );
   }
   const existing = current[index];
-  if (existing && existing !== providerMessageId) {
+  if (
+    isNonemptyProviderMessageId(existing) &&
+    existing !== providerMessageId
+  ) {
     return (
       `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
       `${existing} != ${providerMessageId}`
@@ -478,7 +543,7 @@ export function duplicateProviderMessageIdConflict(
 ): string | null {
   const firstIndex = new Map<string, number>();
   for (const [index, providerMessageId] of providerMessageIds.entries()) {
-    if (!providerMessageId) continue;
+    if (!isNonemptyProviderMessageId(providerMessageId)) continue;
     const priorIndex = firstIndex.get(providerMessageId);
     if (priorIndex !== undefined) {
       return (
@@ -565,6 +630,9 @@ export interface ResendDeliverySettingsSnapshot {
   from: string | undefined;
   testOverride: string | null;
   bccEmails: string[];
+  sentMailCopyRequested?: boolean;
+  sentMailboxTargetScope?: string | null;
+  sentMailCopyConfigurationError?: string | null;
 }
 
 export async function getResendDeliverySettingsSnapshot(
@@ -575,6 +643,10 @@ export async function getResendDeliverySettingsSnapshot(
   ): Promise<ResendDeliverySettingsSnapshot> => {
     const settings = await readGeneralDeliverySettingsInTransaction(policyTx);
     const apiKey = process.env.RESEND_API_KEY;
+    const sentMailCopy = resolveSentMailCopyRequestState(
+      settings.sentMailCopyEnabledValue,
+      settings.sentMailCopyMailboxValue,
+    );
     return {
       apiKey,
       credentialScope: getResendCredentialScope(apiKey),
@@ -585,6 +657,9 @@ export async function getResendDeliverySettingsSnapshot(
           : { value: settings.testOverrideValue },
       ),
       bccEmails: parseBccEmails(settings.bccEmailsValue),
+      sentMailCopyRequested: sentMailCopy.requested,
+      sentMailboxTargetScope: sentMailCopy.targetScope,
+      sentMailCopyConfigurationError: sentMailCopy.configurationError,
     };
   };
   return tx ? readSnapshot(tx) : db.$transaction(readSnapshot);
@@ -599,6 +674,9 @@ export interface ResendDeliveryPolicy {
   bcc: string[];
   subject: string;
   testSend: boolean;
+  sentMailCopyRequested: boolean;
+  sentMailboxTargetScope: string | null;
+  sentMailboxCopyConfigurationError: string | null;
 }
 
 export type ResendDeliveryPolicyResult =
@@ -615,6 +693,9 @@ export interface BuildResendDeliveryPolicyArgs {
   recipientDeliveryMode?: RecipientDeliveryMode;
   primaryRecipientEmail?: string | null;
   allowMissingFrom?: boolean;
+  sentMailCopyRequested?: boolean;
+  sentMailboxTargetScope?: string | null;
+  sentMailCopyConfigurationError?: string | null;
 }
 
 export function buildResendDeliveryPolicy({
@@ -627,6 +708,9 @@ export function buildResendDeliveryPolicy({
   recipientDeliveryMode = DEFAULT_RECIPIENT_DELIVERY_MODE,
   primaryRecipientEmail = null,
   allowMissingFrom = false,
+  sentMailCopyRequested = false,
+  sentMailboxTargetScope = null,
+  sentMailCopyConfigurationError = null,
 }: BuildResendDeliveryPolicyArgs): ResendDeliveryPolicyResult {
   const normalizedFrom = from?.trim();
   if (!normalizedFrom && !allowMissingFrom) {
@@ -690,6 +774,15 @@ export function buildResendDeliveryPolicy({
         ? `[TEST → ${allowedIntended.join(", ")}] ${subject}`
         : subject,
       testSend: !!overrideEmail,
+      sentMailCopyRequested: !!sentMailCopyRequested && !overrideEmail,
+      sentMailboxTargetScope:
+        sentMailCopyRequested && !overrideEmail
+          ? sentMailboxTargetScope
+          : null,
+      sentMailboxCopyConfigurationError:
+        sentMailCopyRequested && !overrideEmail
+          ? sentMailCopyConfigurationError
+          : null,
     },
   };
 }
@@ -718,8 +811,14 @@ export async function resolveResendDeliveryPolicy(
     DEFAULT_RECIPIENT_DELIVERY_MODE,
   primaryRecipientEmail: string | null = null,
 ): Promise<ResendDeliveryPolicyResult> {
-  const { from, testOverride, bccEmails } =
-    await getResendDeliverySettingsSnapshot();
+  const {
+    from,
+    testOverride,
+    bccEmails,
+    sentMailCopyRequested,
+    sentMailboxTargetScope,
+    sentMailCopyConfigurationError,
+  } = await getResendDeliverySettingsSnapshot();
   const candidates = normalizeEmails([
     ...intendedRecipients,
     ...bccEmails,
@@ -739,6 +838,9 @@ export async function resolveResendDeliveryPolicy(
     testOverride,
     bccEmails,
     suppressedEmails: suppressed.map((row) => row.normalizedEmail),
+    sentMailCopyRequested,
+    sentMailboxTargetScope,
+    sentMailCopyConfigurationError,
     recipientDeliveryMode,
     primaryRecipientEmail,
   });
@@ -748,8 +850,14 @@ export async function resolveArbitraryResendDeliveryPolicy(
   intendedRecipients: string[],
   subject: string,
 ): Promise<ResendDeliveryPolicyResult> {
-  const { from, testOverride, bccEmails } =
-    await getResendDeliverySettingsSnapshot();
+  const {
+    from,
+    testOverride,
+    bccEmails,
+    sentMailCopyRequested,
+    sentMailboxTargetScope,
+    sentMailCopyConfigurationError,
+  } = await getResendDeliverySettingsSnapshot();
   const candidates = normalizeEmails([
     ...intendedRecipients,
     ...bccEmails,
@@ -770,6 +878,9 @@ export async function resolveArbitraryResendDeliveryPolicy(
     testOverride,
     bccEmails,
     suppressedEmails: suppressed.map((row) => row.normalizedEmail),
+    sentMailCopyRequested,
+    sentMailboxTargetScope,
+    sentMailCopyConfigurationError,
   });
 }
 
@@ -899,8 +1010,14 @@ export async function prepareResendRequest({
   attemptId,
   idempotencyKey,
 }: PrepareResendRequestArgs): Promise<PrepareResendRequestResult> {
-  const { from, testOverride, bccEmails } =
-    await getResendDeliverySettingsSnapshot();
+  const {
+    from,
+    testOverride,
+    bccEmails,
+    sentMailCopyRequested,
+    sentMailboxTargetScope,
+    sentMailCopyConfigurationError,
+  } = await getResendDeliverySettingsSnapshot();
   const candidates = normalizeEmails([
     ...to,
     ...bccEmails,
@@ -922,6 +1039,9 @@ export async function prepareResendRequest({
     suppressedEmails: suppressed.map((row) => row.normalizedEmail),
     recipientDeliveryMode,
     primaryRecipientEmail,
+    sentMailCopyRequested,
+    sentMailboxTargetScope,
+    sentMailCopyConfigurationError,
   });
   if (!resolvedPolicy.ok) {
     return {
@@ -958,6 +1078,10 @@ export async function prepareResendRequest({
     request,
     requestHash: hashResendRequestSnapshot(request),
     testSend: policy.testSend,
+    sentMailboxCopyRequested: policy.sentMailCopyRequested,
+    sentMailboxTargetScope: policy.sentMailboxTargetScope,
+    sentMailboxCopyConfigurationError:
+      policy.sentMailboxCopyConfigurationError,
     intendedRecipients: policy.intendedRecipients,
     attachmentBlobs: [],
     warnings: [],
@@ -974,8 +1098,14 @@ export async function prepareResendRequestBatch({
   attemptId,
   idempotencyKey,
 }: PrepareResendRequestArgs): Promise<PrepareResendRequestBatchResult> {
-  const { from, testOverride, bccEmails } =
-    await getResendDeliverySettingsSnapshot();
+  const {
+    from,
+    testOverride,
+    bccEmails,
+    sentMailCopyRequested,
+    sentMailboxTargetScope,
+    sentMailCopyConfigurationError,
+  } = await getResendDeliverySettingsSnapshot();
   const candidates = normalizeEmails([
     ...to,
     ...bccEmails,
@@ -997,6 +1127,9 @@ export async function prepareResendRequestBatch({
     suppressedEmails: suppressed.map((row) => row.normalizedEmail),
     recipientDeliveryMode,
     primaryRecipientEmail,
+    sentMailCopyRequested,
+    sentMailboxTargetScope,
+    sentMailCopyConfigurationError,
   });
   if (!resolvedPolicy.ok) {
     return { ...resolvedPolicy, preparationDisposition: "permanent" };
@@ -1015,6 +1148,10 @@ export async function prepareResendRequestBatch({
     requestBatch,
     requestHash: hashResendRequestBatchSnapshot(requestBatch),
     testSend: policy.testSend,
+    sentMailboxCopyRequested: policy.sentMailCopyRequested,
+    sentMailboxTargetScope: policy.sentMailboxTargetScope,
+    sentMailboxCopyConfigurationError:
+      policy.sentMailboxCopyConfigurationError,
     intendedRecipients: policy.intendedRecipients,
     attachmentBlobs: [],
     warnings: [],
@@ -1108,6 +1245,10 @@ export async function prepareArbitraryResendRequest({
     request,
     requestHash: hashResendRequestSnapshot(request),
     testSend: policy.testSend,
+    sentMailboxCopyRequested: policy.sentMailCopyRequested,
+    sentMailboxTargetScope: policy.sentMailboxTargetScope,
+    sentMailboxCopyConfigurationError:
+      policy.sentMailboxCopyConfigurationError,
     intendedRecipients: policy.intendedRecipients,
     attachmentBlobs: [],
     warnings: [],
@@ -1503,7 +1644,9 @@ export async function sendPreparedEmailBatchViaResend(
   return {
     results: await Promise.all(
       batch.requests.map((request, index) =>
-        priorResults[index]?.providerMessageId ||
+        isNonemptyProviderMessageId(
+          priorResults[index]?.providerMessageId,
+        ) ||
         ["permanent", "policy", "uncertain"].includes(
           priorResults[index]?.failureDisposition ?? "",
         )
@@ -1603,18 +1746,22 @@ export function shouldMirrorResendAttempt(
 ): boolean {
   if (
     outreach.idempotencyKey !== attempt.idempotencyKey ||
-    (!attempt.providerMessageId &&
-      (attempt.providerMessageIds?.length ?? 0) === 0)
+    (!isNonemptyProviderMessageId(attempt.providerMessageId) &&
+      !hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []))
   ) {
     return false;
   }
   const attemptIds = new Set([
-    ...(attempt.providerMessageId ? [attempt.providerMessageId] : []),
-    ...(attempt.providerMessageIds ?? []).filter(Boolean),
+    ...(isNonemptyProviderMessageId(attempt.providerMessageId)
+      ? [attempt.providerMessageId]
+      : []),
+    ...nonemptyProviderMessageIds(attempt.providerMessageIds ?? []),
   ]);
   const outreachIds = new Set([
-    ...(outreach.providerMessageId ? [outreach.providerMessageId] : []),
-    ...(outreach.providerMessageIds ?? []).filter(Boolean),
+    ...(isNonemptyProviderMessageId(outreach.providerMessageId)
+      ? [outreach.providerMessageId]
+      : []),
+    ...nonemptyProviderMessageIds(outreach.providerMessageIds ?? []),
   ]);
   return (
     outreachIds.size === 0 ||
@@ -1673,8 +1820,10 @@ export function correlateResendWebhookAttempt(
     return { status: "conflict", reason: "outreach tag contradicts matched attempt" };
   }
   const knownProviderIds = new Set([
-    ...(attempt.providerMessageId ? [attempt.providerMessageId] : []),
-    ...(attempt.providerMessageIds ?? []).filter(Boolean),
+    ...(isNonemptyProviderMessageId(attempt.providerMessageId)
+      ? [attempt.providerMessageId]
+      : []),
+    ...nonemptyProviderMessageIds(attempt.providerMessageIds ?? []),
   ]);
   const expectedProviderMessages =
     parseResendRequestBatchSnapshot(attempt.providerRequest)?.requests.length ??
@@ -1682,7 +1831,7 @@ export function correlateResendWebhookAttempt(
   const canResolveIndexedBatchConflict =
     expectedProviderMessages > 1 && taggedAttempt?.id === attempt.id;
   if (
-    claims.providerMessageId &&
+    isNonemptyProviderMessageId(claims.providerMessageId) &&
     knownProviderIds.size > 0 &&
     knownProviderIds.size >= expectedProviderMessages &&
     !canResolveIndexedBatchConflict &&
@@ -1698,7 +1847,7 @@ export function correlateResendWebhookAttempt(
     status: "matched",
     attempt,
     bindProviderMessageId:
-      !!claims.providerMessageId &&
+      isNonemptyProviderMessageId(claims.providerMessageId) &&
       !knownProviderIds.has(claims.providerMessageId),
   };
 }
