@@ -1583,6 +1583,47 @@ test("partially accepted recipient batches are never treated as definitively uns
   );
 });
 
+test("blank scalar and request-result provider IDs do not freeze safe retries", () => {
+  const retryable = {
+    status: "request_failed",
+    providerCredentialScope: CREDENTIAL_SCOPE,
+    providerMessageId: "   ",
+    providerMessageIds: ["", ""],
+    providerRequestResults: [
+      {
+        providerMessageId: " \t ",
+        error: "temporary failure",
+        failureDisposition: "retryable",
+      },
+    ],
+    firstAttemptAt: NOW,
+    attemptCount: 1,
+    failureDisposition: "retryable",
+  };
+  assert.equal(isDefinitivelyUnsentOutreachAttempt(retryable), true);
+  assert.equal(
+    isDefinitivelyUnsentOutreachAttempt({
+      ...retryable,
+      providerMessageId: "accepted-scalar",
+    }),
+    false,
+  );
+  assert.equal(
+    isDefinitivelyUnsentOutreachAttempt({
+      ...retryable,
+      providerMessageId: "",
+      providerRequestResults: [
+        {
+          providerMessageId: "accepted-result",
+          error: null,
+          failureDisposition: null,
+        },
+      ],
+    }),
+    false,
+  );
+});
+
 test("follow-up recipient snapshots can include multiple unmarked current contacts", () => {
   const contact = {
     id: "contact-new",

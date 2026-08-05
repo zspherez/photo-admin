@@ -119,7 +119,7 @@ BEGIN
     RAISE EXCEPTION 'OutreachSendAttempt firstAttemptAt is immutable once set';
   END IF;
 
-  IF OLD."providerMessageId" IS NOT NULL
+  IF NULLIF(btrim(OLD."providerMessageId"), '') IS NOT NULL
     AND NEW."providerMessageId" IS DISTINCT FROM OLD."providerMessageId"
   THEN
     RAISE EXCEPTION 'OutreachSendAttempt providerMessageId is immutable once set';

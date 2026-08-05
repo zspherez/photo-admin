@@ -23,12 +23,19 @@ export const RESEND_PROVIDER_REQUEST_TIMEOUT_MS = 20_000;
 export const RESEND_CREDENTIAL_SCOPE_PREFIX = "resend:key-sha256:";
 export const RESEND_WEBHOOK_LOCK_CLASS = 1_380_273_301;
 
+export function isNonemptyProviderMessageId(
+  providerMessageId: unknown,
+): providerMessageId is string {
+  return (
+    typeof providerMessageId === "string" &&
+    providerMessageId.trim().length > 0
+  );
+}
+
 export function nonemptyProviderMessageIds(
   providerMessageIds: readonly string[],
 ): string[] {
-  return providerMessageIds.filter(
-    (providerMessageId) => providerMessageId.trim().length > 0,
-  );
+  return providerMessageIds.filter(isNonemptyProviderMessageId);
 }
 
 export function hasAcceptedProviderMessageId(
@@ -336,7 +343,7 @@ export function parseResendRequestResultSnapshot(
     );
   }
   return Array.from({ length: requestCount }, (_, index) =>
-    providerMessageIds[index]
+    isNonemptyProviderMessageId(providerMessageIds[index])
       ? {
           providerMessageId: providerMessageIds[index],
           error: null,
@@ -351,7 +358,9 @@ export function summarizeResendRequestResults(
 ): SendResult {
   const failures = results
     .map((result, index) => ({ ...result, index }))
-    .filter((result) => result.providerMessageId === null);
+    .filter(
+      (result) => !isNonemptyProviderMessageId(result.providerMessageId),
+    );
   if (failures.length === 0) {
     return {
       providerMessageId: results[0]?.providerMessageId ?? null,
@@ -396,9 +405,9 @@ export function mergeResendRequestResults(
   let conflict: string | null = null;
   const results = current.map((result, index) => {
     const previous = prior[index];
-    if (previous?.providerMessageId) {
+    if (isNonemptyProviderMessageId(previous?.providerMessageId)) {
       if (
-        result.providerMessageId &&
+        isNonemptyProviderMessageId(result.providerMessageId) &&
         result.providerMessageId !== previous.providerMessageId
       ) {
         conflict ??=
@@ -427,7 +436,9 @@ export function markResendRequestDeliveryFailure(
     candidateIndex === index
       ? {
           providerMessageId:
-            result?.providerMessageId ?? providerMessageId,
+            isNonemptyProviderMessageId(result?.providerMessageId)
+              ? result.providerMessageId
+              : providerMessageId,
           error: result?.error ?? null,
           failureDisposition: result?.failureDisposition ?? null,
           deliveryFailure: error,
@@ -442,7 +453,7 @@ export function resendRequestResultsAreResolved(
   return results.every(
     (result) =>
       result !== null &&
-      (result.providerMessageId !== null ||
+      (isNonemptyProviderMessageId(result.providerMessageId) ||
         result.failureDisposition === "permanent" ||
         result.failureDisposition === "policy"),
   );
@@ -466,7 +477,9 @@ export function bindProviderMessageIdAtIndex(
   );
   if (conflict) return { providerMessageIds, conflict };
   const existing = current[index];
-  providerMessageIds[index] = existing || providerMessageId;
+  providerMessageIds[index] = isNonemptyProviderMessageId(existing)
+    ? existing
+    : providerMessageId;
   return { providerMessageIds, conflict: null };
 }
 
@@ -476,6 +489,9 @@ export function validateProviderMessageIndex(
   index: number | null,
   providerMessageId: string,
 ): string | null {
+  if (!isNonemptyProviderMessageId(providerMessageId)) {
+    return `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index === null ? "unknown" : index + 1}: provider message ID is blank`;
+  }
   const duplicateConflict = duplicateProviderMessageIdConflict(current);
   if (duplicateConflict) return duplicateConflict;
   if (index === null || index < 0 || index >= requestCount) {
@@ -495,7 +511,10 @@ export function validateProviderMessageIndex(
     );
   }
   const existing = current[index];
-  if (existing && existing !== providerMessageId) {
+  if (
+    isNonemptyProviderMessageId(existing) &&
+    existing !== providerMessageId
+  ) {
     return (
       `${PROVIDER_MESSAGE_ID_CONFLICT_PREFIX}${index + 1}: ` +
       `${existing} != ${providerMessageId}`
@@ -509,7 +528,7 @@ export function duplicateProviderMessageIdConflict(
 ): string | null {
   const firstIndex = new Map<string, number>();
   for (const [index, providerMessageId] of providerMessageIds.entries()) {
-    if (!providerMessageId) continue;
+    if (!isNonemptyProviderMessageId(providerMessageId)) continue;
     const priorIndex = firstIndex.get(providerMessageId);
     if (priorIndex !== undefined) {
       return (
@@ -1610,7 +1629,9 @@ export async function sendPreparedEmailBatchViaResend(
   return {
     results: await Promise.all(
       batch.requests.map((request, index) =>
-        priorResults[index]?.providerMessageId ||
+        isNonemptyProviderMessageId(
+          priorResults[index]?.providerMessageId,
+        ) ||
         ["permanent", "policy", "uncertain"].includes(
           priorResults[index]?.failureDisposition ?? "",
         )
@@ -1716,11 +1737,15 @@ export function shouldMirrorResendAttempt(
     return false;
   }
   const attemptIds = new Set([
-    ...(attempt.providerMessageId ? [attempt.providerMessageId] : []),
+    ...(isNonemptyProviderMessageId(attempt.providerMessageId)
+      ? [attempt.providerMessageId]
+      : []),
     ...nonemptyProviderMessageIds(attempt.providerMessageIds ?? []),
   ]);
   const outreachIds = new Set([
-    ...(outreach.providerMessageId ? [outreach.providerMessageId] : []),
+    ...(isNonemptyProviderMessageId(outreach.providerMessageId)
+      ? [outreach.providerMessageId]
+      : []),
     ...nonemptyProviderMessageIds(outreach.providerMessageIds ?? []),
   ]);
   return (
@@ -1780,7 +1805,9 @@ export function correlateResendWebhookAttempt(
     return { status: "conflict", reason: "outreach tag contradicts matched attempt" };
   }
   const knownProviderIds = new Set([
-    ...(attempt.providerMessageId ? [attempt.providerMessageId] : []),
+    ...(isNonemptyProviderMessageId(attempt.providerMessageId)
+      ? [attempt.providerMessageId]
+      : []),
     ...nonemptyProviderMessageIds(attempt.providerMessageIds ?? []),
   ]);
   const expectedProviderMessages =
@@ -1805,7 +1832,7 @@ export function correlateResendWebhookAttempt(
     status: "matched",
     attempt,
     bindProviderMessageId:
-      !!claims.providerMessageId &&
+      isNonemptyProviderMessageId(claims.providerMessageId) &&
       !knownProviderIds.has(claims.providerMessageId),
   };
 }

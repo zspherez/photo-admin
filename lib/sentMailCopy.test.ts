@@ -230,7 +230,18 @@ test("Sent target refresh is limited to proven-unsent pre-acceptance states", ()
     canRefreshSentMailboxTargetBeforeSubmission({
       ...base,
       status: "request_failed",
+      providerMessageId: "",
       providerMessageIds: ["", ""],
+      failureDisposition: "retryable",
+    }),
+    true,
+  );
+  assert.equal(
+    canRefreshSentMailboxTargetBeforeSubmission({
+      ...base,
+      status: "request_failed",
+      providerMessageId: " \t ",
+      providerMessageIds: [],
       failureDisposition: "retryable",
     }),
     true,
@@ -848,6 +859,14 @@ test("Sent copy persistence constrains one immutable source and retry state", ()
   assert.doesNotMatch(
     batchMigration,
     /cardinality\(OLD\."providerMessageIds"\) > 0/,
+  );
+  assert.doesNotMatch(
+    batchMigration,
+    /OLD\."providerMessageId" IS NOT NULL/,
+  );
+  assert.match(
+    batchMigration,
+    /NULLIF\(btrim\(OLD\."providerMessageId"\), ''\) IS NOT NULL/,
   );
   assert.match(
     batchMigration,

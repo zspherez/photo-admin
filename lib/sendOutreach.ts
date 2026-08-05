@@ -36,6 +36,7 @@ import {
   hashResendRequestBatchSnapshot,
   hashResendRequestSnapshot,
   hasAcceptedProviderMessageId,
+  isNonemptyProviderMessageId,
   isProviderMessageIdConflictError,
   nonemptyProviderMessageIds,
   normalizeEmails,
@@ -156,8 +157,8 @@ export function isConclusiveRealOutreachAcceptance(
     attempt.outreachId === outreach.id &&
     attempt.idempotencyKey === outreach.idempotencyKey &&
     attempt.testSend === false &&
-    outreach.providerMessageId !== null &&
-    attempt.providerMessageId !== null &&
+    isNonemptyProviderMessageId(outreach.providerMessageId) &&
+    isNonemptyProviderMessageId(attempt.providerMessageId) &&
     outreach.providerMessageId === attempt.providerMessageId &&
     sameOrderedStrings(
       outreach.providerMessageIds ?? [],
@@ -191,8 +192,8 @@ export function followUpParentBlockingReason(
       : "Original outreach has no verified real/test classification";
   }
   if (
-    !parent.providerMessageId ||
-    !attempt.providerMessageId ||
+    !isNonemptyProviderMessageId(parent.providerMessageId) ||
+    !isNonemptyProviderMessageId(attempt.providerMessageId) ||
     parent.providerMessageId !== attempt.providerMessageId
   ) {
     return "Original outreach has no matching provider acceptance";
@@ -812,7 +813,7 @@ export function canRecoverConfigurationOutageWithoutAttempt(outreach: {
     outreach.status === "retry_scheduled" &&
     isOutreachConfigurationOutageError(outreach.error) &&
     outreach.attemptCount === 0 &&
-    outreach.providerMessageId === null
+    !isNonemptyProviderMessageId(outreach.providerMessageId)
   );
 }
 
@@ -881,7 +882,7 @@ export function canRecoverPreparationFailureWithoutAttempt(outreach: {
     outreach.status === "retry_scheduled" &&
     getOutreachPreparationRetryCount(outreach.error) !== null &&
     outreach.attemptCount === 0 &&
-    outreach.providerMessageId === null
+    !isNonemptyProviderMessageId(outreach.providerMessageId)
   );
 }
 
@@ -895,7 +896,7 @@ export function hasProtectedCurrentSendState(
   return (
     hasCurrentAttempt ||
     outreach.attemptCount > 0 ||
-    outreach.providerMessageId !== null
+    isNonemptyProviderMessageId(outreach.providerMessageId)
   );
 }
 
@@ -937,7 +938,7 @@ export function isNonBlockingLegacyUnknownAttempt(
     attempt.requestHash === null
   ) {
     return (
-      (attempt.providerMessageId === null &&
+      (!isNonemptyProviderMessageId(attempt.providerMessageId) &&
         !hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) &&
         attempt.attemptCount === 0 &&
         attempt.bouncedAt === null &&
@@ -980,7 +981,7 @@ function hasAcceptedRequestResult(
   value: Prisma.JsonValue | null | undefined,
 ): boolean {
   return requestResultEntries(value).some(
-    (entry) => typeof entry.providerMessageId === "string",
+    (entry) => isNonemptyProviderMessageId(entry.providerMessageId),
   );
 }
 
@@ -1009,7 +1010,7 @@ export function isProviderAcceptanceUnresolvedAttempt(
 ): boolean {
   if (hasUncertainRequestResult(attempt.providerRequestResults)) return true;
   if (
-    attempt.providerMessageId ||
+    isNonemptyProviderMessageId(attempt.providerMessageId) ||
     hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) ||
     hasAcceptedRequestResult(attempt.providerRequestResults)
   ) {
@@ -1070,7 +1071,7 @@ export function isDefinitivelyUnsentOutreachAttempt(
   >,
 ): boolean {
   if (
-    attempt.providerMessageId ||
+    isNonemptyProviderMessageId(attempt.providerMessageId) ||
     hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) ||
     hasAcceptedRequestResult(attempt.providerRequestResults) ||
     hasUncertainRequestResult(attempt.providerRequestResults)
@@ -1117,7 +1118,7 @@ export function isDefinitiveConfigurationRejection(
 ): boolean {
   return (
     !!attempt &&
-    attempt.providerMessageId === null &&
+    !isNonemptyProviderMessageId(attempt.providerMessageId) &&
     !hasAcceptedProviderMessageId(attempt.providerMessageIds ?? []) &&
     !hasAcceptedRequestResult(attempt.providerRequestResults) &&
     !hasUncertainRequestResult(attempt.providerRequestResults) &&
@@ -1152,7 +1153,7 @@ export function evaluateAttemptRetryEligibility(
   if (hasUncertainRequestResult(attempt.providerRequestResults)) {
     return { ok: false, state: "manual_review", error: MANUAL_REVIEW_UNCERTAIN };
   }
-  if (attempt.providerMessageId) {
+  if (isNonemptyProviderMessageId(attempt.providerMessageId)) {
     return {
       ok: false,
       state: "manual_review",
@@ -3940,7 +3941,7 @@ async function finishAlreadyAccepted(
   },
   attempt: StoredAttempt,
 ): Promise<CompletedResult> {
-  if (!attempt.providerMessageId) {
+  if (!isNonemptyProviderMessageId(attempt.providerMessageId)) {
     throw new Error("Accepted attempt has no provider message ID");
   }
   if (
@@ -4568,7 +4569,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
       if (attempt) {
         await assertStoredOutreachCoverageMatches(tx, queued.id, prep);
       }
-      if (attempt?.providerMessageId) {
+      if (isNonemptyProviderMessageId(attempt?.providerMessageId)) {
         return finishAlreadyAccepted(tx, queued, attempt);
       }
       if (attempt) {
@@ -4713,7 +4714,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
       );
       if (!retired) {
         const refreshed = await currentAttempt(tx, existing.idempotencyKey);
-        if (refreshed?.providerMessageId) {
+        if (isNonemptyProviderMessageId(refreshed?.providerMessageId)) {
           return finishAlreadyAccepted(tx, existing, refreshed);
         }
         return markManualReview(
@@ -4923,7 +4924,10 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           },
         };
       }
-      if (existing.status === "cancelled" && existingAttempt?.providerMessageId) {
+      if (
+        existing.status === "cancelled" &&
+        isNonemptyProviderMessageId(existingAttempt?.providerMessageId)
+      ) {
         return finishAlreadyAccepted(tx, existing, existingAttempt);
       }
       if (
@@ -5162,7 +5166,10 @@ async function ensureAttempt(outreachInput: ClaimedOutreach): Promise<AttemptRes
       warnings: [],
     };
   }
-  if (outreachInput.attemptCount > 0 || outreachInput.providerMessageId) {
+  if (
+    outreachInput.attemptCount > 0 ||
+    isNonemptyProviderMessageId(outreachInput.providerMessageId)
+  ) {
     return releaseManualReview(outreachInput, MANUAL_REVIEW_LEGACY);
   }
   if (outreachInput.recipientEmails.length === 0) {
@@ -5359,7 +5366,7 @@ async function recoverUncertainProviderTransaction(
         },
       };
     }
-    if (attempt.providerMessageId) {
+    if (isNonemptyProviderMessageId(attempt.providerMessageId)) {
       return finishAlreadyAccepted(tx, outreach, attempt);
     }
     const expectedMessages =
@@ -5438,7 +5445,7 @@ async function claimAttemptForSending(
               },
             };
           }
-          if (attempt.providerMessageId) {
+          if (isNonemptyProviderMessageId(attempt.providerMessageId)) {
             return finishAlreadyAccepted(tx, current, attempt);
           }
           const retryBlocked = await applyRetryDecision(
@@ -5624,7 +5631,7 @@ async function restoreUnsubmittedClaimFailure(
         },
       };
     }
-    if (attempt?.providerMessageId) {
+    if (isNonemptyProviderMessageId(attempt?.providerMessageId)) {
       return finishAlreadyAccepted(tx, current, attempt);
     }
 
@@ -5708,7 +5715,7 @@ async function submitClaimedAttempt(
               },
             };
           }
-          if (attempt.providerMessageId) {
+          if (isNonemptyProviderMessageId(attempt.providerMessageId)) {
             return finishAlreadyAccepted(tx, current, attempt);
           }
 
@@ -5985,10 +5992,16 @@ async function finishClaimedSend(
     );
     const requestResults = mergedRequestResults.results;
     const providerMessageIds = requestResults.map(
-      (result, index) =>
-        result.providerMessageId ??
-        attempt.providerMessageIds?.[index] ??
-        "",
+      (result, index) => {
+        if (isNonemptyProviderMessageId(result.providerMessageId)) {
+          return result.providerMessageId;
+        }
+        const storedProviderMessageId =
+          attempt.providerMessageIds?.[index];
+        return isNonemptyProviderMessageId(storedProviderMessageId)
+          ? storedProviderMessageId
+          : "";
+      },
     );
     const aggregateResult = summarizeResendRequestResults(
       requestResults,
@@ -6063,7 +6076,7 @@ async function finishClaimedSend(
     }
 
     const failedResults = requestResults.filter(
-      (result) => result.providerMessageId === null,
+      (result) => !isNonemptyProviderMessageId(result.providerMessageId),
     );
     const result = aggregateResult;
     const allRequestsAccepted =
@@ -6076,14 +6089,23 @@ async function finishClaimedSend(
       (requestResult) => requestResult.deliveryFailure,
     )?.deliveryFailure;
     const providerMessageId =
-      attempt.providerMessageId ??
-      (allRequestsAccepted ? providerMessageIds[0] : null) ??
-      result.providerMessageId;
+      (isNonemptyProviderMessageId(attempt.providerMessageId)
+        ? attempt.providerMessageId
+        : null) ??
+      (allRequestsAccepted &&
+      isNonemptyProviderMessageId(providerMessageIds[0])
+        ? providerMessageIds[0]
+        : null) ??
+      (isNonemptyProviderMessageId(result.providerMessageId)
+        ? result.providerMessageId
+        : null);
     if (providerMessageIds.length > 0) {
       await tx.outreachSendAttempt.update({
         where: { id: attempt.id },
         data: {
-          ...(providerMessageId ? { providerMessageId } : {}),
+          ...(isNonemptyProviderMessageId(providerMessageId)
+            ? { providerMessageId }
+            : {}),
           providerMessageIds,
           providerRequestResults:
             requestResults as unknown as Prisma.InputJsonValue,
@@ -6092,7 +6114,9 @@ async function finishClaimedSend(
       await tx.outreach.updateMany({
         where: { id: current.id, idempotencyKey: attempt.idempotencyKey },
         data: {
-          ...(providerMessageId ? { providerMessageId } : {}),
+          ...(isNonemptyProviderMessageId(providerMessageId)
+            ? { providerMessageId }
+            : {}),
           providerMessageIds,
         },
       });
@@ -6105,7 +6129,10 @@ async function finishClaimedSend(
         testSend: attempt.testSend,
       });
     }
-    if (allRequestsAccepted && providerMessageId) {
+    if (
+      allRequestsAccepted &&
+      isNonemptyProviderMessageId(providerMessageId)
+    ) {
       if (attempt.status === "delivery_failed" || deliveryFailure) {
         const error =
           deliveryFailure ??
@@ -6790,7 +6817,7 @@ async function schedulePreparedOutreach(
       if (attempt) {
         await assertStoredOutreachCoverageMatches(tx, queued.id, prep);
       }
-      if (attempt?.providerMessageId) {
+      if (isNonemptyProviderMessageId(attempt?.providerMessageId)) {
         return (await finishAlreadyAccepted(tx, queued, attempt)).result;
       }
       if (attempt) {
@@ -6912,7 +6939,7 @@ async function schedulePreparedOutreach(
       );
       if (!retired) {
         const refreshed = await currentAttempt(tx, existing.idempotencyKey);
-        if (refreshed?.providerMessageId) {
+        if (isNonemptyProviderMessageId(refreshed?.providerMessageId)) {
           return (await finishAlreadyAccepted(tx, existing, refreshed)).result;
         }
         return (
@@ -7085,7 +7112,10 @@ async function schedulePreparedOutreach(
           error: `Outreach cannot be scheduled from state ${existing.status}`,
         };
       }
-      if (existing.status === "cancelled" && existingAttempt?.providerMessageId) {
+      if (
+        existing.status === "cancelled" &&
+        isNonemptyProviderMessageId(existingAttempt?.providerMessageId)
+      ) {
         return (await finishAlreadyAccepted(tx, existing, existingAttempt)).result;
       }
       if (
@@ -7283,7 +7313,7 @@ export async function cancelScheduledOutreach(
     }
 
     const attempt = await currentAttempt(tx, outreach.idempotencyKey);
-    if (attempt?.providerMessageId) {
+    if (isNonemptyProviderMessageId(attempt?.providerMessageId)) {
       await finishAlreadyAccepted(tx, outreach, attempt);
       return { cancelled: true, showId: outreach.showId };
     }
@@ -7395,7 +7425,7 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
     }
 
     const attempt = await currentAttempt(tx, outreach.idempotencyKey);
-    if (attempt?.providerMessageId) {
+    if (isNonemptyProviderMessageId(attempt?.providerMessageId)) {
       return finishAlreadyAccepted(tx, outreach, attempt);
     }
     if (outreach.show.syncStatus !== "active") {
@@ -7601,7 +7631,7 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
       if (blocked) return blocked;
     } else if (
       outreach.attemptCount > 0 ||
-      outreach.providerMessageId !== null ||
+      isNonemptyProviderMessageId(outreach.providerMessageId) ||
       (outreach.status === "retry_scheduled" &&
         !canRecoverConfigurationOutageWithoutAttempt(outreach) &&
         !canRecoverPreparationFailureWithoutAttempt(outreach))

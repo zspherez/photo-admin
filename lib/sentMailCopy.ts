@@ -13,6 +13,7 @@ import {
   hashResendRequestBatchSnapshot,
   hashResendRequestSnapshot,
   hasAcceptedProviderMessageId,
+  isNonemptyProviderMessageId,
   parseResendRequestBatchSnapshot,
   parseResendRequestSnapshot,
   type ResendAttachmentBlob,
@@ -83,7 +84,7 @@ export function canRefreshSentMailboxTargetBeforeSubmission(state: {
   failureDisposition: string | null;
 }): boolean {
   if (
-    state.providerMessageId ||
+    isNonemptyProviderMessageId(state.providerMessageId) ||
     hasAcceptedProviderMessageId(state.providerMessageIds ?? [])
   ) {
     return false;
@@ -106,6 +107,9 @@ export async function ensureSentMailCopyQueued(
   source: SentMailCopySource,
 ): Promise<void> {
   if (!source.requested || source.testSend !== false) return;
+  if (!isNonemptyProviderMessageId(source.providerMessageId)) {
+    throw new Error("Sent copy provider message ID is blank");
+  }
   const id =
     source.kind === "outreach"
       ? `outreach-attempt/${source.id}/message/${source.requestIndex}`
@@ -165,7 +169,7 @@ export async function ensureOutreachSentMailCopiesQueued(
   },
 ): Promise<void> {
   for (const [requestIndex, providerMessageId] of source.providerMessageIds.entries()) {
-    if (!providerMessageId) continue;
+    if (!isNonemptyProviderMessageId(providerMessageId)) continue;
     await ensureSentMailCopyQueued(tx, {
       kind: "outreach",
       id: source.id,
@@ -582,7 +586,10 @@ async function loadSentMailCopyMessage(id: string) {
       );
     const indexedProviderMessageId =
       source.providerMessageIds[requestIndex ?? -1] ??
-      (requestIndex === 0 ? source.providerMessageId : null);
+      (requestIndex === 0 &&
+      isNonemptyProviderMessageId(source.providerMessageId)
+        ? source.providerMessageId
+        : null);
     if (
       source.testSend !== false ||
       source.sentMailboxCopyRequested !== true ||

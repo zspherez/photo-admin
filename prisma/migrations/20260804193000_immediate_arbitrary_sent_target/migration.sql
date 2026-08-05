@@ -21,7 +21,7 @@ BEGIN
     OR NEW."sentMailboxCopyConfigurationError"
       IS DISTINCT FROM OLD."sentMailboxCopyConfigurationError"
   ) AND (
-    OLD."providerMessageId" IS NOT NULL
+    NULLIF(btrim(OLD."providerMessageId"), '') IS NOT NULL
     OR NOT (
       (
         OLD."firstAttemptAt" IS NULL

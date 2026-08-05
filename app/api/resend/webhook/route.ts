@@ -10,6 +10,7 @@ import {
   correlateResendWebhookAttempt,
   duplicateProviderMessageIdConflict,
   getResendWebhookFailurePolicy,
+  isNonemptyProviderMessageId,
   isProviderMessageIdConflictError,
   markResendRequestDeliveryFailure,
   hasAcceptedProviderMessageId,
@@ -242,7 +243,11 @@ async function processEvent(
           const attemptId = findAttemptId(parsed);
           const outreachId = findOutreachId(parsed);
           const arbitraryEmailId = findArbitraryEmailId(parsed);
-          const messageId = parsed.data.email_id ?? null;
+          const messageId = isNonemptyProviderMessageId(
+            parsed.data.email_id,
+          )
+            ? parsed.data.email_id
+            : null;
           const providerCreatedAt = eventDate(parsed);
           const clickMetadata = resendClickMetadata(
             parsed.type,
@@ -368,7 +373,11 @@ async function processEvent(
                 impactedRecipients,
               );
             }
-            if (arbitraryEmail.providerMessageId) {
+            if (
+              isNonemptyProviderMessageId(
+                arbitraryEmail.providerMessageId,
+              )
+            ) {
               await ensureSentMailCopyQueued(tx, {
                 kind: "arbitrary",
                 id: arbitraryEmail.id,
@@ -774,11 +783,15 @@ async function processEvent(
               expectedProviderMessages,
             );
           const primaryProviderMessageId =
-            attempt.providerMessageId ?? providerMessageIds[0] ?? null;
+            (isNonemptyProviderMessageId(attempt.providerMessageId)
+              ? attempt.providerMessageId
+              : null) ??
+            providerMessageIds[0] ??
+            null;
           const indexedProviderMessageIds =
             attempt.providerMessageIds.length > 0
               ? attempt.providerMessageIds
-              : primaryProviderMessageId
+              : isNonemptyProviderMessageId(primaryProviderMessageId)
                 ? [primaryProviderMessageId]
                 : [];
           const mirrorDeliveryProblem =
@@ -812,11 +825,17 @@ async function processEvent(
             persistedDeliveryFailure ??
             (attempt.status === "delivery_failed" ? attempt.error : null);
           const deliveryFailureState = (error: string) => {
-            const providerId =
-              messageId ??
-              currentRequestResults[requestResultIndex]?.providerMessageId ??
-              null;
-            if (requestResultIndex < 0 || !providerId) {
+            const storedProviderId =
+              currentRequestResults[requestResultIndex]?.providerMessageId;
+            const providerId = isNonemptyProviderMessageId(messageId)
+              ? messageId
+              : isNonemptyProviderMessageId(storedProviderId)
+                ? storedProviderId
+                : null;
+            if (
+              requestResultIndex < 0 ||
+              !isNonemptyProviderMessageId(providerId)
+            ) {
               return {
                 results: currentRequestResults,
                 resolved: false,
@@ -844,7 +863,10 @@ async function processEvent(
               testSend: attempt.testSend,
             });
           }
-          if (providerAcceptanceComplete && primaryProviderMessageId) {
+          if (
+            providerAcceptanceComplete &&
+            isNonemptyProviderMessageId(primaryProviderMessageId)
+          ) {
             const acceptedAt = earlier(
               earlier(
                 attempt.acceptedAt,

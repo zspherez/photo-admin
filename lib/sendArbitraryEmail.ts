@@ -15,6 +15,7 @@ import {
   getResendDeliverySettingsSnapshot,
   getResendSubmissionCredential,
   hashResendRequestSnapshot,
+  isNonemptyProviderMessageId,
   normalizeEmails,
   parseResendRequestSnapshot,
   prepareArbitraryResendRequest,
@@ -328,7 +329,7 @@ async function bindImmediateArbitrarySentMailboxTarget(
           if (
             !stored ||
             stored.status !== "sending" ||
-            stored.providerMessageId !== null ||
+            isNonemptyProviderMessageId(stored.providerMessageId) ||
             stored.firstAttemptAt !== null ||
             stored.attemptCount !== 0 ||
             stored.claimedAt !== null ||
@@ -581,7 +582,7 @@ export async function sendArbitraryEmailWithDependencies(
           submissionCredential,
         );
         const completedAt = dependencies.now();
-        if (submission.providerMessageId) {
+        if (isNonemptyProviderMessageId(submission.providerMessageId)) {
           await tx.arbitraryEmail.update({
             where: { id },
             data: {
@@ -695,7 +696,7 @@ async function claimScheduledArbitraryEmail(
               result: { ok: true, id, skipped: true },
             };
           }
-          if (row.providerMessageId) {
+          if (isNonemptyProviderMessageId(row.providerMessageId)) {
             if (typeof row.testSend !== "boolean") {
               const error =
                 "Provider acceptance exists without a verified real/test request snapshot";
@@ -1273,7 +1274,7 @@ async function submitScheduledArbitraryEmail(
             submissionCredential,
           );
           const completedAt = dependencies.now();
-          if (submission.providerMessageId) {
+          if (isNonemptyProviderMessageId(submission.providerMessageId)) {
             await tx.arbitraryEmail.update({
               where: { id },
               data: {
