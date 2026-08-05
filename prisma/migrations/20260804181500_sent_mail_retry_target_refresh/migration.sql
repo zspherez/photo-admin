@@ -33,6 +33,9 @@ BEGIN
         END
       ) AS "providerRequestResult"
       WHERE jsonb_typeof("providerRequestResult") = 'object'
+        AND jsonb_typeof(
+          "providerRequestResult" -> 'providerMessageId'
+        ) = 'string'
         AND NULLIF(
           btrim("providerRequestResult" ->> 'providerMessageId'),
           ''

@@ -25,6 +25,7 @@ import {
   type SentMailImapConfiguration,
 } from "./sentMailConfig";
 import {
+  hasAcceptedProviderRequestResult,
   hashAttachmentContent,
   hashResendRequestSnapshot,
   type ResendRequestSnapshot,
@@ -316,6 +317,28 @@ test("Sent target refresh is limited to proven-unsent pre-acceptance states", ()
       failureDisposition: "retryable",
     }),
     false,
+  );
+});
+
+test("stored request-result acceptance requires a nonblank JSON string ID", () => {
+  for (const providerMessageId of [
+    123,
+    true,
+    ["message"],
+    { id: "message" },
+    null,
+    " \n\t ",
+  ]) {
+    assert.equal(
+      hasAcceptedProviderRequestResult([{ providerMessageId }]),
+      false,
+    );
+  }
+  assert.equal(
+    hasAcceptedProviderRequestResult([
+      { providerMessageId: " accepted-message " },
+    ]),
+    true,
   );
 });
 
@@ -919,7 +942,11 @@ test("Sent copy persistence constrains one immutable source and retry state", ()
   );
   assert.match(
     batchMigration,
-    /jsonb_array_elements\([\s\S]*jsonb_typeof\(OLD\."providerRequestResults"\) = 'array'[\s\S]*providerRequestResult" ->> 'providerMessageId'[\s\S]*IS NOT NULL/,
+    /jsonb_array_elements\([\s\S]*jsonb_typeof\(OLD\."providerRequestResults"\) = 'array'[\s\S]*jsonb_typeof\([\s\S]*providerRequestResult" -> 'providerMessageId'[\s\S]*= 'string'[\s\S]*providerRequestResult" ->> 'providerMessageId'[\s\S]*IS NOT NULL/,
+  );
+  assert.match(
+    refreshMigration,
+    /jsonb_typeof\([\s\S]*providerRequestResult" -> 'providerMessageId'[\s\S]*= 'string'[\s\S]*providerRequestResult" ->> 'providerMessageId'/,
   );
   assert.match(batchMigration, /COMMIT;\s*$/);
 });
