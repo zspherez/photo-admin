@@ -21,7 +21,15 @@ BEGIN
     OR NEW."sentMailboxCopyConfigurationError"
       IS DISTINCT FROM OLD."sentMailboxCopyConfigurationError"
   ) AND (
-    NULLIF(btrim(OLD."providerMessageId"), '') IS NOT NULL
+    NULLIF(
+      regexp_replace(
+        COALESCE(OLD."providerMessageId", ''),
+        '^[[:space:]]+|[[:space:]]+$',
+        '',
+        'g'
+      ),
+      ''
+    ) IS NOT NULL
     OR NOT (
       (
         OLD."firstAttemptAt" IS NULL

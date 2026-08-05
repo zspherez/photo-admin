@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import type { Prisma } from "@prisma/client";
 import {
@@ -28,6 +28,7 @@ import {
   hasAcceptedProviderRequestResult,
   hashAttachmentContent,
   hashResendRequestSnapshot,
+  isNonemptyProviderMessageId,
   type ResendRequestSnapshot,
 } from "./resend";
 
@@ -342,6 +343,23 @@ test("stored request-result acceptance requires a nonblank JSON string ID", () =
     ]),
     true,
   );
+});
+
+test("scalar provider acceptance trims all JavaScript whitespace", () => {
+  for (const providerMessageId of [
+    123,
+    true,
+    ["message"],
+    { id: "message" },
+    null,
+    "",
+    "\t",
+    "\n",
+    " \t\r\n ",
+  ]) {
+    assert.equal(isNonemptyProviderMessageId(providerMessageId), false);
+  }
+  assert.equal(isNonemptyProviderMessageId(" accepted-message "), true);
 });
 
 test("Sent copy MIME preserves immutable recipients, content, and attachments", async () => {
@@ -911,7 +929,31 @@ test("Sent copy persistence constrains one immutable source and retry state", ()
     /status" = 'sending'[\s\S]*claimedAt" IS NULL[\s\S]*claimToken" IS NULL/,
   );
   assert.match(immediateMigration, /possible provider acceptance/);
+  assert.doesNotMatch(immediateMigration, /btrim\(/);
+  assert.match(
+    immediateMigration,
+    /regexp_replace\([\s\S]*'\^\[\[:space:\]\]\+\|\[\[:space:\]\]\+\$'[\s\S]*IS NOT NULL/,
+  );
   assert.match(immediateMigration, /COMMIT;\s*$/);
+  const migrationRoot = new URL("../prisma/migrations/", import.meta.url);
+  const arbitraryTriggerMigrations = readdirSync(migrationRoot, {
+    withFileTypes: true,
+  })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort()
+    .filter((name) =>
+      readFileSync(
+        new URL(`${name}/migration.sql`, migrationRoot),
+        "utf8",
+      ).includes(
+        'CREATE OR REPLACE FUNCTION "protect_arbitrary_email_dispatch_scope"',
+      ),
+    );
+  assert.equal(
+    arbitraryTriggerMigrations.at(-1),
+    "20260804193000_immediate_arbitrary_sent_target",
+  );
 
   const batchMigration = readFileSync(
     new URL(
