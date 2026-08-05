@@ -87,7 +87,6 @@ export function CustomizeForm({
       ? state.error
       : null;
   const canChooseDeliveryMode =
-    followUpMode &&
     selected?.mode === "new" &&
     !contentLocked &&
     (selected?.recipients.length ?? 0) > 1;
@@ -142,7 +141,9 @@ export function CustomizeForm({
       />
       <div>
         <label htmlFor="selected-contact" className="text-sm font-medium">
-          Email recipient
+          {selected && selected.recipients.length > 1
+            ? "Primary email recipient"
+            : "Email recipient"}
         </label>
         <select
           id="selected-contact"
@@ -173,7 +174,9 @@ export function CustomizeForm({
               ? `This retry will use the original immutable recipient${
                   selected.recipients.length === 1 ? "" : "s"
                 }: ${selected.recipients.join(", ")}.`
-              : `This email will be sent only to ${selected.email}.`}
+              : selected.recipients.length > 1
+                ? `This email will be sent to the current active management recipients: ${selected.recipients.join(", ")}.`
+                : `This email will be sent only to ${selected.email}.`}
           </p>
         )}
         {canChooseDeliveryMode && (
