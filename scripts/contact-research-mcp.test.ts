@@ -85,6 +85,7 @@ test("contact research MCP keeps the master token behind narrow tools", async (t
     "utf8"
   );
   assert.match(agent, /tools: \["bash"\]/);
+  assert.match(agent, /use its returned verified `url`/);
   assert.match(
     agent,
     /Keep submitted notes, candidate evidence, reviewed-email reasons,[\s\S]*succinct and non-repetitive/,

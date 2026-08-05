@@ -219,7 +219,44 @@ export function extractReadablePage(html, pageUrl) {
         })
     ).values()
   ).slice(0, 50);
-  return { title, text, emails: [...emails], links };
+  const blocks = root
+    .find("address,article,blockquote,h1,h2,h3,h4,h5,h6,li,p,tr")
+    .toArray()
+    .map((element) => $(element).text().replace(/\s+/g, " ").trim())
+    .filter((block) => block.length >= 2 && block.length <= 2_000)
+    .slice(0, 500);
+  return { title, text, emails: [...emails], links, blocks };
+}
+
+function extractMarkdownBlocks(markdown) {
+  return markdown
+    .split(/\r?\n\s*\r?\n/)
+    .flatMap((paragraph) => {
+      const lines = paragraph
+        .split(/\r?\n/)
+        .map((line) => line.replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      if (
+        lines.length > 1 &&
+        lines.every(
+          (line) =>
+            line.startsWith("|") ||
+            /^[-*]\s/.test(line) ||
+            /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(line),
+        )
+      ) {
+        return lines;
+      }
+      return [lines.join(" ")];
+    })
+    .map((block) => block.trim())
+    .filter(
+      (block) =>
+        block.length >= 2 &&
+        block.length <= 2_000 &&
+        !/^(?:Title|URL Source|Markdown Content):/i.test(block),
+    )
+    .slice(0, 500);
 }
 
 export function extractReaderPage(markdown, pageUrl) {
@@ -257,7 +294,50 @@ export function extractReaderPage(markdown, pageUrl) {
     text: markdown.replace(/\s+/g, " ").trim().slice(0, 20_000),
     emails: Array.from(new Set(emails.map((email) => email.toLowerCase()))),
     links,
+    blocks: extractMarkdownBlocks(markdown),
   };
+}
+
+export function readerSourceUrl(markdown) {
+  const metadata = markdown.split(/^Markdown Content:\s*$/im, 1)[0];
+  const matches = Array.from(
+    metadata.matchAll(/^URL Source:\s*(\S+)\s*$/gim),
+  );
+  return matches.length === 1 ? matches[0][1] : null;
+}
+
+async function assertSafeReaderDestination(requested, finalValue) {
+  if (!finalValue) {
+    throw new Error("Research reader omitted the verified source URL");
+  }
+  const destination = await assertPublicHttpUrl(finalValue);
+  const requestedUrl = new URL(requested);
+  const requestedPort =
+    requestedUrl.port ||
+    (requestedUrl.protocol === "https:" ? "443" : "80");
+  const destinationPort =
+    destination.port ||
+    (destination.protocol === "https:" ? "443" : "80");
+  const httpUpgrade =
+    requestedUrl.protocol === "http:" &&
+    destination.protocol === "https:";
+  if (
+    destination.hostname.toLowerCase() !==
+      requestedUrl.hostname.toLowerCase() ||
+    (destination.protocol === requestedUrl.protocol &&
+      destinationPort !== requestedPort) ||
+    (httpUpgrade &&
+      (requestedPort !== "80" || destinationPort !== "443")) ||
+    (destination.protocol !== requestedUrl.protocol && !httpUpgrade) ||
+    (requestedUrl.protocol === "https:" &&
+      destination.protocol !== "https:")
+  ) {
+    throw new Error(
+      "Research source redirected to a different origin",
+    );
+  }
+  destination.hash = "";
+  return destination;
 }
 
 export async function fetchReadablePage(value) {
@@ -267,8 +347,12 @@ export async function fetchReadablePage(value) {
     accept: "text/plain,text/markdown",
     timeoutMs: 30_000,
   });
+  const destination = await assertSafeReaderDestination(
+    target.toString(),
+    readerSourceUrl(response.text),
+  );
   return {
-    url: target.toString(),
-    ...extractReaderPage(response.text, target.toString()),
+    url: destination.toString(),
+    ...extractReaderPage(response.text, destination.toString()),
   };
 }

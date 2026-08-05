@@ -37,6 +37,7 @@ _Optional integration._
 | `REPOSITORY_SLUG` | no | Overrides the GitHub `owner/name` this deployment trusts and links to. |
 | `CONTACT_RESEARCH_WORKFLOW_REF` | no | Overrides the exact workflow_ref trusted to run contact research via OIDC. |
 | `CONTACT_AUDIT_WORKFLOW_REF` | no | Overrides the exact workflow_ref trusted to run contact audits via OIDC. |
+| `PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_REF` | no | Overrides the exact workflow_ref trusted to run professional contact research via OIDC. |
 
 ## Deployment profile (local readiness check only)
 
@@ -46,7 +47,7 @@ _Optional integration._
 |---|---|---|
 | `DEPLOYMENT_PROFILE` | no | Selects which profile `npm run deployment:readiness` checks: basic (default) or hardened. |
 
-## Contact research agent
+## Contact research agents
 
 _Optional integration._
 
@@ -55,6 +56,8 @@ _Optional integration._
 | `CONTACT_RESEARCH_AGENT_TOKEN` | yes | Optional dedicated token for local/development contact research workers. |
 | `CONTACT_RESEARCH_LIMIT` | no | Optional local worker batch size (1-10, default 3). |
 | `CONTACT_AUDIT_AGENT_TOKEN` | yes | Optional dedicated token for running the review-only contact audit worker locally. |
+| `PROFESSIONAL_CONTACT_RESEARCH_AGENT_TOKEN` | yes | Optional dedicated token for local/development professional contact research workers. |
+| `PROFESSIONAL_CONTACT_RESEARCH_DISPATCH_TOKEN` | yes | Dedicated fine-grained GitHub token used by the app to trigger professional contact research immediately. |
 
 ## Artist trajectory promotion
 

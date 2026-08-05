@@ -684,6 +684,134 @@ model ContactResearchDirectOutreachProposal {
   @@index([contactId])
 }
 
+model ProfessionalContactRequest {
+  id                String                     @id @default(cuid())
+  requestKey        String                     @unique
+  organizationName  String
+  normalizedOrganization String
+  website           String?
+  locationContext   String?
+  notes             String?
+  personNames       String[]
+  jobs              ProfessionalContactJob[]
+  events            ProfessionalContactEvent[]
+  dispatch          ProfessionalContactDispatch?
+  createdAt         DateTime                   @default(now())
+
+  @@index([createdAt])
+}
+
+model ProfessionalContactDispatch {
+  id               String                               @id @default(cuid())
+  requestId        String                               @unique
+  request          ProfessionalContactRequest           @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  status           String                               @default("pending")
+  attemptCount     Int                                  @default(0)
+  leaseToken       String?                              @unique
+  leaseExpiresAt   DateTime?
+  lastAttemptAt    DateTime?
+  lastDispatchedAt DateTime?
+  lastError        String?
+  attempts         ProfessionalContactDispatchAttempt[]
+  createdAt        DateTime                             @default(now())
+  updatedAt        DateTime                             @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([leaseExpiresAt])
+}
+
+model ProfessionalContactDispatchAttempt {
+  id            String                      @id @default(cuid())
+  dispatchId    String
+  dispatch      ProfessionalContactDispatch @relation(fields: [dispatchId], references: [id], onDelete: Restrict)
+  attemptNumber Int
+  status        String
+  error         String?
+  startedAt     DateTime                    @default(now())
+  completedAt   DateTime?
+  createdAt     DateTime                    @default(now())
+  updatedAt     DateTime                    @updatedAt
+
+  @@unique([dispatchId, attemptNumber])
+  @@index([status, startedAt])
+}
+
+model ProfessionalContactJob {
+  id                   String                         @id @default(cuid())
+  requestId            String
+  request              ProfessionalContactRequest     @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  personName           String
+  normalizedPersonName String
+  status               String                         @default("pending")
+  attemptCount         Int                            @default(0)
+  claimedAt            DateTime?
+  claimExpiresAt       DateTime?
+  claimToken           String?                        @unique
+  claimProvenanceToken String?                        @unique
+  resultFingerprint    String?
+  agentNotes           String?
+  completedAt          DateTime?
+  candidates           ProfessionalContactCandidate[]
+  events               ProfessionalContactEvent[]
+  createdAt            DateTime                       @default(now())
+  updatedAt            DateTime                       @updatedAt
+
+  @@unique([requestId, normalizedPersonName])
+  @@index([status, createdAt])
+  @@index([status, claimExpiresAt])
+}
+
+model ProfessionalContactCandidate {
+  id                     String                       @id @default(cuid())
+  jobId                  String
+  job                    ProfessionalContactJob       @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  normalizedEmail        String
+  email                  String
+  personName             String
+  roleTitle              String
+  organization           String
+  confidence             String
+  discoveryMethod        String
+  evidence               String
+  sourceUrls             String[]
+  patternEvidence        String?
+  patternEvidenceUrl     String?
+  patternExamples        Json?
+  decision               ProfessionalContactDecision?
+  events                 ProfessionalContactEvent[]
+  createdAt              DateTime                     @default(now())
+
+  @@unique([jobId, normalizedEmail])
+  @@index([jobId, createdAt])
+}
+
+model ProfessionalContactDecision {
+  id          String                       @id @default(cuid())
+  candidateId String                       @unique
+  candidate   ProfessionalContactCandidate @relation(fields: [candidateId], references: [id], onDelete: Restrict)
+  action      String
+  decidedAt   DateTime                     @default(now())
+  createdAt   DateTime                     @default(now())
+}
+
+model ProfessionalContactEvent {
+  id          String                         @id @default(cuid())
+  requestId   String
+  request     ProfessionalContactRequest     @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  jobId       String?
+  job         ProfessionalContactJob?        @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  candidateId String?
+  candidate   ProfessionalContactCandidate?  @relation(fields: [candidateId], references: [id], onDelete: Restrict)
+  kind        String
+  actor       String
+  details     Json?
+  createdAt   DateTime                       @default(now())
+
+  @@index([requestId, createdAt])
+  @@index([jobId, createdAt])
+  @@index([candidateId, createdAt])
+}
+
 model Show {
   id                        String                        @id @default(cuid())
   edmtrainId                Int?                          @unique

@@ -46,6 +46,7 @@ test("fork-identity overrides are documented as optional, non-secret configurati
     "REPOSITORY_SLUG",
     "CONTACT_RESEARCH_WORKFLOW_REF",
     "CONTACT_AUDIT_WORKFLOW_REF",
+    "PROFESSIONAL_CONTACT_RESEARCH_WORKFLOW_REF",
   ]) {
     const entry = envVarDefinition(key);
     assert.ok(entry, `missing schema entry for ${key}`);
