@@ -90,8 +90,25 @@ import {
   recipientDeliveryLayout,
   type RecipientDeliveryMode,
 } from "@/lib/recipientDelivery";
+import { sleep } from "@/lib/integrationUtils";
 
 export { OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS } from "@/lib/schedule";
+
+const OUTREACH_TRANSACTION_ATTEMPTS = 4;
+const OUTREACH_TRANSACTION_MAX_WAIT_MS = 1_000;
+const OUTREACH_TRANSACTION_TIMEOUT_MS = 3_000;
+
+export function outreachTransactionRetryDelayMs(
+  failedAttempt: number,
+  jitter: number,
+): number {
+  const boundedAttempt = Math.max(0, Math.min(failedAttempt, 3));
+  const boundedJitter = Math.max(0, Math.min(jitter, 1));
+  return (
+    Math.min(25 * 2 ** boundedAttempt, 800) +
+    Math.floor(boundedJitter * 75)
+  );
+}
 
 export interface SendOutreachInput {
   showId: string;
@@ -1781,13 +1798,21 @@ export function getAcceptedDeliveryFailureOutreachState(
 async function withSerializableRetry<T>(
   work: (tx: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < OUTREACH_TRANSACTION_ATTEMPTS; attempt += 1) {
     try {
       return await db.$transaction(work, {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: OUTREACH_TRANSACTION_MAX_WAIT_MS,
+        timeout: OUTREACH_TRANSACTION_TIMEOUT_MS,
       });
     } catch (error) {
-      if (isRetryableOutreachTransactionError(error) && attempt < 3) continue;
+      if (
+        isRetryableOutreachTransactionError(error) &&
+        attempt < OUTREACH_TRANSACTION_ATTEMPTS - 1
+      ) {
+        await sleep(outreachTransactionRetryDelayMs(attempt, Math.random()));
+        continue;
+      }
       throw error;
     }
   }

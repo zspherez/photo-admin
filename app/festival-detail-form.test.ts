@@ -235,6 +235,46 @@ test("festival customize links do not require a listening signal", () => {
 });
 
 test("festival sendability and bulk queueing do not require listen signals", () => {
+  assert.match(source, /const BULK_SCHEDULE_CONCURRENCY = 1/);
+  assert.match(source, /const BULK_ACTION_BUDGET_MS = 260_000/);
+  assert.match(source, /const BULK_ACTION_MIN_START_BUDGET_MS = 70_000/);
+  assert.match(
+    source,
+    /const SCHEDULED_WORKFLOW_START_WINDOW_MS = 15 \* 60 \* 1000/,
+  );
+  assert.ok(
+    (source.match(/hasFestivalBulkActionBudget\(deadlineAt\)/g)?.length ?? 0) >=
+      2,
+  );
+  for (const actionName of ["bulkSend", "queueFestivalOutreach"]) {
+    const actionStart = source.indexOf(`async function ${actionName}`);
+    const auth = source.indexOf("await requireServerActionAuth", actionStart);
+    const deadline = source.indexOf(
+      "const deadlineAt = Date.now() + BULK_ACTION_BUDGET_MS",
+      actionStart,
+    );
+    assert.ok(actionStart >= 0 && auth > actionStart && deadline > auth);
+  }
+  assert.match(source, /rerun to process the remaining artists/);
+  assert.match(
+    source,
+    /async \(group\) => \{[\s\S]*const immediateSchedule = new Date\(Date\.now\(\) \+ 60_000\)[\s\S]*nextScheduledOutreachPoll\(immediateSchedule\)/,
+  );
+  assert.match(
+    source,
+    /isWeekendET\(nextDispatcherPoll\) \|\|[\s\S]*isWeekendET\(dispatcherWindowEnd\)[\s\S]*getNextMondaySlot\(immediateSchedule\)/,
+  );
+  const bulk = source.slice(
+    source.indexOf("async function bulkSend"),
+    source.indexOf("async function queueFestivalOutreach"),
+  );
+  assert.match(bulk, /scheduleFestivalManagerOutreach/);
+  assert.match(bulk, /scheduleOutreach/);
+  assert.doesNotMatch(bulk, /sendFestivalManagerOutreach\(/);
+  assert.doesNotMatch(bulk, /\bsendOutreach\(/);
+  assert.ok(
+    (source.match(/errors\.splice\(/g)?.length ?? 0) >= 2,
+  );
   assert.doesNotMatch(
     source.slice(
       source.indexOf("async function festivalBulkCandidates"),
@@ -262,7 +302,7 @@ test("selected festival sends use the same manager grouping as queue-all", () =>
     source.indexOf("async function queueFestivalOutreach"),
   );
   assert.match(bulk, /groupFestivalManagerTargets/);
-  assert.match(bulk, /sendFestivalManagerOutreach/);
+  assert.match(bulk, /scheduleFestivalManagerOutreach/);
   assert.match(bulk, /scheduleFestivalManagerOutreach/);
   assert.match(source, /FestivalBulkOutreachForm/);
   assert.match(source, /bulkConfirmationCandidates/);
