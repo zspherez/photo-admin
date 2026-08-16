@@ -145,11 +145,7 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
   );
   assert.match(
     actions,
-    /recipientDeliveryModeValue === "legacy_multi_to"[\s\S]*immutableRetryDeliveryMode !== "legacy_multi_to"/,
-  );
-  assert.match(
-    actions,
-    /Legacy multi-recipient delivery is allowed only for its immutable retry/,
+    /immutableRetryDeliveryMode === null[\s\S]*!isSelectableRecipientDeliveryMode/,
   );
   assert.match(form, /followUpMode/);
   assert.match(
@@ -162,6 +158,8 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
   );
   assert.match(form, /Send follow-up now/);
   assert.match(form, /Keep recipients on one email thread/);
+  assert.match(form, /"to_thread"/);
+  assert.match(form, /Put every management contact in To/);
   assert.doesNotMatch(
     form.slice(
       form.indexOf("const canChooseDeliveryMode"),

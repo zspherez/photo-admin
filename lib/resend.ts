@@ -767,7 +767,8 @@ export function buildResendDeliveryPolicy({
       to: layout.to,
       cc: layout.cc,
       bcc:
-        recipientDeliveryMode === "cc_thread"
+        recipientDeliveryMode === "cc_thread" ||
+        recipientDeliveryMode === "to_thread"
           ? allowedBcc.filter((email) => !allowedIntended.includes(email))
           : allowedBcc,
       subject: overrideEmail
@@ -923,6 +924,7 @@ export function compareResendRequestBatchToPolicy(
 ): string | null {
   const expectedLayouts =
     policy.testSend ||
+    deliveryMode === "to_thread" ||
     deliveryMode === "cc_thread" ||
     deliveryMode === "legacy_multi_to"
       ? [{ to: policy.to, cc: policy.cc }]
@@ -1175,6 +1177,7 @@ export function buildResendRequestBatchSnapshot({
 }): ResendRequestBatchSnapshot {
   const layouts =
     policy.testSend ||
+    recipientDeliveryMode === "to_thread" ||
     recipientDeliveryMode === "cc_thread" ||
     recipientDeliveryMode === "legacy_multi_to"
       ? [{ to: policy.to, cc: policy.cc }]

@@ -77,6 +77,15 @@ test("recommendation action attribution is all-or-nothing and exact", () => {
   );
 });
 
+test("manual outreach target IDs do not count as trajectory attribution", () => {
+  const targetOnly = new FormData();
+  targetOnly.set("targetArtistId", "artist-1");
+  assert.equal(
+    trajectoryActionContextFromFormData(targetOnly, "show-1"),
+    null,
+  );
+});
+
 test("transactional recommendation validation checks the current run and exact target", async () => {
   let recommendationQuery: unknown;
   const tx = {

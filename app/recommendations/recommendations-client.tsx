@@ -381,7 +381,7 @@ function RecommendationCard({
               ) : (
                 <input
                   type="hidden"
-                  name="artistId"
+                  name="targetArtistId"
                   value={recommendation.artistId}
                 />
               )}

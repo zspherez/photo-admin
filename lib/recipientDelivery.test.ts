@@ -33,7 +33,24 @@ test("CC delivery keeps the primary recipient on To", () => {
     },
   );
   assert.equal(isRecipientDeliveryMode("cc_thread"), true);
+  assert.equal(isSelectableRecipientDeliveryMode("cc_thread"), false);
   assert.equal(isRecipientDeliveryMode("unknown"), false);
   assert.equal(isRecipientDeliveryMode("legacy_multi_to"), true);
   assert.equal(isSelectableRecipientDeliveryMode("legacy_multi_to"), false);
+});
+
+test("new one-thread delivery places every recipient on To", () => {
+  assert.deepEqual(
+    recipientDeliveryLayout(
+      ["other@example.com", "primary@example.com"],
+      "primary@example.com",
+      "to_thread",
+    ),
+    {
+      to: ["other@example.com", "primary@example.com"],
+      cc: [],
+    },
+  );
+  assert.equal(isRecipientDeliveryMode("to_thread"), true);
+  assert.equal(isSelectableRecipientDeliveryMode("to_thread"), true);
 });

@@ -1055,6 +1055,7 @@ export default async function FestivalDetailPage({
     if (filter === "matched" && !r.matched) return false;
     if (filter === "matched_with_contact" && !(r.matched && !!r.contact)) return false;
     if (filter === "needs_contact" && !(r.matched && !r.contact)) return false;
+    if (filter === "manager_needed" && !r.managerResearchEligible) return false;
     if (
       filter === "unsent" &&
       !r.sendability?.sendable
@@ -1107,6 +1108,7 @@ export default async function FestivalDetailPage({
     { key: "matched", label: "Matched" },
     { key: "matched_with_contact", label: "Matched + email" },
     { key: "needs_contact", label: "Needs email" },
+    { key: "manager_needed", label: "Manager needed" },
     { key: "unsent", label: "Unsent" },
   ];
 
@@ -1712,7 +1714,7 @@ export default async function FestivalDetailPage({
                       ) : (
                         <input
                           type="hidden"
-                          name="artistId"
+                          name="targetArtistId"
                           value={r.artist.id}
                         />
                       )}

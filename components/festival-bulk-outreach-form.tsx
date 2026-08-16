@@ -148,9 +148,10 @@ export function FestivalBulkOutreachForm({
         (candidate) =>
           selected.has(candidate.contactId) &&
           !candidate.immutableDeliveryMode &&
-          candidate.recipientDeliveryMode === "cc_thread",
+          (candidate.recipientDeliveryMode === "to_thread" ||
+            candidate.recipientDeliveryMode === "cc_thread"),
       )
-        ? "cc_thread"
+        ? "to_thread"
         : "individual_threads",
     );
     setSelectionError(null);
@@ -228,11 +229,11 @@ export function FestivalBulkOutreachForm({
               <label className="mt-4 flex items-start gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
                 <input
                   type="checkbox"
-                  checked={recipientDeliveryMode === "cc_thread"}
+                  checked={recipientDeliveryMode === "to_thread"}
                   onChange={(event) =>
                     setRecipientDeliveryMode(
                       event.target.checked
-                        ? "cc_thread"
+                        ? "to_thread"
                         : "individual_threads",
                     )
                   }
@@ -243,9 +244,8 @@ export function FestivalBulkOutreachForm({
                     Keep management contacts on one email thread
                   </span>
                   <span className="mt-1 block text-xs text-zinc-500">
-                    Put the primary contact in To and the remaining contacts in
-                    CC. Off by default, each To recipient receives a separate
-                    thread.
+                    Put every management contact in To on one message. Off by
+                    default, each recipient receives a separate private thread.
                   </span>
                 </span>
               </label>
@@ -306,7 +306,7 @@ export function FestivalBulkOutreachForm({
                           {group.recipients.length > 1
                             ? group.immutableDeliveryMode
                               ? "Immutable retry"
-                              : recipientDeliveryMode === "cc_thread"
+                              : recipientDeliveryMode === "to_thread"
                               ? "One thread"
                               : "Separate threads"
                             : group.artistNames.length > 1

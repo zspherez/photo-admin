@@ -181,6 +181,19 @@ test("festival outreach forms are valid and explicitly associated", () => {
   );
 });
 
+test("manual mark target does not collide with trajectory attribution", () => {
+  assert.match(
+    source,
+    /name="targetArtistId"[\s\S]*value=\{r\.artist\.id\}/,
+  );
+  const markFormStart = source.indexOf("<form action={markSentAction}>");
+  const markForm = source.slice(
+    markFormStart,
+    source.indexOf("</form>", markFormStart),
+  );
+  assert.doesNotMatch(markForm, /name="artistId"/);
+});
+
 test("festival manager research UI reflects the full eligible lineup", () => {
   assert.match(
     source,
@@ -198,6 +211,14 @@ test("festival manager research UI reflects the full eligible lineup", () => {
   assert.doesNotMatch(
     source,
     /managerResearchCount = rows\.filter\([\s\S]{0,100}\.matched/
+  );
+  assert.match(
+    source,
+    /filter === "manager_needed" && !r\.managerResearchEligible/,
+  );
+  assert.match(
+    source,
+    /\{ key: "manager_needed", label: "Manager needed" \}/,
   );
 });
 
@@ -265,7 +286,7 @@ test("festival individual outreach snapshots all active management contacts", ()
   );
 });
 
-test("festival confirmation submits the optional immutable CC delivery mode", () => {
+test("festival confirmation submits the optional immutable all-To delivery mode", () => {
   assert.match(source, /recipientDeliveryMode/);
   assert.match(source, /isSelectableRecipientDeliveryMode/);
   assert.match(
@@ -277,6 +298,7 @@ test("festival confirmation submits the optional immutable CC delivery mode", ()
     "utf8",
   );
   assert.match(form, /Keep management contacts on one email thread/);
+  assert.match(form, /Put every management contact in To/);
   assert.match(form, /name="recipientDeliveryMode"/);
   assert.match(form, /recipientDeliveryLayout/);
 });

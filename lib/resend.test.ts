@@ -344,6 +344,51 @@ test("CC mode reanchors To after suppressing the preferred primary", () => {
     bccEmails: [],
     suppressedEmails: ["primary@example.com"],
   });
+
+  test("new one-thread mode keeps all intended recipients on To", () => {
+    const result = buildResendDeliveryPolicy({
+      from: REQUEST.from,
+      intendedRecipients: ["other@example.com", "primary@example.com"],
+      primaryRecipientEmail: "primary@example.com",
+      recipientDeliveryMode: "to_thread",
+      subject: REQUEST.subject,
+      testOverride: null,
+      bccEmails: ["audit@example.com", "other@example.com"],
+      suppressedEmails: [],
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.policy.to, [
+      "other@example.com",
+      "primary@example.com",
+    ]);
+    assert.deepEqual(result.policy.cc, []);
+    assert.deepEqual(result.policy.bcc, ["audit@example.com"]);
+
+    const batch = buildResendRequestBatchSnapshot({
+      policy: result.policy,
+      recipientDeliveryMode: "to_thread",
+      html: REQUEST.html,
+      outreachId: "outreach-to-thread",
+      attemptId: "attempt-to-thread",
+      idempotencyKey: "outreach/to-thread",
+    });
+    assert.equal(batch.requests.length, 1);
+    assert.deepEqual(batch.requests[0].to, [
+      "other@example.com",
+      "primary@example.com",
+    ]);
+    assert.deepEqual(batch.requests[0].cc, []);
+    assert.equal(
+      compareResendRequestBatchToPolicy(
+        batch,
+        false,
+        result.policy,
+        "to_thread",
+      ),
+      null,
+    );
+  });
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.policy.primaryIntendedRecipient, "other@example.com");

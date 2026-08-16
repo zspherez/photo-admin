@@ -1738,7 +1738,7 @@ test("all-contact delivery fails closed when the selected primary is suppressed"
       stored: null,
       attempt: null,
       requestedFullTeamSend: true,
-      requestedRecipientDeliveryMode: "cc_thread",
+      requestedRecipientDeliveryMode: "to_thread",
       requireSelectedRecipient: true,
       suppressedEmails: ["primary@example.com"],
     }),
@@ -1941,7 +1941,7 @@ test("festival all-contacts mode includes every active email without a full-team
   }
 });
 
-test("festival all-contacts CC mode keeps the selected manager on To", () => {
+test("festival all-contacts one-thread mode places every manager on To", () => {
   const primary = {
     id: "contact-1",
     artistId: "artist-1",
@@ -1967,15 +1967,18 @@ test("festival all-contacts CC mode keeps the selected manager on To", () => {
       bccEmails: [],
       requestedFullTeamSend: true,
       requestedFestivalAllContactsSend: true,
-      requestedRecipientDeliveryMode: "cc_thread",
+      requestedRecipientDeliveryMode: "to_thread",
     }),
   );
   assert.equal(decision.ok, true);
   if (!decision.ok) return;
-  assert.equal(decision.recipientDeliveryMode, "cc_thread");
-  assert.equal(decision.primaryRecipientEmail, "manager@example.com");
-  assert.deepEqual(decision.policy.to, ["manager@example.com"]);
-  assert.deepEqual(decision.policy.cc, ["co-manager@example.com"]);
+  assert.equal(decision.recipientDeliveryMode, "to_thread");
+  assert.equal(decision.primaryRecipientEmail, null);
+  assert.deepEqual(decision.policy.to, [
+    "co-manager@example.com",
+    "manager@example.com",
+  ]);
+  assert.deepEqual(decision.policy.cc, []);
 });
 
 test("festival all-contacts mode stays off for one active email", () => {
