@@ -273,7 +273,10 @@ export function resolveFollowUpRecipientDeliveryMode(
     ok: true,
     recipientDeliveryMode:
       override ??
-      eligibility.recipientDeliveryMode ??
+      (eligibility.mode === "new" &&
+      eligibility.recipientDeliveryMode === "cc_thread"
+        ? "to_thread"
+        : eligibility.recipientDeliveryMode) ??
       DEFAULT_RECIPIENT_DELIVERY_MODE,
   };
 }
@@ -1407,6 +1410,7 @@ function resolvedProviderLayouts(
 ): Array<{ to: string[]; cc: string[] }> {
   if (
     decision.policy.testSend ||
+    decision.recipientDeliveryMode === "to_thread" ||
     decision.recipientDeliveryMode === "cc_thread" ||
     decision.recipientDeliveryMode === "legacy_multi_to"
   ) {

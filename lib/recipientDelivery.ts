@@ -2,6 +2,7 @@ export const DEFAULT_RECIPIENT_DELIVERY_MODE = "individual_threads";
 
 export type RecipientDeliveryMode =
   | "individual_threads"
+  | "to_thread"
   | "cc_thread"
   | "legacy_multi_to";
 
@@ -10,6 +11,7 @@ export function isRecipientDeliveryMode(
 ): value is RecipientDeliveryMode {
   return (
     value === "individual_threads" ||
+    value === "to_thread" ||
     value === "cc_thread" ||
     value === "legacy_multi_to"
   );
@@ -17,8 +19,8 @@ export function isRecipientDeliveryMode(
 
 export function isSelectableRecipientDeliveryMode(
   value: unknown,
-): value is Exclude<RecipientDeliveryMode, "legacy_multi_to"> {
-  return value === "individual_threads" || value === "cc_thread";
+): value is Exclude<RecipientDeliveryMode, "legacy_multi_to" | "cc_thread"> {
+  return value === "individual_threads" || value === "to_thread";
 }
 
 export function recipientDeliveryLayout(
@@ -26,7 +28,11 @@ export function recipientDeliveryLayout(
   primaryRecipientEmail: string | null,
   mode: RecipientDeliveryMode,
 ): { to: string[]; cc: string[] } {
-  if (mode === "individual_threads" || mode === "legacy_multi_to") {
+  if (
+    mode === "individual_threads" ||
+    mode === "to_thread" ||
+    mode === "legacy_multi_to"
+  ) {
     return { to: [...recipients], cc: [] };
   }
   const primary =

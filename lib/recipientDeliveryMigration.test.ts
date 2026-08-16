@@ -9,6 +9,13 @@ const migration = readFileSync(
   ),
   "utf8",
 );
+const allToMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260816013000_outreach_all_to_delivery_mode/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("recipient delivery migration preserves existing rows as separate threads", () => {
   assert.match(
@@ -35,6 +42,18 @@ test("recipient delivery migration preserves existing rows as separate threads",
     migration,
     /'cc_thread'[\s\S]*"primaryRecipientEmail" = ANY\("recipientEmails"\)/,
   );
+});
+
+test("forward migration adds selectable all-To mode without rewriting CC history", () => {
+  assert.match(allToMigration, /^BEGIN;/);
+  assert.match(allToMigration, /DROP CONSTRAINT "Outreach_recipient_delivery_mode_check"/);
+  assert.match(allToMigration, /'to_thread'/);
+  assert.match(
+    allToMigration,
+    /'cc_thread'[\s\S]*"primaryRecipientEmail" IS NOT NULL/,
+  );
+  assert.doesNotMatch(allToMigration, /UPDATE "Outreach"/);
+  assert.match(allToMigration, /\nCOMMIT;\s*$/);
 });
 
 test("historical submitted attempts cannot make a current prepared snapshot legacy", () => {

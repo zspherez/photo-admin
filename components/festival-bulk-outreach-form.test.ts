@@ -17,6 +17,8 @@ test("festival bulk outreach supports select all and grouped confirmation", () =
   assert.match(source, /<th[^>]*>Associated artists<\/th>/);
   assert.match(source, /<th[^>]*>Email format<\/th>/);
   assert.match(source, /"Shared"/);
+  assert.match(source, /"to_thread"/);
+  assert.match(source, /Put every management contact in To/);
   assert.match(source, /"Individual"/);
   assert.match(source, /PendingSubmitButton/);
   assert.match(source, /dialog\.showModal\(\)/);

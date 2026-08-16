@@ -286,7 +286,7 @@ test("festival individual outreach snapshots all active management contacts", ()
   );
 });
 
-test("festival confirmation submits the optional immutable CC delivery mode", () => {
+test("festival confirmation submits the optional immutable all-To delivery mode", () => {
   assert.match(source, /recipientDeliveryMode/);
   assert.match(source, /isSelectableRecipientDeliveryMode/);
   assert.match(
@@ -298,6 +298,7 @@ test("festival confirmation submits the optional immutable CC delivery mode", ()
     "utf8",
   );
   assert.match(form, /Keep management contacts on one email thread/);
+  assert.match(form, /Put every management contact in To/);
   assert.match(form, /name="recipientDeliveryMode"/);
   assert.match(form, /recipientDeliveryLayout/);
 });

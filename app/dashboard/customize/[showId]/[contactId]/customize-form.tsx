@@ -65,8 +65,15 @@ export function CustomizeForm({
     useState(contextContactId);
   const [recipientDeliveryMode, setRecipientDeliveryMode] =
     useState<RecipientDeliveryMode>(
-      recipientOptions.find((option) => option.id === contextContactId)
-        ?.recipientDeliveryMode ?? "individual_threads",
+      (() => {
+        const option = recipientOptions.find(
+          (candidate) => candidate.id === contextContactId,
+        );
+        return option?.mode === "new" &&
+          option.recipientDeliveryMode === "cc_thread"
+          ? "to_thread"
+          : option?.recipientDeliveryMode ?? "individual_threads";
+      })(),
     );
   const [drafts, setDrafts] = useState<CustomizeRecipientDrafts>(() =>
     initializeCustomizeRecipientDrafts(recipientOptions),
@@ -183,10 +190,10 @@ export function CustomizeForm({
           <label className="mt-3 flex items-start gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
             <input
               type="checkbox"
-              checked={recipientDeliveryMode === "cc_thread"}
+              checked={recipientDeliveryMode === "to_thread"}
               onChange={(event) =>
                 setRecipientDeliveryMode(
-                  event.target.checked ? "cc_thread" : "individual_threads",
+                  event.target.checked ? "to_thread" : "individual_threads",
                 )
               }
               className="mt-0.5 h-4 w-4 accent-zinc-900 dark:accent-zinc-100"
@@ -196,9 +203,8 @@ export function CustomizeForm({
                 Keep recipients on one email thread
               </span>
               <span className="mt-1 block text-xs text-zinc-500">
-                Put the primary recipient in To and the remaining management
-                contacts in CC. Off by default, each To recipient receives a
-                separate thread.
+                Put every management contact in To on one message. Off by
+                default, each recipient receives a separate private thread.
               </span>
             </span>
           </label>

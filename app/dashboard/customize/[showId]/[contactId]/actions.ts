@@ -256,19 +256,13 @@ export async function sendCustom(
     );
   }
   if (
-    recipientDeliveryModeValue === "legacy_multi_to" &&
-    immutableRetryDeliveryMode !== "legacy_multi_to"
+    immutableRetryDeliveryMode === null &&
+    !isSelectableRecipientDeliveryMode(recipientDeliveryModeValue)
   ) {
     return actionError(
       selectedContactId,
-      "Legacy multi-recipient delivery is allowed only for its immutable retry",
+      "Historical recipient delivery modes are allowed only for immutable retries",
     );
-  }
-  if (
-    recipientDeliveryModeValue !== "legacy_multi_to" &&
-    !isSelectableRecipientDeliveryMode(recipientDeliveryModeValue)
-  ) {
-    return actionError(selectedContactId, "Unknown recipient delivery mode");
   }
 
   const capturedResult = await captureTrajectoryAction(returnTo, () =>

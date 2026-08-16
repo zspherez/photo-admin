@@ -1,15 +1,17 @@
+import type { RecipientDeliveryMode } from "@/lib/recipientDelivery";
+
 export interface FestivalManagerTarget {
   artistId: string;
   contactId: string;
   email: string;
-  recipientDeliveryMode?: "individual_threads" | "cc_thread" | "legacy_multi_to";
+  recipientDeliveryMode?: RecipientDeliveryMode;
 }
 
 export interface FestivalManagerGroup {
   email: string;
   contactId: string;
   artistIds: string[];
-  recipientDeliveryMode?: "individual_threads" | "cc_thread" | "legacy_multi_to";
+  recipientDeliveryMode?: RecipientDeliveryMode;
 }
 
 export function groupFestivalManagerTargets(
