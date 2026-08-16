@@ -1712,7 +1712,7 @@ export default async function FestivalDetailPage({
                       ) : (
                         <input
                           type="hidden"
-                          name="artistId"
+                          name="targetArtistId"
                           value={r.artist.id}
                         />
                       )}

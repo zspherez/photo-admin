@@ -181,6 +181,19 @@ test("festival outreach forms are valid and explicitly associated", () => {
   );
 });
 
+test("manual mark target does not collide with trajectory attribution", () => {
+  assert.match(
+    source,
+    /name="targetArtistId"[\s\S]*value=\{r\.artist\.id\}/,
+  );
+  const markFormStart = source.indexOf("<form action={markSentAction}>");
+  const markForm = source.slice(
+    markFormStart,
+    source.indexOf("</form>", markFormStart),
+  );
+  assert.doesNotMatch(markForm, /name="artistId"/);
+});
+
 test("festival manager research UI reflects the full eligible lineup", () => {
   assert.match(
     source,

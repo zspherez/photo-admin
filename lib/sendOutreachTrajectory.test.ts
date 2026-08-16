@@ -131,6 +131,8 @@ test("manual marks reject cross-artist and stale contacts before either write pa
     /contact\.artistId !== recommendation\.artistId/,
   );
   assert.match(mark, /tx\.contact\.findUnique/);
+  assert.match(mark, /formData\.get\("targetArtistId"\)/);
+  assert.match(mark, /artistId \?\?= recommendation\?\.artistId/);
   assert.match(
     mark,
     /currentContact\.artistId !== targetArtistId/,

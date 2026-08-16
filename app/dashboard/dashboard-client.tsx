@@ -1402,7 +1402,7 @@ export function DashboardClient({
                             ) : (
                               <input
                                 type="hidden"
-                                name="artistId"
+                                name="targetArtistId"
                                 value={artist.id}
                               />
                             )}

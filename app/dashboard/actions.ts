@@ -565,7 +565,8 @@ export async function markSentAction(formData: FormData) {
   const returnTo = workflowReturnPath(formData.get("returnTo"));
   const showId = String(formData.get("showId") ?? "").trim();
   const contactId = String(formData.get("contactId") ?? "").trim() || null;
-  let artistId = String(formData.get("artistId") ?? "").trim() || null;
+  let artistId =
+    String(formData.get("targetArtistId") ?? "").trim() || null;
 
   if (!showId) {
     redirect(dashboardResultHref(returnTo, "error", "Missing show"));
@@ -596,6 +597,7 @@ export async function markSentAction(formData: FormData) {
     }
     artistId = contact.artistId;
   }
+  artistId ??= recommendation?.artistId ?? null;
   if (!artistId) {
     redirect(dashboardResultHref(returnTo, "error", "Missing outreach target"));
   }
