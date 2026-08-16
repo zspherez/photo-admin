@@ -28,7 +28,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Artists" };
 
 const ARTIST_PAGE_SIZE = 100;
-const ARTIST_VIEWS = ["all", "with", "without"] as const;
+const ARTIST_VIEWS = ["all", "with", "without", "duplicates"] as const;
 type ArtistView = (typeof ARTIST_VIEWS)[number];
 
 function parseArtistView(value: unknown): ArtistView {
@@ -69,6 +69,15 @@ export default async function ArtistsPage({
         AND contact."state" = 'active'
     )
   `;
+  const duplicateArtistExists = Prisma.sql`
+    artist."normalizedName" <> ''
+    AND EXISTS (
+      SELECT 1
+      FROM "Artist" duplicate_artist
+      WHERE duplicate_artist."normalizedName" = artist."normalizedName"
+        AND duplicate_artist."id" <> artist."id"
+    )
+  `;
   const searchWhere = search
     ? Prisma.sql`
         AND (
@@ -96,15 +105,18 @@ export default async function ArtistsPage({
       ? Prisma.sql`AND ${activeContactExists}`
       : view === "without"
         ? Prisma.sql`AND NOT ${activeContactExists}`
+        : view === "duplicates"
+          ? Prisma.sql`AND ${duplicateArtistExists}`
         : Prisma.empty;
 
   const [counts] = await db.$queryRaw<
-    Array<{ all: number; with: number; without: number }>
+    Array<{ all: number; with: number; without: number; duplicates: number }>
   >(Prisma.sql`
     SELECT
       COUNT(*)::int AS "all",
       COUNT(*) FILTER (WHERE ${activeContactExists})::int AS "with",
-      COUNT(*) FILTER (WHERE NOT ${activeContactExists})::int AS "without"
+      COUNT(*) FILTER (WHERE NOT ${activeContactExists})::int AS "without",
+      COUNT(*) FILTER (WHERE ${duplicateArtistExists})::int AS "duplicates"
     FROM "Artist" artist
     WHERE true
     ${searchWhere}
@@ -115,8 +127,17 @@ export default async function ArtistsPage({
     redirect(artistsHref(view, search, pagination.page));
   }
 
-  const artistIds = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-    SELECT artist."id"
+  const artistIds = await db.$queryRaw<
+    Array<{ id: string; duplicateCount: number }>
+  >(Prisma.sql`
+    SELECT
+      artist."id",
+      (
+        SELECT COUNT(*)::int
+        FROM "Artist" duplicate_artist
+        WHERE artist."normalizedName" <> ''
+          AND duplicate_artist."normalizedName" = artist."normalizedName"
+      ) AS "duplicateCount"
     FROM "Artist" artist
     WHERE true
     ${searchWhere}
@@ -135,6 +156,9 @@ export default async function ArtistsPage({
     },
   });
   const artistById = new Map(artistRows.map((artist) => [artist.id, artist]));
+  const duplicateCountById = new Map(
+    artistIds.map((row) => [row.id, row.duplicateCount]),
+  );
   const artists = artistIds.flatMap((row) => {
     const artist = artistById.get(row.id);
     return artist ? [artist] : [];
@@ -144,6 +168,11 @@ export default async function ArtistsPage({
     { view: "all", label: "All", count: counts.all },
     { view: "with", label: "With contacts", count: counts.with },
     { view: "without", label: "Without contacts", count: counts.without },
+    {
+      view: "duplicates",
+      label: "Possible duplicates",
+      count: counts.duplicates,
+    },
   ];
 
   return (
@@ -245,6 +274,12 @@ export default async function ArtistsPage({
                         {artistDisplayName(artist)}
                       </Link>
                       <div className="mt-1">
+                        {(duplicateCountById.get(artist.id) ?? 1) > 1 && (
+                          <Badge tone="warning">
+                            Possible duplicate ·{" "}
+                            {duplicateCountById.get(artist.id)} records
+                          </Badge>
+                        )}{" "}
                         {artist.contacts.length > 0 ? (
                           <Badge tone="success">
                             {artist.contacts.length} contact

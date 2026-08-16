@@ -48,6 +48,11 @@ const persistedArtist = (
   ...overrides,
 });
 
+test("artist identity normalization is case-insensitive", () => {
+  assert.equal(normalizeArtistName("MEDUZA"), normalizeArtistName("Meduza"));
+  assert.equal(normalizeArtistName("KASIA"), normalizeArtistName("kasia"));
+});
+
 test("external ids select authoritatively despite a name collision", () => {
   const selected = candidate("spotify", { spotifyId: "sp-1" });
   const other = candidate("other", { spotifyId: "sp-2" });

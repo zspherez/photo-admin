@@ -142,7 +142,9 @@ function outreachReturnPath(url: URL): string {
 function artistsReturnPath(url: URL): string {
   const params = new URLSearchParams();
   const view = url.searchParams.get("view");
-  if (view === "with" || view === "without") params.set("view", view);
+  if (view === "with" || view === "without" || view === "duplicates") {
+    params.set("view", view);
+  }
   const search = validatedTrimmedSearchParam(
     url.searchParams.get("search"),
     { maxLength: 200 }

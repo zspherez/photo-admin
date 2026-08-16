@@ -30,7 +30,7 @@ function candidateLabel(candidate: {
     identities.length > 0
       ? identities.join(" · ")
       : `record ${candidate.id.slice(-8)}`;
-  return `${candidate.name} — ${identity}${
+  return `${candidate.name} — possible duplicate · ${identity}${
     candidate.onLineup ? " · already on lineup" : ""
   }`;
 }
