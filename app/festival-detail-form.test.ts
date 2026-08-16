@@ -212,6 +212,14 @@ test("festival manager research UI reflects the full eligible lineup", () => {
     source,
     /managerResearchCount = rows\.filter\([\s\S]{0,100}\.matched/
   );
+  assert.match(
+    source,
+    /filter === "manager_needed" && !r\.managerResearchEligible/,
+  );
+  assert.match(
+    source,
+    /\{ key: "manager_needed", label: "Manager needed" \}/,
+  );
 });
 
 test("festival customize links do not require a listening signal", () => {
