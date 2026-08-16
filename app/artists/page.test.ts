@@ -19,12 +19,15 @@ test("Contacts navigation is presented as a searchable Artists view", () => {
 });
 
 test("artist page exposes contact-status tabs with query-backed counts", () => {
-  assert.match(page, /"all", "with", "without"/);
+  assert.match(page, /"all", "with", "without", "duplicates"/);
   assert.match(page, /label: "All"/);
   assert.match(page, /label: "With contacts"/);
   assert.match(page, /label: "Without contacts"/);
+  assert.match(page, /label: "Possible duplicates"/);
   assert.match(page, /COUNT\(\*\) FILTER \(WHERE \$\{activeContactExists\}\)/);
   assert.match(page, /AND NOT \$\{activeContactExists\}/);
+  assert.match(page, /duplicate_artist\."normalizedName" = artist\."normalizedName"/);
+  assert.match(page, /Possible duplicate/);
   assert.match(page, /aria-label="Artist contact status"/);
 });
 

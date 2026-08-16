@@ -194,7 +194,7 @@ export async function addManualFestivalArtist(
   if (result.kind === "ambiguous") {
     return errorState(
       artistName,
-      "Multiple artists share this normalized name. Choose the intended existing artist.",
+      "Multiple case-insensitive artist records share this name. Choose the intended existing artist.",
       result.candidates,
     );
   }

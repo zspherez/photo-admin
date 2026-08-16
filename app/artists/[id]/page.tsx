@@ -337,7 +337,30 @@ const getArtistPageData = cache(async (id: string) => {
       orderBy: [{ createdAt: "desc" }, { id: "asc" }],
     }),
   ]);
-  return { artist, outreaches, now };
+  const duplicateArtists = artist?.normalizedName
+    ? await db.artist.findMany({
+        where: {
+          normalizedName: artist.normalizedName,
+          id: { not: artist.id },
+        },
+        orderBy: { id: "asc" },
+        select: {
+          id: true,
+          name: true,
+          customName: true,
+          spotifyId: true,
+          statsfmId: true,
+          edmtrainId: true,
+          _count: {
+            select: {
+              contacts: true,
+              shows: true,
+            },
+          },
+        },
+      })
+    : [];
+  return { artist, duplicateArtists, outreaches, now };
 });
 
 export async function generateMetadata({
@@ -392,7 +415,8 @@ export default async function ArtistPage({
     `/artists/${id}`,
     safeReturnTo
   );
-  const { artist, outreaches, now } = await getArtistPageData(id);
+  const { artist, duplicateArtists, outreaches, now } =
+    await getArtistPageData(id);
   const today = easternTodayStoredDate(now);
   if (!artist) return notFound();
   const displayName = artistDisplayName(artist);
@@ -780,6 +804,11 @@ export default async function ArtistPage({
             </p>
           )}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {duplicateArtists.length > 0 && (
+              <Badge tone="warning" size="xs">
+                Possible duplicate · {duplicateArtists.length + 1} records
+              </Badge>
+            )}
             {genres.slice(0, 6).map((g) => (
               <Badge key={g} tone="muted" size="xs">{g}</Badge>
             ))}
@@ -816,6 +845,59 @@ export default async function ArtistPage({
           Leave blank to use the imported name. Identity matching still uses the
           imported value.
         </p>
+        {duplicateArtists.length > 0 && (
+          <Card className="mt-3 basis-full border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20">
+            <CardBody>
+              <h2 className="text-sm font-semibold text-amber-900 dark:text-amber-100">
+                Possible duplicate artist records
+              </h2>
+              <p className="mt-1 text-xs text-amber-800 dark:text-amber-200">
+                Matching is case-insensitive. These records share the normalized
+                name <code>{artist.normalizedName}</code>; review external IDs
+                before deciding whether they represent the same artist.
+              </p>
+              <ul className="mt-3 space-y-2">
+                {duplicateArtists.map((duplicate) => (
+                  <li
+                    key={duplicate.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-white/70 px-3 py-2 text-xs dark:border-amber-900 dark:bg-zinc-950/60"
+                  >
+                    <div>
+                      <Link
+                        href={withWorkflowReturnTo(
+                          `/artists/${duplicate.id}`,
+                          currentReturnTo,
+                        )}
+                        className="font-semibold hover:underline"
+                      >
+                        {artistDisplayName(duplicate)}
+                      </Link>
+                      <p className="mt-1 text-zinc-500">
+                        {duplicate.edmtrainId
+                          ? `EDMTrain ${duplicate.edmtrainId} · `
+                          : ""}
+                        {duplicate.spotifyId
+                          ? `Spotify ${duplicate.spotifyId} · `
+                          : ""}
+                        {duplicate.statsfmId
+                          ? `Stats.fm ${duplicate.statsfmId} · `
+                          : ""}
+                        {duplicate._count.contacts} contact
+                        {duplicate._count.contacts === 1 ? "" : "s"} ·{" "}
+                        {duplicate._count.shows} show
+                        {duplicate._count.shows === 1 ? "" : "s"} · record{" "}
+                        {duplicate.id.slice(-8)}
+                      </p>
+                    </div>
+                    <Badge tone="warning" size="xs">
+                      Duplicate candidate
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            </CardBody>
+          </Card>
+        )}
         <div className="flex shrink-0 flex-wrap gap-2">
           <LinkButton
             href={withWorkflowReturnTo(
