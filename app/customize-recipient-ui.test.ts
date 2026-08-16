@@ -438,7 +438,7 @@ test("default and bulk outreach calls retain existing recipient semantics", () =
   assert.doesNotMatch(sendNow, /singleRecipient/);
   assert.match(
     festival,
-    /sendOutreach\(\{[\s\S]*contactId: group\.contactId/,
+    /scheduleOutreach\(\s*\{[\s\S]*contactId: group\.contactId/,
   );
 
   const send = source("lib/sendOutreach.ts");

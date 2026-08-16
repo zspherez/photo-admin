@@ -8,8 +8,6 @@ import {
   getOutreachSendabilityBatch,
   getFollowUpEligibilityBatch,
   scheduleFestivalManagerOutreach,
-  sendFestivalManagerOutreach,
-  sendOutreach,
   scheduleOutreach,
   type OutreachSendability,
 } from "@/lib/sendOutreach";
@@ -111,7 +109,29 @@ import { removeManualFestivalArtist } from "./manual-lineup-actions";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const BULK_SEND_CONCURRENCY = 4;
+const BULK_SCHEDULE_CONCURRENCY = 1;
+const BULK_ACTION_BUDGET_MS = 260_000;
+const BULK_ACTION_MIN_START_BUDGET_MS = 70_000;
+const SCHEDULED_WORKFLOW_START_WINDOW_MS = 15 * 60 * 1000;
+const BULK_ACTION_DEADLINE_ERROR =
+  "Bulk action reached its safe time limit; rerun to process the remaining artists";
+
+export function hasFestivalBulkActionBudget(
+  deadlineAt: number,
+  now: number = Date.now(),
+): boolean {
+  return deadlineAt - now >= BULK_ACTION_MIN_START_BUDGET_MS;
+}
+
+export function nextScheduledOutreachPoll(now: Date): Date {
+  const next = new Date(now);
+  next.setUTCSeconds(0, 0);
+  const minute = next.getUTCMinutes();
+  let minutesUntilPoll = (7 - (minute % 10) + 10) % 10;
+  if (minutesUntilPoll === 0) minutesUntilPoll = 10;
+  next.setUTCMinutes(minute + minutesUntilPoll);
+  return next;
+}
 
 const getFestivalDetails = cache(async (showId: string) =>
   db.show.findUnique({
@@ -359,6 +379,7 @@ async function festivalBulkCandidates(
 async function bulkSend(formData: FormData) {
   "use server";
   await requireServerActionAuth(formData.get("returnTo") ?? "/festivals");
+  const deadlineAt = Date.now() + BULK_ACTION_BUDGET_MS;
   const returnTo = workflowReturnPath(formData.get("returnTo"));
   const showId = String(formData.get("showId") ?? "").trim();
   const filter = parseFestivalFilter(formData.get("filter"));
@@ -438,8 +459,6 @@ async function bulkSend(formData: FormData) {
     selectedTargets,
     new Set(selectedTargets.map((target) => target.contactId)),
   );
-  const weekend = isWeekendET();
-  const scheduledFor = weekend ? getNextMondaySlot() : null;
   let sent = 0;
   let scheduled = 0;
   let failed = 0;
@@ -462,43 +481,49 @@ async function bulkSend(formData: FormData) {
 
   const results = await mapWithConcurrency(
     groups,
-    BULK_SEND_CONCURRENCY,
+    BULK_SCHEDULE_CONCURRENCY,
     async (group) => {
+      if (!hasFestivalBulkActionBudget(deadlineAt)) {
+        return {
+          group,
+          result: {
+            ok: false as const,
+            error: BULK_ACTION_DEADLINE_ERROR,
+          },
+        };
+      }
       try {
+        const immediateSchedule = new Date(Date.now() + 60_000);
+        const nextDispatcherPoll =
+          nextScheduledOutreachPoll(immediateSchedule);
+        const dispatcherWindowEnd = new Date(
+          nextDispatcherPoll.getTime() + SCHEDULED_WORKFLOW_START_WINDOW_MS,
+        );
+        const scheduledFor =
+          isWeekendET(nextDispatcherPoll) ||
+          isWeekendET(dispatcherWindowEnd)
+          ? getNextMondaySlot(immediateSchedule)
+          : immediateSchedule;
         const result =
           group.artistIds.length > 1
-            ? scheduledFor
-              ? await scheduleFestivalManagerOutreach(
-                  {
-                    showId,
-                    contactId: group.contactId,
-                    coveredArtistIds: group.artistIds,
-                  },
-                  scheduledFor,
-                )
-              : await sendFestivalManagerOutreach({
+            ? await scheduleFestivalManagerOutreach(
+                {
                   showId,
                   contactId: group.contactId,
                   coveredArtistIds: group.artistIds,
-                })
-            : scheduledFor
-              ? await scheduleOutreach(
-                  {
-                    showId,
-                    contactId: group.contactId,
-                    festivalAllContacts: true,
-                    recipientDeliveryMode:
-                      group.recipientDeliveryMode,
-                  },
-                  scheduledFor,
-                )
-              : await sendOutreach({
+                },
+                scheduledFor,
+              )
+            : await scheduleOutreach(
+                {
                   showId,
                   contactId: group.contactId,
                   festivalAllContacts: true,
                   recipientDeliveryMode:
                     group.recipientDeliveryMode,
-                });
+                },
+                scheduledFor,
+              );
         return { group, result };
       } catch (error) {
         return {
@@ -527,6 +552,16 @@ async function bulkSend(formData: FormData) {
       );
     }
   }
+  if (errors.some((error) => error.includes(BULK_ACTION_DEADLINE_ERROR))) {
+    errors.splice(
+      0,
+      errors.length,
+      BULK_ACTION_DEADLINE_ERROR,
+      ...errors.filter(
+        (error) => !error.includes(BULK_ACTION_DEADLINE_ERROR),
+      ),
+    );
+  }
   refreshWorkflowViews(returnTo, ["/outreach"]);
   const resultParams: Record<string, string> = {
     bulk: "1",
@@ -547,6 +582,7 @@ async function bulkSend(formData: FormData) {
 async function queueFestivalOutreach(formData: FormData) {
   "use server";
   await requireServerActionAuth(formData.get("returnTo") ?? "/festivals");
+  const deadlineAt = Date.now() + BULK_ACTION_BUDGET_MS;
   const returnTo = workflowReturnPath(formData.get("returnTo"));
   const showId = String(formData.get("showId") ?? "").trim();
   const filter = parseFestivalFilter(formData.get("filter"));
@@ -645,8 +681,17 @@ async function queueFestivalOutreach(formData: FormData) {
   const scheduledFor = getNextNormalOutreachDispatch(now);
   const results = await mapWithConcurrency(
     groups,
-    BULK_SEND_CONCURRENCY,
+    BULK_SCHEDULE_CONCURRENCY,
     async (group) => {
+      if (!hasFestivalBulkActionBudget(deadlineAt)) {
+        return {
+          group,
+          result: {
+            ok: false as const,
+            error: BULK_ACTION_DEADLINE_ERROR,
+          },
+        };
+      }
       try {
         const result =
           group.artistIds.length > 1
@@ -692,6 +737,16 @@ async function queueFestivalOutreach(formData: FormData) {
       failed += 1;
       errors.push(result.error ?? "Unknown queue failure");
     }
+  }
+  if (errors.some((error) => error.includes(BULK_ACTION_DEADLINE_ERROR))) {
+    errors.splice(
+      0,
+      errors.length,
+      BULK_ACTION_DEADLINE_ERROR,
+      ...errors.filter(
+        (error) => !error.includes(BULK_ACTION_DEADLINE_ERROR),
+      ),
+    );
   }
   refreshWorkflowViews(returnTo, ["/outreach"]);
   redirect(

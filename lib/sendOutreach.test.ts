@@ -25,6 +25,7 @@ import {
   getOutreachPreparationFailureState,
   getOutreachPreparationRetryCount,
   getOutreachRetryDelayMs,
+  outreachTransactionRetryDelayMs,
   hasProtectedCurrentSendState,
   isDefinitiveConfigurationRejection,
   isDefinitivelyUnsentOutreachAttempt,
@@ -365,6 +366,28 @@ test("retry scheduling uses bounded exponential backoff", () => {
   assert.equal(getOutreachRetryDelayMs(2), 120_000);
   assert.equal(getOutreachRetryDelayMs(3), 240_000);
   assert.equal(getOutreachRetryDelayMs(20), OUTREACH_RETRY_MAX_DELAY_MS);
+});
+
+test("Serializable transaction retries use bounded exponential jitter", () => {
+  assert.equal(outreachTransactionRetryDelayMs(0, 0), 25);
+  assert.equal(outreachTransactionRetryDelayMs(1, 0), 50);
+  assert.equal(outreachTransactionRetryDelayMs(3, 0), 200);
+  assert.equal(outreachTransactionRetryDelayMs(3, 1), 275);
+  assert.equal(outreachTransactionRetryDelayMs(20, 2), 275);
+
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /OUTREACH_TRANSACTION_ATTEMPTS = 4/);
+  assert.match(source, /OUTREACH_TRANSACTION_MAX_WAIT_MS = 1_000/);
+  assert.match(source, /OUTREACH_TRANSACTION_TIMEOUT_MS = 3_000/);
+  assert.match(source, /maxWait: OUTREACH_TRANSACTION_MAX_WAIT_MS/);
+  assert.match(source, /timeout: OUTREACH_TRANSACTION_TIMEOUT_MS/);
+  assert.match(
+    source,
+    /await sleep\(outreachTransactionRetryDelayMs\(attempt, Math\.random\(\)\)\)/,
+  );
 });
 
 test("only the current conclusively accepted real original qualifies for follow-up", () => {
