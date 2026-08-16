@@ -148,8 +148,8 @@ export function FestivalBulkOutreachForm({
         (candidate) =>
           selected.has(candidate.contactId) &&
           !candidate.immutableDeliveryMode &&
-          candidate.recipientDeliveryMode === "to_thread" ||
-          candidate.recipientDeliveryMode === "cc_thread",
+          (candidate.recipientDeliveryMode === "to_thread" ||
+            candidate.recipientDeliveryMode === "cc_thread"),
       )
         ? "to_thread"
         : "individual_threads",

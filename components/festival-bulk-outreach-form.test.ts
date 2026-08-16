@@ -19,6 +19,10 @@ test("festival bulk outreach supports select all and grouped confirmation", () =
   assert.match(source, /"Shared"/);
   assert.match(source, /"to_thread"/);
   assert.match(source, /Put every management contact in To/);
+  assert.match(
+    source,
+    /selected\.has\(candidate\.contactId\)[\s\S]*!candidate\.immutableDeliveryMode[\s\S]*\(candidate\.recipientDeliveryMode === "to_thread" \|\|[\s\S]*candidate\.recipientDeliveryMode === "cc_thread"\)/,
+  );
   assert.match(source, /"Individual"/);
   assert.match(source, /PendingSubmitButton/);
   assert.match(source, /dialog\.showModal\(\)/);

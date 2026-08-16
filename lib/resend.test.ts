@@ -379,6 +379,15 @@ test("CC mode reanchors To after suppressing the preferred primary", () => {
       "primary@example.com",
     ]);
     assert.deepEqual(batch.requests[0].cc, []);
+    assert.equal(
+      compareResendRequestBatchToPolicy(
+        batch,
+        false,
+        result.policy,
+        "to_thread",
+      ),
+      null,
+    );
   });
   assert.equal(result.ok, true);
   if (!result.ok) return;

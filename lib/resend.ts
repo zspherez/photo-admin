@@ -924,6 +924,7 @@ export function compareResendRequestBatchToPolicy(
 ): string | null {
   const expectedLayouts =
     policy.testSend ||
+    deliveryMode === "to_thread" ||
     deliveryMode === "cc_thread" ||
     deliveryMode === "legacy_multi_to"
       ? [{ to: policy.to, cc: policy.cc }]
