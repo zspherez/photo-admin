@@ -23,6 +23,7 @@ import { LinkButton } from "@/components/ui/button";
 import { ArtistLink } from "@/components/artist-modal";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { FollowUpButton } from "@/components/follow-up-button";
+import { RejectWorkflowTargetButton } from "@/components/reject-workflow-target-button";
 import { cn } from "@/lib/cn";
 import {
   pickDirectOutreachContact,
@@ -68,6 +69,7 @@ import {
   markSentAction,
   restoreShowAction,
   sendFollowUpAction,
+  restoreRejectedFestivalArtistAction,
   unmarkSentAction,
 } from "@/app/dashboard/actions";
 import { requireServerActionAuth } from "@/lib/auth";
@@ -155,6 +157,7 @@ const getFestivalDetails = cache(async (showId: string) =>
         select: {
           providerManaged: true,
           manuallyAdded: true,
+          rejectedAt: true,
           artist: {
             select: {
               id: true,
@@ -197,6 +200,8 @@ const getFestivalDetails = cache(async (showId: string) =>
           attemptCount: true,
           sentAt: true,
           deliveredAt: true,
+          bouncedAt: true,
+          complainedAt: true,
           openCount: true,
           clickCount: true,
           finalSubject: true,
@@ -282,7 +287,11 @@ function storedOutreachLabel(outreach: {
   status: string;
   nextAttemptAt: Date | null;
   scheduledFor: Date | null;
+  bouncedAt: Date | null;
+  complainedAt: Date | null;
 }): string {
+  if (outreach.bouncedAt) return "bounced";
+  if (outreach.complainedAt) return "complained";
   if (outreach.status === "sent") return "already sent";
   if (outreach.status === "scheduled") return "already scheduled";
   if (outreach.status === "retry_scheduled") {
@@ -321,6 +330,7 @@ async function festivalBulkCandidates(
       syncStatus: true,
       dismissedAt: true,
       artists: {
+        where: { rejectedAt: null },
         select: {
           artistId: true,
           artist: {
@@ -603,6 +613,7 @@ async function queueFestivalOutreach(formData: FormData) {
       syncStatus: true,
       dismissedAt: true,
       artists: {
+        where: { rejectedAt: null },
         select: {
           artistId: true,
           artist: {
@@ -1007,6 +1018,11 @@ export default async function FestivalDetailPage({
       outreachHistory.find((outreach) => outreach.status === "sent") ??
       outreachHistory.find((outreach) => outreach.status === "queued") ??
       outreachHistory.find(
+        (outreach) =>
+          outreach.status === "failed" &&
+          (outreach.bouncedAt !== null || outreach.complainedAt !== null),
+      ) ??
+      outreachHistory.find(
         (outreach) => outreach.status === "manual_review",
       ) ??
       null;
@@ -1014,6 +1030,7 @@ export default async function FestivalDetailPage({
       association: {
         providerManaged: sa.providerManaged,
         manuallyAdded: sa.manuallyAdded,
+        rejectedAt: sa.rejectedAt,
       },
       artist: a,
       topSignal,
@@ -1107,6 +1124,11 @@ export default async function FestivalDetailPage({
   ).sort();
 
   const filtered = rows.filter((r) => {
+    if (filter === "rejected") {
+      if (!r.association.rejectedAt) return false;
+    } else if (r.association.rejectedAt) {
+      return false;
+    }
     if (filter === "matched" && !r.matched) return false;
     if (filter === "matched_with_contact" && !(r.matched && !!r.contact)) return false;
     if (filter === "needs_contact" && !(r.matched && !r.contact)) return false;
@@ -1122,7 +1144,7 @@ export default async function FestivalDetailPage({
   });
 
   const managerResearchCount = rows.filter(
-    (row) => row.managerResearchEligible
+    (row) => !row.association.rejectedAt && row.managerResearchEligible
   ).length;
   const bulkFormId = "festival-bulk-outreach";
   const bulkConfirmationCandidates: FestivalBulkConfirmationCandidate[] =
@@ -1165,6 +1187,7 @@ export default async function FestivalDetailPage({
     { key: "needs_contact", label: "Needs email" },
     { key: "manager_needed", label: "Manager needed" },
     { key: "unsent", label: "Unsent" },
+    { key: "rejected", label: "Rejected" },
   ];
 
   return (
@@ -1548,9 +1571,11 @@ export default async function FestivalDetailPage({
           {filtered.map((r) => {
               const canSend =
                 outreachEnabled &&
+                !r.association.rejectedAt &&
                 r.sendability?.sendable === true;
               const canCustomize =
                 outreachEnabled &&
+                !r.association.rejectedAt &&
                 !!r.contact &&
                 !r.followUpEligibility &&
                 r.sendability?.mode !== "retry";
@@ -1564,7 +1589,10 @@ export default async function FestivalDetailPage({
                 r.hasTestSend
               );
               const displayStatus =
-                statusLabel ??
+                (r.coveredOutreach?.bouncedAt ||
+                r.coveredOutreach?.complainedAt
+                  ? storedOutreachLabel(r.coveredOutreach)
+                  : statusLabel) ??
                 (r.coveredOutreach
                   ? storedOutreachLabel(r.coveredOutreach)
                   : !canSend
@@ -1626,6 +1654,11 @@ export default async function FestivalDetailPage({
                           {r.association.providerManaged
                             ? "manual + EDMTrain"
                             : "manual lineup"}
+                        </Badge>
+                      )}
+                      {r.association.rejectedAt && (
+                        <Badge tone="danger" size="xs">
+                          Rejected
                         </Badge>
                       )}
                       {r.genres.slice(0, 2).map((g) => (
@@ -1726,7 +1759,9 @@ export default async function FestivalDetailPage({
                         </PendingSubmitButton>
                       </form>
                     )}
-                  {outreachEnabled && r.followUpEligibility && (
+                  {outreachEnabled &&
+                    !r.association.rejectedAt &&
+                    r.followUpEligibility && (
                     <FollowUpButton
                       eligibility={r.followUpEligibility}
                       returnTo={returnTo}
@@ -1736,7 +1771,33 @@ export default async function FestivalDetailPage({
                       showId={showId}
                     />
                   )}
-                  {outreachEnabled && r.manualMarker && (
+                  {r.association.rejectedAt ? (
+                    <form action={restoreRejectedFestivalArtistAction}>
+                      <input type="hidden" name="showId" value={showId} />
+                      <input
+                        type="hidden"
+                        name="targetArtistId"
+                        value={r.artist.id}
+                      />
+                      <input type="hidden" name="returnTo" value={returnTo} />
+                      <PendingSubmitButton
+                        variant="secondary"
+                        size="sm"
+                        pendingLabel="Restoring…"
+                      >
+                        Restore
+                      </PendingSubmitButton>
+                    </form>
+                  ) : (
+                    <RejectWorkflowTargetButton
+                      showId={showId}
+                      targetArtistId={r.artist.id}
+                      returnTo={returnTo}
+                    />
+                  )}
+                  {outreachEnabled &&
+                    !r.association.rejectedAt &&
+                    r.manualMarker && (
                     <form action={unmarkSentAction}>
                       <input
                         type="hidden"
@@ -1757,7 +1818,9 @@ export default async function FestivalDetailPage({
                       </PendingSubmitButton>
                     </form>
                   )}
-                  {outreachEnabled && r.canMarkManually && (
+                  {outreachEnabled &&
+                    !r.association.rejectedAt &&
+                    r.canMarkManually && (
                     <form action={markSentAction}>
                       <input type="hidden" name="showId" value={showId} />
                       {r.displayContact ? (

@@ -52,6 +52,7 @@ const candidate = (
   edmtrainId: null,
   onLineup,
   manuallyAdded: false,
+  rejectedAt: null,
 });
 
 test("manual festival artists create only when no normalized match exists", () => {

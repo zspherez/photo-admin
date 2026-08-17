@@ -76,7 +76,11 @@ async function addArtistToFestival(
               edmtrainId: true,
               shows: {
                 where: { showId },
-                select: { artistId: true, manuallyAdded: true },
+                select: {
+                  artistId: true,
+                  manuallyAdded: true,
+                  rejectedAt: true,
+                },
               },
             },
           });
@@ -88,6 +92,7 @@ async function addArtistToFestival(
             edmtrainId: candidate.edmtrainId,
             onLineup: candidate.shows.length > 0,
             manuallyAdded: candidate.shows[0]?.manuallyAdded ?? false,
+            rejectedAt: candidate.shows[0]?.rejectedAt ?? null,
           }));
           const decision = chooseManualFestivalArtist(
             candidates,
@@ -100,7 +105,10 @@ async function addArtistToFestival(
             };
           }
           if (decision.kind === "already-on-lineup") {
-            if (!decision.candidate.manuallyAdded) {
+            if (
+              !decision.candidate.manuallyAdded ||
+              decision.candidate.rejectedAt
+            ) {
               await tx.showArtist.update({
                 where: {
                   showId_artistId: {
@@ -108,7 +116,7 @@ async function addArtistToFestival(
                     artistId: decision.candidate.id,
                   },
                 },
-                data: { manuallyAdded: true },
+                data: { manuallyAdded: true, rejectedAt: null },
               });
               return { kind: "added" };
             }
@@ -297,6 +305,7 @@ export async function addManualFestivalArtists(
                   select: {
                     providerManaged: true,
                     manuallyAdded: true,
+                    rejectedAt: true,
                   },
                 },
               },
@@ -342,7 +351,10 @@ export async function addManualFestivalArtists(
                 );
               }
               if (existingArtist?.shows[0]) {
-                if (existingArtist.shows[0].manuallyAdded) {
+                if (
+                  existingArtist.shows[0].manuallyAdded &&
+                  !existingArtist.shows[0].rejectedAt
+                ) {
                   existingCount += 1;
                 } else {
                   preserveArtistIds.push(existingArtist.id);
@@ -364,7 +376,7 @@ export async function addManualFestivalArtists(
                   artistId: { in: preserveArtistIds },
                   manuallyAdded: false,
                 },
-                data: { manuallyAdded: true },
+                data: { manuallyAdded: true, rejectedAt: null },
               });
             }
             if (createAssociations.length > 0) {

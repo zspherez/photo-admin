@@ -135,9 +135,14 @@ interface RecommendationRecord {
     state: string | null;
     ticketUrl: string | null;
     eventName: string | null;
+    isFestival: boolean;
     syncStatus: string;
     dismissedAt: Date | null;
     interestedAt: Date | null;
+    artists: Array<{
+      artistId: string;
+      rejectedAt: Date | null;
+    }>;
     outreaches: OutreachRecord[];
   };
   runArtist: {
@@ -309,9 +314,16 @@ const DEFAULT_STORE: TrajectoryRecommendationStore = {
             state: true,
             ticketUrl: true,
             eventName: true,
+            isFestival: true,
             syncStatus: true,
             dismissedAt: true,
             interestedAt: true,
+            artists: {
+              select: {
+                artistId: true,
+                rejectedAt: true,
+              },
+            },
             outreaches: {
               where: { kind: "original" },
               orderBy: [{ createdAt: "desc" }, { id: "asc" }],
@@ -711,6 +723,16 @@ export async function getTrajectoryRecommendationPage(
   for (const record of records) {
     const artist = record.runArtist.artist;
     if (!artist || record.show.syncStatus !== "active") continue;
+    if (
+      record.show.isFestival &&
+      record.show.artists.some(
+        (association) =>
+          association.artistId === artist.id &&
+          association.rejectedAt !== null,
+      )
+    ) {
+      continue;
+    }
     const identity = `${record.showId}\u0000${artist.id}\u0000${record.arm}`;
     if (identities.has(identity)) continue;
     identities.add(identity);
@@ -842,6 +864,7 @@ export async function getTrajectoryRecommendationPage(
       trajectoryActionId: randomUUID(),
       identityKey: `${record.showId}:${artist.id}:${record.arm}`,
       showId: record.show.id,
+      isFestival: record.show.isFestival,
       showDate: record.show.date.toISOString(),
       venueName: record.show.venueName,
       location: [record.show.city, record.show.state]

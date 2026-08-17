@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Prisma, type TrajectoryArm } from "@prisma/client";
 import type { MatchedShow } from "@/lib/match";
 import {
@@ -9,6 +10,7 @@ import { db } from "@/lib/db";
 
 export interface DashboardRecommendationBadge {
   recommendationId: string;
+  trajectoryActionId: string;
   runId: string;
   showId: string;
   artistId: string;
@@ -123,6 +125,7 @@ export async function getDashboardRecommendationBadges(
       if (!targetKeys.has(key) || badges.has(key)) continue;
       badges.set(key, {
         recommendationId: candidate.id,
+        trajectoryActionId: randomUUID(),
         runId: candidate.runId,
         showId: candidate.showId,
         artistId,

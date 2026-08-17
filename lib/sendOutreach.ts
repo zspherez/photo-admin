@@ -1991,6 +1991,7 @@ async function evaluateLockedOutreachDeliveryPolicy(
       FROM "ShowArtist"
       WHERE "showId" = ${outreach.showId}
         AND "artistId" IN (${Prisma.join(coveredArtistIds)})
+        AND "rejectedAt" IS NULL
       ORDER BY "artistId"
       FOR UPDATE
     `,
@@ -2174,7 +2175,10 @@ export async function getOutreachSendabilityBatch(
         date: true,
         festivalNycStatus: true,
         dismissedAt: true,
-        artists: { select: { artistId: true } },
+        artists: {
+          where: { rejectedAt: null },
+          select: { artistId: true },
+        },
       },
     }),
     db.contact.findMany({
@@ -2832,7 +2836,10 @@ export async function getFollowUpEligibilityBatch(
         date: true,
         festivalNycStatus: true,
         dismissedAt: true,
-        artists: { select: { artistId: true } },
+        artists: {
+          where: { rejectedAt: null },
+          select: { artistId: true },
+        },
       },
     }),
     db.contact.findMany({
@@ -3311,6 +3318,7 @@ async function prepareOriginalOutreach(
     where: {
       showId,
       artistId: { in: coveredArtistIds },
+      rejectedAt: null,
     },
     select: {
       artistId: true,
@@ -3352,9 +3360,11 @@ async function prepareOriginalOutreach(
     where: {
       showId_artistId: { showId, artistId: contact.artistId },
     },
-    select: { showId: true },
+    select: { showId: true, rejectedAt: true },
   });
-  if (!association) return { error: artistNotOnShowError() };
+  if (!association || association.rejectedAt) {
+    return { error: artistNotOnShowError() };
+  }
   const capturedTemplate = await captureTrajectoryPreparation(() =>
     runAfterActionableTrajectoryValidation(
       trajectoryContext,
@@ -3551,6 +3561,7 @@ async function prepareFollowUpOutreach(
     where: {
       showId: parent.showId,
       artistId: { in: coveredArtists.map((covered) => covered.artistId) },
+      rejectedAt: null,
     },
     select: { artistId: true },
   });
@@ -4278,6 +4289,7 @@ async function preparedDeliveryPolicyBlockingReason(
         where: {
           showId: prep.showId,
           artistId: { in: prep.coveredArtistIds },
+          rejectedAt: null,
         },
         select: { artistId: true },
       }),
@@ -4457,7 +4469,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
             artistId: prep.artistId,
           },
         },
-        select: { showId: true },
+        select: { showId: true, rejectedAt: true },
       }),
     ]);
     if (!show) {
@@ -4486,7 +4498,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         result: { ok: false, error: festivalBlocked },
       };
     }
-    if (!association) {
+    if (!association || association.rejectedAt) {
       return {
         kind: "complete",
         result: { ok: false, error: artistNotOnShowError() },
@@ -5317,9 +5329,9 @@ async function ensureAttempt(outreachInput: ClaimedOutreach): Promise<AttemptRes
           artistId: current.artistId,
         },
       },
-      select: { showId: true },
+      select: { showId: true, rejectedAt: true },
     });
-    if (!association) {
+    if (!association || association.rejectedAt) {
       const error = artistNotOnShowError();
       await tx.outreach.update({
         where: { id: current.id },
@@ -6674,6 +6686,7 @@ async function schedulePreparedOutreach(
         where: {
           showId: prep.showId,
           artistId: { in: prep.coveredArtistIds },
+          rejectedAt: null,
         },
         select: { artistId: true },
       }),
@@ -7563,9 +7576,9 @@ async function claimScheduledOutreach(outreachId: string): Promise<ClaimResult> 
           artistId: outreach.artistId,
         },
       },
-      select: { showId: true },
+      select: { showId: true, rejectedAt: true },
     });
-    if (!association) {
+    if (!association || association.rejectedAt) {
       const error = artistNotOnShowError();
       if (attempt) {
         return applyDeliveryPolicyDecision(

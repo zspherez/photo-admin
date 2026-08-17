@@ -918,9 +918,11 @@ model ShowArtist {
   headliner       Boolean @default(false)
   providerManaged Boolean @default(true)
   manuallyAdded   Boolean @default(false)
+  rejectedAt      DateTime?
 
   @@id([showId, artistId])
   @@index([artistId])
+  @@index([showId, rejectedAt])
 }
 
 model ListenSignal {

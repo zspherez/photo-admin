@@ -48,6 +48,7 @@ test("recommendations reuse explicit authenticated workflow controls without aut
     "cancelScheduledAction",
     "SendButton",
     "FollowUpButton",
+    "RejectWorkflowTargetButton",
     "Customize",
     "Add contact",
     "Research contact",

@@ -9,6 +9,7 @@ import { Card, CardBody } from "@/components/ui/card";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { SendButton } from "@/components/send-button";
 import { FollowUpButton } from "@/components/follow-up-button";
+import { RejectWorkflowTargetButton } from "@/components/reject-workflow-target-button";
 import { cn } from "@/lib/cn";
 import { formatShowDate } from "@/lib/formatDate";
 import { mergeUniqueByKey } from "@/lib/dashboardInfinite";
@@ -315,6 +316,12 @@ function RecommendationCard({
               Review direct outreach
             </LinkButton>
           )}
+          <RejectWorkflowTargetButton
+            showId={recommendation.showId}
+            targetArtistId={recommendation.artistId}
+            returnTo={returnTo}
+            hiddenFields={hiddenFields}
+          />
         </div>
 
         <div className="mobile-action-grid flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3 dark:border-zinc-900">

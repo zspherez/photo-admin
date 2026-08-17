@@ -43,6 +43,7 @@ export const FESTIVAL_FILTERS = [
   "needs_contact",
   "manager_needed",
   "unsent",
+  "rejected",
 ] as const;
 
 export type FestivalFilter = (typeof FESTIVAL_FILTERS)[number];
