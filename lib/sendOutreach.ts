@@ -145,6 +145,15 @@ export interface SendOutreachOutput {
   warnings?: string[];
 }
 
+export function scheduledOutreachDispatchResult(
+  result: SendOutreachOutput,
+): SendOutreachOutput {
+  if (!result.ok && result.error === MANUAL_REVIEW_SNAPSHOT) {
+    return { ...result, skipped: true };
+  }
+  return result;
+}
+
 export interface FollowUpParentOutreachProof {
   id: string;
   kind: OutreachKindValue;
@@ -7738,6 +7747,9 @@ export async function dispatchScheduledOutreach(
   outreachId: string,
 ): Promise<SendOutreachOutput> {
   const claim = await claimScheduledOutreach(outreachId);
-  if (claim.kind === "complete") return claim.result;
-  return executeClaimedSend(claim.outreach);
+  const result =
+    claim.kind === "complete"
+      ? claim.result
+      : await executeClaimedSend(claim.outreach);
+  return scheduledOutreachDispatchResult(result);
 }
