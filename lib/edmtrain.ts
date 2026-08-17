@@ -657,12 +657,16 @@ async function reconcileEdmtrainSnapshots(
             where: {
               showId: { in: reconciledShowIds },
               manuallyAdded: false,
+              rejectedAt: null,
             },
           });
           await tx.showArtist.updateMany({
             where: {
               showId: { in: reconciledShowIds },
-              manuallyAdded: true,
+              OR: [
+                { manuallyAdded: true },
+                { rejectedAt: { not: null } },
+              ],
             },
             data: { providerManaged: false },
           });

@@ -9,6 +9,7 @@ export interface ManualFestivalArtistCandidate {
   edmtrainId: number | null;
   onLineup: boolean;
   manuallyAdded: boolean;
+  rejectedAt: Date | null;
 }
 
 export const MANUAL_FESTIVAL_ARTIST_LIST_LIMIT = 200;

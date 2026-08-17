@@ -8,6 +8,7 @@ import { LinkButton } from "@/components/ui/button";
 import { SendButton } from "@/components/send-button";
 import { QueueOutreachButton } from "@/components/queue-outreach-button";
 import { FollowUpButton } from "@/components/follow-up-button";
+import { RejectWorkflowTargetButton } from "@/components/reject-workflow-target-button";
 import { cn } from "@/lib/cn";
 import { withWorkflowReturnTo } from "@/lib/workflowLinks";
 import { formatShowDate } from "@/lib/formatDate";
@@ -477,6 +478,11 @@ function ArtistModal({
                               showId={s.id}
                             />
                           )}
+                          <RejectWorkflowTargetButton
+                            showId={s.id}
+                            targetArtistId={data.id}
+                            returnTo={actionReturnTo}
+                          />
                         </div>
                       </li>
                     );

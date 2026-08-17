@@ -35,6 +35,7 @@ import { SendButton } from "@/components/send-button";
 import { QueueOutreachButton } from "@/components/queue-outreach-button";
 import type { NextDispatchBoundaryData } from "@/components/next-dispatch-label";
 import { FollowUpButton } from "@/components/follow-up-button";
+import { RejectWorkflowTargetButton } from "@/components/reject-workflow-target-button";
 import { cn } from "@/lib/cn";
 import {
   emailContactsRequireSelection,
@@ -1176,6 +1177,20 @@ export function DashboardClient({
                         returnTo,
                       )}#recommendation-${recommendationBadge.recommendationId}`
                     : null;
+                  const rejectionHiddenFields = recommendationBadge
+                    ? [
+                        {
+                          name: "recommendationId",
+                          value: recommendationBadge.recommendationId,
+                        },
+                        { name: "runId", value: recommendationBadge.runId },
+                        { name: "artistId", value: recommendationBadge.artistId },
+                        {
+                          name: "trajectoryActionId",
+                          value: recommendationBadge.trajectoryActionId,
+                        },
+                      ]
+                    : [];
                   const outreachControlsEligible =
                     query.mode === "all-nyc"
                       ? artist.outreachEligible &&
@@ -1379,6 +1394,12 @@ export function DashboardClient({
                             showId={show.id}
                           />
                         )}
+                        <RejectWorkflowTargetButton
+                          showId={show.id}
+                          targetArtistId={artist.id}
+                          returnTo={returnTo}
+                          hiddenFields={rejectionHiddenFields}
+                        />
                         {(query.mode === "all-nyc" ||
                           artist.workflowEligible) &&
                           artist.canMarkManually && (

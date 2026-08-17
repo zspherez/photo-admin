@@ -49,6 +49,7 @@ export interface RecommendationView {
   trajectoryActionId: string;
   identityKey: string;
   showId: string;
+  isFestival: boolean;
   showDate: string;
   venueName: string;
   location: string;

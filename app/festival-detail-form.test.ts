@@ -197,7 +197,7 @@ test("manual mark target does not collide with trajectory attribution", () => {
 test("festival manager research UI reflects the full eligible lineup", () => {
   assert.match(
     source,
-    /const managerResearchCount = rows\.filter\(\s*\(row\) => row\.managerResearchEligible\s*\)\.length;/
+    /const managerResearchCount = rows\.filter\(\s*\(row\) => !row\.association\.rejectedAt && row\.managerResearchEligible\s*\)\.length;/
   );
   assert.match(source, /Research managers \(\{managerResearchCount\}\)/);
   assert.match(
@@ -225,7 +225,7 @@ test("festival manager research UI reflects the full eligible lineup", () => {
 test("festival customize links do not require a listening signal", () => {
   assert.match(
     source,
-    /const canCustomize =\s*outreachEnabled &&\s*!!r\.contact &&\s*!r\.followUpEligibility &&\s*r\.sendability\?\.mode !== "retry";/
+    /const canCustomize =\s*outreachEnabled &&\s*!r\.association\.rejectedAt &&\s*!!r\.contact &&\s*!r\.followUpEligibility &&\s*r\.sendability\?\.mode !== "retry";/
   );
   assert.match(source, /\{canCustomize && r\.contact && \(/);
   assert.doesNotMatch(
@@ -288,7 +288,7 @@ test("festival sendability and bulk queueing do not require listen signals", () 
   assert.match(source, /scheduleFestivalManagerOutreach/);
   assert.match(
     source,
-    /const canSend =\s*outreachEnabled &&\s*r\.sendability\?\.sendable === true/,
+    /const canSend =\s*outreachEnabled &&\s*!r\.association\.rejectedAt &&\s*r\.sendability\?\.sendable === true/,
   );
   assert.doesNotMatch(
     source,
@@ -352,12 +352,19 @@ test("covered artists keep shared outreach status and actions without a current 
   );
   assert.match(
     source,
-    /\{outreachEnabled && r\.followUpEligibility && \(/,
+    /\{outreachEnabled &&\s*!r\.association\.rejectedAt &&\s*r\.followUpEligibility && \(/,
   );
 });
 
 test("festival rows show provider-tracked delivery and engagement badges", () => {
-  for (const field of ["sentAt", "deliveredAt", "openCount", "clickCount"]) {
+  for (const field of [
+    "sentAt",
+    "deliveredAt",
+    "bouncedAt",
+    "complainedAt",
+    "openCount",
+    "clickCount",
+  ]) {
     assert.match(source, new RegExp(`${field}: true`));
   }
   assert.match(
@@ -368,6 +375,19 @@ test("festival rows show provider-tracked delivery and engagement badges", () =>
     source,
     /\{r\.engagementOutreach && \(\s*<OutreachDeliveryBadges[\s\S]*outreach=\{r\.engagementOutreach\}/,
   );
+});
+
+test("festival rows expose retrievable artist rejection and bounce status", () => {
+  assert.match(source, /\{ key: "rejected", label: "Rejected" \}/);
+  assert.match(
+    source,
+    /filter === "rejected"[\s\S]*r\.association\.rejectedAt/,
+  );
+  assert.match(source, /RejectWorkflowTargetButton/);
+  assert.match(source, /restoreRejectedFestivalArtistAction/);
+  assert.match(source, /<Badge tone="danger" size="xs">\s*Rejected/);
+  assert.match(source, /if \(outreach\.bouncedAt\) return "bounced"/);
+  assert.match(source, /if \(outreach\.complainedAt\) return "complained"/);
 });
 
 test("festival pages persist an optional UTM campaign for all festival email kinds", () => {

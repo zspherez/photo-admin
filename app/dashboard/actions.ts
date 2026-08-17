@@ -53,6 +53,7 @@ import {
   emailContactsRequireSelection,
   pickEmailContact,
 } from "@/lib/contactSelection";
+import { acquireShowArtistMembershipLock } from "@/lib/showArtistMembershipInvariant";
 
 async function trajectoryContext(
   formData: FormData,
@@ -514,6 +515,99 @@ export async function restoreShowAction(formData: FormData) {
   );
   if (!capturedMutation.ok) redirect(capturedMutation.errorHref);
   refreshWorkflowViews(returnTo, ["/festivals"]);
+}
+
+export async function rejectWorkflowTargetAction(formData: FormData) {
+  await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
+  const showId = String(formData.get("showId") ?? "").trim();
+  const targetArtistId = String(
+    formData.get("targetArtistId") ?? "",
+  ).trim();
+  if (!showId || !targetArtistId) {
+    throw new Error("Missing show or artist");
+  }
+  const capturedRecommendation = await captureTrajectoryAction(
+    returnTo,
+    async () => {
+      const context = await trajectoryContext(formData, showId);
+      if (context && context.artistId !== targetArtistId) {
+        throw trajectoryActionTargetMismatch();
+      }
+      return context;
+    },
+  );
+  if (!capturedRecommendation.ok) {
+    redirect(capturedRecommendation.errorHref);
+  }
+  const recommendation = capturedRecommendation.value;
+  const capturedMutation = await captureTrajectoryAction(returnTo, () =>
+    withSerializableRetry(async (tx) => {
+      const mutate = async () => {
+        const show = await tx.show.findUnique({
+          where: { id: showId },
+          select: { isFestival: true },
+        });
+        if (!show) throw new Error("Show not found");
+        if (show.isFestival) {
+          await acquireShowArtistMembershipLock(tx);
+          await tx.showArtist.update({
+            where: {
+              showId_artistId: { showId, artistId: targetArtistId },
+            },
+            data: { rejectedAt: new Date() },
+          });
+        } else {
+          await tx.show.update({
+            where: { id: showId },
+            data: { dismissedAt: new Date() },
+          });
+        }
+        await recordRecommendationDecisionInTransaction(
+          tx,
+          formData,
+          recommendation,
+          "declined",
+        );
+      };
+      return recommendation
+        ? runActionableTrajectoryMutation(tx, recommendation, mutate)
+        : mutate();
+    }),
+  );
+  if (!capturedMutation.ok) redirect(capturedMutation.errorHref);
+  refreshWorkflowViews(returnTo, ["/festivals", "/recommendations"]);
+}
+
+export async function restoreRejectedFestivalArtistAction(formData: FormData) {
+  await requireServerActionAuth(formData.get("returnTo") ?? "/festivals");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
+  const showId = String(formData.get("showId") ?? "").trim();
+  const targetArtistId = String(
+    formData.get("targetArtistId") ?? "",
+  ).trim();
+  if (!showId || !targetArtistId) {
+    throw new Error("Missing festival or artist");
+  }
+  await withSerializableRetry(async (tx) => {
+    await acquireShowArtistMembershipLock(tx);
+    const association = await tx.showArtist.findUnique({
+      where: {
+        showId_artistId: { showId, artistId: targetArtistId },
+      },
+      select: { show: { select: { isFestival: true } } },
+    });
+    if (!association?.show.isFestival) {
+      throw new Error("Festival artist not found");
+    }
+    await tx.showArtist.update({
+      where: {
+        showId_artistId: { showId, artistId: targetArtistId },
+      },
+      data: { rejectedAt: null },
+    });
+  });
+  refreshWorkflowViews(returnTo, ["/festivals", "/recommendations"]);
 }
 
 export async function setInterestedAction(formData: FormData) {

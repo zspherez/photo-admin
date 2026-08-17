@@ -21,6 +21,13 @@ const migration = readFileSync(
   ),
   "utf8",
 );
+const rejectionMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260817193000_festival_artist_rejections/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("manual lineup ownership migration is forward-only and behavior safe", () => {
   assert.match(migration, /^BEGIN;\n/);
@@ -60,6 +67,20 @@ test("EDMTrain refresh preserves manual lineup ownership", () => {
     reconciliation,
     /ON CONFLICT \("showId", "artistId"\) DO UPDATE SET[\s\S]*"providerManaged" = TRUE/,
   );
+  assert.match(reconciliation, /rejectedAt: null/);
+  assert.match(reconciliation, /\{ rejectedAt: \{ not: null \} \}/);
+});
+
+test("festival artist rejection is durable and restorable", () => {
+  assert.match(rejectionMigration, /^BEGIN;\n/);
+  assert.match(rejectionMigration, /ADD COLUMN "rejectedAt" TIMESTAMP\(3\)/);
+  assert.match(
+    rejectionMigration,
+    /CHECK \("providerManaged" OR "manuallyAdded" OR "rejectedAt" IS NOT NULL\)/,
+  );
+  assert.match(rejectionMigration, /ShowArtist_showId_rejectedAt_idx/);
+  assert.match(rejectionMigration, /\nCOMMIT;\s*$/);
+  assert.match(action, /rejectedAt: null/);
 });
 
 test("manual lineup actions authenticate, normalize, and serialize identity changes", () => {

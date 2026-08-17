@@ -97,6 +97,27 @@ test("show dismissal actions support grouped festivals and refresh festival view
   assert.match(restore, /dismissedAt: null/);
 });
 
+test("row rejection dismisses regular shows and only rejects festival artists", () => {
+  const reject = actionSource("rejectWorkflowTargetAction");
+  const restoreFestivalArtist = actionSource(
+    "restoreRejectedFestivalArtistAction",
+  );
+
+  assert.match(reject, /formData\.get\("targetArtistId"\)/);
+  assert.match(reject, /context\.artistId !== targetArtistId/);
+  assert.match(reject, /trajectoryActionTargetMismatch/);
+  assert.match(reject, /show\.isFestival/);
+  assert.match(reject, /acquireShowArtistMembershipLock/);
+  assert.match(reject, /showArtist\.update/);
+  assert.match(reject, /rejectedAt: new Date\(\)/);
+  assert.match(reject, /dismissedAt: new Date\(\)/);
+  assert.match(reject, /"declined"/);
+  assert.match(reject, /runActionableTrajectoryMutation/);
+  assert.match(restoreFestivalArtist, /rejectedAt: null/);
+  assert.match(restoreFestivalArtist, /acquireShowArtistMembershipLock/);
+  assert.match(restoreFestivalArtist, /Festival artist not found/);
+});
+
 test("follow-up action derives identity from the parent and preserves workflow return state", () => {
   const followUp = actionSource("sendFollowUpAction");
   assert.match(

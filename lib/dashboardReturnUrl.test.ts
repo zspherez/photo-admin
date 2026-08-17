@@ -122,6 +122,7 @@ test("workflow returns allow exact workflow routes and preserve their filters", 
 test("festival search parameters normalize repeated values safely", () => {
   assert.equal(parseFestivalFilter(["unsent", "all"]), "unsent");
   assert.equal(parseFestivalFilter("manager_needed"), "manager_needed");
+  assert.equal(parseFestivalFilter("rejected"), "rejected");
   assert.equal(parseFestivalGenre(["  Drum & Bass ", "house"]), "drum & bass");
   assert.equal(parseFestivalGenre(["\u0000invalid", "house"]), "all");
   assert.equal(

@@ -4,12 +4,20 @@ export interface OutreachDeliveryState {
   status: string;
   sentAt: Date | null;
   deliveredAt: Date | null;
+  bouncedAt: Date | null;
+  complainedAt: Date | null;
   openCount: number;
   clickCount: number;
 }
 
 export interface OutreachDeliveryBadge {
-  key: "sent" | "delivered" | "opened" | "clicked";
+  key:
+    | "sent"
+    | "delivered"
+    | "opened"
+    | "clicked"
+    | "bounced"
+    | "complained";
   label: string;
   tone: BadgeTone;
 }
@@ -24,6 +32,8 @@ export function outreachDeliveryBadges(
     outreach.status === "sent" ||
     outreach.sentAt !== null ||
     outreach.deliveredAt !== null ||
+    outreach.bouncedAt !== null ||
+    outreach.complainedAt !== null ||
     outreach.openCount > 0 ||
     outreach.clickCount > 0;
 
@@ -56,6 +66,12 @@ export function outreachDeliveryBadges(
           : "Clicked",
       tone: "accent",
     });
+  }
+  if (outreach.bouncedAt) {
+    badges.push({ key: "bounced", label: "Bounced", tone: "danger" });
+  }
+  if (outreach.complainedAt) {
+    badges.push({ key: "complained", label: "Complained", tone: "danger" });
   }
 
   return badges;
