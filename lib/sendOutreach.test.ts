@@ -34,12 +34,43 @@ import {
   isProviderAcceptanceUnresolvedAttempt,
   recipientSnapshotConflict,
   resolveFollowUpRecipientDeliveryMode,
+  scheduledOutreachDispatchResult,
   protectLegacyScheduledSnapshot,
   preparedTemplatePurposeBlockingReason,
   schedulingTimeTemplateProvenance,
   type DeliveryPolicyAttempt,
   type EvaluateOutreachDeliveryPolicyInput,
 } from "./sendOutreach";
+
+test("scheduled recipient snapshot conflicts are safe manual-review skips", () => {
+  assert.deepEqual(
+    scheduledOutreachDispatchResult({
+      ok: false,
+      outreachId: "outreach-1",
+      error:
+        "Current active contact membership, recipient addresses, or suppressions conflict with the verified outreach snapshot; review manually",
+    }),
+    {
+      ok: false,
+      outreachId: "outreach-1",
+      error:
+        "Current active contact membership, recipient addresses, or suppressions conflict with the verified outreach snapshot; review manually",
+      skipped: true,
+    },
+  );
+  assert.deepEqual(
+    scheduledOutreachDispatchResult({
+      ok: false,
+      outreachId: "outreach-2",
+      error: "Provider acceptance is uncertain; review manually",
+    }),
+    {
+      ok: false,
+      outreachId: "outreach-2",
+      error: "Provider acceptance is uncertain; review manually",
+    },
+  );
+});
 
 test("outreach personalization uses artist display-name overrides", () => {
   const source = readFileSync(

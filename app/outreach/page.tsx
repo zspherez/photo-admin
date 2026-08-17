@@ -33,6 +33,7 @@ import {
 } from "@/lib/contactDisplay";
 import { outreachClickLabel } from "@/lib/outreachClickStream";
 import { EmailBulkSelection } from "@/components/email-bulk-selection";
+import { RecentLinkClicks } from "@/components/recent-link-clicks";
 import { updateOutreachEmailVisibilityAction } from "@/app/outreach/actions";
 
 export const dynamic = "force-dynamic";
@@ -381,7 +382,7 @@ export default async function OutreachLogPage({
             No tracked link clicks yet.
           </p>
         ) : (
-          <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
+          <RecentLinkClicks>
             {recentClicks.flatMap((click) => {
               if (!click.clickedLink || !click.outreach) return [];
               const label = outreachClickLabel({
@@ -420,7 +421,7 @@ export default async function OutreachLogPage({
                 </li>,
               ];
             })}
-          </ul>
+          </RecentLinkClicks>
         )}
       </Card>
 
