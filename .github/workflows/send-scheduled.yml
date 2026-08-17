@@ -2,11 +2,11 @@ name: Dispatch scheduled outreach
 
 on:
   schedule:
-    # Poll every ten minutes at :07 offset. Stored nextAttemptAt timestamps
-    # enforce the configured market time; delayed workflow starts still drain.
-    - cron: "7,17,27,37,47,57 * * * *"
-    # Exceptional recovery only: retries, stale claims, and overdue missed sends.
-    - cron: "17 */4 * * *"
+    # Candidate UTC hours for the weekday 09:00 America/New_York window.
+    # The workflow and API both apply IANA-time-zone gates across DST changes.
+    - cron: "7,17,27,37,47,57 13-14 * * 1-5"
+    # Hourly recovery candidates for 09:00-13:59 America/New_York.
+    - cron: "17 13-18 * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -47,13 +47,31 @@ jobs:
 
           dispatch_mode="${OUTREACH_DISPATCH_MODE:-}"
           case "${SCHEDULE_EXPRESSION:-}" in
-            "7,17,27,37,47,57 * * * *")
+            "7,17,27,37,47,57 13-14 * * 1-5")
+              local_hour="${OUTREACH_LOCAL_HOUR_OVERRIDE:-$(TZ=America/New_York date +%H)}"
+              if [[ ! "${local_hour}" =~ ^[0-9]{2}$ ]]; then
+                echo "::error::Unable to determine the America/New_York hour"
+                exit 1
+              fi
+              if [[ "${local_hour}" != "09" ]]; then
+                echo "::notice::Skipping inactive UTC candidate; normal outreach dispatch runs only during 09:00-09:59 America/New_York"
+                exit 0
+              fi
               dispatch_mode="morning"
-              echo "::notice::Polling due scheduled outreach"
+              echo "::notice::Polling due scheduled outreach during the 09:00 America/New_York hour"
               ;;
-            "17 */4 * * *")
+            "17 13-18 * * *")
+              local_hour="${OUTREACH_LOCAL_HOUR_OVERRIDE:-$(TZ=America/New_York date +%H)}"
+              if [[ ! "${local_hour}" =~ ^[0-9]{2}$ ]]; then
+                echo "::error::Unable to determine the America/New_York hour"
+                exit 1
+              fi
+              if (( 10#${local_hour} < 9 || 10#${local_hour} >= 14 )); then
+                echo "::notice::Skipping inactive UTC candidate; recovery runs only from 09:00 through 13:59 America/New_York"
+                exit 0
+              fi
               dispatch_mode="recovery"
-              echo "::notice::Exceptional outreach recovery dispatch (four-hour safety cadence)"
+              echo "::notice::Exceptional outreach recovery dispatch during the 09:00-13:59 America/New_York window"
               ;;
           esac
           if [[ -z "${dispatch_mode}" ]]; then
@@ -240,7 +258,7 @@ jobs:
                   echo "::error::Outreach dispatcher retries did not recover within the response-aware polling window"
                   exit 1
                 fi
-                echo "::warning::Outreach retries or backlog remain after ${max_response_polls} response-aware polls; the exceptional four-hour recovery schedule will continue recovery"
+                echo "::warning::Outreach retries or backlog remain after ${max_response_polls} response-aware polls; the daytime recovery schedule will continue recovery"
                 exit 0
               fi
 
@@ -282,7 +300,7 @@ jobs:
                   echo "::error::Outreach claims remained unresolved through the polling deadline"
                   exit 1
                 fi
-                echo "::warning::Outreach retries or backlog remain after the bounded response-aware polling window; the exceptional four-hour recovery schedule will continue recovery"
+                echo "::warning::Outreach retries or backlog remain after the bounded response-aware polling window; the daytime recovery schedule will continue recovery"
                 exit 0
               fi
               echo "::notice::Outreach state ${dispatch_state_name} remains pending; polling again in ${poll_delay}s"

@@ -9,6 +9,8 @@ import {
   getScheduledDispatchHttpStatus,
   getScheduledDispatchState,
   getOutreachRecoveryCutoff,
+  isOutreachMorningDispatchWindow,
+  isOutreachRecoveryDispatchWindow,
   OUTREACH_CLAIM_TIMEOUT_MS,
   SCHEDULED_DISPATCH_MAX_ROWS,
   SCHEDULED_DISPATCH_ROUTE_TIMEOUT_MS,
@@ -38,6 +40,33 @@ export async function GET(request: NextRequest) {
   const mode = scheduledDispatchMode(request);
   if (!mode) {
     return NextResponse.json({ error: "invalid dispatch mode" }, { status: 400 });
+  }
+  const outsideMorningWindow =
+    mode === "morning" && !isOutreachMorningDispatchWindow();
+  const outsideRecoveryWindow =
+    mode === "recovery" && !isOutreachRecoveryDispatchWindow();
+  if (outsideMorningWindow || outsideRecoveryWindow) {
+    return NextResponse.json({
+      ok: true,
+      complete: true,
+      state: "complete",
+      mode,
+      outsideMorningWindow,
+      outsideRecoveryWindow,
+      dispatched: 0,
+      skipped: 0,
+      retriesScheduled: 0,
+      scheduledRetries: 0,
+      nextRetryAt: null,
+      pendingClaims: 0,
+      nextClaimExpiryAt: null,
+      failures: 0,
+      terminalFailures: 0,
+      retryableFailures: 0,
+      unscheduledRetryableFailures: 0,
+      bounded: false,
+      results: [],
+    });
   }
   const startedAt = Date.now();
   const results: {

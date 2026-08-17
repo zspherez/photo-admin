@@ -11,6 +11,8 @@ export const OUTREACH_MORNING_DISPATCH_HOUR = appConfig.outreachDispatch.hour;
 export const OUTREACH_MORNING_DISPATCH_MINUTE =
   appConfig.outreachDispatch.minute;
 export const OUTREACH_MORNING_DISPATCH_LABEL = appConfig.outreachDispatch.label;
+export const OUTREACH_RECOVERY_DISPATCH_START_HOUR = 9;
+export const OUTREACH_RECOVERY_DISPATCH_END_HOUR = 14;
 export const OUTREACH_RECOVERY_OVERDUE_MS = 2 * 60 * 60 * 1000;
 export const OUTREACH_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
 export const OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS = 30 * 1000;
@@ -157,6 +159,17 @@ export function isOutreachMorningDispatchWindow(
     hour === OUTREACH_MORNING_DISPATCH_HOUR &&
     weekday !== "Sat" &&
     weekday !== "Sun"
+  );
+}
+
+/** True from 09:00 through 13:59 ET, including weekends. */
+export function isOutreachRecoveryDispatchWindow(
+  now: Date = new Date(),
+): boolean {
+  const { hour } = partsInET(now);
+  return (
+    hour >= OUTREACH_RECOVERY_DISPATCH_START_HOUR &&
+    hour < OUTREACH_RECOVERY_DISPATCH_END_HOUR
   );
 }
 

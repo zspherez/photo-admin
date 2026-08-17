@@ -92,9 +92,10 @@ EDMTrain location scope, and the GitHub Actions workflows trusted for contact
 research/audit OIDC all live in one typed module: [`lib/appConfig.ts`](lib/appConfig.ts).
 Edit its constants to define a fork's product and market; every default
 reproduces this deployment's current behavior. Multiple configured EDMTrain
-location IDs are supported. Scheduled outreach polls every ten minutes and the
-app applies the configured time zone, weekday, hour, and minute, so forks do
-not need DST-specific cron schedules.
+location IDs are supported. Normal scheduled outreach is restricted to the
+configured weekday morning hour. Recovery dispatch is restricted to
+09:00-13:59 America/New_York, with both workflow and server-side DST-aware
+gates.
 
 Repository identity and the two workflow trust refs can also be overridden
 per deployment via
