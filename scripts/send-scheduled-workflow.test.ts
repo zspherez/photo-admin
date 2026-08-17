@@ -99,28 +99,65 @@ function runSequence(
   }
 }
 
-test("workflow polls the app-configured morning window", () => {
+test("workflow polls only the active morning UTC candidate", () => {
   const result = runSequence(
     "morning-poll",
     [`0\t200\t${response("complete")}`],
     {
-      SCHEDULE_EXPRESSION: "7,17,27,37,47,57 * * * *",
+      SCHEDULE_EXPRESSION: "7,17,27,37,47,57 13-14 * * 1-5",
+      OUTREACH_LOCAL_HOUR_OVERRIDE: "09",
     },
   );
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Polling due scheduled outreach/);
+  assert.match(result.stdout, /Polling due scheduled outreach during/);
   assert.match(result.stdout, /Outreach dispatch attempt/);
 });
 
-test("workflow labels the four-hour schedule as exceptional recovery", () => {
+test("workflow skips delayed morning candidates outside the Eastern window", () => {
+  const result = runSequence("morning-skip", [], {
+    SCHEDULE_EXPRESSION: "7,17,27,37,47,57 13-14 * * 1-5",
+    OUTREACH_LOCAL_HOUR_OVERRIDE: "00",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Skipping inactive UTC candidate/);
+  assert.doesNotMatch(result.stdout, /Outreach dispatch attempt/);
+});
+
+test("workflow runs recovery only during the daytime Eastern window", () => {
   const result = runSequence(
     "recovery",
     [`0\t200\t${response("complete")}`],
-    { SCHEDULE_EXPRESSION: "17 */4 * * *" },
+    {
+      SCHEDULE_EXPRESSION: "17 13-18 * * *",
+      OUTREACH_LOCAL_HOUR_OVERRIDE: "13",
+    },
   );
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Exceptional outreach recovery dispatch/);
+});
+
+test("workflow skips recovery candidates at and after 2 PM Eastern", () => {
+  const result = runSequence("recovery-skip", [], {
+    SCHEDULE_EXPRESSION: "17 13-18 * * *",
+    OUTREACH_LOCAL_HOUR_OVERRIDE: "14",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /recovery runs only from 09:00 through 13:59/);
+  assert.doesNotMatch(result.stdout, /Outreach dispatch attempt/);
+});
+
+test("workflow fails closed when the Eastern hour cannot be determined", () => {
+  const result = runSequence("recovery-invalid-hour", [], {
+    SCHEDULE_EXPRESSION: "17 13-18 * * *",
+    OUTREACH_LOCAL_HOUR_OVERRIDE: "unknown",
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /Unable to determine the America\/New_York hour/);
+  assert.doesNotMatch(result.stdout, /Outreach dispatch attempt/);
 });
 
 test("workflow keeps retryable failures and fresh claims sticky past the soft poll cap", () => {

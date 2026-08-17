@@ -89,10 +89,14 @@ test("the existing morning and recovery dispatcher also drains arbitrary emails"
   assert.match(source, /db\.arbitraryEmail\.aggregate\(/);
 });
 
-test("delayed normal polls still drain every due scheduled row", () => {
+test("automatic dispatch modes are rejected outside their Eastern windows", () => {
   const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
-  assert.doesNotMatch(source, /isOutreachMorningDispatchWindow/);
-  assert.doesNotMatch(source, /outsideMorningWindow/);
+  assert.match(source, /mode === "morning" && !isOutreachMorningDispatchWindow/);
+  assert.match(source, /mode === "recovery" && !isOutreachRecoveryDispatchWindow/);
+  assert.match(source, /outsideMorningWindow \|\| outsideRecoveryWindow/);
+  assert.match(source, /outsideMorningWindow,/);
+  assert.match(source, /outsideRecoveryWindow,/);
+  assert.match(source, /dispatched: 0/);
   assert.match(
     source,
     /status: "scheduled",[\s\S]*lte: mode === "recovery" \? recoveryCutoff : now/,

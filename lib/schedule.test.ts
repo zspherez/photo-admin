@@ -8,11 +8,14 @@ import {
   getOutreachRecoveryCutoff,
   getScheduledDispatchDisposition,
   isOutreachMorningDispatchWindow,
+  isOutreachRecoveryDispatchWindow,
   isStaleOutreachClaim,
   isWeekendET,
   OUTREACH_CLAIM_TIMEOUT_MS,
   OUTREACH_MORNING_DISPATCH_HOUR,
   OUTREACH_MORNING_DISPATCH_LABEL,
+  OUTREACH_RECOVERY_DISPATCH_END_HOUR,
+  OUTREACH_RECOVERY_DISPATCH_START_HOUR,
   OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
   SCHEDULED_DISPATCH_MAX_MS,
   SCHEDULED_DISPATCH_ROUTE_TIMEOUT_MS,
@@ -123,6 +126,31 @@ test("morning dispatch window is explicit and DST-safe", () => {
   );
 });
 
+test("recovery dispatch is limited to 9 AM through 1:59 PM Eastern", () => {
+  assert.equal(OUTREACH_RECOVERY_DISPATCH_START_HOUR, 9);
+  assert.equal(OUTREACH_RECOVERY_DISPATCH_END_HOUR, 14);
+  assert.equal(
+    isOutreachRecoveryDispatchWindow(new Date("2026-08-17T12:59:59Z")),
+    false,
+  );
+  assert.equal(
+    isOutreachRecoveryDispatchWindow(new Date("2026-08-17T13:00:00Z")),
+    true,
+  );
+  assert.equal(
+    isOutreachRecoveryDispatchWindow(new Date("2026-08-17T17:59:59Z")),
+    true,
+  );
+  assert.equal(
+    isOutreachRecoveryDispatchWindow(new Date("2026-08-17T18:00:00Z")),
+    false,
+  );
+  assert.equal(
+    isOutreachRecoveryDispatchWindow(new Date("2026-12-05T14:00:00Z")),
+    true,
+  );
+});
+
 test("recovery waits until normal scheduled outreach is two hours overdue", () => {
   assert.equal(
     getOutreachRecoveryCutoff(
@@ -186,12 +214,20 @@ test("normal morning dispatch and exceptional recovery stay distinct", () => {
     "utf8",
   );
 
-  assert.match(workflow, /cron: "7,17,27,37,47,57 \* \* \* \*"/);
-  assert.match(workflow, /cron: "17 \*\/4 \* \* \*"/);
+  assert.match(
+    workflow,
+    /cron: "7,17,27,37,47,57 13-14 \* \* 1-5"/,
+  );
+  assert.match(workflow, /cron: "17 13-18 \* \* \*"/);
   assert.equal(OUTREACH_MORNING_DISPATCH_HOUR, 9);
-  assert.doesNotMatch(route, /isOutreachMorningDispatchWindow/);
-  assert.doesNotMatch(route, /outsideMorningWindow/);
-  assert.match(workflow, /Polling due scheduled outreach/);
+  assert.match(route, /isOutreachMorningDispatchWindow/);
+  assert.match(route, /isOutreachRecoveryDispatchWindow/);
+  assert.match(route, /outsideMorningWindow/);
+  assert.match(route, /outsideRecoveryWindow/);
+  assert.match(workflow, /local_hour.*!= "09"/);
+  assert.match(workflow, /10#\$\{local_hour\} < 9/);
+  assert.match(workflow, /10#\$\{local_hour\} >= 14/);
+  assert.match(workflow, /Polling due scheduled outreach during/);
   assert.match(
     readFileSync(new URL("./schedule.ts", import.meta.url), "utf8"),
     /localETToUtc\([\s\S]*OUTREACH_MORNING_DISPATCH_HOUR,[\s\S]*OUTREACH_MORNING_DISPATCH_MINUTE/,
@@ -214,7 +250,7 @@ test("normal morning dispatch and exceptional recovery stay distinct", () => {
   assert.match(workflow, /max_response_polls=8/);
   assert.match(
     workflow,
-    /exceptional four-hour recovery schedule will continue recovery/,
+    /daytime recovery schedule will continue recovery/,
   );
   assert.match(workflow, /terminal_failures_seen=0/);
   assert.match(workflow, /\.terminalFailures/);
