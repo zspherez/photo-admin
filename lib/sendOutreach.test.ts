@@ -8,6 +8,7 @@ import {
   OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
   OUTREACH_RETRY_MAX_DELAY_MS,
   activeContactRecipientEmails,
+  bouncedOutreachResetError,
   canReplaceUnattemptedOutreachSnapshot,
   canRecoverConfigurationOutageWithoutAttempt,
   canRecoverPreparationFailureWithoutAttempt,
@@ -137,10 +138,92 @@ test("transactional claims reject original template purpose drift", () => {
   assert.equal(
     preparedTemplatePurposeBlockingReason(
       { isFestival: true },
+      { kind: "follow_up", templatePurpose: "festival" },
+    ),
+    null,
+  );
+  assert.equal(
+    preparedTemplatePurposeBlockingReason(
+      { isFestival: false },
       { kind: "follow_up", templatePurpose: "follow_up" },
     ),
     null,
   );
+  assert.equal(
+    preparedTemplatePurposeBlockingReason(
+      { isFestival: true },
+      {
+        kind: "follow_up",
+        templatePurpose: "festival_multi_artist",
+        coveredArtistIds: ["artist-1", "artist-2"],
+      },
+    ),
+    null,
+  );
+});
+
+test("bounced outreach reset requires a corrected verified recipient", () => {
+  const base = {
+    status: "failed",
+    kind: "original" as const,
+    bouncedAt: new Date("2026-08-19T14:00:00.000Z"),
+    recipientEmails: ["old@example.com"],
+    currentRecipients: ["new@example.com"],
+    bouncedRecipients: ["old@example.com"],
+    contactMatchesArtist: true,
+    replacementContactSuppressed: false,
+    deliverableRecipientCount: 1,
+    attempt: {
+      status: "delivery_failed",
+      testSend: false,
+      providerMessageId: "message-1",
+      acceptedAt: new Date("2026-08-19T13:00:00.000Z"),
+    },
+  };
+  assert.equal(bouncedOutreachResetError(base), null);
+  assert.match(
+    bouncedOutreachResetError({
+      ...base,
+      currentRecipients: ["OLD@example.com", "new@example.com"],
+    }) ?? "",
+    /Fix the bounced recipient/,
+  );
+  assert.match(
+    bouncedOutreachResetError({
+      ...base,
+      replacementContactSuppressed: true,
+    }) ?? "",
+    /still suppressed/,
+  );
+  assert.match(
+    bouncedOutreachResetError({
+      ...base,
+      currentRecipients: ["new@example.com", "other@example.com"],
+      replacementContactSuppressed: false,
+      deliverableRecipientCount: 1,
+    }) ?? "",
+    /^$/,
+  );
+  assert.match(
+    bouncedOutreachResetError({
+      ...base,
+      attempt: { ...base.attempt, testSend: true },
+    }) ?? "",
+    /not conclusively verified/,
+  );
+
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  const reset = source.slice(
+    source.indexOf("export async function resetBouncedOutreachForResend"),
+    source.indexOf("function isRetryableOutreachTransactionError"),
+  );
+  assert.match(reset, /newAttemptIdentity\(outreach\.id\)/);
+  assert.match(reset, /status: "cancelled"/);
+  assert.match(reset, /resetDeliveryState\(\)/);
+  assert.doesNotMatch(reset, /outreachSendAttempt\.(?:update|delete)/);
 });
 
 test("historical sent attempts remain untouched by legacy pricing protection", () => {

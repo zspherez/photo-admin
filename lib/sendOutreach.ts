@@ -9,8 +9,9 @@ import {
   applyTemplate,
   buildVarsForShow,
   ensureFestivalMultiArtistTemplate,
-  ensureFollowUpTemplate,
+  ensureFollowUpTemplateForShow,
   ensureOriginalTemplateForShow,
+  followUpTemplatePurposeForShow,
   normalizeLegacyRateTemplateHtml,
   normalizeLegacyOutreachSnapshot,
   normalizeLegacyRateTemplateVariable,
@@ -1804,6 +1805,68 @@ export function getAcceptedDeliveryFailureOutreachState(
   };
 }
 
+export interface BouncedOutreachResetState {
+  status: string;
+  kind: OutreachKindValue;
+  bouncedAt: Date | null;
+  recipientEmails: string[];
+  currentRecipients: string[];
+  bouncedRecipients: string[];
+  contactMatchesArtist: boolean;
+  replacementContactSuppressed: boolean;
+  deliverableRecipientCount: number;
+  attempt: {
+    status: string;
+    testSend: boolean | null;
+    providerMessageId: string | null;
+    acceptedAt: Date | null;
+  } | null;
+}
+
+export function bouncedOutreachResetError(
+  state: BouncedOutreachResetState,
+): string | null {
+  if (
+    state.kind !== "original" ||
+    state.status !== "failed" ||
+    !state.bouncedAt
+  ) {
+    return "Only a bounced original outreach can be marked unsent";
+  }
+  if (
+    !state.attempt ||
+    state.attempt.status !== "delivery_failed" ||
+    state.attempt.testSend !== false ||
+    !isNonemptyProviderMessageId(state.attempt.providerMessageId) ||
+    !state.attempt.acceptedAt
+  ) {
+    return "The bounced provider attempt is not conclusively verified";
+  }
+  if (!state.contactMatchesArtist || state.currentRecipients.length === 0) {
+    return "Choose a current active email contact for this artist";
+  }
+  if (state.bouncedRecipients.length === 0) {
+    return "The bounced recipient could not be verified from webhook evidence";
+  }
+  if (
+    state.bouncedRecipients.some((email) =>
+      normalizeEmails(state.currentRecipients).includes(email),
+    )
+  ) {
+    return "Fix the bounced recipient before marking this outreach unsent";
+  }
+  if (state.replacementContactSuppressed) {
+    return "The corrected recipient is still suppressed";
+  }
+  if (state.deliverableRecipientCount === 0) {
+    return "All current recipients are suppressed";
+  }
+  if (sameEmails(state.recipientEmails, state.currentRecipients)) {
+    return "The intended recipient snapshot has not changed";
+  }
+  return null;
+}
+
 async function withSerializableRetry<T>(
   work: (tx: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> {
@@ -1822,10 +1885,140 @@ async function withSerializableRetry<T>(
         await sleep(outreachTransactionRetryDelayMs(attempt, Math.random()));
         continue;
       }
+
       throw error;
     }
   }
   throw new Error("Unable to complete outreach transaction");
+}
+
+export async function resetBouncedOutreachForResend(
+  outreachId: string,
+  replacementContactId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return withSerializableRetry(async (tx) => {
+    const outreach = await tx.outreach.findUnique({
+      where: { id: outreachId },
+      select: {
+        id: true,
+        kind: true,
+        artistId: true,
+        status: true,
+        idempotencyKey: true,
+        bouncedAt: true,
+        recipientEmails: true,
+        fullTeamSend: true,
+        festivalAllContactsSend: true,
+      },
+    });
+    if (!outreach) return { ok: false, error: "Outreach not found" };
+    const [attempt, replacementContact, activeContacts] = await Promise.all([
+      tx.outreachSendAttempt.findUnique({
+        where: { idempotencyKey: outreach.idempotencyKey },
+        select: {
+          id: true,
+          status: true,
+          testSend: true,
+          providerMessageId: true,
+          acceptedAt: true,
+          webhookEvents: {
+            where: { type: "email.bounced" },
+            select: { recipientEmails: true },
+          },
+        },
+      }),
+      tx.contact.findUnique({
+        where: { id: replacementContactId },
+        select: {
+          artistId: true,
+          email: true,
+          state: true,
+        },
+      }),
+      tx.contact.findMany({
+        where: {
+          artistId: outreach.artistId,
+          state: "active",
+          email: { not: null },
+        },
+        select: { email: true },
+      }),
+    ]);
+    const replacementEmail =
+      replacementContact?.state === "active"
+        ? normalizeEmails([replacementContact.email ?? ""])[0] ?? null
+        : null;
+    const currentRecipients =
+      outreach.fullTeamSend || outreach.festivalAllContactsSend
+        ? normalizeEmails(
+            activeContacts.flatMap((contact) =>
+              contact.email ? [contact.email] : [],
+            ),
+          )
+        : replacementEmail
+          ? [replacementEmail]
+          : [];
+    const suppressions =
+      currentRecipients.length === 0
+        ? []
+        : await tx.emailSuppression.findMany({
+            where: { normalizedEmail: { in: currentRecipients } },
+            select: { normalizedEmail: true },
+          });
+    const suppressedEmails = new Set(
+      suppressions.map((suppression) => suppression.normalizedEmail),
+    );
+    const bouncedRecipients = normalizeEmails(
+      attempt?.webhookEvents.flatMap((event) => event.recipientEmails) ?? [],
+    );
+    const error = bouncedOutreachResetError({
+      status: outreach.status,
+      kind: outreach.kind,
+      bouncedAt: outreach.bouncedAt,
+      recipientEmails: outreach.recipientEmails,
+      currentRecipients,
+      bouncedRecipients,
+      contactMatchesArtist:
+        replacementContact?.state === "active" &&
+        replacementContact.artistId === outreach.artistId &&
+        replacementEmail !== null,
+      replacementContactSuppressed:
+        replacementEmail !== null && suppressedEmails.has(replacementEmail),
+      deliverableRecipientCount: currentRecipients.filter(
+        (email) => !suppressedEmails.has(email),
+      ).length,
+      attempt,
+    });
+    if (error) return { ok: false, error };
+
+    const identity = newAttemptIdentity(outreach.id);
+    const reset = await tx.outreach.updateMany({
+      where: {
+        id: outreach.id,
+        status: "failed",
+        idempotencyKey: outreach.idempotencyKey,
+      },
+      data: {
+        status: "cancelled",
+        error:
+          "Operator marked bounced original outreach unsent after recipient correction",
+        idempotencyKey: identity.idempotencyKey,
+        attemptCount: 0,
+        lastAttemptAt: null,
+        scheduledFor: null,
+        nextAttemptAt: null,
+        claimedAt: null,
+        claimToken: null,
+        ...resetDeliveryState(),
+      },
+    });
+    return reset.count === 1
+      ? { ok: true }
+      : {
+          ok: false,
+          error: "Bounced outreach changed before it could be reset",
+        };
+  });
 }
 
 function isRetryableOutreachTransactionError(error: unknown): boolean {
@@ -3572,7 +3765,11 @@ async function prepareFollowUpOutreach(
     runAfterActionableTrajectoryValidation(
       trajectoryContext,
       { showId: parent.showId, artistId: parent.artistId },
-      ensureFollowUpTemplate,
+      () =>
+        ensureFollowUpTemplateForShow(
+          parent.show,
+          coveredArtists.length,
+        ),
     ),
   );
   if (!capturedTemplate.ok) {
@@ -3582,7 +3779,11 @@ async function prepareFollowUpOutreach(
     };
   }
   const template = capturedTemplate.value;
-  if (template.purpose !== "follow_up") {
+  const templatePurpose = followUpTemplatePurposeForShow(
+    parent.show,
+    coveredArtists.length,
+  );
+  if (template.purpose !== templatePurpose) {
     return { error: "The follow-up template purpose is unavailable" };
   }
 
@@ -3627,7 +3828,7 @@ async function prepareFollowUpOutreach(
     artistId: parent.artistId,
     contactId: selectedContact.id,
     templateId: template.id,
-    templatePurpose: "follow_up",
+    templatePurpose,
     recipients: eligibility.recipients,
     recipientDeliveryMode,
     primaryRecipientEmail,
@@ -4415,7 +4616,10 @@ export function preparedTemplatePurposeBlockingReason(
 ): string | null {
   const expectedPurpose =
     prep.kind === "follow_up"
-      ? "follow_up"
+      ? followUpTemplatePurposeForShow(
+          show,
+          prep.coveredArtistIds?.length ?? 1,
+        )
       : show.isFestival && (prep.coveredArtistIds?.length ?? 0) > 1
         ? "festival_multi_artist"
       : originalTemplatePurposeForShow(show);

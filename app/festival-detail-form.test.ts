@@ -390,6 +390,14 @@ test("festival rows expose retrievable artist rejection and bounce status", () =
   assert.match(source, /if \(outreach\.complainedAt\) return "complained"/);
 });
 
+test("bounced festival rows expose a corrected-recipient Mark unsent action", () => {
+  assert.match(source, /markUnsentAction/);
+  assert.match(source, /r\.coveredOutreach\.bouncedAt/);
+  assert.match(source, /name="outreachId"/);
+  assert.match(source, /name="contactId"/);
+  assert.match(source, /Mark unsent/);
+});
+
 test("festival pages persist an optional UTM campaign for all festival email kinds", () => {
   assert.match(source, /async function saveFestivalUtmCampaign/);
   assert.match(source, /requireServerActionAuth/);

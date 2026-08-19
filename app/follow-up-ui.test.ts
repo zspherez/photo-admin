@@ -79,7 +79,7 @@ test("follow-up controls expose customization, 9:07 scheduling, and sent status 
     button,
     /<LinkButton[\s\S]*Customize[\s\S]*Follow-up sent/,
   );
-  assert.match(customize, /readTemplateForPurpose\("follow_up"\)/);
+  assert.match(customize, /followUpTemplatePurposeForShow/);
   assert.match(
     recommendations,
     /contactId: recommendation\.followUpEligibility\.contactId/,

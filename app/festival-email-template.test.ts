@@ -70,7 +70,7 @@ test("immediate and scheduled claims recheck template purpose before snapshots",
     );
   }
   assert.match(send, /templatePurpose,\s*recipients:/);
-  assert.match(send, /templatePurpose: "follow_up"/);
+  assert.match(send, /followUpTemplatePurposeForShow/);
   assert.match(
     send,
     /RESEND_TEST_OVERRIDE|deliverySettings\.testOverride/,
@@ -128,7 +128,7 @@ test("trajectory-aware original, follow-up, and customize paths validate before 
 
   for (const [pathName, preparation, provision] of [
     ["original", original, "ensureOriginalTemplateForShow"],
-    ["follow-up", followUp, "ensureFollowUpTemplate"],
+    ["follow-up", followUp, "ensureFollowUpTemplateForShow"],
     ["customize", customize, "readOriginalTemplateForShow"],
   ] as const) {
     assert.match(preparation, /runAfterActionableTrajectoryValidation\(/);

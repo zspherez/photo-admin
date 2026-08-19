@@ -107,7 +107,7 @@ test("immutable retries load their stored preview and lock recipient selection",
   assert.match(form, /immutable retry content is unavailable/);
 });
 
-test("follow-up Customize uses the follow-up template and real follow-up actions", () => {
+test("follow-up Customize uses show-aware templates and real follow-up actions", () => {
   const page = source(
     "app/dashboard/customize/[showId]/[contactId]/page.tsx",
   );
@@ -120,7 +120,8 @@ test("follow-up Customize uses the follow-up template and real follow-up actions
   const send = source("lib/sendOutreach.ts");
 
   assert.match(page, /parentOutreachId/);
-  assert.match(page, /readTemplateForPurpose\("follow_up"\)/);
+  assert.match(page, /followUpTemplatePurposeForShow/);
+  assert.match(page, /readTemplateForPurpose\(followUpTemplatePurpose!\)/);
   assert.match(page, /getFollowUpEligibilityBatch/);
   assert.match(page, /followUpParent\?\.followUp/);
   assert.match(page, /followUpParent\.coveredArtists[\s\S]*artistDisplayName/);

@@ -68,6 +68,7 @@ export default async function DashboardPage({
   const deleted = firstSearchParam(params.deleted);
   const marked = firstSearchParam(params.marked);
   const unmarked = firstSearchParam(params.unmarked);
+  const unsent = firstSearchParam(params.unsent);
   const queued = firstSearchParam(params.queued);
   const scheduled = firstSearchParam(params.scheduled);
   const cancelled = firstSearchParam(params.cancelled);
@@ -132,6 +133,12 @@ export default async function DashboardPage({
         )}
         {marked && <Banner tone="success">Marked as sent.</Banner>}
         {unmarked && <Banner tone="success">Manual mark removed.</Banner>}
+        {unsent && (
+          <Banner tone="success">
+            Bounced outreach marked unsent. The corrected initial email can be
+            sent again.
+          </Banner>
+        )}
         {added && (
           <Banner tone="success">
             {added === "0" && updated

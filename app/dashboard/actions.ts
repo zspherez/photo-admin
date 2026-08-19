@@ -23,6 +23,7 @@ import {
   scheduleFollowUp,
   sendFollowUp,
   sendOutreach,
+  resetBouncedOutreachForResend,
 } from "@/lib/sendOutreach";
 import {
   formatScheduledTime,
@@ -363,6 +364,7 @@ export async function cancelScheduledAction(formData: FormData) {
   if (!outreachId) {
     redirect(dashboardResultHref(returnTo, "error", "Missing outreach"));
   }
+
   const requestedShowId = String(formData.get("showId") ?? "").trim();
   let recommendation: TrajectoryActionContext | null = null;
   if (requestedShowId) {
@@ -421,6 +423,22 @@ export async function cancelScheduledAction(formData: FormData) {
       "Scheduled or retry send is no longer cancellable"
     )
   );
+}
+
+export async function markUnsentAction(formData: FormData) {
+  await requireServerActionAuth(formData.get("returnTo") ?? "/dashboard");
+  const returnTo = workflowReturnPath(formData.get("returnTo"));
+  const outreachId = String(formData.get("outreachId") ?? "").trim();
+  const contactId = String(formData.get("contactId") ?? "").trim();
+  if (!outreachId || !contactId) {
+    throw new Error("Missing bounced outreach or corrected contact");
+  }
+  const result = await resetBouncedOutreachForResend(outreachId, contactId);
+  if (!result.ok) {
+    redirect(dashboardResultHref(returnTo, "error", result.error));
+  }
+  refreshWorkflowViews(returnTo, ["/festivals", "/outreach"]);
+  redirect(dashboardResultHref(returnTo, "unsent"));
 }
 
 export async function dismissShowAction(formData: FormData) {
