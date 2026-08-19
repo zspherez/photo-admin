@@ -393,6 +393,7 @@ export default async function ArtistPage({
     audit_error?: SearchParamValue;
     name_saved?: SearchParamValue;
     name_error?: SearchParamValue;
+    merged?: SearchParamValue;
   }>;
 }) {
   const { id } = await params;
@@ -410,6 +411,7 @@ export default async function ArtistPage({
   const auditError = firstSearchParam(search.audit_error);
   const nameSaved = firstSearchParam(search.name_saved);
   const nameError = firstSearchParam(search.name_error);
+  const mergedArtistId = firstSearchParam(search.merged);
   const safeReturnTo = workflowReturnPath(firstSearchParam(search.returnTo));
   const currentReturnTo = withWorkflowReturnTo(
     `/artists/${id}`,
@@ -770,6 +772,13 @@ export default async function ArtistPage({
             </div>
           )}
 
+          {mergedArtistId && (
+            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+              Duplicate artist merged successfully. Removed record{" "}
+              <code>{mergedArtistId.slice(-8)}</code>.
+            </div>
+          )}
+
           {(nameSaved || nameError) && (
             <div className="mt-4">
               {nameError ? (
@@ -892,6 +901,19 @@ export default async function ArtistPage({
                     <Badge tone="warning" size="xs">
                       Duplicate candidate
                     </Badge>
+                    <LinkButton
+                      href={`/artists/merge?${new URLSearchParams({
+                        leftId: artist.id,
+                        rightId: duplicate.id,
+                        ...(safeReturnTo !== "/dashboard"
+                          ? { returnTo: safeReturnTo }
+                          : {}),
+                      })}`}
+                      variant="secondary"
+                      size="sm"
+                    >
+                      Review merge
+                    </LinkButton>
                   </li>
                 ))}
               </ul>

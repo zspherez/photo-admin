@@ -39,3 +39,13 @@ test("artist rows preserve contact and add-contact workflows", () => {
   assert.match(page, /withWorkflowReturnTo/);
   assert.match(page, /aria-label="Artist pages"/);
 });
+
+test("duplicate artist details expose the reviewed merge workflow", () => {
+  const detail = readFileSync(
+    new URL("./[id]/page.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(detail, /Possible duplicate artist records/);
+  assert.match(detail, /\/artists\/merge/);
+  assert.match(detail, /Review merge/);
+});

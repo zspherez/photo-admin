@@ -35,6 +35,14 @@ type IdentityCandidate = Pick<
   "id" | "name" | "normalizedName" | "spotifyId" | "statsfmId" | "edmtrainId"
 >;
 
+type ExternalIdentityProvider = "spotify" | "statsfm" | "edmtrain";
+
+interface ExternalIdentityAlias {
+  artistId: string;
+  provider: string;
+  externalId: string;
+}
+
 export type ArtistIdentityDecision =
   | {
       action: "use";
@@ -73,6 +81,33 @@ export async function acquireArtistIdentityLock(
 
 function suppliedExternalIds(input: ArtistIdentityInput) {
   return externalFields.filter((field) => input[field] != null);
+}
+
+function externalProvider(
+  field: (typeof externalFields)[number],
+): ExternalIdentityProvider {
+  if (field === "spotifyId") return "spotify";
+  if (field === "statsfmId") return "statsfm";
+  return "edmtrain";
+}
+
+function externalValue(
+  input: ArtistIdentityInput,
+  field: (typeof externalFields)[number],
+): string | null {
+  const value = input[field];
+  return value == null ? null : String(value);
+}
+
+function aliasMatchesInput(
+  alias: ExternalIdentityAlias,
+  input: ArtistIdentityInput,
+): boolean {
+  return externalFields.some(
+    (field) =>
+      alias.provider === externalProvider(field) &&
+      alias.externalId === externalValue(input, field),
+  );
 }
 
 function matchesAnyExternalId(
@@ -305,7 +340,10 @@ function uniqueValues<T>(values: readonly T[]): T[] {
 async function findLockedIdentityCandidates(
   tx: Prisma.TransactionClient,
   inputs: readonly ArtistIdentityInput[]
-): Promise<Artist[]> {
+): Promise<{
+  artists: Artist[];
+  aliases: ExternalIdentityAlias[];
+}> {
   const spotifyIds = uniqueValues(
     inputs
       .map((input) => input.spotifyId)
@@ -348,9 +386,45 @@ async function findLockedIdentityCandidates(
       Prisma.sql`"edmtrainId" IN (${Prisma.join(edmtrainIds)})`
     );
   }
-  if (predicates.length === 0) return [];
+  const aliasPredicates: Prisma.ArtistExternalIdentityAliasWhereInput[] = [];
+  if (spotifyIds.length > 0) {
+    aliasPredicates.push({
+      provider: "spotify",
+      externalId: { in: spotifyIds },
+    });
+  }
+  if (statsfmIds.length > 0) {
+    aliasPredicates.push({
+      provider: "statsfm",
+      externalId: { in: statsfmIds },
+    });
+  }
+  if (edmtrainIds.length > 0) {
+    aliasPredicates.push({
+      provider: "edmtrain",
+      externalId: { in: edmtrainIds.map(String) },
+    });
+  }
+  const aliases =
+    aliasPredicates.length === 0
+      ? []
+      : await tx.artistExternalIdentityAlias.findMany({
+          where: { OR: aliasPredicates },
+          select: {
+            artistId: true,
+            provider: true,
+            externalId: true,
+          },
+        });
+  const aliasedArtistIds = uniqueValues(aliases.map((alias) => alias.artistId));
+  if (aliasedArtistIds.length > 0) {
+    predicates.push(
+      Prisma.sql`"id" IN (${Prisma.join(aliasedArtistIds)})`,
+    );
+  }
+  if (predicates.length === 0) return { artists: [], aliases };
 
-  return tx.$queryRaw<Artist[]>(
+  const artists = await tx.$queryRaw<Artist[]>(
     Prisma.sql`
       SELECT
         "id",
@@ -370,6 +444,7 @@ async function findLockedIdentityCandidates(
       FOR UPDATE
     `
   );
+  return { artists, aliases };
 }
 
 function artistUpdatePatch(
@@ -425,7 +500,8 @@ export async function resolveArtists(
   // This lock is shared by every provider reconciliation and by the
   // name-only Artist insert guard installed in the follow-up migration.
   await acquireArtistIdentityLock(tx);
-  const candidates = await findLockedIdentityCandidates(tx, inputs);
+  const { artists: candidates, aliases } =
+    await findLockedIdentityCandidates(tx, inputs);
   const artistIdByKey = new Map<string, string>();
   const conflicts: ArtistIdentityConflict[] = [];
   const createdById = new Map<string, Artist>();
@@ -433,7 +509,77 @@ export async function resolveArtists(
   const now = new Date();
 
   for (const input of inputs) {
-    const decision = chooseArtistIdentityCandidate(input, candidates);
+    const matchingAliases = aliases.filter((alias) =>
+      aliasMatchesInput(alias, input),
+    );
+    const aliasedArtistIds = uniqueValues(
+      matchingAliases.map((alias) => alias.artistId),
+    );
+    if (aliasedArtistIds.length > 1) {
+      throw new ArtistIdentityResolutionError([
+        conflict(
+          input,
+          normalizeArtistName(input.name),
+          "external-id-disagreement",
+          candidates.filter((candidate) =>
+            aliasedArtistIds.includes(candidate.id),
+          ),
+        ),
+      ]);
+    }
+    const aliasedCandidate = aliasedArtistIds[0]
+      ? candidates.find((candidate) => candidate.id === aliasedArtistIds[0])
+      : null;
+    const directExternalMatches = candidates.filter((candidate) =>
+      matchesAnyExternalId(candidate, input),
+    );
+    if (
+      aliasedCandidate &&
+      directExternalMatches.some(
+        (candidate) => candidate.id !== aliasedCandidate.id,
+      )
+    ) {
+      throw new ArtistIdentityResolutionError([
+        conflict(
+          input,
+          normalizeArtistName(input.name),
+          "external-id-disagreement",
+          [aliasedCandidate, ...directExternalMatches],
+        ),
+      ]);
+    }
+    const nonAliasedDisagreement = aliasedCandidate
+      ? externalFields.some((field) => {
+          const inputValue = input[field];
+          const candidateValue = aliasedCandidate[field];
+          if (
+            inputValue == null ||
+            candidateValue == null ||
+            inputValue === candidateValue
+          ) {
+            return false;
+          }
+          return !matchingAliases.some(
+            (alias) =>
+              alias.artistId === aliasedCandidate.id &&
+              alias.provider === externalProvider(field) &&
+              alias.externalId === String(inputValue),
+          );
+        })
+      : false;
+    if (aliasedCandidate && nonAliasedDisagreement) {
+      throw new ArtistIdentityResolutionError([
+        conflict(
+          input,
+          normalizeArtistName(input.name),
+          "external-id-disagreement",
+          [aliasedCandidate],
+        ),
+      ]);
+    }
+    const decision: ArtistIdentityDecision = aliasedCandidate
+      ? { action: "use", candidate: aliasedCandidate, conflicts: [] }
+      : chooseArtistIdentityCandidate(input, candidates);
     conflicts.push(...decision.conflicts);
     if (decision.action === "unmatched") {
       throw new ArtistIdentityResolutionError(decision.conflicts);
@@ -442,6 +588,24 @@ export async function resolveArtists(
     const normalizedName = normalizeArtistName(input.name);
     const updateName = input.updateName !== false || decision.action === "create";
     const patch = artistUpdatePatch(input, normalizedName, updateName);
+    if (aliasedCandidate) {
+      for (const field of externalFields) {
+        const inputValue = input[field];
+        if (
+          inputValue != null &&
+          aliasedCandidate[field] != null &&
+          aliasedCandidate[field] !== inputValue &&
+          matchingAliases.some(
+            (alias) =>
+              alias.artistId === aliasedCandidate.id &&
+              alias.provider === externalProvider(field) &&
+              alias.externalId === String(inputValue),
+          )
+        ) {
+          delete patch[field];
+        }
+      }
+    }
 
     let artist: Artist;
     if (decision.action === "use") {
