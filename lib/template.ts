@@ -545,6 +545,26 @@ export async function ensureFollowUpTemplate() {
   return persistNormalizedTemplate(template, normalizeTemplateContent);
 }
 
+export function followUpTemplatePurposeForShow(
+  show: { isFestival: boolean },
+  coveredArtistCount = 1,
+): EmailTemplatePurpose {
+  if (!show.isFestival) return "follow_up";
+  return coveredArtistCount > 1 ? "festival_multi_artist" : "festival";
+}
+
+export async function ensureFollowUpTemplateForShow(
+  show: { isFestival: boolean },
+  coveredArtistCount = 1,
+) {
+  const purpose = followUpTemplatePurposeForShow(show, coveredArtistCount);
+  if (purpose === "festival_multi_artist") {
+    return ensureFestivalMultiArtistTemplate();
+  }
+  if (purpose === "festival") return ensureFestivalTemplate();
+  return ensureFollowUpTemplate();
+}
+
 function fallbackTemplate(
   purpose: EmailTemplatePurpose,
 ): EmailTemplate {

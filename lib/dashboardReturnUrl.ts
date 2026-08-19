@@ -59,6 +59,7 @@ export type DashboardResultKey =
   | "queued"
   | "scheduled"
   | "sent"
+  | "unsent"
   | "unmarked"
   | "updated";
 

@@ -13,6 +13,7 @@ import {
   FOLLOW_UP_TEMPLATE_HTML,
   FOLLOW_UP_TEMPLATE_NAME,
   FOLLOW_UP_TEMPLATE_SUBJECT,
+  followUpTemplatePurposeForShow,
   malformedTemplateVariableTokens,
   normalizeLegacyOutreachSnapshot,
   normalizeLegacyRateTemplateHtml,
@@ -23,6 +24,21 @@ import {
   SUPPORTED_TEMPLATE_VARS,
   unsupportedTemplateVars,
 } from "./template";
+
+test("follow-up templates preserve festival context", () => {
+  assert.equal(
+    followUpTemplatePurposeForShow({ isFestival: false }),
+    "follow_up",
+  );
+  assert.equal(
+    followUpTemplatePurposeForShow({ isFestival: true }),
+    "festival",
+  );
+  assert.equal(
+    followUpTemplatePurposeForShow({ isFestival: true }, 2),
+    "festival_multi_artist",
+  );
+});
 
 test("plain substitutions remain unescaped", () => {
   assert.equal(

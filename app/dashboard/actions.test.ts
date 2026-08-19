@@ -55,6 +55,15 @@ test("manual mark and unmark refresh server truth before redirecting with banner
   );
 });
 
+test("mark unsent rotates only verified bounced outreach after contact correction", () => {
+  const unsent = actionSource("markUnsentAction");
+  assert.match(unsent, /requireServerActionAuth/);
+  assert.match(unsent, /resetBouncedOutreachForResend/);
+  assert.match(unsent, /dashboardResultHref\(returnTo, "error"/);
+  assert.match(unsent, /dashboardResultHref\(returnTo, "unsent"\)/);
+  assert.match(unsent, /refreshWorkflowViews\(returnTo/);
+});
+
 test("inline dashboard mutations keep returnTo without timestamp remounts", () => {
   const pageSource = readFileSync(
     path.join(process.cwd(), "app/dashboard/page.tsx"),

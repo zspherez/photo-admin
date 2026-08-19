@@ -19,6 +19,7 @@ import {
   readOriginalTemplateForShow,
   readOnlyTemplateForPurpose,
   readTemplateForPurpose,
+  followUpTemplatePurposeForShow,
   originalTemplatePurposeForShow,
 } from "@/lib/template";
 import { Card, CardBody } from "@/components/ui/card";
@@ -156,6 +157,12 @@ export default async function CustomizePage({
           .map(({ artist }) => artistDisplayName(artist))
           .join(", ")
       : artistDisplayName(contact.artist);
+  const followUpTemplatePurpose = followUpMode
+    ? followUpTemplatePurposeForShow(
+        show,
+        followUpParent?.coveredArtists.length || 1,
+      )
+    : null;
   const [followUpEligibility] = followUpMode
     ? await getFollowUpEligibilityBatch([parentOutreachId])
     : [];
@@ -192,12 +199,12 @@ export default async function CustomizePage({
             ? Promise.resolve(
                 readOnlyTemplateForPurpose(
                   followUpMode
-                    ? "follow_up"
+                    ? followUpTemplatePurpose!
                     : originalTemplatePurposeForShow(show),
                 ),
               )
             : followUpMode
-              ? readTemplateForPurpose("follow_up")
+              ? readTemplateForPurpose(followUpTemplatePurpose!)
               : readOriginalTemplateForShow(show),
       );
     },

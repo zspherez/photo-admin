@@ -67,6 +67,7 @@ import {
   cancelScheduledAction,
   dismissShowAction,
   markSentAction,
+  markUnsentAction,
   restoreShowAction,
   sendFollowUpAction,
   restoreRejectedFestivalArtistAction,
@@ -871,6 +872,7 @@ export default async function FestivalDetailPage({
     genre?: SearchParamValue;
     marked?: SearchParamValue;
     unmarked?: SearchParamValue;
+    unsent?: SearchParamValue;
     followup_sent?: SearchParamValue;
     followup_scheduled?: SearchParamValue;
     includeInternational?: SearchParamValue;
@@ -902,6 +904,7 @@ export default async function FestivalDetailPage({
     bulk: firstSearchParam(sp.bulk),
     marked: firstSearchParam(sp.marked),
     unmarked: firstSearchParam(sp.unmarked),
+    unsent: firstSearchParam(sp.unsent),
     followUpSent: firstSearchParam(sp.followup_sent),
     followUpScheduled: firstSearchParam(sp.followup_scheduled),
     managerResearch: firstSearchParam(sp.manager_research),
@@ -1472,6 +1475,12 @@ export default async function FestivalDetailPage({
             Manual mark removed.
           </div>
         )}
+        {notices.unsent && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Bounced outreach marked unsent. The corrected initial email can now
+            be sent again.
+          </div>
+        )}
         {notices.errors && (
           <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
             {notices.errors}
@@ -1756,6 +1765,35 @@ export default async function FestivalDetailPage({
                           aria-label={`Cancel scheduled outreach for ${artistDisplayName(r.artist)}`}
                         >
                           Cancel
+                        </PendingSubmitButton>
+                      </form>
+                    )}
+                  {outreachEnabled &&
+                    r.contact &&
+                    r.coveredOutreach?.artistId === r.artist.id &&
+                    r.coveredOutreach.bouncedAt && (
+                      <form action={markUnsentAction}>
+                        <input
+                          type="hidden"
+                          name="outreachId"
+                          value={r.coveredOutreach.id}
+                        />
+                        <input
+                          type="hidden"
+                          name="contactId"
+                          value={r.contact.id}
+                        />
+                        <input
+                          type="hidden"
+                          name="returnTo"
+                          value={returnTo}
+                        />
+                        <PendingSubmitButton
+                          variant="secondary"
+                          size="sm"
+                          pendingLabel="Marking unsent…"
+                        >
+                          Mark unsent
                         </PendingSubmitButton>
                       </form>
                     )}
