@@ -60,10 +60,39 @@ model Artist {
   contactAuditJobs   ContactAuditJob[]
   contactAuditDecisions ContactAuditArtistDecision[]
   trajectoryRuns     TrajectoryRunArtist[]
+  externalIdentityAliases ArtistExternalIdentityAlias[]
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
 
   @@index([normalizedName])
+}
+
+model ArtistExternalIdentityAlias {
+  id             String   @id @default(cuid())
+  artistId       String
+  artist         Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  provider       String
+  externalId     String
+  sourceArtistId String
+  createdAt      DateTime @default(now())
+
+  @@unique([provider, externalId])
+  @@index([artistId])
+  @@index([sourceArtistId])
+}
+
+model ArtistMergeEvent {
+  id             String   @id @default(cuid())
+  sourceArtistId String
+  sourceName     String
+  targetArtistId String
+  targetName     String
+  sourceSnapshot Json
+  mergeSummary   Json
+  createdAt      DateTime @default(now())
+
+  @@index([targetArtistId, createdAt])
+  @@index([sourceArtistId])
 }
 
 enum TrajectoryRunStatus {

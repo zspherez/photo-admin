@@ -252,6 +252,9 @@ test("resolver persists symbol-only artists when a provider id is authoritative"
       queryCount++;
       return [];
     },
+    artistExternalIdentityAlias: {
+      findMany: async () => [],
+    },
     artist: {
       createMany: async ({
         data,
@@ -311,6 +314,9 @@ test("resolver locks before re-reading candidates", async () => {
       }
       order.push("locked-read");
       return [existing];
+    },
+    artistExternalIdentityAlias: {
+      findMany: async () => [],
     },
     artist: {
       createMany: async () => {
@@ -375,6 +381,9 @@ test("resolver updates only explicitly supplied fields", async () => {
       queryCount++;
       return queryCount === 1 ? [] : [existing];
     },
+    artistExternalIdentityAlias: {
+      findMany: async () => [],
+    },
     artist: {
       createMany: async () => {
         throw new Error("unexpected create");
@@ -403,6 +412,50 @@ test("resolver updates only explicitly supplied fields", async () => {
   const artist = resolved.artistsByKey.get("sp-1");
   assert.equal(artist?.statsfmId, "sf-existing");
   assert.equal(artist?.edmtrainId, 10);
+});
+
+test("merged external identity aliases resolve to the canonical artist", async () => {
+  const existing = persistedArtist("artist-canonical", {
+    edmtrainId: 200,
+  });
+  let queryCount = 0;
+  let updated = false;
+  const tx = {
+    $queryRaw: async () => {
+      queryCount++;
+      return queryCount === 1 ? [] : [existing];
+    },
+    artistExternalIdentityAlias: {
+      findMany: async () => [
+        {
+          artistId: existing.id,
+          provider: "edmtrain",
+          externalId: "100",
+        },
+      ],
+    },
+    artist: {
+      createMany: async () => {
+        throw new Error("unexpected create");
+      },
+      update: async () => {
+        updated = true;
+        throw new Error("unexpected update");
+      },
+    },
+  } as unknown as Parameters<typeof resolveArtists>[0];
+
+  const resolved = await resolveArtists(tx, [
+    {
+      key: "edmtrain:100",
+      name: existing.name,
+      edmtrainId: 100,
+      updateName: false,
+    },
+  ]);
+
+  assert.equal(resolved.artistsByKey.get("edmtrain:100")?.id, existing.id);
+  assert.equal(updated, false);
 });
 
 test("name-only database inserts share the resolver advisory lock", () => {
