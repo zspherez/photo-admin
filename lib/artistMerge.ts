@@ -12,11 +12,18 @@ const ACTIVE_AUDIT_STATUSES = ["claimed"] as const;
 type ArtistMergeRecord = Awaited<ReturnType<typeof loadArtistMergeRecord>>;
 type ArtistMergeClient = Prisma.TransactionClient | typeof db;
 export type ArtistMergeArtist = NonNullable<ArtistMergeRecord>;
+export type ArtistMergeResearchJobPolicy = "target" | "source";
 
 export interface ArtistMergePreview {
   source: ArtistMergeArtist;
   target: ArtistMergeArtist;
   blockers: string[];
+  researchJobConflict:
+    | {
+        source: NonNullable<ArtistMergeArtist["contactResearchJob"]>;
+        target: NonNullable<ArtistMergeArtist["contactResearchJob"]>;
+      }
+    | null;
   moveCounts: {
     contacts: number;
     shows: number;
@@ -34,6 +41,10 @@ export interface ArtistMergeResult {
   sourceArtistId: string;
   targetArtistId: string;
   moved: ArtistMergePreview["moveCounts"];
+}
+
+export interface ArtistMergeOptions {
+  researchJobPolicy?: ArtistMergeResearchJobPolicy;
 }
 
 async function loadArtistMergeRecord(
@@ -58,7 +69,29 @@ async function loadArtistMergeRecord(
         orderBy: { id: "asc" },
       },
       contactResearchJob: {
-        select: { id: true, status: true },
+        select: {
+          id: true,
+          status: true,
+          priority: true,
+          nextShowAt: true,
+          attemptCount: true,
+          claimedAt: true,
+          claimExpiresAt: true,
+          claimToken: true,
+          claimedAgentRules: true,
+          claimedAgentRulesVersion: true,
+          claimedDirectOutreachRules: true,
+          userNotes: true,
+          agentNotes: true,
+          requestedShowId: true,
+          completedAt: true,
+          _count: {
+            select: {
+              candidates: true,
+              directOutreachProposals: true,
+            },
+          },
+        },
       },
       contactAuditDecisions: {
         select: { id: true, runId: true },
@@ -141,11 +174,6 @@ async function previewBlockers(
       `Both records contain the same contact email: ${[
         ...new Set(duplicateEmails),
       ].join(", ")}. Resolve the contact duplicate first.`,
-    );
-  }
-  if (source.contactResearchJob && target.contactResearchJob) {
-    blockers.push(
-      "Both artists have manager-research jobs. Resolve or deactivate one job first.",
     );
   }
   const targetDecisionRuns = new Set(
@@ -243,6 +271,13 @@ export async function getArtistMergePreview(
     source,
     target,
     blockers: await previewBlockers(source, target),
+    researchJobConflict:
+      source.contactResearchJob && target.contactResearchJob
+        ? {
+            source: source.contactResearchJob,
+            target: target.contactResearchJob,
+          }
+        : null,
     moveCounts: moveCounts(source),
   };
 }
@@ -406,10 +441,206 @@ async function mergeAliases(
   }
 }
 
+function combineNotes(
+  preferred: string | null,
+  secondary: string | null,
+): string | null {
+  const values = [preferred?.trim(), secondary?.trim()].filter(
+    (value): value is string => Boolean(value),
+  );
+  return values.length === 0 ? null : [...new Set(values)].join("\n\n");
+}
+
+function earlierDate(
+  left: Date | null,
+  right: Date | null,
+): Date | null {
+  if (!left) return right;
+  if (!right) return left;
+  return left < right ? left : right;
+}
+
+function laterDate(
+  left: Date | null,
+  right: Date | null,
+): Date | null {
+  if (!left) return right;
+  if (!right) return left;
+  return left > right ? left : right;
+}
+
+async function mergeResearchCandidates(
+  tx: Prisma.TransactionClient,
+  winnerJobId: string,
+  loserJobId: string,
+) {
+  const loserCandidates = await tx.contactResearchCandidate.findMany({
+    where: { jobId: loserJobId },
+    orderBy: { id: "asc" },
+  });
+  for (const loser of loserCandidates) {
+    const winner = await tx.contactResearchCandidate.findUnique({
+      where: {
+        jobId_normalizedEmail: {
+          jobId: winnerJobId,
+          normalizedEmail: loser.normalizedEmail,
+        },
+      },
+    });
+    if (!winner) {
+      await tx.contactResearchCandidate.update({
+        where: { id: loser.id },
+        data: { jobId: winnerJobId },
+      });
+      continue;
+    }
+    await tx.contactResearchCandidate.update({
+      where: { id: winner.id },
+      data: {
+        sourceUrls: [...new Set([...winner.sourceUrls, ...loser.sourceUrls])],
+        evidence:
+          combineNotes(
+            winner.evidence,
+            `${loser.evidence}\n[Merged duplicate status: ${loser.status}]`,
+          ) ?? winner.evidence,
+        officialSourceType:
+          winner.officialSourceType ?? loser.officialSourceType,
+        officialSourceUrl: winner.officialSourceUrl ?? loser.officialSourceUrl,
+        officialManagementLabel:
+          winner.officialManagementLabel ?? loser.officialManagementLabel,
+        officialSourceEvidence:
+          combineNotes(
+            winner.officialSourceEvidence,
+            loser.officialSourceEvidence,
+          ),
+      },
+    });
+    await tx.contactResearchCandidate.delete({ where: { id: loser.id } });
+  }
+}
+
+async function mergeResearchProposals(
+  tx: Prisma.TransactionClient,
+  winnerJobId: string,
+  loserJobId: string,
+) {
+  const loserProposals =
+    await tx.contactResearchDirectOutreachProposal.findMany({
+      where: { jobId: loserJobId },
+      orderBy: { id: "asc" },
+    });
+  for (const loser of loserProposals) {
+    const winner =
+      await tx.contactResearchDirectOutreachProposal.findUnique({
+        where: {
+          jobId_ruleId_normalizedManagerName: {
+            jobId: winnerJobId,
+            ruleId: loser.ruleId,
+            normalizedManagerName: loser.normalizedManagerName,
+          },
+        },
+      });
+    if (!winner) {
+      await tx.contactResearchDirectOutreachProposal.update({
+        where: { id: loser.id },
+        data: { jobId: winnerJobId },
+      });
+      continue;
+    }
+    await tx.contactResearchDirectOutreachProposal.update({
+      where: { id: winner.id },
+      data: {
+        sourceUrls: [...new Set([...winner.sourceUrls, ...loser.sourceUrls])],
+        evidenceQuotes: [
+          ...new Set([...winner.evidenceQuotes, ...loser.evidenceQuotes]),
+        ],
+        note:
+          combineNotes(
+            winner.note,
+            `${loser.note}\n[Merged duplicate status: ${loser.status}]`,
+          ) ?? winner.note,
+        managerCompany: winner.managerCompany ?? loser.managerCompany,
+        contactId: winner.contactId ?? loser.contactId,
+      },
+    });
+    await tx.contactResearchDirectOutreachProposal.delete({
+      where: { id: loser.id },
+    });
+  }
+}
+
+async function mergeResearchJobs(
+  tx: Prisma.TransactionClient,
+  source: ArtistMergeArtist,
+  target: ArtistMergeArtist,
+  policy: ArtistMergeResearchJobPolicy | undefined,
+) {
+  const sourceJob = source.contactResearchJob;
+  const targetJob = target.contactResearchJob;
+  if (!sourceJob) return;
+  if (!targetJob) {
+    await tx.contactResearchJob.update({
+      where: { id: sourceJob.id },
+      data: { artistId: target.id },
+    });
+    return;
+  }
+  if (policy !== "source" && policy !== "target") {
+    throw new Error("Choose which manager-research job to keep.");
+  }
+  const winner = policy === "source" ? sourceJob : targetJob;
+  const loser = policy === "source" ? targetJob : sourceJob;
+
+  await mergeResearchCandidates(tx, winner.id, loser.id);
+  await mergeResearchProposals(tx, winner.id, loser.id);
+  await tx.artistResearchSkip.updateMany({
+    where: { sourceJobId: loser.id },
+    data: { sourceJobId: winner.id },
+  });
+  await tx.contactResearchJob.delete({ where: { id: loser.id } });
+  const [pendingCandidates, pendingProposals] = await Promise.all([
+    tx.contactResearchCandidate.count({
+      where: { jobId: winner.id, status: "pending" },
+    }),
+    tx.contactResearchDirectOutreachProposal.count({
+      where: { jobId: winner.id, status: "pending" },
+    }),
+  ]);
+  const mergedStatus =
+    pendingCandidates > 0 || pendingProposals > 0
+      ? "review"
+      : winner.status;
+  await tx.contactResearchJob.update({
+    where: { id: winner.id },
+    data: {
+      artistId: target.id,
+      status: mergedStatus,
+      priority: Math.max(winner.priority, loser.priority),
+      nextShowAt: earlierDate(winner.nextShowAt, loser.nextShowAt),
+      attemptCount: Math.max(winner.attemptCount, loser.attemptCount),
+      requestedShowId: winner.requestedShowId ?? loser.requestedShowId,
+      claimedAgentRules:
+        winner.claimedAgentRules ?? loser.claimedAgentRules,
+      claimedAgentRulesVersion:
+        winner.claimedAgentRulesVersion ?? loser.claimedAgentRulesVersion,
+      userNotes: combineNotes(winner.userNotes, loser.userNotes),
+      agentNotes: combineNotes(winner.agentNotes, loser.agentNotes),
+      completedAt:
+        mergedStatus === "review"
+          ? null
+          : laterDate(winner.completedAt, loser.completedAt),
+      claimedAt: null,
+      claimExpiresAt: null,
+      claimToken: null,
+    },
+  });
+}
+
 async function mergeInTransaction(
   tx: Prisma.TransactionClient,
   sourceArtistId: string,
   targetArtistId: string,
+  options: ArtistMergeOptions,
 ): Promise<ArtistMergeResult> {
   await acquireArtistIdentityLock(tx);
   await acquireShowArtistMembershipLock(tx);
@@ -425,6 +656,13 @@ async function mergeInTransaction(
   if (!source || !target) throw new Error("Artist merge target no longer exists.");
   const blockers = await previewBlockers(source, target, tx);
   if (blockers.length > 0) throw new Error(blockers.join(" "));
+  if (
+    source.contactResearchJob &&
+    target.contactResearchJob &&
+    !options.researchJobPolicy
+  ) {
+    throw new Error("Choose which manager-research job to keep.");
+  }
 
   await tx.artist.update({
     where: { id: source.id },
@@ -513,12 +751,12 @@ async function mergeInTransaction(
     where: { artistId: source.id },
     data: { artistId: target.id },
   });
-  if (source.contactResearchJob) {
-    await tx.contactResearchJob.update({
-      where: { id: source.contactResearchJob.id },
-      data: { artistId: target.id },
-    });
-  }
+  await mergeResearchJobs(
+    tx,
+    source,
+    target,
+    options.researchJobPolicy,
+  );
 
   const moved = moveCounts(source);
   const mergeEventId = randomUUID();
@@ -555,6 +793,7 @@ async function mergeInTransaction(
 export async function mergeArtists(
   sourceArtistId: string,
   targetArtistId: string,
+  options: ArtistMergeOptions = {},
 ): Promise<ArtistMergeResult> {
   if (!sourceArtistId || !targetArtistId || sourceArtistId === targetArtistId) {
     throw new Error("Choose two different artists to merge.");
@@ -562,7 +801,13 @@ export async function mergeArtists(
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       return await db.$transaction(
-        (tx) => mergeInTransaction(tx, sourceArtistId, targetArtistId),
+        (tx) =>
+          mergeInTransaction(
+            tx,
+            sourceArtistId,
+            targetArtistId,
+            options,
+          ),
         {
           isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
           timeout: 30_000,

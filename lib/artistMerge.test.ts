@@ -26,6 +26,9 @@ test("artist merge UI requires an explicit canonical choice and confirmation", (
   assert.match(page, /value="MERGE"/);
   assert.match(page, /Merge into \{artistDisplayName\(preview\.target\)\}/);
   assert.match(page, /preview\.blockers/);
+  assert.match(page, /name="researchJobPolicy"/);
+  assert.match(page, /Choose the manager-research job to keep/);
+  assert.match(page, /Unique candidates, direct-outreach proposals, notes/);
 });
 
 test("artist merge is serialized, audited, and covers every Artist relation", () => {
@@ -48,6 +51,8 @@ test("artist merge is serialized, audited, and covers every Artist relation", ()
     "artistResearchSkip",
     "trajectoryRunArtist",
     "contactResearchJob",
+    "contactResearchCandidate",
+    "contactResearchDirectOutreachProposal",
     "artistExternalIdentityAlias",
     "artistMergeEvent",
   ]) {
@@ -61,10 +66,35 @@ test("artist merge is serialized, audited, and covers every Artist relation", ()
 
 test("merge blockers fail closed for ambiguous dependent records", () => {
   assert.match(source, /same contact email/);
-  assert.match(source, /Both artists have manager-research jobs/);
   assert.match(source, /same contact-audit run/);
   assert.match(source, /outreach send is currently in progress/);
   assert.match(source, /contact-audit job is currently claimed/);
+  assert.match(source, /manager-research claim/);
+});
+
+test("manager-research job conflicts are resolved inside the merge", () => {
+  assert.match(source, /type ArtistMergeResearchJobPolicy = "target" \| "source"/);
+  assert.match(source, /async function mergeResearchJobs/);
+  assert.match(source, /Choose which manager-research job to keep/);
+  assert.match(source, /mergeResearchCandidates/);
+  assert.match(source, /mergeResearchProposals/);
+  assert.match(source, /Merged duplicate status:/);
+  assert.match(source, /status: "pending"/);
+  assert.match(source, /const mergedStatus =/);
+  assert.match(source, /pendingCandidates > 0 \|\| pendingProposals > 0/);
+  assert.match(source, /\? "review"/);
+  assert.match(source, /sourceJobId: loser\.id/);
+  assert.match(
+    source,
+    /tx\.contactResearchJob\.delete\(\{ where: \{ id: loser\.id \} \}\);[\s\S]*tx\.contactResearchJob\.update\(\{\s*where: \{ id: winner\.id \}/,
+  );
+  assert.doesNotMatch(
+    source.slice(
+      source.indexOf("async function previewBlockers"),
+      source.indexOf("function moveCounts"),
+    ),
+    /Both artists have manager-research jobs/,
+  );
 });
 
 test("artist merge migrations retain provider aliases and immutable audit", () => {

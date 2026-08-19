@@ -9,6 +9,7 @@ import {
   getArtistMergePreview,
   mergeArtists,
   type ArtistMergePreview,
+  type ArtistMergeResearchJobPolicy,
 } from "@/lib/artistMerge";
 import { artistDisplayName } from "@/lib/artistDisplayName";
 import {
@@ -76,6 +77,7 @@ function MergeOption({
   returnTo: string;
 }) {
   const blocked = preview.blockers.length > 0;
+  const needsResolution = preview.researchJobConflict !== null;
   const counts = preview.moveCounts;
   return (
     <Card>
@@ -89,8 +91,12 @@ function MergeOption({
               Merge and remove {artistDisplayName(preview.source)}.
             </p>
           </div>
-          <Badge tone={blocked ? "warning" : "success"}>
-            {blocked ? "Blocked" : "Ready"}
+          <Badge tone={blocked || needsResolution ? "warning" : "success"}>
+            {blocked
+              ? "Blocked"
+              : needsResolution
+                ? "Resolution required"
+                : "Ready"}
           </Badge>
         </div>
 
@@ -126,6 +132,61 @@ function MergeOption({
               value={preview.target.id}
             />
             <input type="hidden" name="returnTo" value={returnTo} />
+            {preview.researchJobConflict && (
+              <fieldset className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 dark:border-amber-900 dark:bg-amber-950/20">
+                <legend className="px-1 text-sm font-semibold text-amber-900 dark:text-amber-100">
+                  Choose the manager-research job to keep
+                </legend>
+                <p className="mt-1 text-xs text-amber-800 dark:text-amber-200">
+                  Unique candidates, direct-outreach proposals, notes, and skip
+                  provenance from the other job will be combined into your
+                  choice. When the same candidate exists in both jobs, the
+                  chosen job&apos;s review decision takes precedence.
+                </p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {(
+                    [
+                      {
+                        value: "target",
+                        label: `Keep ${artistDisplayName(preview.target)} research`,
+                        job: preview.researchJobConflict.target,
+                      },
+                      {
+                        value: "source",
+                        label: `Keep ${artistDisplayName(preview.source)} research`,
+                        job: preview.researchJobConflict.source,
+                      },
+                    ] as const
+                  ).map((option) => (
+                    <label
+                      key={option.value}
+                      className="flex items-start gap-2 rounded-md border border-amber-200 bg-white/80 p-3 text-sm dark:border-amber-900 dark:bg-zinc-950/60"
+                    >
+                      <input
+                        type="radio"
+                        name="researchJobPolicy"
+                        value={option.value}
+                        required
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <span className="font-medium">{option.label}</span>
+                        <span className="mt-1 block text-xs text-zinc-500">
+                          {option.job.status} ·{" "}
+                          {option.job._count.candidates} candidate
+                          {option.job._count.candidates === 1 ? "" : "s"} ·{" "}
+                          {option.job._count.directOutreachProposals} direct
+                          proposal
+                          {option.job._count.directOutreachProposals === 1
+                            ? ""
+                            : "s"}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
             <label className="flex items-start gap-2 text-sm">
               <input
                 type="checkbox"
@@ -163,6 +224,13 @@ async function mergeArtistAction(formData: FormData) {
     formData.get("targetArtistId") ?? "",
   ).trim();
   const returnTo = workflowReturnPath(formData.get("returnTo"));
+  const rawResearchJobPolicy = String(
+    formData.get("researchJobPolicy") ?? "",
+  );
+  const researchJobPolicy: ArtistMergeResearchJobPolicy | undefined =
+    rawResearchJobPolicy === "source" || rawResearchJobPolicy === "target"
+      ? rawResearchJobPolicy
+      : undefined;
   if (formData.get("confirmation") !== "MERGE") {
     redirect(
       mergeHref(
@@ -175,7 +243,9 @@ async function mergeArtistAction(formData: FormData) {
   }
   let result: Awaited<ReturnType<typeof mergeArtists>>;
   try {
-    result = await mergeArtists(sourceArtistId, targetArtistId);
+    result = await mergeArtists(sourceArtistId, targetArtistId, {
+      researchJobPolicy,
+    });
   } catch (error) {
     redirect(
       mergeHref(
