@@ -1,6 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { nextScheduledOutreachPoll } from "./festivals/[showId]/page";
+import {
+  eligibleFestivalFollowUp,
+  nextScheduledOutreachPoll,
+} from "./festivals/[showId]/page";
+import type { FollowUpEligibility } from "@/lib/sendOutreach";
+
+function followUpEligibility(
+  parentOutreachId: string,
+  eligible: boolean,
+): FollowUpEligibility {
+  return {
+    parentOutreachId,
+    eligible,
+    state: eligible ? "eligible" : "pending",
+    mode: eligible ? "new" : null,
+    reason: eligible ? null : "Follow-up already pending",
+    recipients: ["manager@example.com"],
+    recipientDeliveryMode: "to_thread",
+    primaryRecipientEmail: null,
+    toRecipients: ["manager@example.com"],
+    ccRecipients: [],
+    providerLayouts: [{ to: ["manager@example.com"], cc: [] }],
+    testSend: false,
+    fullTeamSend: false,
+    contactId: "contact-1",
+  };
+}
 
 test("next scheduled outreach poll follows the ten-minute offset", () => {
   assert.equal(
@@ -39,5 +65,47 @@ test("Friday's final poll window extends into Saturday", () => {
   assert.equal(
     new Date(poll.getTime() + 15 * 60 * 1000).toISOString(),
     "2026-08-15T04:12:00.000Z",
+  );
+});
+
+test("bulk follow-up selection uses the newest eligible parent consistently", () => {
+  const newest = followUpEligibility("parent-new", true);
+  const older = followUpEligibility("parent-old", true);
+  const parentOutreaches = [
+    {
+      id: "parent-old",
+      artistId: "artist-1",
+      createdAt: new Date("2026-08-01T12:00:00.000Z"),
+      coveredArtists: [],
+    },
+    {
+      id: "parent-new",
+      artistId: "artist-1",
+      createdAt: new Date("2026-08-02T12:00:00.000Z"),
+      coveredArtists: [],
+    },
+  ];
+
+  assert.equal(
+    eligibleFestivalFollowUp(
+      "artist-1",
+      parentOutreaches,
+      new Map([
+        ["parent-old", older],
+        ["parent-new", newest],
+      ]),
+    )?.parentOutreachId,
+    "parent-new",
+  );
+  assert.equal(
+    eligibleFestivalFollowUp(
+      "artist-1",
+      parentOutreaches,
+      new Map([
+        ["parent-old", older],
+        ["parent-new", followUpEligibility("parent-new", false)],
+      ]),
+    ),
+    null,
   );
 });

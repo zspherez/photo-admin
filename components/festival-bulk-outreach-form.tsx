@@ -9,8 +9,12 @@ import {
 } from "@/lib/recipientDelivery";
 
 export interface FestivalBulkConfirmationCandidate {
+  selectionId: string;
+  artistId: string;
+  coveredArtistIds: string[];
   contactId: string;
-  artistName: string;
+  outreachKind: "original" | "follow_up";
+  artistNames: string[];
   groupKey: string;
   emailLabel: string;
   recipients: string[];
@@ -22,6 +26,7 @@ export interface FestivalBulkConfirmationCandidate {
 
 interface ConfirmationGroup {
   groupKey: string;
+  outreachKind: "original" | "follow_up";
   emailLabel: string;
   artistNames: string[];
   recipients: string[];
@@ -32,20 +37,25 @@ interface ConfirmationGroup {
 
 export function buildFestivalConfirmationGroups(
   candidates: readonly FestivalBulkConfirmationCandidate[],
-  selectedContactIds: readonly string[],
+  selectedIds: readonly string[],
 ): ConfirmationGroup[] {
-  const selected = new Set(selectedContactIds);
+  const selected = new Set(selectedIds);
   const groups = new Map<string, ConfirmationGroup>();
   for (const candidate of candidates) {
-    if (!selected.has(candidate.contactId)) continue;
+    if (!selected.has(candidate.selectionId)) continue;
     const existing = groups.get(candidate.groupKey);
     if (existing) {
-      existing.artistNames.push(candidate.artistName);
+      existing.artistNames.push(
+        ...candidate.artistNames.filter(
+          (artistName) => !existing.artistNames.includes(artistName),
+        ),
+      );
     } else {
       groups.set(candidate.groupKey, {
         groupKey: candidate.groupKey,
+        outreachKind: candidate.outreachKind,
         emailLabel: candidate.emailLabel,
-        artistNames: [candidate.artistName],
+        artistNames: [...candidate.artistNames],
         recipients: candidate.recipients,
         primaryRecipientEmail: candidate.primaryRecipientEmail,
         recipientDeliveryMode: candidate.recipientDeliveryMode,
@@ -59,7 +69,7 @@ export function buildFestivalConfirmationGroups(
 function selectedCheckboxes(formId: string): HTMLInputElement[] {
   return Array.from(
     document.querySelectorAll<HTMLInputElement>(
-      `input[form="${formId}"][name="contactIds"]:not(:disabled)`,
+      `input[form="${formId}"][name="outreachTargets"]:not(:disabled)`,
     ),
   );
 }
@@ -82,7 +92,7 @@ export function FestivalBulkOutreachForm({
   const [selectedIds, setSelectedIds] = useState<string[]>(() =>
     candidates
       .filter((candidate) => candidate.selectedByDefault)
-      .map((candidate) => candidate.contactId),
+      .map((candidate) => candidate.selectionId),
   );
   const [confirming, setConfirming] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
@@ -91,9 +101,13 @@ export function FestivalBulkOutreachForm({
 
   const refreshSelection = useCallback(() => {
     setSelectedIds(
-      selectedCheckboxes(formId)
-        .filter((checkbox) => checkbox.checked)
-        .map((checkbox) => checkbox.value),
+      Array.from(
+        new Set(
+          selectedCheckboxes(formId)
+            .filter((checkbox) => checkbox.checked)
+            .map((checkbox) => checkbox.value),
+        ),
+      ),
     );
   }, [formId]);
 
@@ -102,9 +116,14 @@ export function FestivalBulkOutreachForm({
       const target = event.target;
       if (
         target instanceof HTMLInputElement &&
-        target.name === "contactIds" &&
+        target.name === "outreachTargets" &&
         target.getAttribute("form") === formId
       ) {
+        for (const checkbox of selectedCheckboxes(formId)) {
+          if (checkbox.value === target.value) {
+            checkbox.checked = target.checked;
+          }
+        }
         refreshSelection();
       }
     };
@@ -122,7 +141,10 @@ export function FestivalBulkOutreachForm({
     return buildFestivalConfirmationGroups(candidates, selectedIds);
   }, [candidates, selectedIds]);
   const hasMultipleRecipientGroup = confirmationGroups.some(
-    (group) => group.recipients.length > 1 && !group.immutableDeliveryMode,
+    (group) =>
+      group.outreachKind === "original" &&
+      group.recipients.length > 1 &&
+      !group.immutableDeliveryMode,
   );
 
   const selectAll = () => {
@@ -135,18 +157,23 @@ export function FestivalBulkOutreachForm({
 
   const openConfirmation = () => {
     refreshSelection();
-    const selectedContactIds = selectedCheckboxes(formId)
-      .filter((checkbox) => checkbox.checked)
-      .map((checkbox) => checkbox.value);
-    if (selectedContactIds.length === 0) {
-      setSelectionError("Select at least one sendable artist.");
+    const selectedOutreachTargets = Array.from(
+      new Set(
+        selectedCheckboxes(formId)
+          .filter((checkbox) => checkbox.checked)
+          .map((checkbox) => checkbox.value),
+      ),
+    );
+    if (selectedOutreachTargets.length === 0) {
+      setSelectionError("Select at least one actionable artist.");
       return;
     }
-    const selected = new Set(selectedContactIds);
+    const selected = new Set(selectedOutreachTargets);
     setRecipientDeliveryMode(
       candidates.some(
         (candidate) =>
-          selected.has(candidate.contactId) &&
+          selected.has(candidate.selectionId) &&
+          candidate.outreachKind === "original" &&
           !candidate.immutableDeliveryMode &&
           (candidate.recipientDeliveryMode === "to_thread" ||
             candidate.recipientDeliveryMode === "cc_thread"),
@@ -176,7 +203,8 @@ export function FestivalBulkOutreachForm({
       />
       <div className="z-20 -mx-1 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 bg-white/95 px-4 py-2 shadow-sm backdrop-blur sm:sticky sm:top-12 dark:border-zinc-800 dark:bg-zinc-950/95">
         <span className="text-sm text-zinc-600 dark:text-zinc-400">
-          {candidates.length} sendable · <b>{selectedIds.length}</b> selected
+          {new Set(candidates.map((candidate) => candidate.selectionId)).size}{" "}
+          actionable · <b>{selectedIds.length}</b> selected
         </span>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -257,6 +285,7 @@ export function FestivalBulkOutreachForm({
                     <th className="px-3 py-2">To</th>
                     <th className="px-3 py-2">CC</th>
                     <th className="px-3 py-2">Associated artists</th>
+                    <th className="px-3 py-2">Type</th>
                     <th className="px-3 py-2">Email format</th>
                   </tr>
                 </thead>
@@ -265,11 +294,14 @@ export function FestivalBulkOutreachForm({
                     const layout = recipientDeliveryLayout(
                       group.recipients,
                       group.primaryRecipientEmail,
-                      group.immutableDeliveryMode
+                      group.immutableDeliveryMode ||
+                        group.outreachKind === "follow_up"
                         ? group.recipientDeliveryMode
                         : recipientDeliveryMode,
                     );
-                    const effectiveMode = group.immutableDeliveryMode
+                    const effectiveMode =
+                      group.immutableDeliveryMode ||
+                      group.outreachKind === "follow_up"
                       ? group.recipientDeliveryMode
                       : recipientDeliveryMode;
                     const providerLayouts = testOverride
@@ -303,9 +335,16 @@ export function FestivalBulkOutreachForm({
                           {group.artistNames.join(", ")}
                         </td>
                         <td className="px-3 py-2 font-medium">
+                          {group.outreachKind === "follow_up"
+                            ? "Follow-up"
+                            : "Initial"}
+                        </td>
+                        <td className="px-3 py-2 font-medium">
                           {group.recipients.length > 1
-                            ? group.immutableDeliveryMode
-                              ? "Immutable retry"
+                            ? group.outreachKind === "follow_up"
+                              ? "Inherited from original"
+                              : group.immutableDeliveryMode
+                                ? "Immutable retry"
                               : recipientDeliveryMode === "to_thread"
                               ? "One thread"
                               : "Separate threads"

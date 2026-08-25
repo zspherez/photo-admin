@@ -110,7 +110,7 @@ test("festival outreach forms are valid and explicitly associated", () => {
       if (
         name?.initializer &&
         ts.isStringLiteral(name.initializer) &&
-        name.initializer.text === "contactIds"
+        name.initializer.text === "outreachTargets"
       ) {
         contactCheckboxFound = isIdentifierExpression(
           attribute(node.attributes, "form"),
@@ -258,7 +258,7 @@ test("festival sendability and bulk queueing do not require listen signals", () 
   assert.match(source, /rerun to process the remaining artists/);
   assert.match(
     source,
-    /async \(group\) => \{[\s\S]*const immediateSchedule = new Date\(Date\.now\(\) \+ 60_000\)[\s\S]*nextScheduledOutreachPoll\(immediateSchedule\)/,
+    /async \(job\) => \{[\s\S]*const immediateSchedule = new Date\(Date\.now\(\) \+ 60_000\)[\s\S]*nextScheduledOutreachPoll\(immediateSchedule\)/,
   );
   assert.match(
     source,
@@ -308,12 +308,29 @@ test("selected festival sends use the same manager grouping as queue-all", () =>
   assert.match(source, /bulkConfirmationCandidates/);
   assert.match(
     source,
-    /!result\.fullTeamSend &&[\s\S]*recipients\.length === 1/,
+    /!selection\.sendability\.fullTeamSend &&[\s\S]*recipients\.length === 1/,
   );
   assert.match(
     source,
     /!row\.sendability\.fullTeamSend &&[\s\S]*recipients\.length === 1/,
   );
+});
+
+test("festival bulk selection mixes initial outreach and eligible follow-ups", () => {
+  const bulk = source.slice(
+    source.indexOf("async function bulkSend"),
+    source.indexOf("async function queueFestivalOutreach"),
+  );
+  assert.match(source, /name="outreachTargets"/);
+  assert.match(source, /const followUp = row\.bulkFollowUpEligibility/);
+  assert.match(source, /const selectionId = `follow_up:\$\{followUp\.parentOutreachId\}`/);
+  assert.match(source, /const selectionId = `original:\$\{row\.contact\.id\}`/);
+  assert.match(source, /const canBulkSelect = Boolean\(bulkCandidate\)/);
+  assert.match(bulk, /getFollowUpEligibilityBatch/);
+  assert.match(bulk, /eligibleFestivalFollowUp/);
+  assert.match(bulk, /job\.kind === "follow_up"[\s\S]*scheduleFollowUp/);
+  assert.match(bulk, /job\.group\.artistIds\.length > 1[\s\S]*scheduleFestivalManagerOutreach/);
+  assert.match(bulk, /scheduleOutreach/);
 });
 
 test("festival individual outreach snapshots all active management contacts", () => {

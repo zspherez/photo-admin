@@ -15,13 +15,24 @@ test("festival bulk outreach supports select all and grouped confirmation", () =
   assert.match(source, /<th[^>]*>To<\/th>/);
   assert.match(source, /<th[^>]*>CC<\/th>/);
   assert.match(source, /<th[^>]*>Associated artists<\/th>/);
+  assert.match(source, /<th[^>]*>Type<\/th>/);
   assert.match(source, /<th[^>]*>Email format<\/th>/);
   assert.match(source, /"Shared"/);
   assert.match(source, /"to_thread"/);
   assert.match(source, /Put every management contact in To/);
   assert.match(
     source,
-    /selected\.has\(candidate\.contactId\)[\s\S]*!candidate\.immutableDeliveryMode[\s\S]*\(candidate\.recipientDeliveryMode === "to_thread" \|\|[\s\S]*candidate\.recipientDeliveryMode === "cc_thread"\)/,
+    /selected\.has\(candidate\.selectionId\)[\s\S]*candidate\.outreachKind === "original"[\s\S]*!candidate\.immutableDeliveryMode[\s\S]*\(candidate\.recipientDeliveryMode === "to_thread" \|\|[\s\S]*candidate\.recipientDeliveryMode === "cc_thread"\)/,
+  );
+  assert.match(source, /group\.outreachKind === "follow_up"/);
+  assert.match(source, /"Inherited from original"/);
+  assert.match(
+    source,
+    /checkbox\.value === target\.value[\s\S]*checkbox\.checked = target\.checked/,
+  );
+  assert.match(
+    source,
+    /new Set\(candidates\.map\(\(candidate\) => candidate\.selectionId\)\)\.size/,
   );
   assert.match(source, /"Individual"/);
   assert.match(source, /PendingSubmitButton/);
@@ -35,8 +46,12 @@ test("confirmation groups selected artists by the exact server grouping key", ()
     buildFestivalConfirmationGroups(
       [
         {
+          selectionId: "original:contact-a",
+          artistId: "artist-a",
+          coveredArtistIds: ["artist-a"],
           contactId: "contact-a",
-          artistName: "Artist A",
+          outreachKind: "original",
+          artistNames: ["Artist A"],
           groupKey: "manager@example.com",
           emailLabel: "manager@example.com",
           recipients: ["manager@example.com"],
@@ -46,8 +61,12 @@ test("confirmation groups selected artists by the exact server grouping key", ()
           selectedByDefault: false,
         },
         {
+          selectionId: "original:contact-b",
+          artistId: "artist-b",
+          coveredArtistIds: ["artist-b"],
           contactId: "contact-b",
-          artistName: "Artist B",
+          outreachKind: "original",
+          artistNames: ["Artist B"],
           groupKey: "manager@example.com",
           emailLabel: "manager@example.com",
           recipients: ["manager@example.com"],
@@ -57,22 +76,31 @@ test("confirmation groups selected artists by the exact server grouping key", ()
           selectedByDefault: false,
         },
         {
+          selectionId: "follow_up:outreach-c",
+          artistId: "artist-c",
+          coveredArtistIds: ["artist-c", "artist-d"],
           contactId: "contact-c",
-          artistName: "Artist C",
-          groupKey: "contact:contact-c",
+          outreachKind: "follow_up",
+          artistNames: ["Artist C", "Artist D"],
+          groupKey: "follow_up:outreach-c",
           emailLabel: "team@example.com, manager@example.com",
           recipients: ["manager@example.com", "team@example.com"],
           primaryRecipientEmail: "manager@example.com",
           recipientDeliveryMode: "individual_threads",
-          immutableDeliveryMode: false,
+          immutableDeliveryMode: true,
           selectedByDefault: false,
         },
       ],
-      ["contact-a", "contact-b", "contact-c"],
+      [
+        "original:contact-a",
+        "original:contact-b",
+        "follow_up:outreach-c",
+      ],
     ),
     [
       {
         groupKey: "manager@example.com",
+        outreachKind: "original",
         emailLabel: "manager@example.com",
         artistNames: ["Artist A", "Artist B"],
         recipients: ["manager@example.com"],
@@ -81,13 +109,14 @@ test("confirmation groups selected artists by the exact server grouping key", ()
         immutableDeliveryMode: false,
       },
       {
-        groupKey: "contact:contact-c",
+        groupKey: "follow_up:outreach-c",
+        outreachKind: "follow_up",
         emailLabel: "team@example.com, manager@example.com",
-        artistNames: ["Artist C"],
+        artistNames: ["Artist C", "Artist D"],
         recipients: ["manager@example.com", "team@example.com"],
         primaryRecipientEmail: "manager@example.com",
         recipientDeliveryMode: "individual_threads",
-        immutableDeliveryMode: false,
+        immutableDeliveryMode: true,
       },
     ],
   );
