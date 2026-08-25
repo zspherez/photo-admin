@@ -2873,12 +2873,19 @@ test("follow-up send and schedule reuse the immutable child machinery", () => {
     festival,
     /kind: "original"[\s\S]*status: "test"/,
   );
+  assert.match(
+    festival.slice(
+      festival.indexOf("async function bulkSend"),
+      festival.indexOf("export default async function FestivalDetailPage"),
+    ),
+    /scheduleFollowUp/,
+  );
   assert.doesNotMatch(
     festival.slice(
       festival.indexOf("async function bulkSend"),
       festival.indexOf("export default async function FestivalDetailPage"),
     ),
-    /sendFollowUp|scheduleFollowUp/,
+    /\bsendFollowUp\(/,
   );
 
   assert.match(

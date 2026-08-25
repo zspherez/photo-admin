@@ -8,7 +8,9 @@ import {
   getOutreachSendabilityBatch,
   getFollowUpEligibilityBatch,
   scheduleFestivalManagerOutreach,
+  scheduleFollowUp,
   scheduleOutreach,
+  type FollowUpEligibility,
   type OutreachSendability,
 } from "@/lib/sendOutreach";
 import { getTestOverride } from "@/lib/resend";
@@ -193,6 +195,7 @@ const getFestivalDetails = cache(async (showId: string) =>
         orderBy: [{ createdAt: "desc" }, { id: "asc" }],
         select: {
           id: true,
+          createdAt: true,
           kind: true,
           parentOutreachId: true,
           artistId: true,
@@ -387,6 +390,43 @@ async function festivalBulkCandidates(
   };
 }
 
+export function eligibleFestivalFollowUp(
+  artistId: string,
+  parentOutreaches: readonly {
+    id: string;
+    artistId: string;
+    createdAt: Date;
+    coveredArtists: readonly { artistId: string }[];
+  }[],
+  eligibilityByParent: ReadonlyMap<string, FollowUpEligibility>,
+): FollowUpEligibility | null {
+  const matchingParents = [...parentOutreaches]
+    .filter(
+      (outreach) =>
+        outreach.artistId === artistId ||
+        outreach.coveredArtists.some(
+          (covered) => covered.artistId === artistId,
+        ),
+    )
+    .sort(
+      (left, right) =>
+        right.createdAt.getTime() - left.createdAt.getTime() ||
+        left.id.localeCompare(right.id),
+    );
+  for (const parent of matchingParents) {
+    const eligibility = eligibilityByParent.get(parent.id);
+    if (!eligibility) continue;
+    if (eligibility.eligible) return eligibility;
+    if (
+      eligibility.state === "pending" ||
+      eligibility.state === "sent"
+    ) {
+      return null;
+    }
+  }
+  return null;
+}
+
 async function bulkSend(formData: FormData) {
   "use server";
   await requireServerActionAuth(formData.get("returnTo") ?? "/festivals");
@@ -403,10 +443,10 @@ async function bulkSend(formData: FormData) {
     redirect(festivalListPath(listView));
   }
 
-  const requestedContactIds = Array.from(
+  const requestedTargets = Array.from(
     new Set(
       formData
-        .getAll("contactIds")
+        .getAll("outreachTargets")
         .map((value) => String(value).trim())
         .filter(Boolean)
     )
@@ -430,73 +470,194 @@ async function bulkSend(formData: FormData) {
     );
   }
 
+  const candidateTargets = [...candidates.targetsByContactId.values()];
+  const requestedContactIds = requestedTargets.flatMap((selectionId) =>
+    selectionId.startsWith("original:")
+      ? [selectionId.slice("original:".length)]
+      : [],
+  );
+  const requestedParentOutreachIds = requestedTargets.flatMap((selectionId) =>
+    selectionId.startsWith("follow_up:")
+      ? [selectionId.slice("follow_up:".length)]
+      : [],
+  );
   const candidateIds = requestedContactIds.filter((contactId) =>
-    candidates.targetsByContactId.has(contactId)
+    candidates.targetsByContactId.has(contactId),
   );
-  const sendability = await getOutreachSendabilityBatch(
-    candidateIds.map((contactId) => ({
+  const parentOutreaches = await db.outreach.findMany({
+    where: {
+      id: { in: requestedParentOutreachIds },
+      kind: "original",
       showId,
-      contactId,
-      festivalAllContacts: true,
-    })),
-    now
-  );
+      OR: [
+        { artistId: { in: candidateTargets.map((target) => target.artistId) } },
+        {
+          coveredArtists: {
+            some: {
+              artistId: {
+                in: candidateTargets.map((target) => target.artistId),
+              },
+            },
+          },
+        },
+      ],
+    },
+    select: {
+      id: true,
+      artistId: true,
+      createdAt: true,
+      coveredArtists: {
+        orderBy: { artistId: "asc" },
+        select: { artistId: true },
+      },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+  });
+  const [sendability, followUpEligibility] = await Promise.all([
+    getOutreachSendabilityBatch(
+      candidateIds.map((contactId) => ({
+        showId,
+        contactId,
+        festivalAllContacts: true,
+      })),
+      now,
+    ),
+    getFollowUpEligibilityBatch(
+      parentOutreaches.map((outreach) => outreach.id),
+      now,
+    ),
+  ]);
   const sendabilityByContact = new Map(
     sendability.map((result) => [result.contactId, result]),
   );
-  const selectedTargets = candidateIds.flatMap((contactId) => {
-    const target = candidates.targetsByContactId.get(contactId);
-    const result = sendabilityByContact.get(contactId);
-    if (!target || !result?.sendable) return [];
-    const recipients = normalizeEmails(result.recipients);
+  const followUpByParent = new Map(
+    followUpEligibility.map((result) => [
+      result.parentOutreachId,
+      result,
+    ]),
+  );
+  const eligibleSelections = new Map<
+    string,
+    | {
+        kind: "original";
+        selectionId: string;
+        target: (typeof candidateTargets)[number];
+        sendability: OutreachSendability;
+      }
+    | {
+        kind: "follow_up";
+        selectionId: string;
+        target: (typeof candidateTargets)[number];
+        eligibility: FollowUpEligibility;
+      }
+  >();
+  for (const target of candidateTargets) {
+    const followUp = eligibleFestivalFollowUp(
+      target.artistId,
+      parentOutreaches,
+      followUpByParent,
+    );
+    if (followUp) {
+      const selectionId = `follow_up:${followUp.parentOutreachId}`;
+      if (!eligibleSelections.has(selectionId)) {
+        eligibleSelections.set(selectionId, {
+          kind: "follow_up",
+          selectionId,
+          target,
+          eligibility: followUp,
+        });
+      }
+      continue;
+    }
+    const initial = sendabilityByContact.get(target.contactId);
+    if (!initial?.sendable) continue;
+    const selectionId = `original:${target.contactId}`;
+    eligibleSelections.set(selectionId, {
+      kind: "original",
+      selectionId,
+      target,
+      sendability: initial,
+    });
+  }
+  const selected = requestedTargets.flatMap((selectionId) => {
+    const selection = eligibleSelections.get(selectionId);
+    return selection ? [selection] : [];
+  });
+  const selectedInitialTargets = selected.flatMap((selection) => {
+    if (selection.kind !== "original") return [];
+    const recipients = normalizeEmails(selection.sendability.recipients);
     return [
       {
-        ...target,
+        ...selection.target,
         recipientDeliveryMode:
-          result.mode === "retry"
-            ? result.recipientDeliveryMode ??
+          selection.sendability.mode === "retry"
+            ? selection.sendability.recipientDeliveryMode ??
               DEFAULT_RECIPIENT_DELIVERY_MODE
             : recipientDeliveryMode,
         email:
-          !result.fullTeamSend &&
+          !selection.sendability.fullTeamSend &&
           recipients.length === 1 &&
-          recipients[0] === target.email
-            ? target.email
-            : `contact:${target.contactId}`,
+          recipients[0] === selection.target.email
+            ? selection.target.email
+            : `contact:${selection.target.contactId}`,
       },
     ];
   });
-  const { groups } = groupFestivalManagerTargets(
-    selectedTargets,
-    new Set(selectedTargets.map((target) => target.contactId)),
+  const { groups: initialGroups } = groupFestivalManagerTargets(
+    selectedInitialTargets,
+    new Set(selectedInitialTargets.map((target) => target.contactId)),
   );
+  const followUpSelections = selected.filter(
+    (selection): selection is Extract<
+      (typeof selected)[number],
+      { kind: "follow_up" }
+    > => selection.kind === "follow_up",
+  );
+  const jobs = [
+    ...initialGroups.map((group) => ({
+      kind: "original" as const,
+      id: `original:${group.contactId}`,
+      group,
+    })),
+    ...followUpSelections.map((selection) => ({
+      kind: "follow_up" as const,
+      id: selection.selectionId,
+      selection,
+    })),
+  ];
   let sent = 0;
   let scheduled = 0;
   let failed = 0;
-  let skipped = requestedContactIds.length - selectedTargets.length;
+  let skipped = requestedTargets.length - selected.length;
   const errors: string[] = [];
-  if (requestedContactIds.length === 0) {
+  if (requestedTargets.length === 0) {
     errors.push("Select at least one eligible artist");
   } else if (skipped > 0) {
-    const rejectedIds = new Set(selectedTargets.map((target) => target.contactId));
-    for (const contactId of requestedContactIds) {
-      if (rejectedIds.has(contactId)) continue;
-      const result = sendabilityByContact.get(contactId);
+    const acceptedIds = new Set(selected.map((selection) => selection.selectionId));
+    for (const selectionId of requestedTargets) {
+      if (acceptedIds.has(selectionId)) continue;
+      const isFollowUp = selectionId.startsWith("follow_up:");
+      const identifier = selectionId.slice(
+        isFollowUp ? "follow_up:".length : "original:".length,
+      );
+      const reason = isFollowUp
+        ? followUpByParent.get(identifier)?.reason
+        : sendabilityByContact.get(identifier)?.reason;
       errors.push(
-        `${contactId.slice(-6)}: ${
-          result?.reason ?? "Selected contact is no longer eligible"
-        }`
+        `${isFollowUp ? "follow-up" : "initial"} ${identifier.slice(-8)}: ${
+          reason ?? "Selected outreach is no longer eligible"
+        }`,
       );
     }
   }
 
   const results = await mapWithConcurrency(
-    groups,
+    jobs,
     BULK_SCHEDULE_CONCURRENCY,
-    async (group) => {
+    async (job) => {
       if (!hasFestivalBulkActionBudget(deadlineAt)) {
         return {
-          group,
+          job,
           result: {
             ok: false as const,
             error: BULK_ACTION_DEADLINE_ERROR,
@@ -516,29 +677,34 @@ async function bulkSend(formData: FormData) {
           ? getNextMondaySlot(immediateSchedule)
           : immediateSchedule;
         const result =
-          group.artistIds.length > 1
-            ? await scheduleFestivalManagerOutreach(
-                {
-                  showId,
-                  contactId: group.contactId,
-                  coveredArtistIds: group.artistIds,
-                },
+          job.kind === "follow_up"
+            ? await scheduleFollowUp(
+                job.selection.eligibility.parentOutreachId,
                 scheduledFor,
               )
-            : await scheduleOutreach(
-                {
-                  showId,
-                  contactId: group.contactId,
-                  festivalAllContacts: true,
-                  recipientDeliveryMode:
-                    group.recipientDeliveryMode,
-                },
-                scheduledFor,
-              );
-        return { group, result };
+            : job.group.artistIds.length > 1
+              ? await scheduleFestivalManagerOutreach(
+                  {
+                    showId,
+                    contactId: job.group.contactId,
+                    coveredArtistIds: job.group.artistIds,
+                  },
+                  scheduledFor,
+                )
+              : await scheduleOutreach(
+                  {
+                    showId,
+                    contactId: job.group.contactId,
+                    festivalAllContacts: true,
+                    recipientDeliveryMode:
+                      job.group.recipientDeliveryMode,
+                  },
+                  scheduledFor,
+                );
+        return { job, result };
       } catch (error) {
         return {
-          group,
+          job,
           result: {
             ok: false,
             error: error instanceof Error ? error.message : "Unexpected send error",
@@ -548,16 +714,19 @@ async function bulkSend(formData: FormData) {
     }
   );
 
-  for (const { group, result } of results) {
+  for (const { job, result } of results) {
     if (result.ok) {
       if (result.scheduled === true) scheduled++;
       else sent++;
-    } else if (result.error?.includes("Already sent") || result.error?.includes("Already scheduled")) {
+    } else if (
+      result.error?.toLowerCase().includes("already sent") ||
+      result.error?.toLowerCase().includes("already scheduled")
+    ) {
       skipped++;
     } else {
       failed++;
       errors.push(
-        `${group.contactId.slice(-6)}: ${
+        `${job.id.slice(-8)}: ${
           result.error ?? "Unknown send failure"
         }`,
       );
@@ -1100,21 +1269,37 @@ export default async function FestivalDetailPage({
       result,
     ]),
   );
+  const festivalParentOutreaches = festival.outreaches
+    .filter((outreach) => outreach.kind === "original")
+    .map((outreach) => ({
+      id: outreach.id,
+      artistId: outreach.artistId,
+      createdAt: outreach.createdAt,
+      coveredArtists: outreach.coveredArtists,
+    }));
   const rows = baseRows.map((row) => ({
     ...row,
     sendability: row.contact
       ? (sendabilityByContact.get(row.contact.id) ?? null)
       : null,
     hasTestSend: row.contact ? testContactIds.has(row.contact.id) : false,
+    bulkFollowUpEligibility: eligibleFestivalFollowUp(
+      row.artist.id,
+      festivalParentOutreaches,
+      followUpByParent,
+    ),
     followUpEligibility:
+      eligibleFestivalFollowUp(
+        row.artist.id,
+        festivalParentOutreaches,
+        followUpByParent,
+      ) ??
       row.originalOutreachIds
         .map((outreachId) => followUpByParent.get(outreachId))
         .find(
           (result) =>
             result &&
-            (result.state === "eligible" ||
-              result.state === "pending" ||
-              result.state === "sent"),
+            (result.state === "pending" || result.state === "sent"),
         ) ??
       row.originalOutreachIds
         .map((outreachId) => followUpByParent.get(outreachId))
@@ -1150,38 +1335,98 @@ export default async function FestivalDetailPage({
     (row) => !row.association.rejectedAt && row.managerResearchEligible
   ).length;
   const bulkFormId = "festival-bulk-outreach";
-  const bulkConfirmationCandidates: FestivalBulkConfirmationCandidate[] =
-    outreachEnabled
-      ? filtered.flatMap((row) => {
-          if (!row.contact || !row.sendability?.sendable) return [];
-          const contactEmail = normalizeEmail(row.contact.email ?? "");
-          const recipients = normalizeEmails(row.sendability.recipients);
-          if (!contactEmail || recipients.length === 0) return [];
-          const shareable =
-            !row.sendability.fullTeamSend &&
-            recipients.length === 1 &&
-            recipients[0] === contactEmail;
-          return [
-            {
-              contactId: row.contact.id,
-              artistName: artistDisplayName(row.artist),
-              groupKey: shareable
-                ? contactEmail
-                : `contact:${row.contact.id}`,
-              emailLabel: recipients.join(", "),
-              recipients,
-              primaryRecipientEmail:
-                row.sendability.primaryRecipientEmail ??
-                contactEmail,
-              recipientDeliveryMode:
-                row.sendability.recipientDeliveryMode ??
-                DEFAULT_RECIPIENT_DELIVERY_MODE,
-              immutableDeliveryMode: row.sendability.mode === "retry",
-              selectedByDefault: filter === "unsent",
-            },
-          ];
-        })
-      : [];
+  const bulkConfirmationCandidates: FestivalBulkConfirmationCandidate[] = [];
+  const festivalArtistNameById = new Map(
+    rows.map((row) => [
+      row.artist.id,
+      artistDisplayName(row.artist),
+    ]),
+  );
+  const addedBulkSelections = new Set<string>();
+  if (outreachEnabled) {
+    for (const row of filtered) {
+      const followUp = row.bulkFollowUpEligibility;
+      if (followUp?.contactId) {
+        const selectionId = `follow_up:${followUp.parentOutreachId}`;
+        if (addedBulkSelections.has(selectionId)) continue;
+        const recipients = normalizeEmails(followUp.recipients);
+        if (recipients.length === 0) continue;
+        const parent = festivalParentOutreaches.find(
+          (outreach) => outreach.id === followUp.parentOutreachId,
+        );
+        const coveredArtistIds = parent
+          ? Array.from(
+              new Set([
+                parent.artistId,
+                ...parent.coveredArtists.map(
+                  (covered) => covered.artistId,
+                ),
+              ]),
+            )
+          : [row.artist.id];
+        bulkConfirmationCandidates.push({
+          selectionId,
+          artistId: row.artist.id,
+          coveredArtistIds,
+          contactId: followUp.contactId,
+          outreachKind: "follow_up",
+          artistNames: coveredArtistIds.map(
+            (artistId) =>
+              festivalArtistNameById.get(artistId) ?? artistId,
+          ),
+          groupKey: selectionId,
+          emailLabel: recipients.join(", "),
+          recipients,
+          primaryRecipientEmail: followUp.primaryRecipientEmail ?? null,
+          recipientDeliveryMode:
+            followUp.recipientDeliveryMode ??
+            DEFAULT_RECIPIENT_DELIVERY_MODE,
+          immutableDeliveryMode: true,
+          selectedByDefault: false,
+        });
+        addedBulkSelections.add(selectionId);
+        continue;
+      }
+      if (!row.contact || !row.sendability?.sendable) continue;
+      const contactEmail = normalizeEmail(row.contact.email ?? "");
+      const recipients = normalizeEmails(row.sendability.recipients);
+      if (!contactEmail || recipients.length === 0) continue;
+      const shareable =
+        !row.sendability.fullTeamSend &&
+        recipients.length === 1 &&
+        recipients[0] === contactEmail;
+      const selectionId = `original:${row.contact.id}`;
+      bulkConfirmationCandidates.push({
+        selectionId,
+        artistId: row.artist.id,
+        coveredArtistIds: [row.artist.id],
+        contactId: row.contact.id,
+        outreachKind: "original",
+        artistNames: [artistDisplayName(row.artist)],
+        groupKey: shareable
+          ? contactEmail
+          : `contact:${row.contact.id}`,
+        emailLabel: recipients.join(", "),
+        recipients,
+        primaryRecipientEmail:
+          row.sendability.primaryRecipientEmail ?? contactEmail,
+        recipientDeliveryMode:
+          row.sendability.recipientDeliveryMode ??
+          DEFAULT_RECIPIENT_DELIVERY_MODE,
+        immutableDeliveryMode: row.sendability.mode === "retry",
+        selectedByDefault: filter === "unsent",
+      });
+      addedBulkSelections.add(selectionId);
+    }
+  }
+  const bulkCandidateByArtistId = new Map(
+    bulkConfirmationCandidates.flatMap((candidate) =>
+      candidate.coveredArtistIds.map((artistId) => [
+        artistId,
+        candidate,
+      ] as const),
+    ),
+  );
 
   const filterOptions: { key: FestivalFilter; label: string }[] = [
     { key: "all", label: "All" },
@@ -1588,6 +1833,8 @@ export default async function FestivalDetailPage({
                 !!r.contact &&
                 !r.followUpEligibility &&
                 r.sendability?.mode !== "retry";
+              const bulkCandidate = bulkCandidateByArtistId.get(r.artist.id);
+              const canBulkSelect = Boolean(bulkCandidate);
               const checkboxId = `festival-outreach-${r.artist.id}`;
               const reasonId = `${checkboxId}-reason`;
               const disabledReason = !r.contact
@@ -1628,16 +1875,23 @@ export default async function FestivalDetailPage({
                       <input
                         id={checkboxId}
                         type="checkbox"
-                        name="contactIds"
+                        name="outreachTargets"
                         form={bulkFormId}
-                        value={r.contact?.id ?? ""}
-                        disabled={!canSend}
-                        defaultChecked={canSend && filter === "unsent"}
-                        aria-describedby={!canSend ? reasonId : undefined}
+                        value={bulkCandidate?.selectionId ?? ""}
+                        disabled={!canBulkSelect}
+                        defaultChecked={
+                          bulkCandidate?.selectedByDefault ?? false
+                        }
+                        aria-describedby={
+                          !canBulkSelect ? reasonId : undefined
+                        }
                         className="h-4 w-4 accent-zinc-900 disabled:cursor-not-allowed disabled:opacity-30 dark:accent-zinc-100"
                       />
                       <label htmlFor={checkboxId} className="sr-only">
-                        Select {artistDisplayName(r.artist)} for outreach
+                        Select {artistDisplayName(r.artist)} for{" "}
+                        {bulkCandidate?.outreachKind === "follow_up"
+                          ? "follow-up"
+                          : "initial outreach"}
                       </label>
                     </>
                   )}
