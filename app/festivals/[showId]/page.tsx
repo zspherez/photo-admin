@@ -15,6 +15,7 @@ import {
 } from "@/lib/sendOutreach";
 import { getTestOverride } from "@/lib/resend";
 import {
+  formatScheduledTime,
   getNextNormalOutreachDispatch,
   isWeekendET,
   getNextMondaySlot,
@@ -313,6 +314,48 @@ function storedOutreachLabel(outreach: {
   if (outreach.status === "queued") return "send in progress";
   if (outreach.status === "manual_review") return "manual review required";
   return outreach.status.replaceAll("_", " ");
+}
+
+function scheduledOutreachTooltip(
+  sendability: OutreachSendability | null,
+  outreach:
+    | {
+        status: string;
+        nextAttemptAt: Date | null;
+        scheduledFor: Date | null;
+      }
+    | null,
+): string | null {
+  const blockingStatus = sendability?.blockingStatus;
+  const blockingScheduledAt = sendability?.blockingNextAttemptAt;
+  if (
+    (blockingStatus === "scheduled" ||
+      blockingStatus === "retry_scheduled") &&
+    blockingScheduledAt
+  ) {
+    const label =
+      blockingStatus === "retry_scheduled" ? "Retry scheduled" : "Scheduled";
+    return `${label} for ${formatScheduledTime(
+      blockingScheduledAt,
+    )} (${appConfig.timeZone})`;
+  }
+
+  if (
+    outreach?.status !== "scheduled" &&
+    outreach?.status !== "retry_scheduled"
+  ) {
+    return null;
+  }
+  const scheduledAt =
+    outreach.status === "retry_scheduled"
+      ? outreach.nextAttemptAt ?? outreach.scheduledFor
+      : outreach.scheduledFor ?? outreach.nextAttemptAt;
+  if (!scheduledAt) return null;
+  const label =
+    outreach.status === "retry_scheduled" ? "Retry scheduled" : "Scheduled";
+  return `${label} for ${formatScheduledTime(scheduledAt)} (${
+    appConfig.timeZone
+  })`;
 }
 
 async function festivalBulkCandidates(
@@ -1854,6 +1897,10 @@ export default async function FestivalDetailPage({
                   : !canSend
                     ? disabledReason
                     : null);
+              const scheduledTooltip = scheduledOutreachTooltip(
+                r.sendability,
+                r.coveredOutreach,
+              );
               const cancellableOutreach =
                 r.sendability?.blockingOutreachId &&
                 isCancellableOutreachStatus(
@@ -1954,12 +2001,16 @@ export default async function FestivalDetailPage({
                         !isDirectOutreachOnly(r.displayContact)
                           ? ` · ${directOutreachNoteValue(r.displayContact)}`
                           : ""}
-                        {displayStatus &&
-                          ` · ${
-                            r.contact
-                              ? `original: ${displayStatus}`
-                              : displayStatus
-                          }`}
+                        {displayStatus && (
+                          <>
+                            {" · "}
+                            <span title={scheduledTooltip ?? undefined}>
+                              {r.contact
+                                ? `original: ${displayStatus}`
+                                : displayStatus}
+                            </span>
+                          </>
+                        )}
                       </p>
                     ) : (
                       <p
@@ -1967,7 +2018,14 @@ export default async function FestivalDetailPage({
                         className="mt-0.5 text-xs text-amber-700 dark:text-amber-400"
                       >
                         No email contact
-                        {displayStatus ? ` · original: ${displayStatus}` : ""}
+                        {displayStatus && (
+                          <>
+                            {" · "}
+                            <span title={scheduledTooltip ?? undefined}>
+                              original: {displayStatus}
+                            </span>
+                          </>
+                        )}
                         {" · "}
                         <Link
                           href={
