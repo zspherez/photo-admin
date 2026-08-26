@@ -73,6 +73,10 @@ test("immediate and scheduled claims recheck template purpose before snapshots",
   assert.match(send, /followUpTemplatePurposeForShow/);
   assert.match(
     send,
+    /const followUpTemplate = followUpTemplateContentForShow\([\s\S]*renderTrackedEmailHtml\(\s*followUpTemplate\.htmlBody/,
+  );
+  assert.match(
+    send,
     /RESEND_TEST_OVERRIDE|deliverySettings\.testOverride/,
   );
   assert.match(
@@ -99,7 +103,7 @@ test("Customize uses the festival template with neutral greetings", () => {
   );
   assert.ok(
     pageBody.indexOf("redirect(capturedTemplate.errorHref)") <
-      pageBody.indexOf("const template = capturedTemplate.value"),
+      pageBody.indexOf("const template = followUpMode"),
   );
   assert.match(page, /eventName: show\.eventName/);
   assert.match(page, /renderCustomizeRecipientContent\(template, vars\)/);

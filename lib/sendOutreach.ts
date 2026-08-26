@@ -11,6 +11,7 @@ import {
   ensureFestivalMultiArtistTemplate,
   ensureFollowUpTemplateForShow,
   ensureOriginalTemplateForShow,
+  followUpTemplateContentForShow,
   followUpTemplatePurposeForShow,
   normalizeLegacyRateTemplateHtml,
   normalizeLegacyOutreachSnapshot,
@@ -3786,6 +3787,11 @@ async function prepareFollowUpOutreach(
   if (template.purpose !== templatePurpose) {
     return { error: "The follow-up template purpose is unavailable" };
   }
+  const followUpTemplate = followUpTemplateContentForShow(
+    parent.show,
+    coveredArtists.length,
+    template,
+  );
 
   const trackingArtistName = coveredArtists
     .map((covered) => artistDisplayName(covered.artist))
@@ -3837,7 +3843,7 @@ async function prepareFollowUpOutreach(
     subject:
       eligibility.mode === "new" && normalizedSubjectOverride
         ? normalizedSubjectOverride
-        : applyTemplate(template.subject, vars),
+        : applyTemplate(followUpTemplate.subject, vars),
     html:
       eligibility.mode === "new" && normalizedHtmlOverride
         ? appendEmailUtmToHtml(
@@ -3850,7 +3856,7 @@ async function prepareFollowUpOutreach(
               : null,
           )
         : renderTrackedEmailHtml(
-            template.htmlBody,
+            followUpTemplate.htmlBody,
             vars,
             "follow_up",
             trackingArtistName,

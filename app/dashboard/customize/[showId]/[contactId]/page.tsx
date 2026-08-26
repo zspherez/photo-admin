@@ -19,6 +19,7 @@ import {
   readOriginalTemplateForShow,
   readOnlyTemplateForPurpose,
   readTemplateForPurpose,
+  followUpTemplateContentForShow,
   followUpTemplatePurposeForShow,
   originalTemplatePurposeForShow,
 } from "@/lib/template";
@@ -212,7 +213,13 @@ export default async function CustomizePage({
   if (!capturedTemplate.ok) {
     redirect(capturedTemplate.errorHref);
   }
-  const template = capturedTemplate.value;
+  const template = followUpMode
+    ? followUpTemplateContentForShow(
+        show,
+        followUpParent?.coveredArtists.length || 1,
+        capturedTemplate.value,
+      )
+    : capturedTemplate.value;
 
   const artistContacts = await db.contact.findMany({
     where: { artistId: contact.artistId },

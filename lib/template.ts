@@ -459,6 +459,27 @@ export interface TemplateContent {
   htmlBody: string;
 }
 
+const FESTIVAL_FOLLOW_UP_INTRO_HTML =
+  "<p>Hi there, following up about the {{artist}} set at {{festival_name}} in a few weeks. Included my original email below for your reference!</p><hr>";
+const FESTIVAL_MULTI_ARTIST_FOLLOW_UP_INTRO_HTML =
+  "<p>Hi there, following up about your artists' sets at {{festival_name}} in a few weeks. Included my original email below for your reference!</p><hr>";
+
+export function followUpTemplateContentForShow(
+  show: { isFestival: boolean },
+  coveredArtistCount: number,
+  template: TemplateContent,
+): TemplateContent {
+  if (!show.isFestival) return template;
+  const intro =
+    coveredArtistCount > 1
+      ? FESTIVAL_MULTI_ARTIST_FOLLOW_UP_INTRO_HTML
+      : FESTIVAL_FOLLOW_UP_INTRO_HTML;
+  return {
+    subject: template.subject,
+    htmlBody: `${intro}${template.htmlBody}`,
+  };
+}
+
 export function normalizeTemplateContent(
   template: TemplateContent
 ): TemplateContent {
