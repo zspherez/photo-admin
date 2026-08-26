@@ -373,6 +373,27 @@ test("covered artists keep shared outreach status and actions without a current 
   );
 });
 
+test("festival scheduled statuses expose the exact time on hover", () => {
+  assert.match(source, /formatScheduledTime/);
+  assert.match(
+    source,
+    /const blockingScheduledAt = sendability\?\.blockingNextAttemptAt[\s\S]*formatScheduledTime\(\s*blockingScheduledAt/,
+  );
+  assert.match(
+    source,
+    /outreach\.scheduledFor \?\? outreach\.nextAttemptAt/,
+  );
+  assert.match(
+    source,
+    /const scheduledTooltip = scheduledOutreachTooltip\(\s*r\.sendability,\s*r\.coveredOutreach/,
+  );
+  assert.equal(
+    source.match(/title=\{scheduledTooltip \?\? undefined\}/g)?.length,
+    2,
+    "Scheduled status text should expose its timestamp with or without a current contact",
+  );
+});
+
 test("festival rows show provider-tracked delivery and engagement badges", () => {
   for (const field of [
     "sentAt",
