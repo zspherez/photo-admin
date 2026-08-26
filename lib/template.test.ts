@@ -8,11 +8,13 @@ import {
   DEFAULT_TEMPLATE_HTML,
   DEFAULT_TEMPLATE_SUBJECT,
   extractVars,
+  FESTIVAL_MULTI_ARTIST_TEMPLATE_HTML,
   FESTIVAL_TEMPLATE_HTML,
   FESTIVAL_TEMPLATE_SUBJECT,
   FOLLOW_UP_TEMPLATE_HTML,
   FOLLOW_UP_TEMPLATE_NAME,
   FOLLOW_UP_TEMPLATE_SUBJECT,
+  followUpTemplateContentForShow,
   followUpTemplatePurposeForShow,
   malformedTemplateVariableTokens,
   normalizeLegacyOutreachSnapshot,
@@ -37,6 +39,47 @@ test("follow-up templates preserve festival context", () => {
   assert.equal(
     followUpTemplatePurposeForShow({ isFestival: true }, 2),
     "festival_multi_artist",
+  );
+});
+
+test("festival follow-ups prepend context to the saved festival template", () => {
+  const single = followUpTemplateContentForShow(
+    { isFestival: true },
+    1,
+    {
+      subject: FESTIVAL_TEMPLATE_SUBJECT,
+      htmlBody: FESTIVAL_TEMPLATE_HTML,
+    },
+  );
+  assert.equal(single.subject, FESTIVAL_TEMPLATE_SUBJECT);
+  assert.match(
+    single.htmlBody,
+    /^<p>Hi there, following up about the \{\{artist\}\} set at \{\{festival_name\}\}/,
+  );
+  assert.match(single.htmlBody, /reference!<\/p><hr><p>Hi there, wanted/);
+  assert.equal(single.htmlBody.endsWith(FESTIVAL_TEMPLATE_HTML), true);
+
+  const shared = followUpTemplateContentForShow(
+    { isFestival: true },
+    2,
+    {
+      subject: "Festival",
+      htmlBody: FESTIVAL_MULTI_ARTIST_TEMPLATE_HTML,
+    },
+  );
+  assert.match(shared.htmlBody, /following up about your artists' sets/);
+  assert.equal(
+    shared.htmlBody.endsWith(FESTIVAL_MULTI_ARTIST_TEMPLATE_HTML),
+    true,
+  );
+
+  const regular = {
+    subject: FOLLOW_UP_TEMPLATE_SUBJECT,
+    htmlBody: FOLLOW_UP_TEMPLATE_HTML,
+  };
+  assert.equal(
+    followUpTemplateContentForShow({ isFestival: false }, 1, regular),
+    regular,
   );
 });
 

@@ -122,6 +122,10 @@ test("follow-up Customize uses show-aware templates and real follow-up actions",
   assert.match(page, /parentOutreachId/);
   assert.match(page, /followUpTemplatePurposeForShow/);
   assert.match(page, /readTemplateForPurpose\(followUpTemplatePurpose!\)/);
+  assert.match(
+    page,
+    /followUpTemplateContentForShow\(\s*show,\s*followUpParent\?\.coveredArtists\.length \|\| 1,\s*capturedTemplate\.value/,
+  );
   assert.match(page, /getFollowUpEligibilityBatch/);
   assert.match(page, /followUpParent\?\.followUp/);
   assert.match(page, /followUpParent\.coveredArtists[\s\S]*artistDisplayName/);
