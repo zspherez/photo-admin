@@ -3383,6 +3383,8 @@ export async function getFollowUpEligibilityBatch(
       suppressedEmails,
       allowMissingFrom: mode === "new",
       requestedRecipientEmails: currentRecipients,
+      requestedFestivalAllContactsSend:
+        parent.festivalAllContactsSend,
       requestedRecipientDeliveryMode:
         mode === "retry" && child
           ? isRecipientDeliveryMode(child.recipientDeliveryMode)

@@ -1949,6 +1949,19 @@ test("festival all-contacts follow-ups preserve mode when one current email rema
     assert.equal(decision.festivalAllContactsSend, true);
     assert.deepEqual(decision.currentRecipients, ["current@example.com"]);
   }
+
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  const eligibility = source.slice(
+    source.indexOf("export async function getFollowUpEligibilityBatch"),
+    source.indexOf("async function prepareFollowUpOutreach"),
+  );
+  assert.match(
+    eligibility,
+    /requestedFestivalAllContactsSend:\s*parent\.festivalAllContactsSend,[\s\S]*preserveFestivalAllContactsSend: true/,
+  );
 });
 
 test("a direct-only contact cannot trigger full-team email fanout", () => {
