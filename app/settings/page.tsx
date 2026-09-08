@@ -115,6 +115,13 @@ export default async function SettingsIndex() {
       description: "Lifetime listening history. Rotate token here.",
     },
     {
+      title: "Email suppressions",
+      href: "/settings/suppressions",
+      status: "Review",
+      ok: true,
+      description: "Find blocked artist addresses, review reasons, and unblock with an audit note.",
+    },
+    {
       title: "Contacts",
       href: "/settings/contacts",
       status: `${contactCount.toLocaleString()} contacts`,
