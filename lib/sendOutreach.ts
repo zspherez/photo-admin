@@ -1816,6 +1816,7 @@ export interface BouncedOutreachResetState {
   contactMatchesArtist: boolean;
   replacementContactSuppressed: boolean;
   deliverableRecipientCount: number;
+  releasedBouncedRecipients?: string[];
   attempt: {
     status: string;
     testSend: boolean | null;
@@ -1828,11 +1829,10 @@ export function bouncedOutreachResetError(
   state: BouncedOutreachResetState,
 ): string | null {
   if (
-    state.kind !== "original" ||
     state.status !== "failed" ||
     !state.bouncedAt
   ) {
-    return "Only a bounced original outreach can be marked unsent";
+    return "Only a bounced outreach can be marked unsent";
   }
   if (
     !state.attempt ||
@@ -1851,7 +1851,8 @@ export function bouncedOutreachResetError(
   }
   if (
     state.bouncedRecipients.some((email) =>
-      normalizeEmails(state.currentRecipients).includes(email),
+      normalizeEmails(state.currentRecipients).includes(email) &&
+      !state.releasedBouncedRecipients?.includes(email),
     )
   ) {
     return "Fix the bounced recipient before marking this outreach unsent";
@@ -1862,7 +1863,12 @@ export function bouncedOutreachResetError(
   if (state.deliverableRecipientCount === 0) {
     return "All current recipients are suppressed";
   }
-  if (sameEmails(state.recipientEmails, state.currentRecipients)) {
+  if (
+    sameEmails(state.recipientEmails, state.currentRecipients) &&
+    !state.bouncedRecipients.every((email) =>
+      state.releasedBouncedRecipients?.includes(email),
+    )
+  ) {
     return "The intended recipient snapshot has not changed";
   }
   return null;
@@ -1896,6 +1902,7 @@ async function withSerializableRetry<T>(
 export async function resetBouncedOutreachForResend(
   outreachId: string,
   replacementContactId: string,
+  review?: { expectedIdempotencyKey: string; allowReleasedRecipients: boolean },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   return withSerializableRetry(async (tx) => {
     const outreach = await tx.outreach.findUnique({
@@ -1910,9 +1917,16 @@ export async function resetBouncedOutreachForResend(
         recipientEmails: true,
         fullTeamSend: true,
         festivalAllContactsSend: true,
+        coveredArtists: { select: { artistId: true } },
       },
     });
     if (!outreach) return { ok: false, error: "Outreach not found" };
+    if (review && review.expectedIdempotencyKey !== outreach.idempotencyKey) {
+      return { ok: false, error: "This outreach changed. Refresh and review the current attempt." };
+    }
+    const coveredArtistIds = outreach.coveredArtists.length
+      ? outreach.coveredArtists.map((row) => row.artistId)
+      : [outreach.artistId];
     const [attempt, replacementContact, activeContacts] = await Promise.all([
       tx.outreachSendAttempt.findUnique({
         where: { idempotencyKey: outreach.idempotencyKey },
@@ -1938,11 +1952,11 @@ export async function resetBouncedOutreachForResend(
       }),
       tx.contact.findMany({
         where: {
-          artistId: outreach.artistId,
+          artistId: { in: outreach.kind === "follow_up" ? coveredArtistIds : [outreach.artistId] },
           state: "active",
           email: { not: null },
         },
-        select: { email: true },
+        select: { email: true, artistId: true, state: true },
       }),
     ]);
     const replacementEmail =
@@ -1950,7 +1964,9 @@ export async function resetBouncedOutreachForResend(
         ? normalizeEmails([replacementContact.email ?? ""])[0] ?? null
         : null;
     const currentRecipients =
-      outreach.fullTeamSend || outreach.festivalAllContactsSend
+      outreach.kind === "follow_up"
+        ? currentFollowUpRecipientEmails(coveredArtistIds, activeContacts)
+        : outreach.fullTeamSend || outreach.festivalAllContactsSend
         ? normalizeEmails(
             activeContacts.flatMap((contact) =>
               contact.email ? [contact.email] : [],
@@ -1959,6 +1975,7 @@ export async function resetBouncedOutreachForResend(
         : replacementEmail
           ? [replacementEmail]
           : [];
+    await acquireOutreachRecipientPolicyLocks(tx, currentRecipients);
     const suppressions =
       currentRecipients.length === 0
         ? []
@@ -1972,6 +1989,16 @@ export async function resetBouncedOutreachForResend(
     const bouncedRecipients = normalizeEmails(
       attempt?.webhookEvents.flatMap((event) => event.recipientEmails) ?? [],
     );
+    const releases = review?.allowReleasedRecipients && outreach.bouncedAt
+      ? await tx.emailSuppressionRelease.findMany({
+          where: {
+            normalizedEmail: { in: bouncedRecipients },
+            suppressedAt: { gte: outreach.bouncedAt },
+            createdAt: { gte: outreach.bouncedAt },
+          },
+          select: { normalizedEmail: true },
+        })
+      : [];
     const error = bouncedOutreachResetError({
       status: outreach.status,
       kind: outreach.kind,
@@ -1979,10 +2006,14 @@ export async function resetBouncedOutreachForResend(
       recipientEmails: outreach.recipientEmails,
       currentRecipients,
       bouncedRecipients,
+      releasedBouncedRecipients: releases
+        .map((row) => row.normalizedEmail)
+        .filter((email) => !suppressedEmails.has(email)),
       contactMatchesArtist:
         replacementContact?.state === "active" &&
         replacementContact.artistId === outreach.artistId &&
-        replacementEmail !== null,
+        replacementEmail !== null &&
+        currentRecipients.includes(replacementEmail),
       replacementContactSuppressed:
         replacementEmail !== null && suppressedEmails.has(replacementEmail),
       deliverableRecipientCount: currentRecipients.filter(
@@ -2001,8 +2032,8 @@ export async function resetBouncedOutreachForResend(
       },
       data: {
         status: "cancelled",
-        error:
-          "Operator marked bounced original outreach unsent after recipient correction",
+        error: "Operator reviewed bounced outreach for resend",
+        contactId: replacementContactId,
         idempotencyKey: identity.idempotencyKey,
         attemptCount: 0,
         lastAttemptAt: null,
@@ -3344,7 +3375,11 @@ export async function getFollowUpEligibilityBatch(
       (email) => !suppressedEmails.includes(email),
     );
     const preferredContactId =
-      mode === "retry" ? child?.contactId : parent.contactId;
+      mode === "retry" ||
+      (child?.status === "cancelled" &&
+        child.error === "Operator reviewed bounced outreach for resend")
+        ? child?.contactId
+        : parent.contactId;
     const contact = currentFollowUpContact(
       parent.artistId,
       unsuppressedRecipients,

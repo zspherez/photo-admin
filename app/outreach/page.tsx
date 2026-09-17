@@ -256,6 +256,7 @@ export default async function OutreachLogPage({
       createdAt: true,
       nextAttemptAt: true,
       deliveredAt: true,
+      bouncedAt: true,
       openCount: true,
       clickCount: true,
       error: true,
@@ -597,6 +598,11 @@ export default async function OutreachLogPage({
                       <p className="text-xs text-zinc-400">
                         {sentDate.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                       </p>
+                      {o.status === "failed" && o.bouncedAt && (
+                        <Link href={`/outreach/${o.id}/resend`} className="rounded border px-3 py-1.5 text-xs font-medium">
+                          Review &amp; resend
+                        </Link>
+                      )}
                       {followUpEligibility && (
                         <FollowUpButton
                           eligibility={followUpEligibility}
