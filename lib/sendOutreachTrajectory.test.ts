@@ -186,7 +186,10 @@ test("new follow-ups rebind to current active recipients while retries remain im
     send.indexOf("type CapturedTrajectoryPreparation"),
   );
   assert.match(eligibility, /currentFollowUpRecipientEmails/);
-  assert.match(eligibility, /mode === "retry" \? child\?\.contactId : parent\.contactId/);
+  assert.match(
+    eligibility,
+    /mode === "retry" \|\|\s*\(child\?\.status === "cancelled" &&\s*child\.error === "Operator reviewed bounced outreach for resend"\)\s*\? child\?\.contactId\s*: parent\.contactId/,
+  );
   assert.match(eligibility, /requestedRecipientEmails: currentRecipients/);
   assert.doesNotMatch(
     eligibility,
