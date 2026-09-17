@@ -211,6 +211,28 @@ test("bounced outreach reset requires a corrected verified recipient", () => {
     }) ?? "",
     /not conclusively verified/,
   );
+  assert.equal(bouncedOutreachResetError({ ...base, kind: "follow_up" }), null);
+  const sameAddress = {
+    ...base,
+    currentRecipients: ["old@example.com"],
+    releasedBouncedRecipients: ["old@example.com"],
+  };
+  assert.equal(bouncedOutreachResetError(sameAddress), null);
+  assert.match(bouncedOutreachResetError({
+    ...sameAddress, releasedBouncedRecipients: [],
+  }) ?? "", /Fix the bounced recipient/);
+  assert.match(bouncedOutreachResetError({
+    ...sameAddress, replacementContactSuppressed: true,
+  }) ?? "", /still suppressed/);
+  assert.match(bouncedOutreachResetError({
+    ...sameAddress, deliverableRecipientCount: 0,
+  }) ?? "", /All current recipients/);
+  assert.match(bouncedOutreachResetError({
+    ...sameAddress, status: "sent",
+  }) ?? "", /Only a bounced/);
+  assert.match(bouncedOutreachResetError({
+    ...sameAddress, attempt: { ...base.attempt, status: "uncertain" },
+  }) ?? "", /not conclusively verified/);
 
   const source = readFileSync(
     new URL("./sendOutreach.ts", import.meta.url),
@@ -224,6 +246,11 @@ test("bounced outreach reset requires a corrected verified recipient", () => {
   assert.match(reset, /status: "cancelled"/);
   assert.match(reset, /resetDeliveryState\(\)/);
   assert.doesNotMatch(reset, /outreachSendAttempt\.(?:update|delete)/);
+  assert.match(reset, /review\.expectedIdempotencyKey !== outreach\.idempotencyKey/);
+  assert.match(reset, /suppressedAt: \{ gte: outreach\.bouncedAt \}/);
+  assert.match(reset, /createdAt: \{ gte: outreach\.bouncedAt \}/);
+  assert.match(reset, /!suppressedEmails\.has\(email\)/);
+  assert.ok(reset.indexOf("await acquireOutreachRecipientPolicyLocks") < reset.indexOf("await tx.emailSuppression.findMany"));
 });
 
 test("historical sent attempts remain untouched by legacy pricing protection", () => {

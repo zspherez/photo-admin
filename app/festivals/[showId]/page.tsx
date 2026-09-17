@@ -2109,6 +2109,15 @@ export default async function FestivalDetailPage({
                         </PendingSubmitButton>
                       </form>
                     )}
+                  {r.coveredOutreach?.status === "failed" && r.coveredOutreach.bouncedAt && (
+                    <LinkButton
+                      href={`/outreach/${r.coveredOutreach.id}/resend`}
+                      variant="secondary"
+                      size="sm"
+                    >
+                      Review &amp; resend
+                    </LinkButton>
+                  )}
                   {outreachEnabled &&
                     !r.association.rejectedAt &&
                     r.followUpEligibility && (
