@@ -1,5 +1,6 @@
 import { normalizeArbitraryEmailContent } from "@/lib/arbitraryEmailContent";
 import { normalizeEmail, normalizeEmails } from "@/lib/resend";
+import type { ResendAttachmentSnapshot } from "@/lib/resend";
 
 export const ARBITRARY_EMAIL_UTM_KEYS = [
   "utm_source",
@@ -13,6 +14,7 @@ export type ArbitraryEmailUtmKey = (typeof ARBITRARY_EMAIL_UTM_KEYS)[number];
 export type ArbitraryEmailUtmValues = Record<ArbitraryEmailUtmKey, string>;
 
 export interface ArbitraryEmailInput {
+  attachments?: ResendAttachmentSnapshot[];
   recipientEmails: string[];
   subject: string;
   html: string;

@@ -1,6 +1,8 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
+import { EmailAttachmentsInput } from "@/components/email-attachments-input";
+import { emailAttachmentError } from "@/lib/emailAttachmentPolicy";
 import { sendArbitraryEmailAction } from "@/app/emails/actions";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { TemplateEditor } from "@/components/template-editor";
@@ -12,7 +14,13 @@ export function ComposeEmailForm({
   compositionId: string;
   scheduleLabel: string;
 }) {
-  const [state, formAction] = useActionState(sendArbitraryEmailAction, {
+  const [files, setFiles] = useState<File[]>([]);
+  const [state, formAction] = useActionState(async (previous: { error: string | null }, data: FormData) => {
+    const error = emailAttachmentError(files);
+    if (error) return { error };
+    for (const file of files) data.append("attachments", file);
+    return sendArbitraryEmailAction(previous, data);
+  }, {
     error: null,
   });
 
@@ -60,6 +68,7 @@ export function ComposeEmailForm({
         unsafe schemes and hidden tracking pixels are removed.
       </p>
 
+      <EmailAttachmentsInput files={files} onChange={setFiles} />
       <fieldset>
         <legend className="text-sm font-medium">UTM tags</legend>
         <p className="mt-1 text-xs text-zinc-500">

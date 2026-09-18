@@ -6,6 +6,8 @@ import {
   buildArbitraryResendDeliveryPolicy,
   getResendCredentialScope,
   hashResendRequestSnapshot,
+  hashAttachmentContent,
+  type ResendAttachmentBlob,
   type PrepareArbitraryResendRequestArgs,
   type PrepareResendRequestResult,
   type ResendDeliverySettingsSnapshot,
@@ -43,6 +45,9 @@ class Mutex {
 }
 
 interface MemoryTransaction {
+  outreachAttachmentBlob: {
+    findMany: () => Promise<ResendAttachmentBlob[]>;
+  };
   releases: Array<() => void>;
   $queryRaw: (query: { text: string; values: unknown[] }) => Promise<unknown[]>;
   arbitraryEmail: {
@@ -67,6 +72,7 @@ interface MemoryTransaction {
 }
 
 class MemoryArbitraryEmailDatabase {
+  attachmentBlobs: ResendAttachmentBlob[] = [];
   record: Record<string, unknown> | null = null;
   sentMailCopyRecord: Record<string, unknown> | null = null;
   createCount = 0;
@@ -184,6 +190,7 @@ class MemoryArbitraryEmailDatabase {
       await this.transactionMutex.acquire(),
     ];
     const tx: MemoryTransaction = {
+      outreachAttachmentBlob: { findMany: async () => this.attachmentBlobs },
       releases,
       $queryRaw: async (query) => {
         if (query.text.includes("pg_advisory_xact_lock")) {
@@ -307,7 +314,7 @@ function prepareWithSettings(
       text: args.text,
       headers: { "X-Arbitrary-Email-Id": args.arbitraryEmailId },
       tags: [{ name: "arbitrary_email_id", value: args.arbitraryEmailId }],
-      attachments: [],
+      attachments: args.attachments ?? [],
     };
     return {
       ok: true,
@@ -798,6 +805,64 @@ test("scheduled retries retain their committed credential scope", async () => {
   assert.equal(submissions, 2);
   assert.equal(database.record?.providerCredentialScope, committedScope);
   assert.equal(database.record?.firstAttemptAt, firstAttemptAt);
+});
+
+test("immediate and queued attachments survive dispatch and immutable retries", async () => {
+  const content = new TextEncoder().encode("%PDF-portfolio");
+  const blob = { sha256: hashAttachmentContent(content), byteLength: content.length, content };
+  const attachment = { filename: "portfolio.pdf", contentSha256: blob.sha256, byteLength: blob.byteLength, contentType: "application/pdf", contentId: null };
+  for (const queued of [false, true]) {
+    const database = new MemoryArbitraryEmailDatabase();
+    database.attachmentBlobs = [blob];
+    const now = { value: new Date("2026-07-20T12:00:00Z") };
+    let submissions = 0;
+    let originalHash: string | null = null;
+    const deps = dependencies(database, { ...REAL_SETTINGS }, async (request, hash, blobs) => {
+      submissions++;
+      assert.deepEqual(request.attachments, [attachment]);
+      assert.deepEqual(blobs, [blob]);
+      assert.equal(hash, hashResendRequestSnapshot(request));
+      originalHash ??= hash;
+      assert.equal(hash, originalHash);
+      return queued && submissions === 1
+        ? { providerMessageId: null, error: "temporary failure", failureDisposition: "retryable" }
+        : { providerMessageId: "message-attached", error: null, failureDisposition: null };
+    });
+    deps.now = () => now.value;
+    const input = { ...INPUT, attachments: [attachment] };
+    if (!queued) {
+      assert.equal((await sendArbitraryEmailWithDependencies(input, deps)).ok, true);
+      assert.equal(submissions, 1);
+      continue;
+    }
+    const id = "d9bde2a6-8c6b-4424-9907-14cdb46867a2";
+    const scheduledFor = new Date("2026-07-20T13:00:00Z");
+    assert.equal((await queueArbitraryEmailWithDependencies(input, scheduledFor, id, deps)).ok, true);
+    assert.deepEqual(database.record?.attachmentManifest, [attachment]);
+    assert.equal((await queueArbitraryEmailWithDependencies({
+      ...input, attachments: [{ ...attachment, filename: "changed.pdf" }],
+    }, scheduledFor, id, deps)).ok, false);
+    now.value = new Date("2026-07-20T13:00:01Z");
+    assert.equal((await dispatchScheduledArbitraryEmailWithDependencies(id, deps)).retryScheduled, true);
+    now.value = new Date("2026-07-20T13:01:02Z");
+    assert.equal((await dispatchScheduledArbitraryEmailWithDependencies(id, deps)).ok, true);
+    assert.equal(submissions, 2);
+  }
+});
+
+test("missing persisted attachment bytes prevent provider submission", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  let submitted = false;
+  const deps = dependencies(database, { ...REAL_SETTINGS }, async () => {
+    submitted = true;
+    return { providerMessageId: "unexpected", error: null, failureDisposition: null };
+  });
+  const result = await sendArbitraryEmailWithDependencies({
+    ...INPUT,
+    attachments: [{ filename: "missing.pdf", byteLength: 1, contentSha256: "a".repeat(64), contentType: "application/pdf", contentId: null }],
+  }, deps);
+  assert.equal(result.ok, false);
+  assert.equal(submitted, false);
 });
 
 test("credential rotation after an in-flight scheduled attempt fails closed", async () => {

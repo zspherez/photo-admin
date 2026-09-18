@@ -16,6 +16,7 @@ import {
 } from "@/lib/sendArbitraryEmail";
 import { getNextNormalOutreachDispatch } from "@/lib/schedule";
 import { db } from "@/lib/db";
+import { readAndStoreEmailAttachments } from "@/lib/emailAttachments";
 
 export interface ArbitraryEmailActionState {
   error: string | null;
@@ -71,14 +72,17 @@ export async function sendArbitraryEmailAction(
     return { error: "This composition identity is invalid; reload and retry" };
   }
 
+  const upload = await readAndStoreEmailAttachments(formData);
+  if (!upload.ok) return { error: upload.error };
+  const input = { ...parsed.input, attachments: upload.attachments };
   const result =
     intent === "queue"
       ? await queueArbitraryEmail(
-          parsed.input,
+          input,
           getNextNormalOutreachDispatch(),
           compositionId,
         )
-      : await sendArbitraryEmail(parsed.input);
+      : await sendArbitraryEmail(input);
   revalidatePath("/emails");
   if (!result.ok) {
     return { error: result.error };
