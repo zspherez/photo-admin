@@ -6,6 +6,8 @@ import {
 } from "@/lib/arbitraryEmail";
 import { normalizeArbitraryEmailContent } from "@/lib/arbitraryEmailContent";
 import { db } from "@/lib/db";
+import { attachmentManifestJson, readAttachmentManifest, loadEmailAttachmentBlobs } from "@/lib/emailAttachments";
+import type { ResendAttachmentBlob } from "@/lib/resend";
 import { acquireOutreachRecipientPolicyLocks } from "@/lib/outreachPolicyLocks";
 import { getResendCredentialScopeConflict } from "@/lib/sendOutreach";
 import {
@@ -67,7 +69,7 @@ export interface SendArbitraryEmailDependencies {
   submit: (
     request: Parameters<typeof sendPreparedEmailViaResend>[0],
     expectedHash: string,
-    attachmentBlobs: [],
+    attachmentBlobs: ResendAttachmentBlob[],
     credential: ReturnType<typeof getResendSubmissionCredential>,
   ) => Promise<SendResult>;
 }
@@ -154,6 +156,7 @@ function sentMailboxCopyStateForLockedSettings(
 
 function sameQueuedSnapshot(
   stored: {
+    attachmentManifest?: Prisma.JsonValue;
     recipientEmails: string[];
     subject: string;
     html: string;
@@ -170,6 +173,7 @@ function sameQueuedSnapshot(
   scheduledFor: Date,
 ): boolean {
   return (
+    JSON.stringify(readAttachmentManifest(stored.attachmentManifest)) === JSON.stringify(input.attachments ?? []) &&
     sameStrings(stored.recipientEmails, input.recipientEmails) &&
     stored.subject === input.subject &&
     stored.html === content.html &&
@@ -267,6 +271,7 @@ export async function queueArbitraryEmailWithDependencies(
               recipientEmails: input.recipientEmails,
               subject: input.subject,
               html: content.content.html,
+              attachmentManifest: attachmentManifestJson(input.attachments),
               text: content.content.text,
               utmSource: input.utm.utm_source || null,
               utmMedium: input.utm.utm_medium || null,
@@ -391,6 +396,7 @@ export async function sendArbitraryEmailWithDependencies(
   const id = dependencies.createId();
   const idempotencyKey = `arbitrary-email/${id}`;
   const prepared = await dependencies.prepare({
+    attachments: input.attachments,
     to: input.recipientEmails,
     subject: input.subject,
     html: content.content.html,
@@ -415,6 +421,7 @@ export async function sendArbitraryEmailWithDependencies(
       recipientEmails: prepared.intendedRecipients,
       subject: input.subject,
       html: prepared.request.html,
+      attachmentManifest: attachmentManifestJson(input.attachments),
       text: prepared.request.text,
       utmSource: input.utm.utm_source || null,
       utmMedium: input.utm.utm_medium || null,
@@ -574,11 +581,12 @@ export async function sendArbitraryEmailWithDependencies(
           return { ok: false, error };
         }
 
+        const attachmentBlobs = await loadEmailAttachmentBlobs(request.attachments, tx);
         providerSubmissionStarted = true;
         const submission = await dependencies.submit(
           request,
           stored.requestHash,
-          [],
+          attachmentBlobs,
           submissionCredential,
         );
         const completedAt = dependencies.now();
@@ -849,6 +857,7 @@ async function ensureScheduledArbitraryRequest(
   }
 
   const prepared = await dependencies.prepare({
+    attachments: readAttachmentManifest(row.attachmentManifest),
     to: row.recipientEmails,
     subject: row.subject,
     html: row.html,
@@ -1266,11 +1275,12 @@ async function submitScheduledArbitraryEmail(
               failureDisposition: null,
             },
           });
+          const attachmentBlobs = await loadEmailAttachmentBlobs(request.attachments, tx);
           providerSubmissionStarted = true;
           const submission = await dependencies.submit(
             request,
             stored.requestHash,
-            [],
+            attachmentBlobs,
             submissionCredential,
           );
           const completedAt = dependencies.now();

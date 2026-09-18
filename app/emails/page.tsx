@@ -11,6 +11,7 @@ import {
 } from "@/app/emails/actions";
 import { EmailBulkSelection } from "@/components/email-bulk-selection";
 import { db } from "@/lib/db";
+import { readAttachmentManifest } from "@/lib/emailAttachments";
 import { getPagination } from "@/lib/match";
 import { formatScheduledTime } from "@/lib/schedule";
 import {
@@ -114,6 +115,7 @@ export default async function EmailsPage({
       recipientEmails: true,
       subject: true,
       html: true,
+      attachmentManifest: true,
       text: true,
       status: true,
       error: true,
@@ -256,6 +258,11 @@ export default async function EmailsPage({
                         <div className="mt-1 text-xs text-red-600 dark:text-red-400">
                           {email.error}
                         </div>
+                      )}
+                      {readAttachmentManifest(email.attachmentManifest).length > 0 && (
+                        <p className="mt-1 break-all text-xs text-zinc-500">
+                          Attachments: {readAttachmentManifest(email.attachmentManifest).map((file) => file.filename).join(", ")}
+                        </p>
                       )}
                       <details className="mt-2 text-xs">
                         <summary className="cursor-pointer text-zinc-500">

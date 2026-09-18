@@ -214,6 +214,7 @@ export interface PrepareResendRequestArgs {
 }
 
 export interface PrepareArbitraryResendRequestArgs {
+  attachments?: ResendAttachmentSnapshot[];
   to: string[];
   subject: string;
   html: string;
@@ -1213,6 +1214,7 @@ export function buildResendRequestBatchSnapshot({
 }
 
 export async function prepareArbitraryResendRequest({
+  attachments = [],
   to,
   subject,
   html,
@@ -1241,7 +1243,7 @@ export async function prepareArbitraryResendRequest({
     text,
     headers: { "X-Arbitrary-Email-Id": arbitraryEmailId },
     tags: [{ name: "arbitrary_email_id", value: arbitraryEmailId }],
-    attachments: [],
+    attachments,
   };
   return {
     ok: true,

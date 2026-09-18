@@ -1183,6 +1183,7 @@ model ArbitraryEmail {
   recipientEmails         String[]             @default([])
   subject                 String
   html                    String
+  attachmentManifest      Json                 @default("[]")
   text                    String?
   utmSource               String?
   utmMedium               String?
