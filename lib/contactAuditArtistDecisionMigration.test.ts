@@ -13,6 +13,13 @@ const schema = readFileSync(
   new URL("../prisma/schema.prisma", import.meta.url),
   "utf8",
 );
+const contactDeletionMigration = readFileSync(
+  new URL(
+    "../prisma/migrations/20260924125000_allow_audited_contact_deletion/migration.sql",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("artist audit decisions are normalized, constrained, and immutable", () => {
   assert.match(migration, /^BEGIN;/);
@@ -68,8 +75,24 @@ test("Prisma exposes artist decisions and selected contact provenance", () => {
     schema,
     /contactAuditDecisions ContactAuditArtistDecision\[\]/,
   );
+  assert.match(schema, /createdContactId\s+String\?/);
+  assert.match(schema, /contactId\s+String/);
+  assert.doesNotMatch(schema, /createdContact\s+Contact\?/);
+  assert.doesNotMatch(schema, /auditDecisionMutations ContactAuditDecisionContact\[\]/);
+});
+
+test("deleting a contact preserves immutable audit identifiers and snapshots", () => {
+  assert.match(contactDeletionMigration, /^BEGIN;/);
   assert.match(
-    schema,
-    /auditDecisionMutations ContactAuditDecisionContact\[\]/,
+    contactDeletionMigration,
+    /DROP CONSTRAINT "ContactAuditArtistDecision_createdContactId_fkey"/,
   );
+  assert.match(
+    contactDeletionMigration,
+    /DROP CONSTRAINT "ContactAuditDecisionContact_contactId_fkey"/,
+  );
+  assert.doesNotMatch(contactDeletionMigration, /DELETE FROM|UPDATE "ContactAudit/);
+  assert.match(migration, /ContactAuditArtistDecision_immutable_delete/);
+  assert.match(migration, /ContactAuditDecisionContact_immutable_delete/);
+  assert.match(contactDeletionMigration, /COMMIT;\s*$/);
 });

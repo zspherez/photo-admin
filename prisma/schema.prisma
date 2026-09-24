@@ -373,8 +373,6 @@ model Contact {
   isFullTeam         Boolean           @default(false)
   outreaches         Outreach[]
   auditJobs          ContactAuditJob[]
-  auditDecisionMutations ContactAuditDecisionContact[]
-  createdByAuditDecisions ContactAuditArtistDecision[] @relation("ContactAuditCreatedContact")
   researchDirectOutreachProposals ContactResearchDirectOutreachProposal[]
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
@@ -581,8 +579,8 @@ model ContactAuditArtistDecision {
   action                String
   selectedAlternativeId String?
   selectedAlternative   ContactAuditAlternative?     @relation("ContactAuditArtistSelectedAlternative", fields: [selectedAlternativeId], references: [id], onDelete: Restrict)
+  /// Immutable historical identity; the contact may later be deleted.
   createdContactId      String?
-  createdContact        Contact?                     @relation("ContactAuditCreatedContact", fields: [createdContactId], references: [id], onDelete: Restrict)
   contactMutations      ContactAuditDecisionContact[]
   resolvedAt            DateTime
   createdAt             DateTime                     @default(now())
@@ -596,8 +594,8 @@ model ContactAuditArtistDecision {
 model ContactAuditDecisionContact {
   decisionId                 String
   decision                   ContactAuditArtistDecision @relation(fields: [decisionId], references: [id], onDelete: Restrict)
+  /// Immutable roster identity and snapshot survive contact deletion.
   contactId                  String
-  contact                    Contact                    @relation(fields: [contactId], references: [id], onDelete: Restrict)
   action                     String
   snapshotEmail              String?
   snapshotPhone              String?
