@@ -65,6 +65,9 @@ test("outreach sent date and follow-up controls stay right aligned", () => {
     outreach,
     /className="ml-auto flex shrink-0 flex-col items-end gap-1\.5"/,
   );
+  assert.match(outreach, /scheduledFor: true/);
+  assert.match(outreach, /outreachHistoryTimestamp\(o, appConfig\.timeZone\)/);
+  assert.match(outreach, /dateTime=\{timestamp\.date\.toISOString\(\)\}/);
 });
 
 test("outreach email center shows a recent click stream without client metadata", () => {

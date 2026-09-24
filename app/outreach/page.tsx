@@ -32,6 +32,7 @@ import {
   isDirectOutreachOnly,
 } from "@/lib/contactDisplay";
 import { outreachClickLabel } from "@/lib/outreachClickStream";
+import { outreachHistoryTimestamp } from "@/lib/outreachHistoryTimestamp";
 import { EmailBulkSelection } from "@/components/email-bulk-selection";
 import { RecentLinkClicks } from "@/components/recent-link-clicks";
 import { updateOutreachEmailVisibilityAction } from "@/app/outreach/actions";
@@ -254,6 +255,7 @@ export default async function OutreachLogPage({
       status: true,
       sentAt: true,
       createdAt: true,
+      scheduledFor: true,
       nextAttemptAt: true,
       deliveredAt: true,
       bouncedAt: true,
@@ -492,7 +494,7 @@ export default async function OutreachLogPage({
           <Card className="mt-3">
             <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
             {outreach.map((o) => {
-              const sentDate = o.sentAt ?? o.createdAt;
+              const timestamp = outreachHistoryTimestamp(o, appConfig.timeZone);
               const activeContact =
                 o.contact?.state === "active" ? o.contact : null;
               const showLabel = (
@@ -595,9 +597,13 @@ export default async function OutreachLogPage({
                       )}
                     </div>
                     <div className="ml-auto flex shrink-0 flex-col items-end gap-1.5">
-                      <p className="text-xs text-zinc-400">
-                        {sentDate.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                      </p>
+                      <time
+                        dateTime={timestamp.date.toISOString()}
+                        className="text-xs text-zinc-400"
+                        title={appConfig.timeZone}
+                      >
+                        {timestamp.label}: {timestamp.text}
+                      </time>
                       {o.status === "failed" && o.bouncedAt && (
                         <Link href={`/outreach/${o.id}/resend`} className="rounded border px-3 py-1.5 text-xs font-medium">
                           Review &amp; resend
