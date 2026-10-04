@@ -43,3 +43,17 @@ export function groupFestivalManagerTargets(
   }
   return { groups: [...grouped.values()], skipped };
 }
+
+export function sharedFestivalManagementArtistIds(
+  targets: readonly FestivalManagerTarget[],
+): Set<string> {
+  const { groups } = groupFestivalManagerTargets(
+    targets,
+    new Set(targets.map((target) => target.contactId)),
+  );
+  return new Set(
+    groups
+      .filter((group) => new Set(group.artistIds).size > 1)
+      .flatMap((group) => group.artistIds),
+  );
+}

@@ -92,7 +92,10 @@ import {
   satisfiesFestivalLeadTime,
 } from "@/lib/festivalEligibility";
 import { normalizeEmail, normalizeEmails } from "@/lib/resend";
-import { groupFestivalManagerTargets } from "@/lib/festivalOutreach";
+import {
+  groupFestivalManagerTargets,
+  sharedFestivalManagementArtistIds,
+} from "@/lib/festivalOutreach";
 import {
   FestivalBulkOutreachForm,
   type FestivalBulkConfirmationCandidate,
@@ -1354,6 +1357,18 @@ export default async function FestivalDetailPage({
     new Set(rows.flatMap((r) => r.genres.map((g) => g.toLowerCase())))
   ).sort();
 
+  const sharedManagementArtistIds = sharedFestivalManagementArtistIds(
+    rows
+      .filter((row) => !row.association.rejectedAt)
+      .flatMap((row) =>
+        row.artist.contacts.flatMap((contact) => {
+          const email = normalizeEmail(contact.email ?? "");
+          return email
+            ? [{ artistId: row.artist.id, contactId: contact.id, email }]
+            : [];
+        }),
+      ),
+  );
   const filtered = rows.filter((r) => {
     if (filter === "rejected") {
       if (!r.association.rejectedAt) return false;
@@ -1364,6 +1379,10 @@ export default async function FestivalDetailPage({
     if (filter === "matched_with_contact" && !(r.matched && !!r.contact)) return false;
     if (filter === "needs_contact" && !(r.matched && !r.contact)) return false;
     if (filter === "manager_needed" && !r.managerResearchEligible) return false;
+    if (
+      filter === "shared_management" &&
+      !sharedManagementArtistIds.has(r.artist.id)
+    ) return false;
     if (
       filter === "unsent" &&
       !r.sendability?.sendable
@@ -1477,6 +1496,7 @@ export default async function FestivalDetailPage({
     { key: "matched_with_contact", label: "Matched + email" },
     { key: "needs_contact", label: "Needs email" },
     { key: "manager_needed", label: "Manager needed" },
+    { key: "shared_management", label: "Shared management" },
     { key: "unsent", label: "Unsent" },
     { key: "rejected", label: "Rejected" },
   ];

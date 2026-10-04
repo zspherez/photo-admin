@@ -42,6 +42,7 @@ export const FESTIVAL_FILTERS = [
   "matched_with_contact",
   "needs_contact",
   "manager_needed",
+  "shared_management",
   "unsent",
   "rejected",
 ] as const;
