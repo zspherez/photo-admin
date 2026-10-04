@@ -428,7 +428,7 @@ test("Customize exposes the shared next-dispatch target without changing Send no
   assert.match(form, /htmlValue=\{selectedDraft\.html\}/);
 });
 
-test("default and bulk outreach calls retain existing recipient semantics", () => {
+test("default outreach is unchanged while festival bulk sends by recipient", () => {
   const dashboardActions = source("app/dashboard/actions.ts");
   const festival = source("app/festivals/[showId]/page.tsx");
   const sendNow = dashboardActions.slice(
@@ -443,7 +443,7 @@ test("default and bulk outreach calls retain existing recipient semantics", () =
   assert.doesNotMatch(sendNow, /singleRecipient/);
   assert.match(
     festival,
-    /scheduleOutreach\(\s*\{[\s\S]*contactId: group\.contactId/,
+    /scheduleOutreach\(\s*\{[\s\S]*contactId: job\.group\.contactId,[\s\S]*singleRecipient: true,[\s\S]*festivalRecipientPartition: true/,
   );
 
   const send = source("lib/sendOutreach.ts");

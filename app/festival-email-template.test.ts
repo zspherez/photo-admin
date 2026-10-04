@@ -37,11 +37,11 @@ test("every original send path selects the show-purpose template before snapshot
   );
   assert.match(
     festival,
-    /scheduleOutreach\([\s\S]*contactId: group\.contactId/,
+    /scheduleOutreach\([\s\S]*contactId: job\.group\.contactId/,
   );
   const bulk = festival.slice(
     festival.indexOf("async function bulkSend"),
-    festival.indexOf("async function queueFestivalOutreach"),
+    festival.indexOf("async function queueFestivalManagerResearch"),
   );
   assert.doesNotMatch(bulk, /\bsendOutreach\(/);
 });

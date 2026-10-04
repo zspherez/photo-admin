@@ -1,4 +1,5 @@
 import type { RecipientDeliveryMode } from "@/lib/recipientDelivery";
+import { normalizeEmail } from "@/lib/resend";
 
 export interface FestivalManagerTarget {
   artistId: string;
@@ -12,6 +13,27 @@ export interface FestivalManagerGroup {
   contactId: string;
   artistIds: string[];
   recipientDeliveryMode?: RecipientDeliveryMode;
+}
+
+export function uniqueFestivalRecipientTargets(
+  artists: readonly {
+    artistId: string;
+    contacts: readonly {
+      id: string;
+      email: string | null;
+      state: string;
+    }[];
+  }[],
+): FestivalManagerTarget[] {
+  return artists.flatMap(({ artistId, contacts }) => {
+    const seen = new Set<string>();
+    return contacts.flatMap((contact) => {
+      const email = normalizeEmail(contact.email ?? "");
+      if (contact.state !== "active" || !email || seen.has(email)) return [];
+      seen.add(email);
+      return [{ artistId, contactId: contact.id, email }];
+    });
+  });
 }
 
 export function groupFestivalManagerTargets(

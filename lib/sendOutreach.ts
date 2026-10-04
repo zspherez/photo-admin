@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Prisma, type EmailTemplatePurpose } from "@prisma/client";
 import { db } from "@/lib/db";
 import {
@@ -112,6 +112,56 @@ export function outreachTransactionRetryDelayMs(
   );
 }
 
+export function followUpRecipientsForSnapshot(
+  coveredArtistIds: readonly string[],
+  contacts: readonly {
+    artistId: string;
+    email: string | null;
+    state: "active" | "quarantined";
+  }[],
+  partition: { festivalRecipientPartition: boolean; recipientEmails: readonly string[] },
+): string[] {
+  const shared = currentFollowUpRecipientEmails(coveredArtistIds, contacts);
+  if (!partition.festivalRecipientPartition) return shared;
+  const initialRecipient = normalizeEmails([...partition.recipientEmails]);
+  return initialRecipient.length === 1 && shared.includes(initialRecipient[0])
+    ? initialRecipient
+    : [];
+}
+
+export function partitionedBounceResendError(input: {
+  kind: OutreachKindValue;
+  originalContactId: string | null;
+  replacementContactId: string;
+  recipientEmails: readonly string[];
+  replacementEmail: string | null;
+  coveredArtistIds: readonly string[];
+  activeContacts: readonly { artistId: string; email: string | null }[];
+  parentRecipientEmails?: readonly string[];
+}): string | null {
+  const snapshot = normalizeEmails([...input.recipientEmails]);
+  if (snapshot.length !== 1) {
+    return "Partitioned resend requires exactly one verified original recipient";
+  }
+  if (input.originalContactId !== input.replacementContactId ||
+      input.replacementEmail !== snapshot[0]) {
+    return "Partitioned resend currently supports only the original contact and address. Corrected addresses require a separate reviewed migration of immutable recipient and artist coverage.";
+  }
+  if (input.kind === "follow_up" &&
+      (!input.parentRecipientEmails ||
+        !sameEmails([...input.parentRecipientEmails], [...input.recipientEmails]))) {
+    return "Follow-up recipient differs from its original outreach";
+  }
+  if (!input.coveredArtistIds.every((artistId) =>
+    input.activeContacts.some((contact) =>
+      contact.artistId === artistId &&
+      normalizeEmails([contact.email ?? ""]).includes(snapshot[0]),
+    ))) {
+    return "Original recipient is no longer active for every covered artist";
+  }
+  return null;
+}
+
 export interface SendOutreachInput {
   showId: string;
   contactId: string;
@@ -123,13 +173,17 @@ export interface SendOutreachInput {
   trajectoryContext?: TrajectoryActionContext;
   festivalCoveredArtistIds?: string[];
   festivalAllContacts?: boolean;
+  festivalRecipientPartition?: boolean;
   recipientDeliveryMode?: RecipientDeliveryMode;
+  expectedRecipientEmails?: readonly string[];
 }
 
 export interface FollowUpContentOverrides {
   subjectOverride?: string;
   htmlOverride?: string;
   recipientDeliveryMode?: RecipientDeliveryMode;
+  expectedRecipientEmails?: readonly string[];
+  expectedCoveredArtistIds?: readonly string[];
 }
 
 export type OutreachKindValue = "original" | "follow_up";
@@ -324,10 +378,111 @@ interface PreparedOutreach {
   primaryRecipientEmail: string | null;
   fullTeamSend: boolean;
   festivalAllContactsSend: boolean;
+  festivalRecipientPartition: boolean;
   subject: string;
   html: string;
   expectedRecipientIdentity: CustomizeRecipientIdentity | null;
   coveredArtistIds: string[];
+  reviewedBounce?: { outreachId: string; idempotencyKey: string };
+}
+
+async function reviewedBounceGuard(
+  tx: Prisma.TransactionClient,
+  prep: PreparedOutreach,
+): Promise<string | null> {
+  if (!prep.reviewedBounce) return null;
+  const row = await tx.outreach.findUnique({
+    where: { id: prep.reviewedBounce.outreachId },
+    select: {
+      id: true, idempotencyKey: true, status: true, error: true, kind: true,
+      contactId: true, showId: true, parentOutreachId: true,
+      festivalRecipientPartition: true, recipientEmails: true,
+      coveredArtists: { select: { artistId: true } },
+    },
+  });
+  if (!row || row.idempotencyKey !== prep.reviewedBounce.idempotencyKey ||
+      row.status !== "cancelled" ||
+      row.error !== "Operator reviewed bounced outreach for resend" ||
+      row.kind !== prep.kind || row.showId !== prep.showId ||
+      row.parentOutreachId !== prep.parentOutreachId ||
+      !row.festivalRecipientPartition || row.contactId !== prep.contactId ||
+      !sameEmails(row.recipientEmails, prep.recipients) ||
+      !sameOrderedStrings(
+        (row.coveredArtists.length ? row.coveredArtists.map((covered) => covered.artistId) : [prep.artistId]).sort(),
+        [...prep.coveredArtistIds].sort(),
+      )) {
+    return "Reviewed partitioned resend changed. Refresh the review before sending.";
+  }
+
+  return null;
+}
+
+export function attemptedOutreachScopeError(
+  existing: {
+    festivalRecipientPartition: boolean;
+    recipientEmails: readonly string[];
+    coveredArtistIds: readonly string[];
+    recipientDeliveryMode: string;
+    primaryRecipientEmail: string | null;
+  },
+  prepared: {
+    festivalRecipientPartition: boolean;
+    recipients: readonly string[];
+    coveredArtistIds: readonly string[];
+    recipientDeliveryMode: RecipientDeliveryMode;
+    primaryRecipientEmail: string | null;
+  },
+  hasHistoricalProviderAttempt: boolean,
+): string | null {
+  if (!hasHistoricalProviderAttempt) return null;
+  if (!existing.festivalRecipientPartition && !prepared.festivalRecipientPartition) {
+    return null;
+  }
+  return existing.festivalRecipientPartition === prepared.festivalRecipientPartition &&
+    existing.recipientDeliveryMode === prepared.recipientDeliveryMode &&
+    existing.primaryRecipientEmail === prepared.primaryRecipientEmail &&
+    sameEmails([...existing.recipientEmails], [...prepared.recipients]) &&
+    sameOrderedStrings(
+      [...existing.coveredArtistIds].sort(),
+      [...prepared.coveredArtistIds].sort(),
+    )
+    ? null
+    : "Existing attempted outreach has immutable recipient coverage and delivery mode";
+}
+
+async function existingAttemptedScopeError(
+  tx: Prisma.TransactionClient,
+  existing: {
+    id: string; artistId: string; festivalRecipientPartition: boolean;
+    recipientEmails: string[]; recipientDeliveryMode: string;
+    primaryRecipientEmail: string | null;
+  },
+  prep: PreparedOutreach,
+): Promise<string | null> {
+  const attempts = await tx.outreachSendAttempt.findMany({
+    where: { outreachId: existing.id },
+    select: {
+      attemptCount: true, firstAttemptAt: true, providerMessageId: true,
+      providerMessageIds: true,
+    },
+  });
+  const historical = attempts.some((attempt) =>
+    attempt.attemptCount > 0 || attempt.firstAttemptAt !== null ||
+    isNonemptyProviderMessageId(attempt.providerMessageId) ||
+    hasAcceptedProviderMessageId(attempt.providerMessageIds),
+  );
+  if (!historical) return null;
+  const covered = await tx.outreachCoveredArtist.findMany({
+    where: { outreachId: existing.id },
+    select: { artistId: true },
+  });
+  return attemptedOutreachScopeError({
+    festivalRecipientPartition: existing.festivalRecipientPartition,
+    recipientEmails: existing.recipientEmails,
+    recipientDeliveryMode: existing.recipientDeliveryMode,
+    primaryRecipientEmail: existing.primaryRecipientEmail,
+    coveredArtistIds: covered.length ? covered.map((row) => row.artistId) : [existing.artistId],
+  }, prep, historical);
 }
 
 export function resolveTrajectoryRecommendationAttribution(
@@ -475,6 +630,7 @@ interface ClaimedOutreach {
   primaryRecipientEmail?: string | null;
   fullTeamSend: boolean;
   festivalAllContactsSend?: boolean;
+  festivalRecipientPartition: boolean;
   idempotencyKey: string;
   providerMessageId: string | null;
   sentAt: Date | null;
@@ -1915,6 +2071,10 @@ export async function resetBouncedOutreachForResend(
         idempotencyKey: true,
         bouncedAt: true,
         recipientEmails: true,
+        contactId: true,
+        parentOutreachId: true,
+        festivalRecipientPartition: true,
+        recipientSnapshotState: true,
         fullTeamSend: true,
         festivalAllContactsSend: true,
         coveredArtists: { select: { artistId: true } },
@@ -1952,7 +2112,7 @@ export async function resetBouncedOutreachForResend(
       }),
       tx.contact.findMany({
         where: {
-          artistId: { in: outreach.kind === "follow_up" ? coveredArtistIds : [outreach.artistId] },
+          artistId: { in: outreach.festivalRecipientPartition || outreach.kind === "follow_up" ? coveredArtistIds : [outreach.artistId] },
           state: "active",
           email: { not: null },
         },
@@ -1963,8 +2123,35 @@ export async function resetBouncedOutreachForResend(
       replacementContact?.state === "active"
         ? normalizeEmails([replacementContact.email ?? ""])[0] ?? null
         : null;
+    if (outreach.festivalRecipientPartition) {
+      if (outreach.recipientSnapshotState !== "verified") {
+        return { ok: false, error: "Partitioned resend requires a verified original recipient snapshot" };
+      }
+      const parent = outreach.kind === "follow_up" && outreach.parentOutreachId
+        ? await tx.outreach.findUnique({
+            where: { id: outreach.parentOutreachId },
+            select: { recipientEmails: true, festivalRecipientPartition: true },
+          })
+        : null;
+      if (outreach.kind === "follow_up" && !parent?.festivalRecipientPartition) {
+        return { ok: false, error: "Partitioned follow-up has no matching original outreach" };
+      }
+      const partitionError = partitionedBounceResendError({
+        kind: outreach.kind,
+        originalContactId: outreach.contactId,
+        replacementContactId,
+        recipientEmails: outreach.recipientEmails,
+        replacementEmail,
+        coveredArtistIds,
+        activeContacts,
+        parentRecipientEmails: parent?.recipientEmails,
+      });
+      if (partitionError) return { ok: false, error: partitionError };
+    }
     const currentRecipients =
-      outreach.kind === "follow_up"
+      outreach.festivalRecipientPartition
+        ? replacementEmail ? [replacementEmail] : []
+      : outreach.kind === "follow_up"
         ? currentFollowUpRecipientEmails(coveredArtistIds, activeContacts)
         : outreach.fullTeamSend || outreach.festivalAllContactsSend
         ? normalizeEmails(
@@ -2068,6 +2255,7 @@ export interface OutreachSendabilityInput {
   singleRecipient?: boolean;
   allContacts?: boolean;
   festivalAllContacts?: boolean;
+  festivalRecipientPartition?: boolean;
   recipientDeliveryMode?: RecipientDeliveryMode;
 }
 
@@ -2090,6 +2278,21 @@ export interface OutreachSendability {
   blockingOutreachId?: string;
   blockingStatus?: string;
   blockingNextAttemptAt?: Date;
+}
+
+export function festivalRecipientCovers(
+  outreach: {
+    recipientEmails: readonly string[];
+    recipientSnapshotState: string;
+    festivalRecipientPartition: boolean;
+  },
+  recipientEmail: string,
+): boolean {
+  if (!outreach.festivalRecipientPartition) return true;
+  if (outreach.recipientSnapshotState !== "verified") return true;
+  const recipients = normalizeEmails([...outreach.recipientEmails]);
+  if (!recipients.length) return true;
+  return recipients.includes(recipientEmail);
 }
 
 function requestBatchIdentityMatches(
@@ -2121,6 +2324,7 @@ interface LockedPolicyOutreach extends DeliveryPolicySnapshot {
   artistId: string;
   contactId: string | null;
   finalSubject: string;
+  festivalRecipientPartition: boolean;
   expectedRecipientIdentity?: CustomizeRecipientIdentity | null;
 }
 
@@ -2242,8 +2446,20 @@ async function evaluateLockedOutreachDeliveryPolicy(
   );
   const currentFollowUpRecipients =
     outreach.kind === "follow_up"
-      ? currentFollowUpRecipientEmails(coveredArtistIds, coveredContacts)
+      ? followUpRecipientsForSnapshot(coveredArtistIds, coveredContacts, outreach)
       : null;
+  if (outreach.kind === "follow_up" &&
+      outreach.festivalRecipientPartition &&
+      currentFollowUpRecipients?.length !== 1) {
+    return {
+      decision: {
+        ok: false,
+        state: "manual_review",
+        error: "Original festival recipient is no longer active for every covered artist",
+      },
+      submissionCredential: null,
+    };
+  }
   const contact =
     artistContacts.find((candidate) => candidate.id === outreach.contactId) ??
     null;
@@ -2532,6 +2748,15 @@ export async function getOutreachSendabilityBatch(
   return inputs.map((input) => {
     const show = showById.get(input.showId);
     if (!show) return blockedSendability(input, "Show not found");
+    if (input.festivalRecipientPartition && !show.isFestival) {
+      return blockedSendability(input, "Recipient partitions require a festival");
+    }
+    if (
+      input.festivalRecipientPartition &&
+      (input.festivalAllContacts || input.allContacts || !input.singleRecipient)
+    ) {
+      return blockedSendability(input, "Festival recipient partitions require one selected recipient");
+    }
     if (show.syncStatus !== "active") {
       return blockedSendability(input, showInactiveError(show.syncStatus));
     }
@@ -2584,8 +2809,28 @@ export async function getOutreachSendabilityBatch(
       });
     }
     const recipients = initialPolicy.currentRecipients;
-    const rows =
+    const allRows =
       outreachesByTarget.get(`${input.showId}\u0000${contact.artistId}`) ?? [];
+    const recipientEmail = normalizeEmails([contact.email ?? ""])[0] ?? "";
+    const existingOtherRecipient = input.festivalRecipientPartition
+      ? allRows.find(
+          (row) =>
+            row.contactId === contact.id &&
+            !festivalRecipientCovers(row, recipientEmail),
+        )
+      : null;
+    if (existingOtherRecipient) {
+      return blockedSendability(
+        input,
+        "This contact has an existing immutable outreach for a different recipient address",
+        { artistId: contact.artistId, outreachId: existingOtherRecipient.id, status: existingOtherRecipient.status },
+      );
+    }
+    const rows = allRows.filter(
+      (row) =>
+        !input.festivalRecipientPartition ||
+        festivalRecipientCovers(row, recipientEmail),
+    );
     const details = {
       artistId: contact.artistId,
       recipients,
@@ -2843,6 +3088,16 @@ export async function getOutreachSendabilityBatch(
       );
     }
     if (
+      input.festivalRecipientPartition &&
+      !candidate.festivalRecipientPartition
+    ) {
+      return blockedSendability(
+        input,
+        "Existing recipient coverage has a different delivery mode",
+        { ...details, outreachId: candidate.id, status: candidate.status },
+      );
+    }
+    if (
       input.recipientDeliveryMode &&
       candidate.recipientDeliveryMode !== input.recipientDeliveryMode
     ) {
@@ -2972,6 +3227,8 @@ export async function getFollowUpEligibilityBatch(
         artistId: true,
         contactId: true,
         festivalAllContactsSend: true,
+        festivalRecipientPartition: true,
+        recipientEmails: true,
         recipientDeliveryMode: true,
         primaryRecipientEmail: true,
         expectedRecipientContactId: true,
@@ -2998,6 +3255,7 @@ export async function getFollowUpEligibilityBatch(
             artistId: true,
             contactId: true,
             festivalAllContactsSend: true,
+            festivalRecipientPartition: true,
             recipientDeliveryMode: true,
             primaryRecipientEmail: true,
             expectedRecipientContactId: true,
@@ -3155,6 +3413,9 @@ export async function getFollowUpEligibilityBatch(
         child.contactId !== childRecipientIdentity?.contactId ||
         child.artistId !== childRecipientIdentity?.artistId ||
         child.festivalAllContactsSend !== parent.festivalAllContactsSend ||
+        child.festivalRecipientPartition !== parent.festivalRecipientPartition ||
+        (parent.festivalRecipientPartition &&
+          !sameEmails(child.recipientEmails, parent.recipientEmails)) ||
         !sameOrderedStrings(
           child.coveredArtists.length > 0
             ? child.coveredArtists.map((covered) => covered.artistId)
@@ -3367,9 +3628,10 @@ export async function getFollowUpEligibilityBatch(
       parent.coveredArtists.length > 0
         ? parent.coveredArtists.map((covered) => covered.artistId)
         : [parent.artistId];
-    const currentRecipients = currentFollowUpRecipientEmails(
+    const currentRecipients = followUpRecipientsForSnapshot(
       coveredArtistIds,
       contacts,
+      parent,
     );
     const unsuppressedRecipients = currentRecipients.filter(
       (email) => !suppressedEmails.includes(email),
@@ -3485,8 +3747,16 @@ async function prepareOriginalOutreach(
     trajectoryContext,
     festivalCoveredArtistIds,
     festivalAllContacts,
+    festivalRecipientPartition,
     recipientDeliveryMode,
+    expectedRecipientEmails,
   } = input;
+  if (
+    festivalRecipientPartition &&
+    (!singleRecipient || allContacts || festivalAllContacts)
+  ) {
+    return { error: "Festival recipient partitions require one selected recipient" };
+  }
   const [sendability] = await getOutreachSendabilityBatch([
     {
       showId,
@@ -3494,11 +3764,18 @@ async function prepareOriginalOutreach(
       singleRecipient,
       allContacts,
       festivalAllContacts,
+      festivalRecipientPartition,
       recipientDeliveryMode,
     },
   ]);
   if (!sendability.sendable) {
     return { error: sendability.reason ?? "Outreach is not sendable" };
+  }
+  if (
+    expectedRecipientEmails &&
+    !sameEmails(sendability.recipients, [...expectedRecipientEmails])
+  ) {
+    return { error: "Confirmed festival recipient changed; review outreach again" };
   }
 
   const [show, contact, utmSettings] = await Promise.all([
@@ -3527,6 +3804,12 @@ async function prepareOriginalOutreach(
   if (!currentRecipientIdentity) {
     return { error: "Selected contact has no valid active recipient address" };
   }
+  if (
+    expectedRecipientEmails &&
+    !sameEmails([currentRecipientIdentity.normalizedEmail], [...expectedRecipientEmails])
+  ) {
+    return { error: "Confirmed festival recipient changed; review outreach again" };
+  }
   const coveredArtistIds = Array.from(
     new Set(
       (festivalCoveredArtistIds?.length
@@ -3544,6 +3827,9 @@ async function prepareOriginalOutreach(
     : originalTemplatePurposeForShow(show);
   if (multiArtistFestival && !show.isFestival) {
     return { error: "Multi-artist manager outreach requires a festival" };
+  }
+  if (festivalRecipientPartition && !show.isFestival) {
+    return { error: "Recipient partitions require a festival" };
   }
   const coveredAssociations = await db.showArtist.findMany({
     where: {
@@ -3660,6 +3946,7 @@ async function prepareOriginalOutreach(
     fullTeamSend: sendability.fullTeamSend,
     festivalAllContactsSend:
       sendability.festivalAllContactsSend ?? false,
+    festivalRecipientPartition: festivalRecipientPartition === true,
     subject: normalizedSubjectOverride || applyTemplate(template.subject, vars),
     html: normalizedHtmlOverride
       ? appendEmailUtmToHtml(
@@ -3697,6 +3984,12 @@ async function prepareFollowUpOutreach(
         eligibility?.reason ?? "Original outreach is not eligible for follow-up",
     };
   }
+  if (
+    overrides.expectedRecipientEmails &&
+    !sameEmails(eligibility.recipients, [...overrides.expectedRecipientEmails])
+  ) {
+    return { error: "Confirmed follow-up recipients changed; review outreach again" };
+  }
 
   if (!eligibility.contactId) {
     return { error: "Current follow-up contact is unavailable" };
@@ -3713,6 +4006,8 @@ async function prepareFollowUpOutreach(
         artistId: true,
         contactId: true,
         festivalAllContactsSend: true,
+        festivalRecipientPartition: true,
+        recipientEmails: true,
         recipientDeliveryMode: true,
         expectedRecipientContactId: true,
         expectedRecipientArtistId: true,
@@ -3788,6 +4083,15 @@ async function prepareFollowUpOutreach(
             artist: parent.artist,
           },
         ];
+  if (
+    overrides.expectedCoveredArtistIds &&
+    !sameOrderedStrings(
+      coveredArtists.map((covered) => covered.artistId).sort(),
+      [...overrides.expectedCoveredArtistIds].sort(),
+    )
+  ) {
+    return { error: "Confirmed follow-up artist coverage changed; review outreach again" };
+  }
   const associations = await db.showArtist.findMany({
     where: {
       showId: parent.showId,
@@ -3877,6 +4181,7 @@ async function prepareFollowUpOutreach(
     primaryRecipientEmail,
     fullTeamSend: eligibility.fullTeamSend,
     festivalAllContactsSend: parent.festivalAllContactsSend,
+    festivalRecipientPartition: parent.festivalRecipientPartition,
     subject:
       eligibility.mode === "new" && normalizedSubjectOverride
         ? normalizedSubjectOverride
@@ -3931,6 +4236,7 @@ function claimedOutreach(
     primaryRecipientEmail: string | null;
     fullTeamSend: boolean;
     festivalAllContactsSend: boolean;
+    festivalRecipientPartition: boolean;
     idempotencyKey: string;
     providerMessageId: string | null;
     sentAt: Date | null;
@@ -3969,6 +4275,7 @@ function claimedOutreach(
     primaryRecipientEmail: row.primaryRecipientEmail,
     fullTeamSend: row.fullTeamSend,
     festivalAllContactsSend: row.festivalAllContactsSend,
+    festivalRecipientPartition: row.festivalRecipientPartition,
     idempotencyKey: row.idempotencyKey,
     providerMessageId: row.providerMessageId,
     sentAt: row.sentAt,
@@ -4377,6 +4684,12 @@ async function finishAlreadyAccepted(
 function preparedOutreachScopeWhere(
   prep: PreparedOutreach,
 ): Prisma.OutreachWhereInput {
+  const artistScope: Prisma.OutreachWhereInput = {
+    OR: [
+      { artistId: { in: prep.coveredArtistIds } },
+      { coveredArtists: { some: { artistId: { in: prep.coveredArtistIds } } } },
+    ],
+  };
   return prep.kind === "follow_up"
     ? {
         kind: "follow_up",
@@ -4385,14 +4698,19 @@ function preparedOutreachScopeWhere(
     : {
         kind: "original",
         showId: prep.showId,
-        OR: [
-          { artistId: { in: prep.coveredArtistIds } },
-          {
-            coveredArtists: {
-              some: { artistId: { in: prep.coveredArtistIds } },
-            },
-          },
-        ],
+        AND: prep.festivalRecipientPartition
+          ? [
+              artistScope,
+              {
+                OR: [
+                  { festivalRecipientPartition: false },
+                  { recipientEmails: { has: prep.recipients[0] } },
+                  { recipientEmails: { isEmpty: true } },
+                  { recipientSnapshotState: { not: "verified" } },
+                ],
+              },
+            ]
+          : [artistScope],
       };
 }
 
@@ -4439,6 +4757,8 @@ async function preparedFollowUpBlockingReason(
     showId: string;
     artistId: string;
     contactId: string | null;
+    recipients?: readonly string[];
+    recipientEmails?: readonly string[];
   },
 ): Promise<string | null> {
   if (prep.kind !== "follow_up") return null;
@@ -4457,6 +4777,8 @@ async function preparedFollowUpBlockingReason(
       showId: true,
       artistId: true,
       contactId: true,
+      festivalRecipientPartition: true,
+      recipientEmails: true,
       show: {
         select: {
           isFestival: true,
@@ -4481,6 +4803,12 @@ async function preparedFollowUpBlockingReason(
     parent.artistId !== prep.artistId
   ) {
     return "Follow-up identity no longer matches its original outreach";
+  }
+  if (parent.festivalRecipientPartition) {
+    const recipients = prep.recipients ?? prep.recipientEmails;
+    if (!recipients || !sameEmails([...recipients], parent.recipientEmails)) {
+      return "Follow-up recipient coverage differs from its original festival outreach";
+    }
   }
   return null;
 }
@@ -4559,8 +4887,15 @@ async function preparedDeliveryPolicyBlockingReason(
   );
   const currentFollowUpRecipients =
     prep.kind === "follow_up"
-      ? currentFollowUpRecipientEmails(prep.coveredArtistIds, coveredContacts)
+      ? followUpRecipientsForSnapshot(prep.coveredArtistIds, coveredContacts, {
+          festivalRecipientPartition: prep.festivalRecipientPartition,
+          recipientEmails: prep.recipients,
+        })
       : null;
+  if (prep.kind === "follow_up" && prep.festivalRecipientPartition &&
+      currentFollowUpRecipients?.length !== 1) {
+    return "Original festival recipient is no longer active for every covered artist";
+  }
   const deliverySettings = await getResendDeliverySettingsSnapshot(tx);
   const festivalBlocked = festivalOutreachBlockingReason(show, prep.kind);
   if (festivalBlocked) return festivalBlocked;
@@ -4752,6 +5087,10 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
       };
     }
     await lockPreparedOutreachArtists(tx, prep);
+    const reviewedError = await reviewedBounceGuard(tx, prep);
+    if (reviewedError) {
+      return { kind: "complete", result: { ok: false, error: reviewedError } };
+    }
     const followUpBlocked = await preparedFollowUpBlockingReason(tx, prep);
     if (followUpBlocked) {
       return {
@@ -4794,6 +5133,23 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
+    if (prep.festivalRecipientPartition) {
+      const conflictingMode = active.find(
+        (row) =>
+          row.contactId === prep.contactId &&
+          row.festivalRecipientPartition !== prep.festivalRecipientPartition,
+      );
+      if (conflictingMode) {
+        return {
+          kind: "complete",
+          result: {
+            ok: false,
+            error: "Existing outreach uses a different recipient coverage mode",
+            outreachId: conflictingMode.id,
+          },
+        };
+      }
+    }
     const currentAttempts = new Map(
       (
         await tx.outreachSendAttempt.findMany({
@@ -4956,6 +5312,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
                 primaryRecipientEmail: prep.primaryRecipientEmail,
                 fullTeamSend: prep.fullTeamSend,
                 festivalAllContactsSend: prep.festivalAllContactsSend,
+                festivalRecipientPartition: prep.festivalRecipientPartition,
                 templateId: prep.templateId,
                 ...expectedRecipientIdentityData(
                   prep.expectedRecipientIdentity,
@@ -5003,6 +5360,28 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
     const existing = await tx.outreach.findUnique({
       where: preparedOutreachUniqueWhere(prep),
     });
+    if (
+      existing &&
+      existing.festivalRecipientPartition !== prep.festivalRecipientPartition &&
+      existing.status !== "test" &&
+      existing.status !== "cancelled"
+    ) {
+      return {
+        kind: "complete",
+        result: {
+          ok: false,
+          error: "Existing outreach uses a different recipient coverage mode",
+          outreachId: existing.id,
+        },
+      };
+    }
+    const attemptedScopeError = existing
+      ? await existingAttemptedScopeError(tx, existing, prep) : null;
+    if (attemptedScopeError) {
+      return { kind: "complete", result: {
+        ok: false, error: attemptedScopeError, outreachId: existing!.id,
+      } };
+    }
     const claimToken = randomUUID();
     const existingAttempt = existing
       ? await currentAttempt(tx, existing.idempotencyKey)
@@ -5057,6 +5436,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
+          festivalRecipientPartition: prep.festivalRecipientPartition,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           ...trajectoryAttributionData(
@@ -5099,6 +5479,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
+          festivalRecipientPartition: prep.festivalRecipientPartition,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           ...trajectoryAttributionData(
@@ -5207,6 +5588,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
+          festivalRecipientPartition: prep.festivalRecipientPartition,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           ...trajectoryAttributionData(
@@ -5285,6 +5667,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
           primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
+          festivalRecipientPartition: prep.festivalRecipientPartition,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           ...trajectoryAttributionData(
@@ -5330,6 +5713,7 @@ async function claimImmediateOutreach(prep: PreparedOutreach): Promise<ClaimResu
         primaryRecipientEmail: prep.primaryRecipientEmail,
         fullTeamSend: prep.fullTeamSend,
         festivalAllContactsSend: prep.festivalAllContactsSend,
+        festivalRecipientPartition: prep.festivalRecipientPartition,
         ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
         ...trajectoryAttributionData(prep),
         status: "queued",
@@ -6840,6 +7224,101 @@ export async function sendFollowUp(
   return executeClaimedSend(claim.outreach);
 }
 
+export async function prepareReviewedPartitionedBounceResend(
+  outreachId: string,
+  expectedIdempotencyKey: string,
+): Promise<
+  | { ok: false; error: string }
+  | { ok: true; preview: {
+      subject: string; html: string; recipients: string[];
+      recipientDeliveryMode: RecipientDeliveryMode;
+      coveredArtistIds: string[]; kind: OutreachKindValue;
+    }; previewHash: string; prepared: PreparedOutreach }
+> {
+  const row = await db.outreach.findUnique({
+    where: { id: outreachId },
+    select: {
+      id: true, status: true, error: true, kind: true, showId: true,
+      contactId: true, parentOutreachId: true, artistId: true,
+      festivalRecipientPartition: true, idempotencyKey: true,
+      recipientEmails: true, recipientDeliveryMode: true,
+      coveredArtists: { select: { artistId: true } },
+    },
+  });
+  if (!row || !row.festivalRecipientPartition ||
+      row.status !== "cancelled" ||
+      row.error !== "Operator reviewed bounced outreach for resend" ||
+      row.idempotencyKey !== expectedIdempotencyKey || !row.contactId) {
+    return { ok: false, error: "Reviewed partitioned resend is no longer available. Refresh the bounce review." };
+  }
+  const coverage = (row.coveredArtists.length
+    ? row.coveredArtists.map((covered) => covered.artistId)
+    : [row.artistId]).sort();
+  const prep = row.kind === "follow_up"
+    ? row.parentOutreachId
+      ? await prepareFollowUpOutreach(row.parentOutreachId, undefined, {
+          recipientDeliveryMode: isRecipientDeliveryMode(row.recipientDeliveryMode)
+            ? row.recipientDeliveryMode
+            : undefined,
+        })
+      : { error: "Follow-up has no original outreach" }
+    : await prepareOriginalOutreach({
+        showId: row.showId,
+        contactId: row.contactId,
+        singleRecipient: true,
+        festivalRecipientPartition: true,
+        festivalCoveredArtistIds: coverage,
+        recipientDeliveryMode: isRecipientDeliveryMode(row.recipientDeliveryMode)
+          ? row.recipientDeliveryMode
+          : undefined,
+      });
+  if ("error" in prep) return { ok: false, error: prep.error };
+  if (prep.kind !== row.kind ||
+      prep.contactId !== row.contactId ||
+      prep.parentOutreachId !== row.parentOutreachId ||
+      !prep.festivalRecipientPartition ||
+      prep.recipientDeliveryMode !== row.recipientDeliveryMode ||
+      !sameEmails(prep.recipients, row.recipientEmails) ||
+      !sameOrderedStrings([...prep.coveredArtistIds].sort(), coverage)) {
+    return { ok: false, error: "The recipient or artist coverage changed since the bounced attempt; resend was not prepared." };
+  }
+  prep.reviewedBounce = { outreachId, idempotencyKey: expectedIdempotencyKey };
+  const preview = {
+    subject: prep.subject, html: prep.html, recipients: prep.recipients,
+    recipientDeliveryMode: prep.recipientDeliveryMode,
+    coveredArtistIds: coverage, kind: prep.kind,
+  };
+  return {
+    ok: true,
+    preview,
+    previewHash: createHash("sha256").update(JSON.stringify(preview)).digest("hex"),
+    prepared: prep,
+  };
+}
+
+export async function dispatchReviewedPartitionedBounceResend(
+  outreachId: string,
+  expectedIdempotencyKey: string,
+  expectedPreviewHash: string,
+  scheduledFor?: Date,
+): Promise<SendOutreachOutput> {
+  const reviewed = await prepareReviewedPartitionedBounceResend(
+    outreachId, expectedIdempotencyKey,
+  );
+  if (!reviewed.ok) return reviewed;
+  if (!expectedPreviewHash || reviewed.previewHash !== expectedPreviewHash) {
+    return { ok: false, error: "Resend preview changed. Refresh and review the current recipient, artist scope and content." };
+  }
+  if (scheduledFor) return schedulePreparedOutreach(reviewed.prepared, scheduledFor);
+  const configurationError = getResendConfigurationError(
+    process.env.RESEND_API_KEY, process.env.RESEND_FROM_EMAIL,
+  );
+  if (configurationError) return { ok: false, error: configurationError };
+  const claim = await claimImmediateOutreach(reviewed.prepared);
+  if (claim.kind === "complete") return claim.result;
+  return executeClaimedSend(claim.outreach);
+}
+
 async function syncOutreachCoveredArtists(
   tx: Prisma.TransactionClient,
   outreachId: string,
@@ -6955,6 +7434,8 @@ async function schedulePreparedOutreach(
       return { ok: false, error: artistNotOnShowError() };
     }
     await lockPreparedOutreachArtists(tx, prep);
+    const reviewedError = await reviewedBounceGuard(tx, prep);
+    if (reviewedError) return { ok: false, error: reviewedError };
     if (prep.coveredArtistIds.length > 1) {
       const managerEmail = prep.expectedRecipientIdentity?.normalizedEmail;
       const coveredContacts = await tx.contact.findMany({
@@ -7052,6 +7533,8 @@ async function schedulePreparedOutreach(
         scheduled.fullTeamSend === prep.fullTeamSend &&
         scheduled.festivalAllContactsSend ===
           prep.festivalAllContactsSend &&
+        scheduled.festivalRecipientPartition ===
+          prep.festivalRecipientPartition &&
         scheduled.recipientSnapshotState === "verified" &&
         sameEmails(scheduled.recipientEmails, prep.recipients) &&
         sameExpectedRecipientIdentity(
@@ -7200,6 +7683,7 @@ async function schedulePreparedOutreach(
                 primaryRecipientEmail: prep.primaryRecipientEmail,
                 fullTeamSend: prep.fullTeamSend,
                 festivalAllContactsSend: prep.festivalAllContactsSend,
+                festivalRecipientPartition: prep.festivalRecipientPartition,
                 templateId: prep.templateId,
                 ...expectedRecipientIdentityData(
                   prep.expectedRecipientIdentity,
@@ -7237,6 +7721,23 @@ async function schedulePreparedOutreach(
     const existing = await tx.outreach.findUnique({
       where: preparedOutreachUniqueWhere(prep),
     });
+    if (
+      existing &&
+      existing.festivalRecipientPartition !== prep.festivalRecipientPartition &&
+      existing.status !== "test" &&
+      existing.status !== "cancelled"
+    ) {
+      return {
+        ok: false,
+        error: "Existing outreach uses a different recipient coverage mode",
+        outreachId: existing.id,
+      };
+    }
+    const attemptedScopeError = existing
+      ? await existingAttemptedScopeError(tx, existing, prep) : null;
+    if (attemptedScopeError) {
+      return { ok: false, error: attemptedScopeError, outreachId: existing!.id };
+    }
     const existingAttempt = existing
       ? await currentAttempt(tx, existing.idempotencyKey)
       : null;
@@ -7285,6 +7786,7 @@ async function schedulePreparedOutreach(
           primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
+          festivalRecipientPartition: prep.festivalRecipientPartition,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           ...trajectoryAttributionData(
@@ -7319,6 +7821,7 @@ async function schedulePreparedOutreach(
           primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
+          festivalRecipientPartition: prep.festivalRecipientPartition,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           ...trajectoryAttributionData(
@@ -7407,6 +7910,7 @@ async function schedulePreparedOutreach(
           primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
+          festivalRecipientPartition: prep.festivalRecipientPartition,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           ...trajectoryAttributionData(
@@ -7478,6 +7982,7 @@ async function schedulePreparedOutreach(
           primaryRecipientEmail: prep.primaryRecipientEmail,
           fullTeamSend: prep.fullTeamSend,
           festivalAllContactsSend: prep.festivalAllContactsSend,
+          festivalRecipientPartition: prep.festivalRecipientPartition,
           templateId: prep.templateId,
           ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
           ...trajectoryAttributionData(
@@ -7516,6 +8021,7 @@ async function schedulePreparedOutreach(
         primaryRecipientEmail: prep.primaryRecipientEmail,
         fullTeamSend: prep.fullTeamSend,
         festivalAllContactsSend: prep.festivalAllContactsSend,
+        festivalRecipientPartition: prep.festivalRecipientPartition,
         ...expectedRecipientIdentityData(prep.expectedRecipientIdentity),
         ...trajectoryAttributionData(prep),
         status: "scheduled",
@@ -7542,6 +8048,9 @@ export async function scheduleFestivalManagerOutreach(
     showId: string;
     contactId: string;
     coveredArtistIds: string[];
+    festivalRecipientPartition?: boolean;
+    recipientDeliveryMode?: RecipientDeliveryMode;
+    expectedRecipientEmails?: readonly string[];
   },
   scheduledFor: Date,
 ): Promise<SendOutreachOutput> {
@@ -7549,7 +8058,10 @@ export async function scheduleFestivalManagerOutreach(
     showId: input.showId,
     contactId: input.contactId,
     singleRecipient: true,
+    festivalRecipientPartition: input.festivalRecipientPartition,
     festivalCoveredArtistIds: input.coveredArtistIds,
+    recipientDeliveryMode: input.recipientDeliveryMode,
+    expectedRecipientEmails: input.expectedRecipientEmails,
   });
   if ("error" in prep) return { ok: false, ...prep };
   return schedulePreparedOutreach(prep, scheduledFor);
@@ -7559,6 +8071,7 @@ export async function sendFestivalManagerOutreach(input: {
   showId: string;
   contactId: string;
   coveredArtistIds: string[];
+  festivalRecipientPartition?: boolean;
 }): Promise<SendOutreachOutput> {
   const configurationError = getResendConfigurationError(
     process.env.RESEND_API_KEY,
@@ -7569,6 +8082,7 @@ export async function sendFestivalManagerOutreach(input: {
     showId: input.showId,
     contactId: input.contactId,
     singleRecipient: true,
+    festivalRecipientPartition: input.festivalRecipientPartition,
     festivalCoveredArtistIds: input.coveredArtistIds,
   });
   if ("error" in prep) return { ok: false, ...prep };

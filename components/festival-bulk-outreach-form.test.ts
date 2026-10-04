@@ -30,6 +30,9 @@ test("festival bulk outreach supports select all and grouped confirmation", () =
     source,
     /checkbox\.value === target\.value[\s\S]*checkbox\.checked = target\.checked/,
   );
+  assert.match(source, /target\.dataset\.festivalArtistId/);
+  assert.match(source, /artistValues\.has\(checkbox\.value\)[\s\S]*checkbox\.checked = target\.checked/);
+  assert.match(source, /syncArtistCheckboxes\(formId\)/);
   assert.match(
     source,
     /new Set\(candidates\.map\(\(candidate\) => candidate\.selectionId\)\)\.size/,
@@ -120,4 +123,61 @@ test("confirmation groups selected artists by the exact server grouping key", ()
       },
     ],
   );
+});
+
+test("mixed original and follow-up confirmation has three messages per stage", () => {
+  const candidates = [
+    ["jon-layz", "LAYZ", "jon@confirmedgroup.com"],
+    ["emily", "LAYZ", "emily@confirmedgroup.com"],
+    ["anthony", "Wooli", "anthony@confirmedgroup.com"],
+    ["jon-wooli", "Wooli", "jon@confirmedgroup.com"],
+  ].map(([contactId, artistName, email]) => ({
+    selectionId: `original:${contactId}`,
+    artistId: artistName,
+    coveredArtistIds: [artistName],
+    contactId,
+    outreachKind: "original" as const,
+    artistNames: [artistName],
+    groupKey: email,
+    emailLabel: email,
+    recipients: [email],
+    primaryRecipientEmail: email,
+    recipientDeliveryMode: "individual_threads" as const,
+    immutableDeliveryMode: false,
+    selectedByDefault: false,
+  }));
+  const originals = buildFestivalConfirmationGroups(
+    candidates,
+    candidates.map((candidate) => candidate.selectionId),
+  );
+  assert.deepEqual(originals.map((group) => [group.emailLabel, group.artistNames]), [
+    ["jon@confirmedgroup.com", ["LAYZ", "Wooli"]],
+    ["emily@confirmedgroup.com", ["LAYZ"]],
+    ["anthony@confirmedgroup.com", ["Wooli"]],
+  ]);
+  const followUps = buildFestivalConfirmationGroups(
+    originals.map((group, index) => ({
+      ...candidates[index],
+      selectionId: `follow_up:${index}`,
+      outreachKind: "follow_up" as const,
+      groupKey: `follow_up:${index}`,
+      artistNames: group.artistNames,
+      coveredArtistIds: group.artistNames,
+      emailLabel: group.emailLabel,
+      recipients: group.recipients,
+    })),
+    ["follow_up:0", "follow_up:1", "follow_up:2"],
+  );
+  assert.deepEqual(
+    followUps.map((group) => [group.emailLabel, group.artistNames]),
+    originals.map((group) => [group.emailLabel, group.artistNames]),
+  );
+});
+
+test("submission uses the click-time confirmation selection and its exact plan", () => {
+  assert.match(source, /setConfirmedIds\(selectedOutreachTargets\)/);
+  assert.match(source, /buildFestivalConfirmationGroups\(candidates, confirmedIds\)/);
+  assert.match(source, /formData\.delete\("outreachTargets"\)/);
+  assert.match(source, /for \(const id of confirmedIds\) formData\.append\("outreachTargets", id\)/);
+  assert.match(source, /JSON\.stringify\(festivalConfirmedPlan\([\s\S]*candidates, confirmedIds, recipientDeliveryMode/);
 });

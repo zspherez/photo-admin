@@ -7,6 +7,7 @@ import {
   recipientDeliveryLayout,
   type RecipientDeliveryMode,
 } from "@/lib/recipientDelivery";
+import { festivalConfirmedPlan } from "@/lib/festivalOutreachPlan";
 
 export interface FestivalBulkConfirmationCandidate {
   selectionId: string;
@@ -74,6 +75,21 @@ function selectedCheckboxes(formId: string): HTMLInputElement[] {
   );
 }
 
+function syncArtistCheckboxes(formId: string) {
+  const recipients = selectedCheckboxes(formId);
+  for (const artist of document.querySelectorAll<HTMLInputElement>(
+    `input[form="${formId}"][data-festival-artist-id]`,
+  )) {
+    const artistRecipients = recipients.filter(
+      (recipient) => recipient.dataset.festivalTargetArtistId ===
+        artist.dataset.festivalArtistId,
+    );
+    const checked = artistRecipients.filter((recipient) => recipient.checked).length;
+    artist.checked = artistRecipients.length > 0 && checked === artistRecipients.length;
+    artist.indeterminate = checked > 0 && checked < artistRecipients.length;
+  }
+}
+
 export function FestivalBulkOutreachForm({
   action,
   formId,
@@ -94,6 +110,7 @@ export function FestivalBulkOutreachForm({
       .filter((candidate) => candidate.selectedByDefault)
       .map((candidate) => candidate.selectionId),
   );
+  const [confirmedIds, setConfirmedIds] = useState<string[]>([]);
   const [confirming, setConfirming] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [recipientDeliveryMode, setRecipientDeliveryMode] =
@@ -114,18 +131,29 @@ export function FestivalBulkOutreachForm({
   useEffect(() => {
     const onChange = (event: Event) => {
       const target = event.target;
-      if (
-        target instanceof HTMLInputElement &&
-        target.name === "outreachTargets" &&
-        target.getAttribute("form") === formId
-      ) {
+      if (!(target instanceof HTMLInputElement) ||
+          target.getAttribute("form") !== formId) return;
+      if (target.dataset.festivalArtistId) {
+        const artistValues = new Set(
+          selectedCheckboxes(formId)
+            .filter((checkbox) =>
+              checkbox.dataset.festivalTargetArtistId ===
+              target.dataset.festivalArtistId,
+            )
+            .map((checkbox) => checkbox.value),
+        );
+        for (const checkbox of selectedCheckboxes(formId)) {
+          if (artistValues.has(checkbox.value)) checkbox.checked = target.checked;
+        }
+      } else if (target.name === "outreachTargets") {
         for (const checkbox of selectedCheckboxes(formId)) {
           if (checkbox.value === target.value) {
             checkbox.checked = target.checked;
           }
         }
-        refreshSelection();
-      }
+      } else return;
+      syncArtistCheckboxes(formId);
+      refreshSelection();
     };
     document.addEventListener("change", onChange);
     return () => document.removeEventListener("change", onChange);
@@ -138,8 +166,8 @@ export function FestivalBulkOutreachForm({
   }, [confirming]);
 
   const confirmationGroups = useMemo(() => {
-    return buildFestivalConfirmationGroups(candidates, selectedIds);
-  }, [candidates, selectedIds]);
+    return buildFestivalConfirmationGroups(candidates, confirmedIds);
+  }, [candidates, confirmedIds]);
   const hasMultipleRecipientGroup = confirmationGroups.some(
     (group) =>
       group.outreachKind === "original" &&
@@ -151,6 +179,7 @@ export function FestivalBulkOutreachForm({
     for (const checkbox of selectedCheckboxes(formId)) {
       checkbox.checked = true;
     }
+    syncArtistCheckboxes(formId);
     setSelectionError(null);
     refreshSelection();
   };
@@ -168,6 +197,7 @@ export function FestivalBulkOutreachForm({
       setSelectionError("Select at least one actionable artist.");
       return;
     }
+    setConfirmedIds(selectedOutreachTargets);
     const selected = new Set(selectedOutreachTargets);
     setRecipientDeliveryMode(
       candidates.some(
@@ -189,7 +219,17 @@ export function FestivalBulkOutreachForm({
     <form
       ref={formRef}
       id={formId}
-      action={action}
+      action={(formData) => {
+        formData.delete("outreachTargets");
+        for (const id of confirmedIds) formData.append("outreachTargets", id);
+        formData.set(
+          "confirmedPlan",
+          JSON.stringify(festivalConfirmedPlan(
+            candidates, confirmedIds, recipientDeliveryMode,
+          )),
+        );
+        return action(formData);
+      }}
       className="mt-6"
       aria-label="Bulk festival outreach"
     >

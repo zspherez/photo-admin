@@ -64,7 +64,7 @@ test("direct-only contacts expose manual marking without email actions", () => {
   assert.match(dashboard, /artist\.canMarkManually && \(/);
   assert.match(
     festival,
-    /outreachEnabled &&\s*!r\.association\.rejectedAt &&\s*r\.followUpEligibility/,
+    /outreachEnabled && !r\.association\.rejectedAt &&\s*r\.followUpEligibilities\.map/,
   );
   assert.match(
     festival,

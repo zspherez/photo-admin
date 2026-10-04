@@ -185,7 +185,8 @@ test("new follow-ups rebind to current active recipients while retries remain im
     send.indexOf("export async function getFollowUpEligibilityBatch"),
     send.indexOf("type CapturedTrajectoryPreparation"),
   );
-  assert.match(eligibility, /currentFollowUpRecipientEmails/);
+  assert.match(eligibility, /followUpRecipientsForSnapshot/);
+  assert.match(send, /if \(!partition\.festivalRecipientPartition\) return shared/);
   assert.match(
     eligibility,
     /mode === "retry" \|\|\s*\(child\?\.status === "cancelled" &&\s*child\.error === "Operator reviewed bounced outreach for resend"\)\s*\? child\?\.contactId\s*: parent\.contactId/,

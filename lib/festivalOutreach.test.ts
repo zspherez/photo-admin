@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   groupFestivalManagerTargets,
   sharedFestivalManagementArtistIds,
+  uniqueFestivalRecipientTargets,
 } from "./festivalOutreach";
 
 test("festival manager targets collapse shared recipient emails deterministically", () => {
@@ -40,6 +41,39 @@ test("festival manager targets collapse shared recipient emails deterministicall
       },
     ],
     skipped: 0,
+  });
+
+  test("mixed manager recipients produce one shared target and two individual targets", () => {
+    const targets = uniqueFestivalRecipientTargets([
+      {
+        artistId: "layz",
+        contacts: [
+          { id: "emily", email: "Emily@ConfirmedGroup.com", state: "active" },
+          { id: "jon-layz", email: "Jon <jon@confirmedgroup.com>", state: "active" },
+          { id: "duplicate", email: "JON@confirmedgroup.com", state: "active" },
+        ],
+      },
+      {
+        artistId: "wooli",
+        contacts: [
+          { id: "anthony", email: "anthony@confirmedgroup.com", state: "active" },
+          { id: "jon-wooli", email: "jon@confirmedgroup.com", state: "active" },
+          { id: "quarantined", email: "skip@example.com", state: "quarantined" },
+        ],
+      },
+    ]);
+    const { groups } = groupFestivalManagerTargets(
+      targets,
+      new Set(targets.map((target) => target.contactId)),
+    );
+    assert.deepEqual(
+      groups.map((group) => [group.email, group.artistIds]),
+      [
+        ["emily@confirmedgroup.com", ["layz"]],
+        ["jon@confirmedgroup.com", ["layz", "wooli"]],
+        ["anthony@confirmedgroup.com", ["wooli"]],
+      ],
+    );
   });
 });
 
