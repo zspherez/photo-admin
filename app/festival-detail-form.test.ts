@@ -315,6 +315,14 @@ test("selected festival sends partition by recipient and queue-all is retired", 
   assert.match(source, /data-festival-target-artist-id=\{r\.artist\.id\}/);
 });
 
+test("festival rows keep one visible artist checkbox and tuck multi-recipient choices under a disclosure", () => {
+  assert.match(source, /<input[\s\S]*data-festival-artist-id=\{r\.artist\.id\}[\s\S]*aria-label=\{`Select all recipients/);
+  assert.match(source, /bulkCandidates\.length > 1 \? \(\s*<details/);
+  assert.match(source, /<summary[^>]*>\s*Choose recipients \(\{bulkCandidates\.length\}\)/);
+  assert.match(source, /bulkCandidates\.length === 1 \? \(\s*<input[\s\S]*name="outreachTargets"[\s\S]*hidden/);
+  assert.doesNotMatch(source, /\$\{target\.email\}: \$\{sendability\?\.sendable/);
+});
+
 test("festival bulk selection mixes initial outreach and eligible follow-ups", () => {
   const bulk = source.slice(
     source.indexOf("async function bulkSend"),
