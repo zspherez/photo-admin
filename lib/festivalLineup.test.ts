@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   chooseFestivalLineupCandidate,
   dedupeFestivalArtistIds,
+  FestivalLineupMergeSelectionError,
   parseFestivalLineupEntries,
+  planFestivalLineupMerges,
 } from "./festivalLineup";
 
 const candidates = [
@@ -77,5 +79,70 @@ test("same-normalized lineup entries keep independent artist selections", () => 
   assert.deepEqual(
     dedupeFestivalArtistIds(["artist-1", "artist-1"]),
     ["artist-1"]
+  );
+});
+
+test("confirmed same-artist records are merged into the selected canonical record", () => {
+  const choice = {
+    name: "HAYLA",
+    normalizedName: "hayla",
+    candidates: [
+      { id: "statsfm-only" },
+      { id: "spotify-and-edmtrain" },
+    ],
+    selectedId: "spotify-and-edmtrain",
+    confirmed: true,
+  };
+  assert.deepEqual(planFestivalLineupMerges([choice]), [
+    {
+      name: "HAYLA",
+      targetId: "spotify-and-edmtrain",
+      sourceIds: ["statsfm-only"],
+    },
+  ]);
+  assert.deepEqual(
+    planFestivalLineupMerges([{ ...choice, confirmed: false }]),
+    [],
+  );
+  assert.deepEqual(planFestivalLineupMerges([choice, choice]), [
+    {
+      name: "HAYLA",
+      targetId: "spotify-and-edmtrain",
+      sourceIds: ["statsfm-only"],
+    },
+  ]);
+});
+
+test("merge planning rejects stale, invalid, or inconsistent artist choices", () => {
+  const choice = {
+    name: "HAYLA",
+    normalizedName: "hayla",
+    candidates,
+    selectedId: "artist-1",
+    confirmed: true,
+  };
+  assert.throws(
+    () => planFestivalLineupMerges([{ ...choice, selectedId: "unknown" }]),
+    FestivalLineupMergeSelectionError,
+  );
+  assert.throws(
+    () => planFestivalLineupMerges([{ ...choice, candidates: [] }]),
+    FestivalLineupMergeSelectionError,
+  );
+  assert.throws(
+    () =>
+      planFestivalLineupMerges([
+        choice,
+        { ...choice, selectedId: "artist-2", confirmed: false },
+      ]),
+    /Every HAYLA lineup entry must select the same record/,
+  );
+  assert.throws(
+    () =>
+      planFestivalLineupMerges([
+        choice,
+        { ...choice, selectedId: "artist-2" },
+      ]),
+    /choose different records/,
   );
 });

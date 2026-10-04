@@ -6,6 +6,10 @@ const source = readFileSync(
   new URL("./actions.ts", import.meta.url),
   "utf8"
 );
+const form = readFileSync(
+  new URL("./festival-form.tsx", import.meta.url),
+  "utf8",
+);
 
 test("festival action validates before persistence", () => {
   const actionStart = source.indexOf("export async function createFestival");
@@ -72,4 +76,21 @@ test("festival show, artists, and lineup links are created transactionally", () 
   assert.ok(lineupCreate > showCreate);
   assert.ok(manualOwnership > lineupCreate);
   assert.ok(transactionEnd > lineupCreate);
+});
+
+test("confirmed duplicate artists merge inside the festival transaction before lineup insertion", () => {
+  const transactionStart = source.indexOf("return await db.$transaction(");
+  const merge = source.indexOf("await mergeArtistsInTransaction(", transactionStart);
+  const artistCreate = source.indexOf("await tx.artist.create(", transactionStart);
+  const showCreate = source.indexOf("await tx.show.create(", transactionStart);
+  assert.ok(merge > transactionStart);
+  assert.ok(artistCreate > merge);
+  assert.ok(showCreate > artistCreate);
+  assert.match(source, /confirmedMerges\.has\(entry\.selectionKey\)/);
+  assert.match(source, /error instanceof FestivalMergeError/);
+  assert.match(source, /timeout: 120_000/);
+  assert.match(form, /name=\{`mergeChoice:\$\{ambiguity\.selectionKey\}`\}/);
+  assert.match(form, /value="MERGE"/);
+  assert.match(form, /defaultChecked=\{ambiguity\.mergeConfirmed\}/);
+  assert.match(form, /pathname: "\/artists\/merge"/);
 });

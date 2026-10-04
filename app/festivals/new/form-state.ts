@@ -20,6 +20,7 @@ export interface FestivalArtistAmbiguity {
   selectionKey: string;
   lineupName: string;
   selectedId: string;
+  mergeConfirmed: boolean;
   candidates: FestivalArtistCandidate[];
 }
 

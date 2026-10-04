@@ -5,6 +5,7 @@ import type { SearchParamValue } from "@/lib/searchParams";
 import { FestivalForm } from "./festival-form";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 180;
 export const metadata: Metadata = { title: "Add festival" };
 
 export default async function NewFestivalPage({
