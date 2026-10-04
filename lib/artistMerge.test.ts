@@ -34,6 +34,8 @@ test("artist merge UI requires an explicit canonical choice and confirmation", (
 test("artist merge is serialized, audited, and covers every Artist relation", () => {
   assert.match(source, /acquireArtistIdentityLock\(tx\)/);
   assert.match(source, /acquireShowArtistMembershipLock\(tx\)/);
+  assert.match(source, /export async function mergeArtistsInTransaction/);
+  assert.match(source, /class ArtistMergeReviewRequiredError extends Error/);
   assert.match(
     source,
     /isolationLevel: Prisma\.TransactionIsolationLevel\.Serializable/,

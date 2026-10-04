@@ -5,8 +5,14 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { acquireArtistIdentityLock } from "@/lib/artistIdentity";
 import {
+  ArtistMergeReviewRequiredError,
+  mergeArtistsInTransaction,
+} from "@/lib/artistMerge";
+import {
   chooseFestivalLineupCandidate,
   dedupeFestivalArtistIds,
+  FestivalLineupMergeSelectionError,
+  planFestivalLineupMerges,
   type FestivalLineupEntry,
   type FestivalLineupDecision,
 } from "@/lib/festivalLineup";
@@ -17,6 +23,7 @@ import {
   workflowReturnPath,
 } from "@/lib/dashboardReturnUrl";
 import { parseFestivalListView } from "@/lib/festivalView";
+import { refreshWorkflowViews } from "@/lib/workflowRefresh";
 import type {
   FestivalArtistAmbiguity,
   FestivalFormState,
@@ -28,6 +35,16 @@ class AmbiguousLineupError extends Error {
   constructor(readonly ambiguities: FestivalArtistAmbiguity[]) {
     super("Lineup artist selection is required");
     this.name = "AmbiguousLineupError";
+  }
+}
+
+class FestivalMergeError extends Error {
+  constructor(
+    readonly ambiguities: FestivalArtistAmbiguity[],
+    message: string,
+  ) {
+    super(message);
+    this.name = "FestivalMergeError";
   }
 }
 
@@ -63,8 +80,9 @@ async function persistFestival(
   countryName: string,
   festivalNycStatus: "inside_nyc" | "outside_nyc" | "unknown",
   entries: FestivalLineupEntry[],
-  selections: Map<string, string>
-): Promise<string> {
+  selections: Map<string, string>,
+  confirmedMerges: ReadonlySet<string>,
+): Promise<{ festivalId: string; merged: boolean }> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       return await db.$transaction(
@@ -113,6 +131,7 @@ async function persistFestival(
                 lineupName: entry.name,
                 selectedId:
                   decision.kind === "use" ? decision.candidate.id : "",
+                mergeConfirmed: confirmedMerges.has(entry.selectionKey),
                 candidates: matches.map((candidate) => ({
                   id: candidate.id,
                   name: candidate.name,
@@ -127,6 +146,55 @@ async function persistFestival(
 
           if (unresolved) {
             throw new AmbiguousLineupError(ambiguityPrompts);
+          }
+
+          let mergePlans: ReturnType<typeof planFestivalLineupMerges>;
+          try {
+            mergePlans = planFestivalLineupMerges(
+              decisions.map(({ entry, decision }) => ({
+                name: entry.name,
+                normalizedName: entry.normalizedName,
+                candidates: candidatesByName.get(entry.normalizedName) ?? [],
+                selectedId:
+                  decision.kind === "use" ? decision.candidate.id : null,
+                confirmed: confirmedMerges.has(entry.selectionKey),
+              })),
+            );
+          } catch (error) {
+            if (error instanceof FestivalLineupMergeSelectionError) {
+              throw new FestivalMergeError(ambiguityPrompts, error.message);
+            }
+            throw error;
+          }
+          for (const plan of mergePlans) {
+            for (const sourceId of plan.sourceIds) {
+              try {
+                await mergeArtistsInTransaction(
+                  tx,
+                  sourceId,
+                  plan.targetId,
+                  {},
+                );
+              } catch (error) {
+                if (error instanceof ArtistMergeReviewRequiredError) {
+                  throw new FestivalMergeError(
+                    ambiguityPrompts,
+                    `Could not merge ${plan.name}: ${error.message} No changes were saved. Resolve the conflict in Artists → Merge or leave the merge box unchecked.`,
+                  );
+                }
+                if (
+                  error instanceof Prisma.PrismaClientKnownRequestError &&
+                  (error.code === "P2002" || error.code === "P2034")
+                ) {
+                  throw error;
+                }
+                console.error("Festival artist merge failed", error);
+                throw new FestivalMergeError(
+                  ambiguityPrompts,
+                  `Could not merge the ${plan.name} records. No changes were saved. Review this pair in Artists → Merge, or leave the merge box unchecked to use just one record.`,
+                );
+              }
+            }
           }
 
           const artistIds: string[] = [];
@@ -185,19 +253,21 @@ async function persistFestival(
               })),
             });
           }
-          return festival.id;
+          return { festivalId: festival.id, merged: mergePlans.length > 0 };
         },
         {
           isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          timeout: 120_000,
         }
       );
     } catch (error) {
-      if (error instanceof AmbiguousLineupError) throw error;
+      if (error instanceof AmbiguousLineupError ||
+          error instanceof FestivalMergeError) throw error;
       const code =
         error instanceof Prisma.PrismaClientKnownRequestError
           ? error.code
           : null;
-      if (code === "P2034" && attempt < 3) continue;
+      if ((code === "P2002" || code === "P2034") && attempt < 3) continue;
       throw error;
     }
   }
@@ -224,25 +294,37 @@ export async function createFestival(
       formValue(formData, entry.selectionKey),
     ])
   );
+  const confirmedMerges = new Set(
+    validation.entries
+      .filter(
+        (entry) =>
+          formValue(formData, `mergeChoice:${entry.selectionKey}`) === "MERGE",
+      )
+      .map((entry) => entry.selectionKey),
+  );
 
-  let festivalId: string;
+  let result: Awaited<ReturnType<typeof persistFestival>>;
   try {
-    festivalId = await persistFestival(
+    result = await persistFestival(
       values,
       validation.date,
       validation.countryCode,
       validation.countryName,
       validation.festivalNycStatus,
       validation.entries,
-      selections
+      selections,
+      confirmedMerges,
     );
   } catch (error) {
     if (error instanceof AmbiguousLineupError) {
       return errorState(
         values,
-        "Multiple artists share these normalized names. Choose the intended existing artist for each lineup entry, then submit again.",
+        "Multiple records share these artist names. Choose the correct record; confirm a merge only when all listed records are the same artist.",
         error.ambiguities
       );
+    }
+    if (error instanceof FestivalMergeError) {
+      return errorState(values, error.message, error.ambiguities);
     }
     console.error("Unable to create festival transaction", error);
     return errorState(
@@ -251,10 +333,21 @@ export async function createFestival(
     );
   }
 
+  if (result.merged) {
+    refreshWorkflowViews(returnTo, [
+      "/artists",
+      "/shows",
+      "/festivals",
+      "/recommendations",
+      "/research",
+      "/contact-audit",
+      "/outreach",
+    ]);
+  }
   const returnUrl = new URL(returnTo, "https://festivals.local");
   redirect(
     festivalReturnPath(
-      festivalId,
+      result.festivalId,
       "all",
       "all",
       parseFestivalListView({

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { LinkButton } from "@/components/ui/button";
@@ -96,7 +97,7 @@ export function FestivalForm({ returnTo = "/festivals" }: { returnTo?: string })
             <TextArea
               name="lineup"
               label="Lineup"
-              description="At least one artist is required. Unique normalized matches are reused; ambiguous matches require your selection."
+              description="At least one artist is required. Same-name records require your selection; confirmed duplicates can be merged."
               rows={12}
               defaultValue={state.values.lineup}
               placeholder={"Solomun\nAdam Beyer\nDixon\nAdriatique\n..."}
@@ -108,6 +109,10 @@ export function FestivalForm({ returnTo = "/festivals" }: { returnTo?: string })
                 <legend className="px-1 text-sm font-semibold">
                   Choose ambiguous artists
                 </legend>
+                <p className="text-xs text-amber-900 dark:text-amber-200">
+                  A shared name does not prove these records represent the same artist.
+                  Choose the correct record; merge only if every listed record is that same person.
+                </p>
                 {state.ambiguities.map((ambiguity) => (
                   <div key={ambiguity.selectionKey}>
                     <label
@@ -130,6 +135,45 @@ export function FestivalForm({ returnTo = "/festivals" }: { returnTo?: string })
                         </option>
                       ))}
                     </select>
+                    <label className="mt-2 flex items-start gap-2 text-xs text-amber-900 dark:text-amber-200">
+                      <input
+                        type="checkbox"
+                        name={`mergeChoice:${ambiguity.selectionKey}`}
+                        value="MERGE"
+                        defaultChecked={ambiguity.mergeConfirmed}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        These are duplicate records for the same artist. Merge all
+                        other listed records into my selection while creating
+                        the festival. Contacts, shows, research, and provider
+                        identities will be preserved.
+                      </span>
+                    </label>
+                    {ambiguity.selectedId && (
+                      <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                        {ambiguity.candidates
+                          .filter((candidate) => candidate.id !== ambiguity.selectedId)
+                          .map((candidate) => (
+                            <Link
+                              key={candidate.id}
+                              href={{
+                                pathname: "/artists/merge",
+                                query: {
+                                  leftId: ambiguity.selectedId,
+                                  rightId: candidate.id,
+                                  returnTo: "/festivals/new",
+                                },
+                              }}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-amber-900 underline dark:text-amber-200"
+                            >
+                              Review merge with record {candidate.id.slice(-8)}
+                            </Link>
+                          ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </fieldset>
@@ -140,7 +184,9 @@ export function FestivalForm({ returnTo = "/festivals" }: { returnTo?: string })
                 variant="primary"
                 pendingLabel="Creating festival…"
               >
-                Create festival
+                {state.ambiguities.length > 0
+                  ? "Create festival and merge confirmed duplicates"
+                  : "Create festival"}
               </PendingSubmitButton>
               <LinkButton href={returnTo} variant="secondary">
                 Cancel

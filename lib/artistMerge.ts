@@ -47,6 +47,8 @@ export interface ArtistMergeOptions {
   researchJobPolicy?: ArtistMergeResearchJobPolicy;
 }
 
+export class ArtistMergeReviewRequiredError extends Error {}
+
 async function loadArtistMergeRecord(
   artistId: string,
   client: ArtistMergeClient = db,
@@ -636,12 +638,15 @@ async function mergeResearchJobs(
   });
 }
 
-async function mergeInTransaction(
+export async function mergeArtistsInTransaction(
   tx: Prisma.TransactionClient,
   sourceArtistId: string,
   targetArtistId: string,
   options: ArtistMergeOptions,
 ): Promise<ArtistMergeResult> {
+  if (!sourceArtistId || !targetArtistId || sourceArtistId === targetArtistId) {
+    throw new Error("Choose two different artists to merge.");
+  }
   await acquireArtistIdentityLock(tx);
   await acquireShowArtistMembershipLock(tx);
   await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
@@ -655,13 +660,17 @@ async function mergeInTransaction(
   const target = await loadArtistMergeRecord(targetArtistId, tx);
   if (!source || !target) throw new Error("Artist merge target no longer exists.");
   const blockers = await previewBlockers(source, target, tx);
-  if (blockers.length > 0) throw new Error(blockers.join(" "));
+  if (blockers.length > 0) {
+    throw new ArtistMergeReviewRequiredError(blockers.join(" "));
+  }
   if (
     source.contactResearchJob &&
     target.contactResearchJob &&
     !options.researchJobPolicy
   ) {
-    throw new Error("Choose which manager-research job to keep.");
+    throw new ArtistMergeReviewRequiredError(
+      "Choose which manager-research job to keep.",
+    );
   }
 
   await tx.artist.update({
@@ -802,7 +811,7 @@ export async function mergeArtists(
     try {
       return await db.$transaction(
         (tx) =>
-          mergeInTransaction(
+          mergeArtistsInTransaction(
             tx,
             sourceArtistId,
             targetArtistId,
