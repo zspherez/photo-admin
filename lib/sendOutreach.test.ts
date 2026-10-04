@@ -13,6 +13,9 @@ import {
   canRecoverConfigurationOutageWithoutAttempt,
   canRecoverPreparationFailureWithoutAttempt,
   currentFollowUpRecipientEmails,
+  festivalRecipientCovers,
+  partitionedBounceResendError,
+  followUpRecipientsForSnapshot,
   evaluateAttemptRetryEligibility,
   evaluateOutreachDeliveryPolicy,
   earliestDeliveryDate,
@@ -105,6 +108,173 @@ import {
 
 const NOW = new Date("2026-07-16T04:00:00.000Z");
 const CREDENTIAL_SCOPE = getResendCredentialScope("re_original")!;
+
+test("legacy outreach blocks new partitions while partitioned coverage is recipient-scoped", () => {
+  const sent = {
+    recipientEmails: ["jon@confirmedgroup.com"],
+    recipientSnapshotState: "verified",
+    festivalRecipientPartition: true,
+    contactId: "jon-layz",
+  };
+  assert.equal(festivalRecipientCovers(sent, "jon@confirmedgroup.com"), true);
+  assert.equal(festivalRecipientCovers(sent, "emily@confirmedgroup.com"), false);
+  assert.equal(
+    festivalRecipientCovers(
+      { ...sent, festivalRecipientPartition: false },
+      "emily@confirmedgroup.com",
+    ),
+    true,
+  );
+  assert.equal(
+    festivalRecipientCovers({
+      ...sent,
+      recipientEmails: ["jon@confirmedgroup.com", "emily@confirmedgroup.com"],
+    }, "emily@confirmedgroup.com"),
+    true,
+  );
+  assert.equal(
+    festivalRecipientCovers({ ...sent, recipientSnapshotState: "legacy_unknown" },
+      "emily@confirmedgroup.com"),
+    true,
+  );
+  assert.equal(
+    festivalRecipientCovers({ ...sent, recipientEmails: [] },
+      "emily@confirmedgroup.com"),
+    true,
+  );
+});
+
+test("partitioned follow-ups retain initial recipient across shared artists", () => {
+  const contacts = [
+    { artistId: "layz", email: "emily@confirmedgroup.com", state: "active" as const },
+    { artistId: "layz", email: "jon@confirmedgroup.com", state: "active" as const },
+    { artistId: "wooli", email: "anthony@confirmedgroup.com", state: "active" as const },
+    { artistId: "wooli", email: "jon@confirmedgroup.com", state: "active" as const },
+  ];
+  const artists = ["layz", "wooli"];
+  assert.deepEqual(
+    followUpRecipientsForSnapshot(artists, contacts, {
+      festivalRecipientPartition: true,
+      recipientEmails: ["jon@confirmedgroup.com"],
+    }),
+    ["jon@confirmedgroup.com"],
+  );
+  assert.deepEqual(
+    followUpRecipientsForSnapshot(["layz"], contacts, {
+      festivalRecipientPartition: true,
+      recipientEmails: ["emily@confirmedgroup.com"],
+    }),
+    ["emily@confirmedgroup.com"],
+  );
+  assert.deepEqual(
+    followUpRecipientsForSnapshot(artists, contacts, {
+      festivalRecipientPartition: false,
+      recipientEmails: ["jon@confirmedgroup.com"],
+    }),
+    ["jon@confirmedgroup.com"],
+  );
+  const sharedTeam = [
+    ...contacts,
+    { artistId: "wooli", email: "emily@confirmedgroup.com", state: "active" as const },
+  ];
+  assert.deepEqual(
+    followUpRecipientsForSnapshot(artists, sharedTeam, {
+      festivalRecipientPartition: false,
+      recipientEmails: ["jon@confirmedgroup.com"],
+    }),
+    ["emily@confirmedgroup.com", "jon@confirmedgroup.com"],
+  );
+  assert.deepEqual(
+    followUpRecipientsForSnapshot(artists, sharedTeam, {
+      festivalRecipientPartition: true,
+      recipientEmails: ["jon@confirmedgroup.com"],
+    }),
+    ["jon@confirmedgroup.com"],
+  );
+  assert.deepEqual(
+    followUpRecipientsForSnapshot(artists, contacts.slice(0, 3), {
+      festivalRecipientPartition: true,
+      recipientEmails: ["jon@confirmedgroup.com"],
+    }),
+    [],
+  );
+});
+
+test("festival recipient partition is enforced in both claim and schedule transactions", () => {
+  const source = readFileSync(
+    new URL("./sendOutreach.ts", import.meta.url),
+    "utf8",
+  );
+  const scope = source.slice(
+    source.indexOf("function preparedOutreachScopeWhere"),
+    source.indexOf("async function lockPreparedOutreachArtists"),
+  );
+  assert.match(scope, /prep\.festivalRecipientPartition/);
+  assert.match(scope, /recipientEmails: \{ has: prep\.recipients\[0\] \}/);
+  assert.match(scope, /recipientSnapshotState: \{ not: "verified" \}/);
+  for (const name of ["claimImmediateOutreach", "schedulePreparedOutreach"]) {
+    const start = source.indexOf(`async function ${name}`);
+    const body = source.slice(start, source.indexOf("\nexport async function", start));
+    assert.match(body, /lockPreparedOutreachArtists\(tx, prep\)/);
+    assert.match(body, /preparedOutreachScopeWhere\(prep\)/);
+    assert.match(body, /preparedDeliveryPolicyBlockingReason\(tx, prep\)/);
+    assert.match(body, /festivalRecipientPartition: prep\.festivalRecipientPartition/);
+  }
+  assert.match(source, /followUpRecipientsForSnapshot\(coveredArtistIds, coveredContacts, outreach\)/);
+  assert.match(source, /parent\.festivalRecipientPartition[\s\S]*sameEmails\(\[\.\.\.recipients\], parent\.recipientEmails\)/);
+  assert.match(source, /expectedRecipientEmails &&\s*!sameEmails\(sendability\.recipients, \[\.\.\.expectedRecipientEmails\]\)/);
+  assert.match(source, /expectedRecipientEmails &&\s*!sameEmails\(\[currentRecipientIdentity\.normalizedEmail\], \[\.\.\.expectedRecipientEmails\]\)/);
+  assert.match(source, /overrides\.expectedRecipientEmails &&\s*!sameEmails\(eligibility\.recipients, \[\.\.\.overrides\.expectedRecipientEmails\]\)/);
+  assert.match(source, /overrides\.expectedCoveredArtistIds &&\s*!sameOrderedStrings\(/);
+});
+
+test("cancelled attempted partition cannot be repurposed as legacy all-contact outreach", async () => {
+  const { attemptedOutreachScopeError } = await import("./sendOutreach");
+  const prior = {
+    festivalRecipientPartition: true,
+    recipientEmails: ["jon@example.com"],
+    coveredArtistIds: ["artist-a", "artist-b"],
+    recipientDeliveryMode: "individual_threads" as const,
+    primaryRecipientEmail: "jon@example.com",
+  };
+  const exact = {
+    festivalRecipientPartition: true,
+    recipients: ["jon@example.com"],
+    coveredArtistIds: ["artist-b", "artist-a"],
+    recipientDeliveryMode: "individual_threads" as const,
+    primaryRecipientEmail: "jon@example.com",
+  };
+  assert.equal(attemptedOutreachScopeError(prior, exact, true), null);
+  assert.equal(attemptedOutreachScopeError(prior, {
+    ...exact, festivalRecipientPartition: false,
+    recipients: ["jon@example.com", "emily@example.com"],
+  }, true)?.includes("immutable"), true);
+  assert.match(attemptedOutreachScopeError(prior, {
+    ...exact, coveredArtistIds: ["artist-a"],
+  }, true) ?? "", /immutable/);
+  assert.match(attemptedOutreachScopeError(prior, {
+    ...exact, recipients: ["other@example.com"],
+  }, true) ?? "", /immutable/);
+  assert.match(attemptedOutreachScopeError(prior, {
+    ...exact, recipientDeliveryMode: "to_thread",
+  }, true) ?? "", /immutable/);
+  assert.equal(attemptedOutreachScopeError(prior, {
+    ...exact, festivalRecipientPartition: false,
+  }, false), null);
+  assert.equal(attemptedOutreachScopeError({
+    ...prior, festivalRecipientPartition: false,
+  }, {
+    ...exact,
+    festivalRecipientPartition: false,
+    recipients: ["emily@example.com"],
+  }, true), null);
+  const source = readFileSync(new URL("./sendOutreach.ts", import.meta.url), "utf8");
+  for (const name of ["claimImmediateOutreach", "schedulePreparedOutreach"]) {
+    const body = source.slice(source.indexOf(`async function ${name}`));
+    assert.match(body, /existingAttemptedScopeError\(tx, existing, prep\)/);
+  }
+  assert.match(source, /where: \{ outreachId: existing\.id \}/);
+});
 
 test("transactional claims reject original template purpose drift", () => {
   assert.equal(
@@ -251,6 +421,48 @@ test("bounced outreach reset requires a corrected verified recipient", () => {
   assert.match(reset, /createdAt: \{ gte: outreach\.bouncedAt \}/);
   assert.match(reset, /!suppressedEmails\.has\(email\)/);
   assert.ok(reset.indexOf("await acquireOutreachRecipientPolicyLocks") < reset.indexOf("await tx.emailSuppression.findMany"));
+});
+
+test("partitioned bounce resend keeps the original address and full shared coverage", () => {
+  const base = {
+    kind: "original" as const,
+    originalContactId: "jon",
+    replacementContactId: "jon",
+    recipientEmails: ["jon@example.com"],
+    replacementEmail: "jon@example.com",
+    coveredArtistIds: ["artist-a", "artist-b"],
+    activeContacts: [
+      { artistId: "artist-a", email: "jon@example.com" },
+      { artistId: "artist-b", email: "jon@example.com" },
+      { artistId: "artist-a", email: "emily@example.com" },
+    ],
+  };
+  assert.equal(partitionedBounceResendError(base), null);
+  assert.match(partitionedBounceResendError({
+    ...base, replacementContactId: "emily", replacementEmail: "emily@example.com",
+  }) ?? "", /only the original contact and address/);
+  assert.match(partitionedBounceResendError({
+    ...base, activeContacts: base.activeContacts.filter((contact) => contact.artistId !== "artist-b"),
+  }) ?? "", /every covered artist/);
+  assert.match(partitionedBounceResendError({
+    ...base, recipientEmails: ["jon@example.com", "other@example.com"],
+  }) ?? "", /exactly one/);
+  assert.equal(partitionedBounceResendError({
+    ...base, kind: "follow_up", parentRecipientEmails: ["jon@example.com"],
+  }), null);
+  assert.match(partitionedBounceResendError({
+    ...base, kind: "follow_up", parentRecipientEmails: ["other@example.com"],
+  }) ?? "", /differs from its original/);
+  const source = readFileSync(new URL("./sendOutreach.ts", import.meta.url), "utf8");
+  const reset = source.slice(
+    source.indexOf("export async function resetBouncedOutreachForResend"),
+    source.indexOf("function isRetryableOutreachTransactionError"),
+  );
+  assert.match(reset, /if \(outreach\.festivalRecipientPartition\)/);
+  assert.match(reset, /partitionedBounceResendError/);
+  assert.match(reset, /parentRecipientEmails: parent\?\.recipientEmails/);
+  assert.match(source, /reviewedBounceGuard\(tx, prep\)/);
+  assert.match(source, /previewHash !== expectedPreviewHash/);
 });
 
 test("historical sent attempts remain untouched by legacy pricing protection", () => {

@@ -1020,6 +1020,7 @@ model Outreach {
   primaryRecipientEmail      String?
   fullTeamSend               Boolean               @default(false)
   festivalAllContactsSend    Boolean               @default(false)
+  festivalRecipientPartition Boolean               @default(false)
   expectedRecipientContactId String?
   expectedRecipientArtistId  String?
   expectedRecipientEmail     String?

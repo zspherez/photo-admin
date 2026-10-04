@@ -47,7 +47,6 @@ test("festival outreach forms are valid and explicitly associated", () => {
   let bulkFormFound = false;
   let cancelFormFound = false;
   let managerResearchFormFound = false;
-  let queueOutreachFormFound = false;
   let manualArtistFormFound = false;
   let bulkManualArtistFormFound = false;
   let manualRemovalFormFound = false;
@@ -83,14 +82,6 @@ test("festival outreach forms are valid and explicitly associated", () => {
         )
       ) {
         managerResearchFormFound = true;
-      }
-      if (
-        isIdentifierExpression(
-          attribute(attributes, "action"),
-          "queueFestivalOutreach",
-        )
-      ) {
-        queueOutreachFormFound = true;
       }
       if (
         isIdentifierExpression(
@@ -159,11 +150,8 @@ test("festival outreach forms are valid and explicitly associated", () => {
     true,
     "Festival pages need an independent manager-research action",
   );
-  assert.equal(
-    queueOutreachFormFound,
-    true,
-    "Festival pages need a one-click queue-outreach action",
-  );
+  assert.match(source, /href=\{`#\$\{bulkFormId\}`\}[\s\S]*Review outreach/);
+  assert.doesNotMatch(source, /queueFestivalOutreach|Queue outreach \(/);
   assert.equal(
     manualArtistFormFound,
     true,
@@ -252,9 +240,9 @@ test("festival sendability and bulk queueing do not require listen signals", () 
   );
   assert.ok(
     (source.match(/hasFestivalBulkActionBudget\(deadlineAt\)/g)?.length ?? 0) >=
-      2,
+      1,
   );
-  for (const actionName of ["bulkSend", "queueFestivalOutreach"]) {
+  for (const actionName of ["bulkSend"]) {
     const actionStart = source.indexOf(`async function ${actionName}`);
     const auth = source.indexOf("await requireServerActionAuth", actionStart);
     const deadline = source.indexOf(
@@ -274,14 +262,20 @@ test("festival sendability and bulk queueing do not require listen signals", () 
   );
   const bulk = source.slice(
     source.indexOf("async function bulkSend"),
-    source.indexOf("async function queueFestivalOutreach"),
+    source.indexOf("async function queueFestivalManagerResearch"),
   );
   assert.match(bulk, /scheduleFestivalManagerOutreach/);
   assert.match(bulk, /scheduleOutreach/);
+  assert.match(bulk, /recipientDeliveryMode: job\.group\.recipientDeliveryMode/);
+  assert.match(bulk, /matchesFestivalConfirmedPlan\(submittedPlan, serverPlan\)/);
+  assert.ok(
+    bulk.indexOf("matchesFestivalConfirmedPlan(submittedPlan, serverPlan)") <
+      bulk.indexOf("const results = await mapWithConcurrency"),
+  );
   assert.doesNotMatch(bulk, /sendFestivalManagerOutreach\(/);
   assert.doesNotMatch(bulk, /\bsendOutreach\(/);
   assert.ok(
-    (source.match(/errors\.splice\(/g)?.length ?? 0) >= 2,
+    (source.match(/errors\.splice\(/g)?.length ?? 0) >= 1,
   );
   assert.doesNotMatch(
     source.slice(
@@ -290,8 +284,7 @@ test("festival sendability and bulk queueing do not require listen signals", () 
     ),
     /pickTopListenSignal/,
   );
-  assert.match(source, /Queue outreach \(\{contactIds\.length\}\)/);
-  assert.match(source, /getNextNormalOutreachDispatch\(now\)/);
+  assert.match(source, /Review outreach \(\{bulkConfirmationCandidates\.length\}\)/);
   assert.match(source, /groupFestivalManagerTargets/);
   assert.match(source, /scheduleFestivalManagerOutreach/);
   assert.match(
@@ -304,50 +297,50 @@ test("festival sendability and bulk queueing do not require listen signals", () 
   );
 });
 
-test("selected festival sends use the same manager grouping as queue-all", () => {
+test("selected festival sends partition by recipient and queue-all is retired", () => {
   const bulk = source.slice(
     source.indexOf("async function bulkSend"),
-    source.indexOf("async function queueFestivalOutreach"),
+    source.indexOf("async function queueFestivalManagerResearch"),
   );
   assert.match(bulk, /groupFestivalManagerTargets/);
   assert.match(bulk, /scheduleFestivalManagerOutreach/);
   assert.match(bulk, /scheduleFestivalManagerOutreach/);
   assert.match(source, /FestivalBulkOutreachForm/);
   assert.match(source, /bulkConfirmationCandidates/);
-  assert.match(
-    source,
-    /!selection\.sendability\.fullTeamSend &&[\s\S]*recipients\.length === 1/,
-  );
-  assert.match(
-    source,
-    /!row\.sendability\.fullTeamSend &&[\s\S]*recipients\.length === 1/,
-  );
+  assert.match(bulk, /singleRecipient: true,[\s\S]*festivalRecipientPartition: true/);
+  assert.match(source, /groupKey: retry \? `retry:\$\{retry\.id\}` : target\.email/);
+  assert.match(source, /uniqueFestivalRecipientTargets/);
+  assert.match(bulk, /retry\.coveredArtists\.map\(\(covered\) => covered\.artistId\)/);
+  assert.match(source, /data-festival-artist-id=\{r\.artist\.id\}/);
+  assert.match(source, /data-festival-target-artist-id=\{r\.artist\.id\}/);
 });
 
 test("festival bulk selection mixes initial outreach and eligible follow-ups", () => {
   const bulk = source.slice(
     source.indexOf("async function bulkSend"),
-    source.indexOf("async function queueFestivalOutreach"),
+    source.indexOf("async function queueFestivalManagerResearch"),
   );
   assert.match(source, /name="outreachTargets"/);
-  assert.match(source, /const followUp = row\.bulkFollowUpEligibility/);
+  assert.match(source, /row\.followUpEligibilities\.filter/);
   assert.match(source, /const selectionId = `follow_up:\$\{followUp\.parentOutreachId\}`/);
-  assert.match(source, /const selectionId = `original:\$\{row\.contact\.id\}`/);
-  assert.match(source, /const canBulkSelect = Boolean\(bulkCandidate\)/);
+  assert.match(source, /const selectionId = `original:\$\{target\.contactId\}`/);
+  assert.match(source, /const canBulkSelect = bulkCandidates\.length > 0/);
   assert.match(bulk, /getFollowUpEligibilityBatch/);
-  assert.match(bulk, /eligibleFestivalFollowUp/);
+  assert.match(bulk, /followUpByParent\.get\(parent\.id\)/);
   assert.match(bulk, /job\.kind === "follow_up"[\s\S]*scheduleFollowUp/);
+  assert.match(bulk, /expectedRecipientEmails: expectedPlan\.recipients/);
+  assert.match(bulk, /expectedCoveredArtistIds: expectedPlan\.coveredArtistIds/);
   assert.match(bulk, /job\.group\.artistIds\.length > 1[\s\S]*scheduleFestivalManagerOutreach/);
   assert.match(bulk, /scheduleOutreach/);
 });
 
-test("festival individual outreach snapshots all active management contacts", () => {
+test("other legacy outreach retains all-contact delivery while bulk partitions recipients", () => {
   assert.ok(
-    (source.match(/festivalAllContacts: true/g)?.length ?? 0) >= 3,
+    (source.match(/festivalAllContacts: true/g)?.length ?? 0) >= 1,
   );
   assert.match(
     source,
-    /!row\.sendability\.fullTeamSend &&[\s\S]*groupKey: shareable/,
+    /festivalRecipientPartition: true,[\s\S]*groupKey: retry \? `retry:\$\{retry\.id\}` : target\.email/,
   );
 });
 
@@ -377,7 +370,7 @@ test("covered artists keep shared outreach status and actions without a current 
   );
   assert.match(
     source,
-    /\{outreachEnabled &&\s*!r\.association\.rejectedAt &&\s*r\.followUpEligibility && \(/,
+    /r\.followUpEligibilities\.map\(\(eligibility\) => \(/,
   );
 });
 

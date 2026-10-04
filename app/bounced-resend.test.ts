@@ -19,3 +19,20 @@ test("bounced resend review authenticates, confirms the snapshot and redirects t
   assert.match(history, /o\.status === "failed" && o\.bouncedAt/);
   assert.match(history, /Review &amp; resend/);
 });
+
+test("partitioned bounced resend reviews its exact scope and never redirects through broad Customize", () => {
+  const source = readFileSync(new URL("./outreach/[outreachId]/resend/page.tsx", import.meta.url), "utf8");
+  const reset = source.slice(source.indexOf("async function prepareResend"), source.indexOf("async function sendReviewedResend"));
+  const action = source.slice(source.indexOf("async function sendReviewedResend"), source.indexOf("export default"));
+  assert.match(reset, /if \(outreach\.festivalRecipientPartition\)/);
+  assert.ok(reset.indexOf("if (outreach.festivalRecipientPartition)") < reset.indexOf("redirect(`/dashboard/customize/"));
+  assert.match(action, /await requireServerActionAuth/);
+  assert.match(action, /dispatchReviewedPartitionedBounceResend\(/);
+  assert.match(action, /attemptKey, previewHash, scheduledFor/);
+  assert.doesNotMatch(action, /dashboard\/customize|sendOutreach\(/);
+  assert.match(source, /prepareReviewedPartitionedBounceResend\(row\.id, preparedKey\)/);
+  assert.match(source, /name="previewHash" value=\{reviewed\.previewHash\}/);
+  assert.match(source, /partitionChoices = row\.festivalRecipientPartition/);
+  assert.match(source, /choice\.id === row\.contactId/);
+  assert.match(source, /Corrected addresses cannot be substituted here/);
+});
