@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { groupFestivalManagerTargets } from "./festivalOutreach";
+import {
+  groupFestivalManagerTargets,
+  sharedFestivalManagementArtistIds,
+} from "./festivalOutreach";
 
 test("festival manager targets collapse shared recipient emails deterministically", () => {
   const result = groupFestivalManagerTargets(
@@ -66,4 +69,19 @@ test("festival manager grouping excludes contacts that fail sendability", () => 
     ],
     skipped: 1,
   });
+});
+
+test("shared management includes artists with a common active email", () => {
+  const shared = sharedFestivalManagementArtistIds([
+    { artistId: "artist-a", contactId: "contact-a1", email: "team@example.com" },
+    { artistId: "artist-a", contactId: "contact-a2", email: "team@example.com" },
+    { artistId: "artist-b", contactId: "contact-b1", email: "team@example.com" },
+    { artistId: "artist-b", contactId: "contact-b2", email: "other@example.com" },
+    { artistId: "artist-c", contactId: "contact-c1", email: "other@example.com" },
+    { artistId: "artist-d", contactId: "contact-d1", email: "solo@example.com" },
+    { artistId: "artist-e", contactId: "contact-e1", email: "duplicate@example.com" },
+    { artistId: "artist-e", contactId: "contact-e2", email: "duplicate@example.com" },
+  ]);
+  assert.deepEqual([...shared].sort(), ["artist-a", "artist-b", "artist-c"]);
+  assert.deepEqual(sharedFestivalManagementArtistIds([]), new Set());
 });

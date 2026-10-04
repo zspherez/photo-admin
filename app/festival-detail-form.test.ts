@@ -222,6 +222,14 @@ test("festival manager research UI reflects the full eligible lineup", () => {
   );
 });
 
+test("festival shared management filter uses active contact addresses across the full non-rejected lineup", () => {
+  assert.match(source, /sharedFestivalManagementArtistIds\(\s*rows\s*\.filter\(\(row\) => !row\.association\.rejectedAt\)/);
+  assert.match(source, /row\.artist\.contacts\.flatMap\(\(contact\) => \{/);
+  assert.match(source, /normalizeEmail\(contact\.email \?\? ""\)/);
+  assert.match(source, /filter === "shared_management" &&\s*!sharedManagementArtistIds\.has\(r\.artist\.id\)/);
+  assert.match(source, /\{ key: "shared_management", label: "Shared management" \}/);
+});
+
 test("festival customize links do not require a listening signal", () => {
   assert.match(
     source,
