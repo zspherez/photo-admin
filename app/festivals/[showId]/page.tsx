@@ -1944,40 +1944,20 @@ export default async function FestivalDetailPage({
               return (
                 <li key={r.artist.id} className="flex items-center gap-3 px-4 py-3">
                   {outreachEnabled && (
-                    <div className="flex flex-col gap-1">
-                      <input
-                        id={checkboxId}
-                        type="checkbox"
-                        data-festival-artist-id={r.artist.id}
-                        form={bulkFormId}
-                        disabled={!canBulkSelect}
-                        defaultChecked={
-                          canBulkSelect &&
-                          bulkCandidates.every((candidate) => candidate.selectedByDefault)
-                        }
-                        aria-label={`Select all recipients for ${artistDisplayName(r.artist)}`}
-                        aria-describedby={!canBulkSelect ? reasonId : undefined}
-                        className="h-4 w-4 accent-zinc-900 disabled:opacity-30 dark:accent-zinc-100"
-                      />
-                      {bulkCandidates.map((candidate) => (
-                        <label
-                          key={candidate.selectionId}
-                          className="flex items-center gap-1 text-[10px] text-zinc-600 dark:text-zinc-400"
-                        >
-                          <input
-                            type="checkbox"
-                            name="outreachTargets"
-                            form={bulkFormId}
-                            data-festival-target-artist-id={r.artist.id}
-                            value={candidate.selectionId}
-                            defaultChecked={candidate.selectedByDefault}
-                            className="h-4 w-4 accent-zinc-900 dark:accent-zinc-100"
-                          />
-                          {candidate.emailLabel}
-                          {candidate.outreachKind === "follow_up" ? " follow-up" : ""}
-                        </label>
-                      ))}
-                    </div>
+                    <input
+                      id={checkboxId}
+                      type="checkbox"
+                      data-festival-artist-id={r.artist.id}
+                      form={bulkFormId}
+                      disabled={!canBulkSelect}
+                      defaultChecked={
+                        canBulkSelect &&
+                        bulkCandidates.every((candidate) => candidate.selectedByDefault)
+                      }
+                      aria-label={`Select all recipients for ${artistDisplayName(r.artist)}`}
+                      aria-describedby={!canBulkSelect ? reasonId : undefined}
+                      className="h-4 w-4 shrink-0 self-start mt-1 accent-zinc-900 disabled:opacity-30 dark:accent-zinc-100"
+                    />
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -2082,15 +2062,47 @@ export default async function FestivalDetailPage({
                         </Link>
                       </p>
                     )}
-                    {r.bulkSendabilities.length > 0 && (
-                      <p className="mt-1 text-xs text-zinc-500">
-                        {r.bulkSendabilities.map(({ target, sendability }) =>
-                          `${target.email}: ${sendability?.sendable
-                            ? sendability.mode === "retry" ? "retry ready" : "initial ready"
-                            : sendabilityLabel(sendability, false) ?? "unavailable"}`,
-                        ).join(" · ")}
-                      </p>
-                    )}
+                    {outreachEnabled && bulkCandidates.length > 1 ? (
+                      <details className="mt-1 text-xs text-zinc-500">
+                        <summary className="w-fit cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100">
+                          Choose recipients ({bulkCandidates.length})
+                        </summary>
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
+                          {bulkCandidates.map((candidate) => (
+                            <label
+                              key={candidate.selectionId}
+                              className="flex min-w-0 items-center gap-1.5"
+                            >
+                              <input
+                                type="checkbox"
+                                name="outreachTargets"
+                                form={bulkFormId}
+                                data-festival-target-artist-id={r.artist.id}
+                                value={candidate.selectionId}
+                                defaultChecked={candidate.selectedByDefault}
+                                className="h-4 w-4 shrink-0 accent-zinc-900 dark:accent-zinc-100"
+                              />
+                              <span className="break-all">
+                                {candidate.emailLabel}
+                                {candidate.outreachKind === "follow_up" ? " · follow-up" : ""}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </details>
+                    ) : outreachEnabled && bulkCandidates.length === 1 ? (
+                      <input
+                        type="checkbox"
+                        name="outreachTargets"
+                        form={bulkFormId}
+                        data-festival-target-artist-id={r.artist.id}
+                        value={bulkCandidates[0].selectionId}
+                        defaultChecked={bulkCandidates[0].selectedByDefault}
+                        hidden
+                        aria-hidden="true"
+                        tabIndex={-1}
+                      />
+                    ) : null}
                   </div>
                   {canCustomize && r.contact && (
                     <LinkButton
