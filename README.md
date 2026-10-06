@@ -43,7 +43,7 @@ idle. Research discovery runs hourly. A durable, idempotent full audit is
 enqueued monthly; a mid-month rolling audit covers artists with active shows
 30–60 days out. Both wait behind any active audit.
 
-Both agents are pinned to `gpt-5.6-sol` with maximum reasoning effort. They use
+Both agents are pinned to `gpt-6.1-sol` with maximum reasoning effort. They use
 public professional management sources, never bypass access controls, and
 exclude booking, publicity, label, promoter, venue, and press contacts.
 

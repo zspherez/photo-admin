@@ -41,7 +41,7 @@ const child = spawn(
     "--agent",
     agentName,
     "--model",
-    "gpt-5.6-sol",
+    "gpt-6.1-sol",
     "--reasoning-effort",
     "max",
     "--available-tools=bash",
