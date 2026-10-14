@@ -693,18 +693,6 @@ export function normalizeOfficialManagementSource(
   };
 }
 
-export function isOfficialManagementAutoApprovalEligible(
-  candidate: ContactResearchCandidateInput
-): boolean {
-  return (
-    candidate.needsApproval === false &&
-    candidate.officialSourceType !== null &&
-    candidate.officialSourceUrl !== null &&
-    candidate.officialManagementLabel !== null &&
-    candidate.officialSourceEvidence !== null
-  );
-}
-
 export function normalizeContactResearchUserNotes(
   value: unknown
 ): string | null {
@@ -1311,7 +1299,7 @@ async function persistTrustedDirectOutreachProposal(
   tx: Prisma.TransactionClient,
   job: { id: string },
   directOutreach: TrustedDirectOutreachInput,
-): Promise<void> {
+): Promise<string | null> {
   const normalizedManagerName = normalizedIdentityText(
     directOutreach.managerName,
   );
@@ -1333,7 +1321,7 @@ async function persistTrustedDirectOutreachProposal(
       },
       select: { id: true, status: true },
     });
-  if (existing && existing.status !== "pending") return;
+  if (existing && existing.status !== "pending") return null;
   const data = {
     ruleVersion: directOutreach.instructionVersion,
     canonicalRule,
@@ -1352,9 +1340,9 @@ async function persistTrustedDirectOutreachProposal(
       where: { id: existing.id },
       data,
     });
-    return;
+    return existing.id;
   }
-  await tx.contactResearchDirectOutreachProposal.create({
+  const created = await tx.contactResearchDirectOutreachProposal.create({
     data: {
       jobId: job.id,
       ruleId,
@@ -1363,6 +1351,7 @@ async function persistTrustedDirectOutreachProposal(
       ...data,
     },
   });
+  return created.id;
 }
 
 async function applyApprovedDirectOutreach(
@@ -2002,6 +1991,7 @@ export async function prepareContactResearchQueue(
           inactivated: 0,
         }
       : await refreshContactResearchQueue(now);
+  await approvePendingContactResearchFindings(now);
   const claimable = await countClaimableContactResearchJobs(now);
   return { ...refreshed, claimable };
 }
@@ -2397,11 +2387,12 @@ export async function submitContactResearchResult(
     await supersedeObsoleteContactResearchApprovals(tx, {
       jobIds: [jobId],
     });
+    let directOutreachProposalId: string | null = null;
     if (
       submission.directOutreach !== null &&
       trustedDirectOutreachInstruction
     ) {
-      await persistTrustedDirectOutreachProposal(
+      directOutreachProposalId = await persistTrustedDirectOutreachProposal(
         tx,
         job,
         submission.directOutreach,
@@ -2471,8 +2462,7 @@ export async function submitContactResearchResult(
         },
       });
       if (
-        !preserveApproval &&
-        isOfficialManagementAutoApprovalEligible(candidate)
+        !preserveApproval
       ) {
         autoApproveCandidates.push({
           id: storedCandidate.id,
@@ -2525,6 +2515,13 @@ export async function submitContactResearchResult(
       if (updated.count !== approvedIds.length) {
         throw new ContactResearchCandidateConflictError();
       }
+    }
+    if (directOutreachProposalId !== null) {
+      const proposal = await tx.contactResearchDirectOutreachProposal.findUniqueOrThrow({
+        where: { id: directOutreachProposalId },
+        include: { job: { select: { id: true, artistId: true } } },
+      });
+      await approvePendingDirectOutreachProposal(tx, proposal, now);
     }
     const status = await resolveContactResearchJob(
       tx,
@@ -2677,23 +2674,7 @@ export async function approveContactResearchDirectOutreach(
     if (!proposal) {
       return { ok: false, error: "Direct outreach is no longer reviewable" };
     }
-    const contact = await applyApprovedDirectOutreach(
-      tx,
-      proposal.job,
-      proposal,
-    );
-    const reviewed =
-      await tx.contactResearchDirectOutreachProposal.updateMany({
-        where: { id: proposal.id, status: "pending" },
-        data: {
-          status: "approved",
-          contactId: contact.id,
-          reviewedAt: now,
-        },
-      });
-    if (reviewed.count !== 1) {
-      throw new ContactResearchCandidateConflictError();
-    }
+    const contact = await approvePendingDirectOutreachProposal(tx, proposal, now);
     await resolveContactResearchJob(
       tx,
       proposal.jobId,
@@ -2704,6 +2685,31 @@ export async function approveContactResearchDirectOutreach(
   });
 }
 
+async function approvePendingDirectOutreachProposal(
+  tx: Prisma.TransactionClient,
+  proposal: {
+    id: string;
+    job: { id: string; artistId: string };
+    ruleVersion: number;
+    canonicalRule: string;
+    managerName: string;
+    managerCompany: string | null;
+    note: string;
+    sourceUrls: string[];
+    evidenceQuotes: string[];
+  },
+  now: Date,
+): Promise<{ id: string }> {
+  const contact = await applyApprovedDirectOutreach(tx, proposal.job, proposal);
+  const reviewed = await tx.contactResearchDirectOutreachProposal.updateMany({
+    where: { id: proposal.id, status: "pending" },
+    data: { status: "approved", contactId: contact.id, reviewedAt: now },
+  });
+  if (reviewed.count !== 1) {
+    throw new ContactResearchCandidateConflictError();
+  }
+  return contact;
+}
 export async function rejectContactResearchDirectOutreach(
   proposalId: string,
   now: Date = new Date(),
@@ -2886,6 +2892,61 @@ export async function approveContactResearchCandidate(
     ok: result.ok,
     ...(result.error ? { error: result.error } : {}),
   };
+}
+
+export async function approvePendingContactResearchFindings(
+  now: Date = new Date(),
+  operations: {
+    findCandidates: () => Promise<Array<{ id: string; jobId: string }>>;
+    findProposals: () => Promise<Array<{ id: string }>>;
+    approveCandidates: (ids: string[]) => Promise<{ ok: boolean; error?: string }>;
+    approveProposal: (id: string) => Promise<{ ok: boolean; error?: string }>;
+  } = {
+    findCandidates: () => db.contactResearchCandidate.findMany({
+      where: { status: "pending", job: { status: "review" } },
+      select: { id: true, jobId: true },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 20,
+    }),
+    findProposals: () => db.contactResearchDirectOutreachProposal.findMany({
+      where: { status: "pending", job: { status: "review" } },
+      select: { id: true },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 20,
+    }),
+    approveCandidates: (ids) => approveContactResearchCandidates(ids, now),
+    approveProposal: (id) => approveContactResearchDirectOutreach(id, now),
+  }
+): Promise<{ candidates: number; directOutreach: number }> {
+  const candidates = await operations.findCandidates();
+  const byJob = new Map<string, string[]>();
+  for (const candidate of candidates) {
+    const ids = byJob.get(candidate.jobId) ?? [];
+    ids.push(candidate.id);
+    byJob.set(candidate.jobId, ids);
+  }
+  for (const ids of byJob.values()) {
+    const result = await operations.approveCandidates(ids);
+    if (!result.ok) {
+      throw new Error(result.error ?? "Pending research approval failed");
+    }
+  }
+
+  const proposals = await operations.findProposals();
+  for (const proposal of proposals) {
+    const result = await operations.approveProposal(proposal.id);
+    if (!result.ok) {
+      throw new Error(result.error ?? "Pending direct outreach approval failed");
+    }
+  }
+  if (candidates.length || proposals.length) {
+    console.info(JSON.stringify({
+      event: "contact_research_pending_findings_approved",
+      candidates: candidates.length,
+      directOutreach: proposals.length,
+    }));
+  }
+  return { candidates: candidates.length, directOutreach: proposals.length };
 }
 
 export async function rejectContactResearchCandidate(

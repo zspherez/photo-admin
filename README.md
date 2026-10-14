@@ -14,7 +14,7 @@ or mutations; see [docs/mobile-pwa.md](docs/mobile-pwa.md).
 |---|---|
 | **Shows** (`/dashboard`) | Review shows; customize, queue, or send outreach. |
 | **Recommendations** (`/recommendations`) | Review trajectory, momentum, exploration, and portfolio suggestions. |
-| **Research** (`/research`) | Review manager candidates, skips, exhausted searches, and direct-outreach proposals. |
+| **Research** (`/research`) | Inspect automatically approved manager findings, skips, and exhausted searches; audits remain review-only. |
 | **Audit** (`/contact-audit`) | Review an artist's roster, evidence, and proposed changes. |
 | **Emails** (`/emails`, `/outreach`) | Inspect outreach and delivery history. |
 | **Contacts** (`/contacts`) | Browse artist contacts. |

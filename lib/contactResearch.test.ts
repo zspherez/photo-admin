@@ -30,9 +30,9 @@ import {
   parseContactResearchSubmission,
   approveContactResearchCandidates,
   approveContactResearchCandidate,
+  approvePendingContactResearchFindings,
   rankKnownContactEmails,
   rejectContactResearchCandidate,
-  isOfficialManagementAutoApprovalEligible,
   isContactResearchApprovalEffective,
   refreshContactResearchQueue,
   queueContactResearchArtistByArtistId,
@@ -1343,7 +1343,7 @@ test("stale candidate actions fail without changing resolved state", async () =>
   assert.equal(harness.job.status, "complete");
 });
 
-test("rediscovered obsolete approval returns to manual review", async () => {
+test("rediscovered obsolete approval is automatically reactivated", async () => {
   const now = new Date("2026-07-21T12:00:00.000Z");
   const harness = createCandidateResolutionHarness(
     [
@@ -1376,13 +1376,13 @@ test("rediscovered obsolete approval returns to manual review", async () => {
     harness.serialRunner
   );
 
-  assert.equal(result.status, "review");
-  assert.equal(result.autoApproved, 0);
-  assert.equal(harness.candidates.get("candidate-1")?.status, "pending");
-  assert.equal(harness.candidates.get("candidate-1")?.reviewedAt, null);
+  assert.equal(result.status, "complete");
+  assert.equal(result.autoApproved, 1);
+  assert.equal(harness.candidates.get("candidate-1")?.status, "approved");
+  assert.equal(harness.candidates.get("candidate-1")?.reviewedAt, now);
   assert.equal(
     harness.contacts.get("manager@example.com")?.state,
-    "quarantined"
+    "active"
   );
 });
 
@@ -1472,7 +1472,7 @@ test("submission preserves only an effective existing approval", async () => {
   );
 });
 
-test("auto-approval leaves manual candidates awaiting review", async () => {
+test("auto-approval includes inferred research candidates alongside official ones", async () => {
   const now = new Date("2026-07-21T12:00:00.000Z");
   const harness = createCandidateResolutionHarness([], "claimed");
 
@@ -1500,13 +1500,13 @@ test("auto-approval leaves manual candidates awaiting review", async () => {
     harness.serialRunner
   );
 
-  assert.equal(result.status, "review");
-  assert.equal(result.autoApproved, 1);
+  assert.equal(result.status, "complete");
+  assert.equal(result.autoApproved, 2);
   assert.equal(harness.contacts.get("official@example.com")?.source, "agent");
-  assert.equal(harness.job.status, "review");
+  assert.equal(harness.job.status, "complete");
   assert.deepEqual(
     [...harness.candidates.values()].map((candidate) => candidate.status).sort(),
-    ["approved", "pending"]
+    ["approved", "approved"]
   );
 });
 
@@ -1537,6 +1537,43 @@ test("all directly published candidates auto-approve together", async () => {
     [...harness.candidates.values()].every(
       (candidate) => candidate.status === "approved"
     )
+  );
+});
+
+test("scheduled preparation approves pending research by job and direct outreach", async () => {
+  const now = new Date("2026-07-21T12:00:00.000Z");
+  const approved: string[][] = [];
+  const proposals: string[] = [];
+  const result = await approvePendingContactResearchFindings(now, {
+    findCandidates: async () => [
+      { id: "one", jobId: "job-1" },
+      { id: "two", jobId: "job-1" },
+      { id: "three", jobId: "job-2" },
+    ],
+    findProposals: async () => [{ id: "direct-1" }],
+    approveCandidates: async (ids) => {
+      approved.push(ids);
+      return { ok: true };
+    },
+    approveProposal: async (id) => {
+      proposals.push(id);
+      return { ok: true };
+    },
+  });
+  assert.deepEqual(result, { candidates: 3, directOutreach: 1 });
+  assert.deepEqual(approved, [["one", "two"], ["three"]]);
+  assert.deepEqual(proposals, ["direct-1"]);
+});
+
+test("pending research approval failures stop preparation instead of claiming success", async () => {
+  await assert.rejects(
+    approvePendingContactResearchFindings(new Date(), {
+      findCandidates: async () => [{ id: "one", jobId: "job-1" }],
+      findProposals: async () => [],
+      approveCandidates: async () => ({ ok: false, error: "stale candidate" }),
+      approveProposal: async () => ({ ok: true }),
+    }),
+    /stale candidate/
   );
 });
 
@@ -1979,20 +2016,6 @@ test("official artist management sources are strictly normalized", () => {
     officialSourceEvidence:
       "Official Instagram bio: MGMT manager@example.com",
   });
-  assert.equal(
-    isOfficialManagementAutoApprovalEligible({
-      email: "manager@example.com",
-      normalizedEmail: "manager@example.com",
-      name: "Manager",
-      role: "management",
-      sourceUrls: ["https://www.instagram.com/exampleartist/"],
-      evidence: "Official Instagram publishes the address.",
-      confidence: "high",
-      needsApproval: false,
-      ...official,
-    }),
-    true
-  );
   assert.throws(
     () =>
       normalizeOfficialManagementSource(
@@ -2197,36 +2220,6 @@ test("official source evidence matches complete Unicode-aware mailbox tokens", (
       evidence
     );
   }
-});
-
-test("direct publication is eligible while inferred sources remain review-only", () => {
-  const candidate = {
-    email: "manager@example.com",
-    normalizedEmail: "manager@example.com",
-    name: "Manager",
-    role: "management" as const,
-    sourceUrls: ["https://soundcloud.com/exampleartist"],
-    evidence: "Official profile publishes the address.",
-    confidence: "high" as const,
-    needsApproval: false,
-    officialSourceType: "soundcloud" as const,
-    officialSourceUrl: "https://soundcloud.com/exampleartist",
-    officialManagementLabel: "management" as const,
-    officialSourceEvidence:
-      "Official SoundCloud: management manager@example.com",
-  };
-  assert.equal(isOfficialManagementAutoApprovalEligible(candidate), true);
-  assert.equal(
-    isOfficialManagementAutoApprovalEligible({
-      ...candidate,
-      officialSourceType: null,
-      officialSourceUrl: null,
-      officialManagementLabel: null,
-      officialSourceEvidence: null,
-      needsApproval: true,
-    }),
-    false
-  );
 });
 
 test("ranks a matching manager email above a generic company inbox", () => {
