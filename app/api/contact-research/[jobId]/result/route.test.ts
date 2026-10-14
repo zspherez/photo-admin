@@ -18,13 +18,13 @@ const migration = readFileSync(
   "utf8"
 );
 
-test("result route returns atomic official-source auto-approval results", () => {
+test("result route returns atomic research auto-approval results", () => {
   assert.doesNotMatch(route, /approveContactResearchCandidates/);
   assert.match(route, /result\.autoApproved/);
   assert.doesNotMatch(route, /sheet/i);
-  assert.match(research, /isOfficialManagementAutoApprovalEligible/);
-  assert.match(research, /candidate\.needsApproval === false/);
-  assert.match(research, /officialSourceEvidence !== null/);
+  assert.match(research, /await approvePendingDirectOutreachProposal/);
+  assert.match(research, /needsApproval === false/);
+  assert.match(research, /officialSource\.officialSourceType !== null/);
   assert.match(
     research,
     /autoApproveCandidates[\s\S]*tx\.contact\.create[\s\S]*resolveContactResearchJob/

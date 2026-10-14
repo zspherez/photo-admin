@@ -154,18 +154,28 @@ test("every agent-controlled field rejects phone numbers and safe IDs remain val
   );
 });
 
-test("only the direct outreach snapshot authorizes a pending human-reviewed proposal", async () => {
+test("trusted direct outreach is automatically approved without exposing phone data", async () => {
   const proposals: Array<Record<string, unknown>> = [];
   const jobUpdates: Array<Record<string, unknown>> = [];
   const proposalDelegate = {
     findUnique: async () => null,
+    findUniqueOrThrow: async () => ({
+      ...proposals[0],
+      id: "proposal-1",
+      job: { id: "job-1", artistId: "artist-1" },
+    }),
     create: async (value: { data: Record<string, unknown> }) => {
       proposals.push(value.data);
       return { id: "proposal-1" };
     },
-    findMany: async () => [{ status: "pending" }],
+    updateMany: async () => {
+      proposals[0].status = "approved";
+      return { count: 1 };
+    },
+    findMany: async () => [{ status: proposals[0].status }],
   };
   const tx = {
+    $queryRaw: async () => [],
     contactResearchJob: {
       findFirst: async () => claimedJob(),
       update: async (value: Record<string, unknown>) => {
@@ -179,6 +189,8 @@ test("only the direct outreach snapshot authorizes a pending human-reviewed prop
     },
     contact: {
       findMany: async () => [],
+      findUnique: async () => null,
+      create: async () => ({ id: "contact-1" }),
     },
   };
   const result = await submitContactResearchResult(
@@ -200,7 +212,7 @@ test("only the direct outreach snapshot authorizes a pending human-reviewed prop
   );
   assert.equal(proposals[0].canonicalRule, canonicalRule);
   assert.equal(proposals[0].ruleVersion, 4);
-  assert.equal(proposals[0].status, "pending");
+  assert.equal(proposals[0].status, "approved");
   assert.equal("email" in proposals[0], false);
   assert.equal("phone" in proposals[0], false);
   assert.equal(
@@ -292,21 +304,41 @@ test("proposal retries are idempotent and do not reopen reviewed decisions", asy
   const proposalDelegate = {
     findUnique: async () =>
       creates === 0 ? null : { id: "proposal-1", status },
+    findUniqueOrThrow: async () => ({
+      id: "proposal-1",
+      job: { id: "job-1", artistId: "artist-1" },
+      ruleVersion: 4,
+      canonicalRule,
+      managerName: "Leif Fosse",
+      managerCompany: null,
+      note: "Direct outreach",
+      sourceUrls: [],
+      evidenceQuotes: [],
+    }),
     create: async () => {
       creates += 1;
       return { id: "proposal-1" };
     },
     update: async () => ({}),
+    updateMany: async () => {
+      status = "approved";
+      return { count: 1 };
+    },
     findMany: async () => [{ status }],
   };
   const tx = {
+    $queryRaw: async () => [],
     contactResearchJob: {
       findFirst: async () => claimedJob(),
       update: async () => ({}),
     },
     contactResearchDirectOutreachProposal: proposalDelegate,
     contactResearchCandidate: { findMany: async () => [] },
-    contact: { findMany: async () => [] },
+    contact: {
+      findMany: async () => [],
+      findUnique: async () => null,
+      create: async () => ({ id: "contact-1" }),
+    },
   };
   const submission = {
     outcome: "candidates",
@@ -564,9 +596,11 @@ test("human approval merges a quarantined identity into the active matching note
   assert.equal(updates[1].data.directOutreachRuleText, canonicalRule);
 });
 
-test("email candidates and direct outreach persist together without collapsing review", async () => {
+test("email candidates and direct outreach both auto-approve in one submission", async () => {
   let proposalWrites = 0;
   let candidateWrites = 0;
+  let candidateStatus = "pending";
+  let proposalStatus = "pending";
   const result = await submitContactResearchResult(
     "job-1",
     {
@@ -587,17 +621,33 @@ test("email candidates and direct outreach persist together without collapsing r
     },
     new Date("2026-07-21T17:00:00.000Z"),
     runWithTransaction({
+      $queryRaw: async () => [],
       contactResearchJob: {
         findFirst: async () => claimedJob(),
         update: async () => ({}),
       },
       contactResearchDirectOutreachProposal: {
         findUnique: async () => null,
+        findUniqueOrThrow: async () => ({
+          id: "proposal-1",
+          job: { id: "job-1", artistId: "artist-1" },
+          ruleVersion: 4,
+          canonicalRule,
+          managerName: "Leif Fosse",
+          managerCompany: null,
+          note: "Direct outreach",
+          sourceUrls: [],
+          evidenceQuotes: [],
+        }),
         create: async () => {
           proposalWrites += 1;
           return { id: "proposal-1" };
         },
-        findMany: async () => [{ status: "pending" }],
+        updateMany: async () => {
+          proposalStatus = "approved";
+          return { count: 1 };
+        },
+        findMany: async () => [{ status: proposalStatus }],
       },
       contactResearchCandidate: {
         findUnique: async () => null,
@@ -612,6 +662,10 @@ test("email candidates and direct outreach persist together without collapsing r
             status: "pending",
           };
         },
+        updateMany: async () => {
+          candidateStatus = "approved";
+          return { count: 1 };
+        },
         findMany: async (value: {
           where: { status?: string | { in: string[] } };
         }) =>
@@ -619,15 +673,22 @@ test("email candidates and direct outreach persist together without collapsing r
             ? []
             : [
                 {
-                  status: "pending",
+                  status: candidateStatus,
                   normalizedEmail: "manager@example.com",
                 },
               ],
       },
-      contact: { findMany: async () => [] },
+      contact: {
+        findMany: async () => candidateStatus === "approved"
+          ? [{ email: "manager@example.com", state: "active", name: null }]
+          : [],
+        findUnique: async () => null,
+        create: async () => ({ id: "contact-1" }),
+      },
     }),
   );
-  assert.equal(result.status, "review");
+  assert.equal(result.status, "complete");
+  assert.equal(result.autoApproved, 1);
   assert.equal(proposalWrites, 1);
   assert.equal(candidateWrites, 1);
 });

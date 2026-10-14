@@ -862,7 +862,7 @@ export default async function ContactResearchPage({
                     pendingCandidates.length > 0) && (
                     <p className="mt-3 text-xs font-medium text-zinc-600 dark:text-zinc-400">
                       {approvedCandidateCount} approved ·{" "}
-                      {pendingCandidates.length} awaiting review
+                      {pendingCandidates.length} pending auto-approval
                     </p>
                   )}
 
@@ -875,7 +875,7 @@ export default async function ContactResearchPage({
                         <span className="font-semibold">
                           Direct outreach proposal
                         </span>
-                        <Badge tone="warning">human review required</Badge>
+                        <Badge tone="warning">pending auto-approval</Badge>
                       </div>
                       <p className="mt-2">{proposal.note}</p>
                       <p className="mt-1 text-xs">

@@ -202,7 +202,7 @@ test("candidate cards retain pending actions with independent review counts", ()
   );
   assert.match(
     source,
-    /\{approvedCandidateCount\} approved ·\{" "\}[\s\S]*\{pendingCandidates\.length\} awaiting review/
+    /\{approvedCandidateCount\} approved ·\{" "\}[\s\S]*\{pendingCandidates\.length\} pending auto-approval/
   );
   assert.match(source, /pendingCandidates\.map\(\(candidate\) =>/);
   assert.match(
