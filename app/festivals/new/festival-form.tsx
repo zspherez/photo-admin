@@ -97,7 +97,7 @@ export function FestivalForm({ returnTo = "/festivals" }: { returnTo?: string })
             <TextArea
               name="lineup"
               label="Lineup"
-              description="At least one artist is required. Same-name records require your selection; confirmed duplicates can be merged."
+              description="One act per line; use Artist A B2B Artist B for pairings. Each artist gets separate outreach. Same-name records require your selection; confirmed duplicates can be merged."
               rows={12}
               defaultValue={state.values.lineup}
               placeholder={"Solomun\nAdam Beyer\nDixon\nAdriatique\n..."}

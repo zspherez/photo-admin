@@ -178,6 +178,12 @@ export async function addManualFestivalArtist(
   const selectedId = textValue(formData, "artistChoice") || null;
   const normalizedName = normalizeArtistName(artistName);
   if (!showId) return errorState(artistName, "Festival is required.");
+  if (/\bB2B\b/i.test(artistName)) {
+    return errorState(
+      artistName,
+      "Use the artist-list form below to add a B2B set and its individual artists.",
+    );
+  }
   if (!normalizedName) {
     return errorState(
       artistName,
@@ -329,6 +335,7 @@ export async function addManualFestivalArtists(
               providerManaged: boolean;
               manuallyAdded: boolean;
             }> = [];
+            const resolvedByName = new Map<string, string>();
             let existingCount = 0;
             const ambiguousNames: string[] = [];
             for (const input of parsed.artists) {
@@ -350,6 +357,7 @@ export async function addManualFestivalArtists(
                   `Canonical artist was not created for ${input.name}`,
                 );
               }
+              resolvedByName.set(input.normalizedName, existingArtist.id);
               if (existingArtist?.shows[0]) {
                 if (
                   existingArtist.shows[0].manuallyAdded &&
@@ -382,6 +390,31 @@ export async function addManualFestivalArtists(
             if (createAssociations.length > 0) {
               await tx.showArtist.createMany({
                 data: createAssociations,
+                skipDuplicates: true,
+              });
+            }
+            for (const pairing of parsed.pairings ?? []) {
+              const memberIds = pairing.normalizedNames.map((name) =>
+                resolvedByName.get(name)
+              );
+              if (memberIds.some((id) => !id)) continue;
+              const uniqueIds = [
+                ...new Set(memberIds.filter((id): id is string => !!id)),
+              ];
+              if (uniqueIds.length < 2) {
+                throw new Error(`B2B "${pairing.name}" needs distinct artists`);
+              }
+              const set = await tx.festivalB2b.upsert({
+                where: { showId_name: { showId, name: pairing.name } },
+                create: { showId, name: pairing.name },
+                update: {},
+                select: { id: true },
+              });
+              await tx.festivalB2bMember.createMany({
+                data: uniqueIds.map((artistId) => ({
+                  b2bId: set.id,
+                  artistId,
+                })),
                 skipDuplicates: true,
               });
             }
@@ -479,6 +512,23 @@ export async function removeManualFestivalArtist(
         await tx.showArtist.delete({
           where: { showId_artistId: { showId, artistId } },
         });
+        const memberships = await tx.festivalB2bMember.findMany({
+          where: { artistId, b2b: { showId } },
+          select: { b2bId: true },
+        });
+        if (memberships.length > 0) {
+          await tx.festivalB2bMember.deleteMany({
+            where: { artistId, b2bId: { in: memberships.map((row) => row.b2bId) } },
+          });
+          for (const { b2bId } of memberships) {
+            const remaining = await tx.festivalB2bMember.count({
+              where: { b2bId },
+            });
+            if (remaining < 2) {
+              await tx.festivalB2b.delete({ where: { id: b2bId } });
+            }
+          }
+        }
         await staleReadyTrajectoryRunsWithMissingMembership(tx);
         return "deleted";
       },

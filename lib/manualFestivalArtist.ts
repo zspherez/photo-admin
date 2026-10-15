@@ -1,4 +1,7 @@
-import { chooseFestivalLineupCandidate } from "@/lib/festivalLineup";
+import {
+  b2bArtistNames,
+  chooseFestivalLineupCandidate,
+} from "@/lib/festivalLineup";
 import { normalizeArtistName } from "@/lib/normalize";
 
 export interface ManualFestivalArtistCandidate {
@@ -17,6 +20,7 @@ export const MANUAL_FESTIVAL_ARTIST_NAME_MAX_LENGTH = 300;
 
 export interface ParsedManualFestivalArtistList {
   artists: Array<{ name: string; normalizedName: string }>;
+  pairings?: Array<{ name: string; normalizedNames: string[] }>;
   duplicateCount: number;
   error: string | null;
 }
@@ -44,32 +48,60 @@ export function parseManualFestivalArtistList(
   }
 
   const artists: ParsedManualFestivalArtistList["artists"] = [];
+  const pairings: NonNullable<ParsedManualFestivalArtistList["pairings"]> = [];
   const seen = new Set<string>();
   let duplicateCount = 0;
-  for (const name of rawNames) {
-    if (name.length > MANUAL_FESTIVAL_ARTIST_NAME_MAX_LENGTH) {
-      return {
-        artists: [],
-        duplicateCount,
-        error: `Artist names must be ${MANUAL_FESTIVAL_ARTIST_NAME_MAX_LENGTH} characters or fewer.`,
-      };
+  for (const line of rawNames) {
+    const names = b2bArtistNames(line) ?? [line];
+    if (names.some((name) => /\bB2B\b/i.test(name))) {
+      return { artists: [], duplicateCount, error: `Incomplete B2B lineup: "${line}".` };
     }
-    const normalizedName = normalizeArtistName(name);
-    if (!normalizedName) {
-      return {
-        artists: [],
-        duplicateCount,
-        error: `"${name}" must contain letters or numbers.`,
-      };
+    if (names.length > 1) {
+      if (new Set(names.map(normalizeArtistName)).size !== names.length) {
+        return { artists: [], duplicateCount, error: `B2B "${line}" must contain distinct artists.` };
+      }
+      pairings.push({
+        name: line,
+        normalizedNames: names.map(normalizeArtistName),
+      });
     }
-    if (seen.has(normalizedName)) {
-      duplicateCount += 1;
-      continue;
+    for (const name of names) {
+      if (name.length > MANUAL_FESTIVAL_ARTIST_NAME_MAX_LENGTH) {
+        return {
+          artists: [],
+          duplicateCount,
+          error: `Artist names must be ${MANUAL_FESTIVAL_ARTIST_NAME_MAX_LENGTH} characters or fewer.`,
+        };
+      }
+      const normalizedName = normalizeArtistName(name);
+      if (!normalizedName) {
+        return {
+          artists: [],
+          duplicateCount,
+          error: `"${name}" must contain letters or numbers.`,
+        };
+      }
+      if (seen.has(normalizedName)) {
+        duplicateCount += 1;
+        continue;
+      }
+      seen.add(normalizedName);
+      artists.push({ name, normalizedName });
     }
-    seen.add(normalizedName);
-    artists.push({ name, normalizedName });
   }
-  return { artists, duplicateCount, error: null };
+  if (artists.length > MANUAL_FESTIVAL_ARTIST_LIST_LIMIT) {
+    return {
+      artists: [],
+      duplicateCount,
+      error: `Add at most ${MANUAL_FESTIVAL_ARTIST_LIST_LIMIT} artists at a time.`,
+    };
+  }
+  return {
+    artists,
+    duplicateCount,
+    error: null,
+    ...(pairings.length > 0 ? { pairings } : {}),
+  };
 }
 
 export type ManualFestivalArtistDecision =

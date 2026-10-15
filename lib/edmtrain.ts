@@ -44,6 +44,8 @@ import {
   staleReadyTrajectoryRunsWithMissingMembership,
 } from "@/lib/showArtistMembershipInvariant";
 import { appConfig } from "@/lib/appConfig";
+import { b2bArtistNames } from "@/lib/festivalLineup";
+import { normalizeArtistName } from "@/lib/normalize";
 
 const EDMTRAIN_BASE = "https://edmtrain.com/api/events";
 const MARKET_LOCATION_IDS =
@@ -430,6 +432,22 @@ async function reconcileEdmtrainSnapshots(
       edmtrainId: artist.id,
     })
   );
+  const b2bMembers = new Map<number, { name: string; memberKeys: string[] }>();
+  const childIdentities = new Map<string, ArtistIdentityInput>();
+  for (const event of events) {
+    if (!event.festivalInd) continue;
+    for (const artist of event.artistList) {
+      const names = b2bArtistNames(artist.name);
+      if (!names) continue;
+      const memberKeys = names.map((name) => `b2b:${normalizeArtistName(name)}`);
+      b2bMembers.set(artist.id, { name: artist.name, memberKeys });
+      names.forEach((name, index) => {
+        const key = memberKeys[index];
+        if (!childIdentities.has(key)) childIdentities.set(key, { key, name });
+      });
+    }
+  }
+  identities.push(...childIdentities.values());
 
   return runDeadlineBoundTransaction(
     deadline,
@@ -670,6 +688,12 @@ async function reconcileEdmtrainSnapshots(
             },
             data: { providerManaged: false },
           });
+          await tx.festivalB2b.deleteMany({
+            where: {
+              showId: { in: reconciledShowIds },
+              providerManaged: true,
+            },
+          });
         }
         const lineupRows = dedupeProviderLineupRows(
           rows.flatMap(({ event }) => {
@@ -677,7 +701,7 @@ async function reconcileEdmtrainSnapshots(
             if (!showId) {
               throw new Error(`EDMTrain event was not persisted: ${event.id}`);
             }
-            return event.artistList.map((artist) => {
+            return event.artistList.flatMap((artist) => {
               const resolvedArtist = resolved.artistsByKey.get(
                 String(artist.id),
               );
@@ -686,11 +710,20 @@ async function reconcileEdmtrainSnapshots(
                   `EDMTrain artist was not resolved: ${artist.id}`,
                 );
               }
-              return {
+              const members = event.festivalInd
+                ? b2bMembers.get(artist.id)?.memberKeys ?? []
+                : [];
+              return [{
                 showId,
                 artistId: resolvedArtist.id,
                 headliner: false,
-              };
+              }, ...members.map((key) => {
+                const member = resolved.artistsByKey.get(key);
+                if (!member) {
+                  throw new Error(`B2B artist was not resolved: ${key}`);
+                }
+                return { showId, artistId: member.id, headliner: false };
+              })];
             });
           }),
         );
@@ -722,6 +755,38 @@ async function reconcileEdmtrainSnapshots(
                 "providerManaged" = TRUE
             `,
           );
+        }
+        for (const { event } of rows) {
+          if (!event.festivalInd) continue;
+          const showId = showIdByEvent.get(event.id)!;
+          for (const artist of event.artistList) {
+            const group = b2bMembers.get(artist.id);
+            if (!group) continue;
+            const memberIds = [...new Set(group.memberKeys.map((key) => {
+              const member = resolved.artistsByKey.get(key);
+              if (!member) throw new Error(`B2B artist was not resolved: ${key}`);
+              return member.id;
+            }))];
+            if (memberIds.length < 2) continue;
+            await tx.festivalB2b.upsert({
+              where: { showId_name: { showId, name: group.name } },
+              create: {
+                showId,
+                name: group.name,
+                providerManaged: true,
+                members: {
+                  create: memberIds.map((artistId) => ({ artistId })),
+                },
+              },
+              update: {
+                providerManaged: true,
+                members: {
+                  deleteMany: {},
+                  create: memberIds.map((artistId) => ({ artistId })),
+                },
+              },
+            });
+          }
         }
 
         const scopeFestival = snapshot.scope === "festivals";

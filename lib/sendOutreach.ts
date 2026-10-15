@@ -23,6 +23,8 @@ import {
   renderTrackedEmailHtml,
 } from "@/lib/emailUtm";
 import { readEmailUtmSettingsSnapshot } from "@/lib/generalSettings";
+import { readFestivalShowTemplate } from "@/lib/festivalShowTemplate";
+import { festivalArtistsTemplateName } from "@/lib/festivalArtistTemplateName";
 import {
   RESEND_CONFIGURATION_ERROR,
   acquireResendProviderMessageLocks,
@@ -3898,7 +3900,13 @@ async function prepareOriginalOutreach(
       trajectoryError: true,
     };
   }
-  const template = capturedTemplate.value;
+  const template = {
+    ...capturedTemplate.value,
+    ...(sendability.mode === "retry" ||
+    (subjectOverride?.trim() && htmlOverride?.trim())
+      ? {}
+      : await readFestivalShowTemplate(show, capturedTemplate.value)),
+  };
   if (template.purpose !== templatePurpose) {
     return { error: "The selected outreach template purpose is unavailable" };
   }
@@ -3909,8 +3917,19 @@ async function prepareOriginalOutreach(
   const trackingArtistName = multiArtistFestival
     ? coveredArtistNames.join(", ")
     : artistDisplayName(contact.artist);
+  const templateArtistName =
+    sendability.mode === "retry"
+      ? trackingArtistName
+      : await festivalArtistsTemplateName({
+          showId,
+          isFestival: show.isFestival,
+          artists: coveredAssociations.map(({ artistId, artist }) => ({
+            artistId,
+            artistName: artistDisplayName(artist),
+          })),
+        });
   const vars = await buildVarsForShow({
-    artistName: trackingArtistName,
+    artistName: templateArtistName,
     venueName: show.venueName,
     showDate: show.date,
     managerName: contact.name,
@@ -4137,8 +4156,19 @@ async function prepareFollowUpOutreach(
   const trackingArtistName = coveredArtists
     .map((covered) => artistDisplayName(covered.artist))
     .join(", ");
+  const templateArtistName =
+    eligibility.mode === "retry"
+      ? trackingArtistName
+      : await festivalArtistsTemplateName({
+          showId: parent.showId,
+          isFestival: parent.show.isFestival,
+          artists: coveredArtists.map((covered) => ({
+            artistId: covered.artistId,
+            artistName: artistDisplayName(covered.artist),
+          })),
+        });
   const vars = await buildVarsForShow({
-    artistName: trackingArtistName,
+    artistName: templateArtistName,
     venueName: parent.show.venueName,
     showDate: parent.show.date,
     managerName: selectedContact.name,

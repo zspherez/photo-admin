@@ -1871,6 +1871,12 @@ export async function enqueueFestivalManagerResearch(
       select: {
         id: true,
         date: true,
+        b2bSets: {
+          select: {
+            name: true,
+            members: { select: { artistId: true } },
+          },
+        },
         artists: {
           where: {
             artist: {
@@ -1882,6 +1888,7 @@ export async function enqueueFestivalManagerResearch(
             artistId: true,
             artist: {
               select: {
+                name: true,
                 popularity: true,
                 listenSignals: {
                   where: activeListenSignalWhere(now),
@@ -1896,7 +1903,14 @@ export async function enqueueFestivalManagerResearch(
     });
     if (!festival) throw new Error("Festival is inactive or unavailable");
 
-    const artistIds = festival.artists.map((row) => row.artistId);
+    const b2bNames = new Set(festival.b2bSets.map((set) => set.name));
+    const memberIds = new Set(
+      festival.b2bSets.flatMap((set) => set.members.map((member) => member.artistId))
+    );
+    const artists = festival.artists.filter(({ artistId, artist }) =>
+      !b2bNames.has(artist.name) || memberIds.has(artistId)
+    );
+    const artistIds = artists.map((row) => row.artistId);
     await supersedeObsoleteContactResearchApprovals(tx, { artistIds });
     const existing =
       artistIds.length === 0
@@ -1911,7 +1925,7 @@ export async function enqueueFestivalManagerResearch(
     let enqueued = 0;
     let alreadyQueued = 0;
 
-    for (const row of festival.artists) {
+    for (const row of artists) {
       const priority =
         2_000 +
         contactResearchPriority({
@@ -1969,7 +1983,7 @@ export async function enqueueFestivalManagerResearch(
     }
 
     return {
-      eligible: festival.artists.length,
+      eligible: artists.length,
       enqueued,
       alreadyQueued,
     };

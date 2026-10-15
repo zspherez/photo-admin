@@ -72,6 +72,7 @@ test("same-normalized lineup entries keep independent artist selections", () => 
     assert.equal(decision.kind, "use", entry.selectionKey);
     return decision.kind === "use" ? decision.candidate.id : "";
   });
+
   assert.deepEqual(dedupeFestivalArtistIds(selectedIds), [
     "artist-1",
     "artist-2",
@@ -145,4 +146,30 @@ test("merge planning rejects stale, invalid, or inconsistent artist choices", ()
       ]),
     /choose different records/,
   );
+});
+
+test("B2B lineup splits into individual identities while retaining the full set name", () => {
+  const parsed = parseFestivalLineupEntries(
+    "Boris Brejcha B2B Cirez D\nCalvin Harris\nNico Moreno b2b Novah"
+  );
+  assert.equal(parsed.error, null);
+  assert.deepEqual(
+    parsed.entries.map(({ name, selectionKey, b2bName }) => ({
+      name,
+      selectionKey,
+      b2bName,
+    })),
+    [
+      { name: "Boris Brejcha", selectionKey: "artistChoice:0", b2bName: "Boris Brejcha B2B Cirez D" },
+      { name: "Cirez D", selectionKey: "artistChoice:1", b2bName: "Boris Brejcha B2B Cirez D" },
+      { name: "Calvin Harris", selectionKey: "artistChoice:2", b2bName: null },
+      { name: "Nico Moreno", selectionKey: "artistChoice:3", b2bName: "Nico Moreno b2b Novah" },
+      { name: "Novah", selectionKey: "artistChoice:4", b2bName: "Nico Moreno b2b Novah" },
+    ]
+  );
+});
+
+test("incomplete B2B entries are rejected rather than creating a composite artist", () => {
+  assert.match(parseFestivalLineupEntries("Boris Brejcha B2B").error ?? "", /Incomplete B2B/);
+  assert.match(parseFestivalLineupEntries("B2B Cirez D").error ?? "", /Incomplete B2B/);
 });

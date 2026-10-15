@@ -253,6 +253,27 @@ async function persistFestival(
               })),
             });
           }
+          const b2bMembers = new Map<string, Set<string>>();
+          for (const [index, entry] of entries.entries()) {
+            if (!entry.b2bName) continue;
+            const members = b2bMembers.get(entry.b2bName) ?? new Set<string>();
+            members.add(artistIds[index]);
+            b2bMembers.set(entry.b2bName, members);
+          }
+          for (const [name, members] of b2bMembers) {
+            if (members.size < 2) {
+              throw new Error(`B2B "${name}" must contain distinct artists`);
+            }
+            await tx.festivalB2b.create({
+              data: {
+                showId: festival.id,
+                name,
+                members: {
+                  create: [...members].map((artistId) => ({ artistId })),
+                },
+              },
+            });
+          }
           return { festivalId: festival.id, merged: mergePlans.length > 0 };
         },
         {

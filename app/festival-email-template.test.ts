@@ -105,6 +105,9 @@ test("Customize uses the festival template with neutral greetings", () => {
     pageBody.indexOf("redirect(capturedTemplate.errorHref)") <
       pageBody.indexOf("const template = followUpMode"),
   );
+  assert.match(page, /eligibleContacts\.map\(async \(candidate\)[\s\S]*managerName: candidate\.name/);
+  assert.match(page, /followUpTemplateContentForShow\(/);
+  assert.match(page, /readFestivalShowTemplate\(show, capturedTemplate\.value\)/);
   assert.match(page, /eventName: show\.eventName/);
   assert.match(page, /renderCustomizeRecipientContent\(template, vars\)/);
   assert.match(actions, /contactId: selectedContactId/);

@@ -354,6 +354,35 @@ async function mergeShowMemberships(
   }
 }
 
+async function mergeFestivalB2bMemberships(
+  tx: Prisma.TransactionClient,
+  sourceArtistId: string,
+  targetArtistId: string,
+): Promise<void> {
+  const memberships = await tx.festivalB2bMember.findMany({
+    where: { artistId: sourceArtistId },
+    select: { b2bId: true },
+  });
+  for (const { b2bId } of memberships) {
+    const duplicate = await tx.festivalB2bMember.findUnique({
+      where: {
+        b2bId_artistId: { b2bId, artistId: targetArtistId },
+      },
+    });
+    if (duplicate) {
+      throw new ArtistMergeReviewRequiredError(
+        "Both artist records belong to the same B2B set; review the pairing before merging.",
+      );
+    }
+    await tx.festivalB2bMember.update({
+      where: {
+        b2bId_artistId: { b2bId, artistId: sourceArtistId },
+      },
+      data: { artistId: targetArtistId },
+    });
+  }
+}
+
 async function mergeListenSignals(
   tx: Prisma.TransactionClient,
   sourceArtistId: string,
@@ -691,6 +720,7 @@ export async function mergeArtistsInTransaction(
   });
   await mergeAliases(tx, source, { ...target, ...updatedTarget });
 
+  await mergeFestivalB2bMemberships(tx, source.id, target.id);
   await mergeShowMemberships(tx, source.id, target.id);
   await mergeListenSignals(tx, source.id, target.id);
   const sourcePlaylists = await tx.artistPlaylist.findMany({
