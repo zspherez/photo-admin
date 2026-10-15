@@ -114,6 +114,19 @@ jobs:
                 ORDER BY a."name", part.value
               `;
               for (const member of members) console.log(JSON.stringify(member));
+              const candidates = await db.$queryRaw`
+                SELECT a."id", a."name", a."normalizedName",
+                       a."spotifyId" IS NOT NULL AS "spotifyLinked",
+                       a."edmtrainId" IS NOT NULL AS "edmtrainLinked",
+                       (SELECT count(*)::int FROM "Contact" c WHERE c."artistId" = a."id") AS "contacts",
+                       (SELECT count(*)::int FROM "Outreach" o WHERE o."artistId" = a."id") AS "outreaches",
+                       (SELECT count(*)::int FROM "ShowArtist" sa WHERE sa."artistId" = a."id") AS "shows"
+                FROM "Artist" a
+                WHERE a."normalizedName" IN ('cid', 'josh baker')
+                   OR lower(a."name") IN ('cid', 'josh baker')
+                ORDER BY lower(a."name"), a."id"
+              `;
+              for (const candidate of candidates) console.log(JSON.stringify({ candidate }));
             } finally {
               await db.$disconnect();
             }
