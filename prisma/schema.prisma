@@ -50,6 +50,7 @@ model Artist {
   imageUrl           String?
   contacts           Contact[]
   shows              ShowArtist[]
+  b2bSets            FestivalB2bMember[]
   listenSignals      ListenSignal[]
   playlists          ArtistPlaylist[]
   outreaches         Outreach[]
@@ -869,6 +870,7 @@ model Show {
   interestedAt              DateTime?
   raw                       String?
   artists                   ShowArtist[]
+  b2bSets                   FestivalB2b[]
   outreaches                Outreach[]
   contactResearchJobs       ContactResearchJob[]
   dashboardSnapshotMembers  DashboardShowSnapshotMember[]
@@ -950,6 +952,28 @@ model ShowArtist {
   @@id([showId, artistId])
   @@index([artistId])
   @@index([showId, rejectedAt])
+}
+
+model FestivalB2b {
+  id        String              @id @default(cuid())
+  showId    String
+  show      Show                @relation(fields: [showId], references: [id], onDelete: Cascade)
+  name      String
+  providerManaged Boolean       @default(false)
+  members   FestivalB2bMember[]
+
+  @@unique([showId, name])
+  @@index([showId])
+}
+
+model FestivalB2bMember {
+  b2bId    String
+  artistId String
+  b2b      FestivalB2b @relation(fields: [b2bId], references: [id], onDelete: Cascade)
+  artist   Artist       @relation(fields: [artistId], references: [id], onDelete: Cascade)
+
+  @@id([b2bId, artistId])
+  @@index([artistId])
 }
 
 model ListenSignal {

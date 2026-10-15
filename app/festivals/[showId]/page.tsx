@@ -164,6 +164,13 @@ const getFestivalDetails = cache(async (showId: string) =>
       eventName: true,
       syncStatus: true,
       dismissedAt: true,
+      b2bSets: {
+        select: {
+          id: true,
+          name: true,
+          members: { select: { artistId: true } },
+        },
+      },
       artists: {
         select: {
           providerManaged: true,
@@ -386,12 +393,20 @@ async function festivalBulkCandidates(
       festivalNycStatus: true,
       syncStatus: true,
       dismissedAt: true,
+      b2bSets: {
+        select: {
+          name: true,
+          members: { select: { artistId: true } },
+        },
+      },
       artists: {
         where: { rejectedAt: null },
         select: {
           artistId: true,
           artist: {
             select: {
+              id: true,
+              name: true,
               listenSignals: {
                 select: { source: true, rank: true, expiresAt: true },
               },
@@ -422,11 +437,26 @@ async function festivalBulkCandidates(
     satisfiesFestivalLeadTime(festival, now) &&
     festival.dismissedAt === null
   ) {
+    const groupNames = new Set(festival.b2bSets.map((set) => set.name));
+    const memberCounts = new Map<string, number>();
+    for (const set of festival.b2bSets) {
+      for (const member of set.members) {
+        memberCounts.set(
+          member.artistId,
+          (memberCounts.get(member.artistId) ?? 0) + 1,
+        );
+      }
+    }
     for (const target of uniqueFestivalRecipientTargets(
-      festival.artists.map(({ artistId, artist }) => ({
-        artistId,
-        contacts: artist.contacts,
-      })),
+      festival.artists
+        .filter(({ artistId, artist }) =>
+          (!groupNames.has(artist.name) || memberCounts.has(artistId)) &&
+          (memberCounts.get(artistId) ?? 0) <= 1,
+        )
+        .map(({ artistId, artist }) => ({
+          artistId,
+          contacts: artist.contacts,
+        })),
     )) {
       targetsByContactId.set(target.contactId, target);
     }
@@ -1136,10 +1166,22 @@ export default async function FestivalDetailPage({
   const outreachEnabled =
     festivalActive && festival.dismissedAt === null;
 
-  const baseRows = festival.artists.map((sa) => {
+  const b2bMemberIds = new Set(
+    festival.b2bSets.flatMap((set) => set.members.map((member) => member.artistId))
+  );
+  const b2bNames = new Set(festival.b2bSets.map((set) => set.name));
+  const pairingCounts = new Map<string, number>();
+  for (const set of festival.b2bSets) {
+    for (const member of set.members) {
+      pairingCounts.set(member.artistId, (pairingCounts.get(member.artistId) ?? 0) + 1);
+    }
+  }
+  const baseRows = festival.artists.filter(({ artist }) =>
+    !b2bNames.has(artist.name) || b2bMemberIds.has(artist.id)
+  ).map((sa) => {
     const a = sa.artist;
     const topSignal = pickTopListenSignal(a.listenSignals, now);
-    const matched = topSignal !== null;
+    const matched = topSignal !== null || b2bMemberIds.has(a.id);
     const contact = pickEmailContact(a.contacts);
     const bulkTargets = uniqueFestivalRecipientTargets([
       { artistId: a.id, contacts: a.contacts },
@@ -1215,6 +1257,7 @@ export default async function FestivalDetailPage({
         rejectedAt: sa.rejectedAt,
       },
       artist: a,
+      pairingCount: pairingCounts.get(a.id) ?? 0,
       topSignal,
       matched,
       contact,
@@ -1370,13 +1413,31 @@ export default async function FestivalDetailPage({
     ) return false;
     if (
       filter === "unsent" &&
-      !r.bulkSendabilities.some(({ sendability }) => sendability?.sendable)
+      (r.pairingCount > 1 ||
+        !r.bulkSendabilities.some(({ sendability }) => sendability?.sendable))
     ) {
       return false;
     }
     if (genreFilter !== "all" && !r.genres.some((g) => g.toLowerCase() === genreFilter)) return false;
     return true;
   });
+  const groupedIds = new Set(
+    festival.b2bSets.flatMap((set) => set.members.map((member) => member.artistId))
+  );
+  const displayRows = [
+    ...festival.b2bSets.flatMap((set) => {
+      const members = filtered.filter((row) =>
+        set.members.some((member) => member.artistId === row.artist.id)
+      );
+      return members.length > 0
+        ? [{ setName: set.name, row: null }, ...members.map((row) => ({ setName: set.name, row }))]
+        : [];
+    }),
+    ...filtered.filter((row) => !groupedIds.has(row.artist.id)).map((row) => ({
+      setName: null,
+      row,
+    })),
+  ];
 
   const managerResearchCount = rows.filter(
     (row) => !row.association.rejectedAt && row.managerResearchEligible
@@ -1392,6 +1453,7 @@ export default async function FestivalDetailPage({
   const addedBulkSelections = new Set<string>();
   if (outreachEnabled) {
     for (const row of filtered) {
+      if (row.pairingCount > 1) continue;
       for (const followUp of row.followUpEligibilities.filter(
         (eligibility) => eligibility.eligible && eligibility.contactId,
       )) {
@@ -1520,6 +1582,12 @@ export default async function FestivalDetailPage({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <LinkButton
+            href={`/festivals/${encodeURIComponent(showId)}/customize`}
+            variant="secondary"
+          >
+            Customize festival email
+          </LinkButton>
           <LinkButton href="/research" variant="secondary">
             Review research
           </LinkButton>
@@ -1882,22 +1950,33 @@ export default async function FestivalDetailPage({
 
       <Card className={outreachEnabled ? undefined : "mt-6"}>
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
-          {filtered.map((r) => {
+          {displayRows.map(({ setName, row: r }) => {
+              if (!r) {
+                return (
+                  <li key={`b2b:${setName}`} className="bg-zinc-50 px-4 py-2 text-sm font-semibold dark:bg-zinc-900">
+                    {setName}
+                  </li>
+                );
+              }
               const canSend =
                 outreachEnabled &&
                 !r.association.rejectedAt &&
+                r.pairingCount <= 1 &&
                 r.sendability?.sendable === true;
               const canCustomize =
                 outreachEnabled &&
                 !r.association.rejectedAt &&
+                r.pairingCount <= 1 &&
                 !!r.contact &&
                 !r.followUpEligibility &&
                 r.sendability?.mode !== "retry";
               const bulkCandidates = bulkCandidatesByArtistId.get(r.artist.id) ?? [];
               const canBulkSelect = bulkCandidates.length > 0;
-              const checkboxId = `festival-outreach-${r.artist.id}`;
+              const checkboxId = `festival-outreach-${r.artist.id}-${setName ?? "solo"}`;
               const reasonId = `${checkboxId}-reason`;
-              const disabledReason = !r.contact
+              const disabledReason = r.pairingCount > 1
+                ? "Cannot send automatically: artist appears in multiple B2B sets"
+                : !r.contact
                 ? "No email contact"
                 : r.sendability?.reason ?? "Outreach is unavailable";
               const statusLabel = sendabilityLabel(
@@ -1942,7 +2021,7 @@ export default async function FestivalDetailPage({
                     )),
               );
               return (
-                <li key={r.artist.id} className="flex items-center gap-3 px-4 py-3">
+                <li key={`${setName ?? "solo"}:${r.artist.id}`} className={cn("flex items-center gap-3 px-4 py-3", setName && "pl-9")}>
                   {outreachEnabled && (
                     <input
                       id={checkboxId}

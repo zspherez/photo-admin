@@ -62,6 +62,10 @@ test("festival show, artists, and lineup links are created transactionally", () 
     "manuallyAdded: true",
     lineupCreate
   );
+  const b2bCreate = source.indexOf(
+    "await tx.festivalB2b.create(",
+    lineupCreate
+  );
   const transactionEnd = source.indexOf(
     "isolationLevel: Prisma.TransactionIsolationLevel.Serializable",
     transactionStart
@@ -75,7 +79,8 @@ test("festival show, artists, and lineup links are created transactionally", () 
   assert.ok(geographyPersisted > countryPersisted);
   assert.ok(lineupCreate > showCreate);
   assert.ok(manualOwnership > lineupCreate);
-  assert.ok(transactionEnd > lineupCreate);
+  assert.ok(b2bCreate > manualOwnership);
+  assert.ok(transactionEnd > b2bCreate);
 });
 
 test("confirmed duplicate artists merge inside the festival transaction before lineup insertion", () => {

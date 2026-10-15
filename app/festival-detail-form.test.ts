@@ -221,7 +221,7 @@ test("festival shared management filter uses active contact addresses across the
 test("festival customize links do not require a listening signal", () => {
   assert.match(
     source,
-    /const canCustomize =\s*outreachEnabled &&\s*!r\.association\.rejectedAt &&\s*!!r\.contact &&\s*!r\.followUpEligibility &&\s*r\.sendability\?\.mode !== "retry";/
+    /const canCustomize =\s*outreachEnabled &&\s*!r\.association\.rejectedAt &&\s*r\.pairingCount <= 1 &&\s*!!r\.contact &&\s*!r\.followUpEligibility &&\s*r\.sendability\?\.mode !== "retry";/
   );
   assert.match(source, /\{canCustomize && r\.contact && \(/);
   assert.doesNotMatch(
@@ -289,7 +289,7 @@ test("festival sendability and bulk queueing do not require listen signals", () 
   assert.match(source, /scheduleFestivalManagerOutreach/);
   assert.match(
     source,
-    /const canSend =\s*outreachEnabled &&\s*!r\.association\.rejectedAt &&\s*r\.sendability\?\.sendable === true/,
+    /const canSend =\s*outreachEnabled &&\s*!r\.association\.rejectedAt &&\s*r\.pairingCount <= 1 &&\s*r\.sendability\?\.sendable === true/,
   );
   assert.doesNotMatch(
     source,

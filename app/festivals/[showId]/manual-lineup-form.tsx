@@ -118,7 +118,7 @@ export function BulkManualFestivalArtistForm({
       <TextArea
         name="artistNames"
         label="Artist names"
-        description="Paste one artist per line. Duplicate names and artists already on the lineup are merged, not duplicated."
+        description="Paste one act per line; use Artist A B2B Artist B to create separate artist contacts under a shared set. Existing artists are reused."
         placeholder={"Artist One\nArtist Two\nArtist Three"}
         rows={8}
         defaultValue={state.artistNames}

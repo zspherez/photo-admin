@@ -4,6 +4,8 @@ import { notFound, redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { db } from "@/lib/db";
+import { readFestivalShowTemplate } from "@/lib/festivalShowTemplate";
+import { festivalArtistsTemplateName } from "@/lib/festivalArtistTemplateName";
 import { workflowReturnPath } from "@/lib/dashboardReturnUrl";
 import {
   getFollowUpEligibilityBatch,
@@ -133,6 +135,7 @@ export default async function CustomizePage({
           coveredArtists: {
             orderBy: { artistId: "asc" },
             select: {
+              artistId: true,
               artist: { select: { name: true, customName: true } },
             },
           },
@@ -213,14 +216,6 @@ export default async function CustomizePage({
   if (!capturedTemplate.ok) {
     redirect(capturedTemplate.errorHref);
   }
-  const template = followUpMode
-    ? followUpTemplateContentForShow(
-        show,
-        followUpParent?.coveredArtists.length || 1,
-        capturedTemplate.value,
-      )
-    : capturedTemplate.value;
-
   const artistContacts = await db.contact.findMany({
     where: { artistId: contact.artistId },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -269,6 +264,20 @@ export default async function CustomizePage({
   const sendabilityByContact = new Map(
     sendabilityRows.map((row) => [row.contactId, row]),
   );
+  const hasFreshRecipient =
+    !followUpMode && sendabilityRows.some((row) => row.mode !== "retry");
+  const template = followUpMode
+    ? followUpTemplateContentForShow(
+        show,
+        followUpParent?.coveredArtists.length || 1,
+        capturedTemplate.value,
+      )
+    : {
+        ...capturedTemplate.value,
+        ...(hasFreshRecipient && access !== "read_only"
+          ? await readFestivalShowTemplate(show, capturedTemplate.value)
+          : {}),
+      };
   const retryOutreachIds = sendabilityRows.flatMap((row) =>
     row.mode === "retry" && row.blockingOutreachId
       ? [row.blockingOutreachId]
@@ -293,13 +302,33 @@ export default async function CustomizePage({
   const retrySnapshotById = new Map(
     retrySnapshots.map((snapshot) => [snapshot.id, snapshot]),
   );
+  const followUpArtists =
+    followUpParent?.coveredArtists.length
+      ? followUpParent.coveredArtists.map(({ artistId, artist }) => ({
+          artistId,
+          artistName: artistDisplayName(artist),
+        }))
+      : [{ artistId: contact.artistId, artistName: artistDisplayName(contact.artist) }];
+  const templateArtistName =
+    access === "read_only" ||
+    (followUpMode &&
+      (followUpEligibility?.mode === "retry" ||
+        followUpEligibility?.state === "pending" ||
+        followUpEligibility?.state === "sent")) ||
+    (!followUpMode && !hasFreshRecipient)
+      ? followUpMode ? followUpArtistName : artistDisplayName(contact.artist)
+      : await festivalArtistsTemplateName({
+          showId,
+          isFestival: show.isFestival,
+          artists: followUpMode
+            ? followUpArtists
+            : [{ artistId: contact.artistId, artistName: artistDisplayName(contact.artist) }],
+        });
   const renderedContentByContact = new Map(
     await Promise.all(
       eligibleContacts.map(async (candidate) => {
         const vars = await buildVarsForShow({
-          artistName: followUpMode
-            ? followUpArtistName
-            : artistDisplayName(contact.artist),
+          artistName: templateArtistName,
           venueName: show.venueName,
           showDate: show.date,
           managerName: candidate.name,

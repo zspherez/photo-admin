@@ -1772,6 +1772,7 @@ test("festival enqueue preserves concurrent contact and skip terminal states", a
               return {
                 id: "show-1",
                 date: new Date("2026-07-27T00:00:00.000Z"),
+                b2bSets: [],
                 artists:
                   state.activeContact || state.activeSkip
                     ? []
@@ -1779,6 +1780,7 @@ test("festival enqueue preserves concurrent contact and skip terminal states", a
                         {
                           artistId: "artist-1",
                           artist: {
+                            name: "Artist One",
                             popularity: 50,
                             listenSignals: [],
                           },
@@ -1845,10 +1847,18 @@ test("festival enqueue requeues a completed job after approval quarantine", asyn
         findFirst: async () => ({
           id: "festival-1",
           date: new Date("2026-08-01T00:00:00.000Z"),
+          b2bSets: [{
+            name: "Artist One B2B Artist Two",
+            members: [{ artistId: "artist-1" }],
+          }],
           artists: [
             {
               artistId: "artist-1",
-              artist: { popularity: 50, listenSignals: [] },
+              artist: { name: "Artist One", popularity: 50, listenSignals: [] },
+            },
+            {
+              artistId: "legacy-pair",
+              artist: { name: "Artist One B2B Artist Two", popularity: 50, listenSignals: [] },
             },
           ],
         }),

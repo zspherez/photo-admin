@@ -41,6 +41,26 @@ test("manual festival artist lists are bounded and reject invalid names", () => 
   );
 });
 
+test("manual festival B2Bs keep one pairing with two separate artist identities", () => {
+  assert.deepEqual(
+    parseManualFestivalArtistList("Boris Brejcha B2B Cirez D\nCirez D"),
+    {
+      artists: [
+        { name: "Boris Brejcha", normalizedName: "boris brejcha" },
+        { name: "Cirez D", normalizedName: "cirez d" },
+      ],
+      pairings: [{
+        name: "Boris Brejcha B2B Cirez D",
+        normalizedNames: ["boris brejcha", "cirez d"],
+      }],
+      duplicateCount: 1,
+      error: null,
+    },
+  );
+  assert.match(parseManualFestivalArtistList("Boris Brejcha B2B").error ?? "", /Incomplete B2B/);
+  assert.match(parseManualFestivalArtistList("Boris Brejcha B2B Boris Brejcha").error ?? "", /distinct/);
+});
+
 const candidate = (
   id: string,
   onLineup = false,

@@ -85,28 +85,44 @@ export interface FestivalLineupEntry {
   name: string;
   normalizedName: string;
   selectionKey: string;
+  b2bName: string | null;
+}
+
+export function b2bArtistNames(name: string): string[] | null {
+  const members = name.trim().split(/\s+B2B\s+/i);
+  if (members.length < 2 || members.some((member) => !normalizeArtistName(member))) {
+    return null;
+  }
+  return members;
 }
 
 export function parseFestivalLineupEntries(
   lineup: string
 ): { entries: FestivalLineupEntry[]; error: string | null } {
   const entries: FestivalLineupEntry[] = [];
-  for (const name of lineup
+  for (const line of lineup
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)) {
-    const normalizedName = normalizeArtistName(name);
-    if (!normalizedName) {
-      return {
-        entries: [],
-        error: `Lineup artist "${name}" does not contain a usable name.`,
-      };
+    const names = b2bArtistNames(line) ?? [line];
+    if (names.length === 1 && /\bB2B\b/i.test(line)) {
+      return { entries: [], error: `Incomplete B2B lineup: "${line}".` };
     }
-    entries.push({
-      name,
-      normalizedName,
-      selectionKey: `artistChoice:${entries.length}`,
-    });
+    for (const name of names) {
+      const normalizedName = normalizeArtistName(name);
+      if (!normalizedName || (names.length > 1 && /\bB2B\b/i.test(name))) {
+        return {
+          entries: [],
+          error: `Lineup artist "${name}" does not contain a usable name.`,
+        };
+      }
+      entries.push({
+        name,
+        normalizedName,
+        selectionKey: `artistChoice:${entries.length}`,
+        b2bName: names.length > 1 ? line : null,
+      });
+    }
   }
   return { entries, error: null };
 }

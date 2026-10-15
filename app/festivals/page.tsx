@@ -55,6 +55,12 @@ async function loadFestivals(now: Date) {
     },
     orderBy: { date: "asc" },
     include: {
+      b2bSets: {
+        select: {
+          name: true,
+          members: { select: { artistId: true } },
+        },
+      },
       artists: {
         include: {
           artist: {
@@ -366,16 +372,24 @@ export default async function FestivalsPage({
       ) : (
         <ul className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {groups.map(({ key, primary: festival, dates, showIds }) => {
-            const matched = festival.artists.filter(
+            const b2bMembers = new Set(
+              festival.b2bSets.flatMap((set) => set.members.map((member) => member.artistId))
+            );
+            const b2bNames = new Set(festival.b2bSets.map((set) => set.name));
+            const artists = festival.artists.filter(({ artist }) =>
+              !b2bNames.has(artist.name) || b2bMembers.has(artist.id)
+            );
+            const matched = artists.filter(
               (showArtist) =>
+                b2bMembers.has(showArtist.artist.id) ||
                 pickTopListenSignal(showArtist.artist.listenSignals, now) !==
                 null
             ).length;
-            const withContact = festival.artists.filter(
+            const withContact = artists.filter(
               (showArtist) =>
                 pickEmailContact(showArtist.artist.contacts) !== null
             ).length;
-            const headliners = festival.artists
+            const headliners = artists
               .slice(0, 3)
               .map((showArtist) => artistDisplayName(showArtist.artist));
             const countryCategory = festivalCountryCategory(festival);
@@ -430,7 +444,7 @@ export default async function FestivalsPage({
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-1.5">
                       <Badge tone="default" size="xs">
-                        {festival.artists.length} artists
+                        {artists.length} artists
                       </Badge>
                       {matched > 0 && (
                         <Badge tone="success" size="xs">
@@ -446,8 +460,8 @@ export default async function FestivalsPage({
                     {headliners.length > 0 && (
                       <p className="mt-3 truncate text-xs text-zinc-500">
                         {headliners.join(", ")}
-                        {festival.artists.length > 3
-                          ? ` +${festival.artists.length - 3}`
+                        {artists.length > 3
+                          ? ` +${artists.length - 3}`
                           : ""}
                       </p>
                     )}
