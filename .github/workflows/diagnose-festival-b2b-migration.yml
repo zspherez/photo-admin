@@ -89,6 +89,31 @@ jobs:
                   AND a."name" ~* '[[:space:]]+b2b[[:space:]]+'
               `;
               console.log(JSON.stringify(count));
+              const members = await db.$queryRaw`
+                SELECT a."name" AS "pairing", trim(part.value) AS "member",
+                       (SELECT count(*)::int FROM "Artist" candidate
+                        WHERE candidate."normalizedName" =
+                          trim(regexp_replace(lower(replace(trim(part.value), '&', 'and')),
+                            '[^[:alnum:]]+', ' ', 'g'))
+                           OR lower(candidate."name") = lower(trim(part.value))
+                       ) AS "matches",
+                       (SELECT count(*)::int FROM "ArtistIdentityNameClaim" claim
+                        WHERE claim."normalizedName" =
+                          trim(regexp_replace(lower(replace(trim(part.value), '&', 'and')),
+                            '[^[:alnum:]]+', ' ', 'g'))
+                       ) AS "claims",
+                       sa."providerManaged", sa."manuallyAdded"
+                FROM "ShowArtist" sa
+                JOIN "Show" s ON s."id" = sa."showId"
+                JOIN "Artist" a ON a."id" = sa."artistId"
+                CROSS JOIN LATERAL unnest(
+                  regexp_split_to_array(a."name", '[[:space:]]+b2b[[:space:]]+', 'i')
+                ) AS part(value)
+                WHERE s."isFestival" AND sa."rejectedAt" IS NULL
+                  AND a."name" ~* '[[:space:]]+b2b[[:space:]]+'
+                ORDER BY a."name", part.value
+              `;
+              for (const member of members) console.log(JSON.stringify(member));
             } finally {
               await db.$disconnect();
             }
