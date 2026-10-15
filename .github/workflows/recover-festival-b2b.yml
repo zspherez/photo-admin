@@ -1,0 +1,320 @@
+name: Recover festival B2B release
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact current main SHA containing the corrected migration
+        required: true
+        type: string
+      confirmation:
+        description: Type RECOVER to confirm the paused production cutover
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: photo-admin-release-production
+  cancel-in-progress: false
+
+env:
+  STAGED_URL: https://rehders-photos-admin-nswdn1how-zsphere-projects.vercel.app
+  STAGED_SHA: 957e737cc70a2f7c2e102dda5c0b7fcfa5c7b28c
+  FAILED_CHECKSUM: 5b1e30c6e3953efd49d5fe1e0fb99d887e0a67db5423f73d9e24cddf683b0316
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main' && github.repository == 'zspherez/photo-admin'
+    runs-on: ubuntu-latest
+    outputs:
+      revision: ${{ steps.trust.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: false
+      - id: trust
+        env:
+          REQUESTED_REVISION: ${{ inputs.revision }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          main_sha="$(git rev-parse HEAD)"
+          if [[ "$CONFIRMATION" != RECOVER || ! "$REQUESTED_REVISION" =~ ^[0-9a-f]{40}$ \
+            || "$REQUESTED_REVISION" != "$main_sha" || "$WORKFLOW_SHA" != "$main_sha" ]]; then
+            echo "::error::Recovery requires the exact current main workflow and confirmation."
+            exit 1
+          fi
+          echo "revision=$main_sha" >> "$GITHUB_OUTPUT"
+
+  migration_test:
+    needs: validate
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: migration
+          POSTGRES_PASSWORD: migration
+          POSTGRES_DB: migration
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U migration"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PGPASSWORD: migration
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.revision }}
+          persist-credentials: false
+      - name: Exercise corrected SQL against duplicate legacy identities
+        run: |
+          set -euo pipefail
+          psql -h localhost -U migration -d migration -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE "Show" ("id" text PRIMARY KEY, "isFestival" boolean NOT NULL);
+          CREATE TABLE "Artist" (
+            "id" text PRIMARY KEY, "name" text NOT NULL,
+            "normalizedName" text NOT NULL, "edmtrainId" integer,
+            "updatedAt" timestamp NOT NULL
+          );
+          CREATE TABLE "ShowArtist" (
+            "showId" text NOT NULL REFERENCES "Show"("id"),
+            "artistId" text NOT NULL REFERENCES "Artist"("id"),
+            "headliner" boolean NOT NULL DEFAULT false,
+            "providerManaged" boolean NOT NULL DEFAULT false,
+            "manuallyAdded" boolean NOT NULL DEFAULT true,
+            "rejectedAt" timestamp,
+            PRIMARY KEY ("showId", "artistId")
+          );
+          INSERT INTO "Show" VALUES ('festival', true);
+          INSERT INTO "Artist" ("id", "name", "normalizedName", "edmtrainId", "updatedAt")
+          VALUES
+            ('pair-cid', 'ACRAZE B2B CID', 'acraze b2b cid', NULL, now()),
+            ('pair-josh', 'Prospa B2B Josh Baker', 'prospa b2b josh baker', NULL, now()),
+            ('pair-new', 'Boris Brejcha B2B Cirez D', 'boris brejcha b2b cirez d', NULL, now()),
+            ('acraze', 'ACRAZE', 'acraze', 101, now()),
+            ('cid', 'CID', 'cid', 102, now()),
+            ('cid-duplicate', 'CID', 'cid', NULL, now()),
+            ('prospa', 'Prospa', 'prospa', 103, now()),
+            ('josh', 'Josh Baker', 'josh baker', 104, now()),
+            ('josh-duplicate', 'Josh Baker', 'josh baker', NULL, now()),
+            ('boris', 'Boris Brejcha', 'boris brejcha', 105, now());
+          INSERT INTO "ShowArtist" ("showId", "artistId")
+          VALUES ('festival', 'pair-cid'), ('festival', 'pair-josh'), ('festival', 'pair-new');
+          SQL
+          psql -h localhost -U migration -d migration -v ON_ERROR_STOP=1 \
+            -f prisma/migrations/20261015160000_festival_b2b/migration.sql
+          psql -h localhost -U migration -d migration -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF (SELECT count(*) FROM "FestivalB2b") <> 3
+               OR (SELECT count(*) FROM "FestivalB2bMember") <> 6
+               OR NOT EXISTS (
+                 SELECT 1 FROM "FestivalB2bMember" m
+                 JOIN "FestivalB2b" b ON b."id" = m."b2bId"
+                 WHERE b."name" = 'ACRAZE B2B CID' AND m."artistId" = 'cid'
+               )
+               OR NOT EXISTS (
+                 SELECT 1 FROM "FestivalB2bMember" m
+                 JOIN "FestivalB2b" b ON b."id" = m."b2bId"
+                 WHERE b."name" = 'Prospa B2B Josh Baker' AND m."artistId" = 'josh'
+               )
+               OR EXISTS (
+                 SELECT 1 FROM "FestivalB2bMember"
+                 WHERE "artistId" IN ('cid-duplicate', 'josh-duplicate')
+               )
+               OR NOT EXISTS (
+                 SELECT 1 FROM "Artist" WHERE "name" = 'Cirez D'
+               )
+            THEN
+              RAISE EXCEPTION 'B2B backfill did not select the canonical artist identities';
+            END IF;
+          END $$;
+          SQL
+
+  recovery_preflight:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production-recovery
+    outputs:
+      fingerprint: ${{ steps.binding.outputs.fingerprint }}
+    env:
+      VERCEL_TOKEN: ${{ secrets.RECOVERY_VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.RECOVERY_VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.RECOVERY_VERCEL_PROJECT_ID }}
+    steps:
+      - id: binding
+        run: |
+          set -euo pipefail
+          if [[ ! "${VERCEL_ORG_ID:-}" =~ ^[A-Za-z0-9_-]+$ \
+            || ! "${VERCEL_PROJECT_ID:-}" =~ ^[A-Za-z0-9_-]+$ \
+            || -z "${VERCEL_TOKEN:-}" ]]; then
+            echo "::error::Dedicated production recovery credentials are unavailable."
+            exit 1
+          fi
+          status="$(curl --silent --show-error --fail --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${VERCEL_TOKEN}" \
+            "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?teamId=${VERCEL_ORG_ID}")"
+          if [[ "$status" != 200 ]]; then
+            echo "::error::Dedicated recovery project cannot be verified."
+            exit 1
+          fi
+          fingerprint="$(printf '%s\n%s\n' "$VERCEL_ORG_ID" "$VERCEL_PROJECT_ID" | sha256sum | cut -d ' ' -f 1)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+  migrate:
+    needs: [validate, migration_test, recovery_preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    outputs:
+      fingerprint: ${{ steps.binding.outputs.fingerprint }}
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DIRECT_URL: ${{ secrets.DIRECT_URL }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      EXPECTED_FINGERPRINT: ${{ needs.recovery_preflight.outputs.fingerprint }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: |
+          database_scheme="postgresql"
+          DATABASE_URL="${database_scheme}://localhost:5432/generate" \
+            DIRECT_URL="${database_scheme}://localhost:5432/generate" \
+            npm run db:generate
+      - name: Verify sealed target and failed transaction state
+        id: binding
+        run: |
+          set -euo pipefail
+          fingerprint="$(printf '%s\n%s\n' "$VERCEL_ORG_ID" "$VERCEL_PROJECT_ID" | sha256sum | cut -d ' ' -f 1)"
+          if [[ ! "$fingerprint" =~ ^[0-9a-f]{64}$ || "$fingerprint" != "$EXPECTED_FINGERPRINT" ]]; then
+            echo "::error::Production and recovery projects do not match."
+            exit 1
+          fi
+          bash scripts/verify-vercel-deployment.sh "$STAGED_URL" "$STAGED_SHA"
+          node <<'NODE'
+          const { PrismaClient } = require("@prisma/client");
+          const db = new PrismaClient({ datasourceUrl: process.env.DIRECT_URL });
+          (async () => {
+            try {
+              const rows = await db.$queryRaw`
+                SELECT "checksum" FROM "_prisma_migrations"
+                WHERE "migration_name" = '20261015160000_festival_b2b'
+                  AND "finished_at" IS NULL AND "rolled_back_at" IS NULL
+              `;
+              const tables = await db.$queryRaw`
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                  AND table_name IN ('FestivalB2b', 'FestivalB2bMember')
+              `;
+              if (rows.length !== 1 || rows[0].checksum !== process.env.FAILED_CHECKSUM || tables.length) {
+                throw new Error("Failed migration record or rolled-back schema differs from the diagnosed state");
+              }
+              console.log("Verified exact failed migration and transaction rollback.");
+            } finally {
+              await db.$disconnect();
+            }
+          })().catch((error) => {
+            console.error(error.message);
+            process.exitCode = 1;
+          });
+          NODE
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+      - name: Resolve only the diagnosed failed migration
+        run: >-
+          npm --silent run db:resolve-failed-migration --
+          20261015160000_festival_b2b
+          5b1e30c6e3953efd49d5fe1e0fb99d887e0a67db5423f73d9e24cddf683b0316
+      - name: Require only the corrected migration to be pending
+        run: |
+          set -euo pipefail
+          verification="$(npm --silent run db:verify-targets)"
+          if [[ "$(jq -er 'select(.event == "database_targets_verified") | .pendingMigrationCount' <<< "$verification")" != 1 ]]; then
+            echo "::error::Expected only the corrected B2B migration to be pending."
+            exit 1
+          fi
+      - name: Apply corrected production migration
+        run: npm --silent run db:migrate:deploy
+      - name: Backfill normalized artist names
+        run: npm --silent run db:backfill:normalized-artists
+      - name: Verify all migrations, application compatibility, and legacy B2Bs
+        run: |
+          set -euo pipefail
+          npm --silent run db:verify-targets -- --require-all-migrations
+          npm --silent run db:verify-release-compatibility
+          node <<'NODE'
+          const { PrismaClient } = require("@prisma/client");
+          const db = new PrismaClient({ datasourceUrl: process.env.DIRECT_URL });
+          (async () => {
+            try {
+              const legacy = await db.$queryRaw`
+                SELECT sa."showId", a."name", b."id" AS "pairingId",
+                       count(DISTINCT m."artistId")::int AS "members",
+                       count(DISTINCT linked."artistId")::int AS "linkedMembers"
+                FROM "ShowArtist" sa
+                JOIN "Show" s ON s."id" = sa."showId"
+                JOIN "Artist" a ON a."id" = sa."artistId"
+                LEFT JOIN "FestivalB2b" b ON b."showId" = sa."showId" AND b."name" = a."name"
+                LEFT JOIN "FestivalB2bMember" m ON m."b2bId" = b."id"
+                LEFT JOIN "ShowArtist" linked ON linked."showId" = b."showId"
+                  AND linked."artistId" = m."artistId" AND linked."rejectedAt" IS NULL
+                WHERE s."isFestival" AND sa."rejectedAt" IS NULL
+                  AND a."name" ~* '[[:space:]]+b2b[[:space:]]+'
+                GROUP BY sa."showId", a."name", b."id"
+              `;
+              if (legacy.length !== 11 ||
+                  legacy.some((row) => !row.pairingId || row.members < 2 ||
+                    row.linkedMembers !== row.members)) {
+                throw new Error("Legacy B2B rows were not all backfilled with active individual artists");
+              }
+              console.log(`Verified ${legacy.length} legacy B2B pairings and their active members.`);
+            } finally {
+              await db.$disconnect();
+            }
+          })().catch((error) => {
+            console.error(error.message);
+            process.exitCode = 1;
+          });
+          NODE
+
+  resume:
+    needs: [validate, recovery_preflight, migrate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production-recovery
+    env:
+      VERCEL_TOKEN: ${{ secrets.RECOVERY_VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.RECOVERY_VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.RECOVERY_VERCEL_PROJECT_ID }}
+      EXPECTED_PROJECT_FINGERPRINT: ${{ needs.migrate.outputs.fingerprint }}
+      RELEASE_PAUSE_REQUESTED: "true"
+      RELEASE_SCHEMA_STARTED: "true"
+      RELEASE_SCHEMA_READY: "true"
+      RELEASE_STAGED_VERIFIED: "true"
+      RELEASE_TARGET_PROMOTED: "false"
+      RELEASE_TARGET_URL: https://rehders-photos-admin-nswdn1how-zsphere-projects.vercel.app
+      RELEASE_SHA: 957e737cc70a2f7c2e102dda5c0b7fcfa5c7b28c
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.revision }}
+          persist-credentials: false
+      - run: npm install --global vercel@56.2.1
+      - run: bash scripts/recover-production-release.sh

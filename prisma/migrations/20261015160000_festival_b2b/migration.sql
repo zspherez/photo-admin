@@ -32,6 +32,7 @@ DECLARE
     member_normalized TEXT;
     member_id TEXT;
     member_count INTEGER;
+    edmtrain_match_count INTEGER;
     pairing_id TEXT;
 BEGIN
     FOR pairing IN
@@ -55,10 +56,13 @@ BEGIN
                 RAISE EXCEPTION 'Invalid B2B lineup: %', pairing."name";
             END IF;
             member_normalized := trim(regexp_replace(lower(replace(member_name, '&', 'and')), '[^[:alnum:]]+', ' ', 'g'));
-            SELECT count(*), min("id") INTO member_count, member_id
+            SELECT count(*),
+                   count(*) FILTER (WHERE "edmtrainId" IS NOT NULL),
+                   COALESCE(min("id") FILTER (WHERE "edmtrainId" IS NOT NULL), min("id"))
+            INTO member_count, edmtrain_match_count, member_id
             FROM "Artist"
             WHERE "normalizedName" = member_normalized OR lower("name") = lower(member_name);
-            IF member_count > 1 THEN
+            IF member_count > 1 AND edmtrain_match_count <> 1 THEN
                 RAISE EXCEPTION 'Ambiguous B2B artist: %', member_name;
             END IF;
             IF member_count = 0 THEN
