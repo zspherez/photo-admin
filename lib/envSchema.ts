@@ -267,9 +267,9 @@ export const ENV_SCHEMA: readonly EnvVarDefinition[] = [
     key: "PROFESSIONAL_CONTACT_RESEARCH_DISPATCH_TOKEN",
     group: "contact-agents",
     secret: true,
-    summary: "Dedicated fine-grained GitHub token used by the app to trigger professional contact research immediately.",
+    summary: "Fine-grained GitHub token used by the app to dispatch professional contact research and scheduled outreach workflows.",
     notes: [
-      "Required for immediate form-triggered research in deployed environments.",
+      "Required for immediate form-triggered research and the manual dispatch button on the emails page.",
       "Use a fine-grained repository token limited to Actions: write for this repository.",
       "The token stays server-side and is never passed to the research worker or browser.",
     ],

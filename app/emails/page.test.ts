@@ -26,3 +26,11 @@ test("bulk visibility action authenticates and only toggles dismissedAt", () => 
     /arbitraryEmail\.delete/,
   );
 });
+
+test("emails page requests a manual scheduled outreach workflow without claiming delivery", () => {
+  assert.match(page, /<form action=\{dispatchScheduledOutreachAction\}/);
+  assert.match(page, /Dispatch due outreach/);
+  assert.match(page, /Scheduled outreach workflow requested/);
+  assert.match(actions, /dispatchScheduledOutreachAction\(\)[\s\S]*requireServerActionAuth\("\/emails"\)/);
+  assert.match(actions, /triggerScheduledOutreachWorkflow\(\)/);
+});
