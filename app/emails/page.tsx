@@ -7,6 +7,7 @@ import { EmailCenterHeader } from "@/components/email-center-header";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import {
   cancelArbitraryEmailAction,
+  dispatchScheduledOutreachAction,
   updateArbitraryEmailVisibilityAction,
 } from "@/app/emails/actions";
 import { EmailBulkSelection } from "@/components/email-bulk-selection";
@@ -14,6 +15,7 @@ import { db } from "@/lib/db";
 import { readAttachmentManifest } from "@/lib/emailAttachments";
 import { getPagination } from "@/lib/match";
 import { formatScheduledTime } from "@/lib/schedule";
+import { workflowActionsUrl } from "@/lib/appConfig";
 import {
   firstSearchParam,
   positiveIntegerSearchParam,
@@ -65,6 +67,7 @@ export default async function EmailsPage({
     error?: SearchParamValue;
     dismissed?: SearchParamValue;
     restored?: SearchParamValue;
+    dispatch?: SearchParamValue;
   }>;
 }) {
   const sp = await searchParams;
@@ -76,6 +79,7 @@ export default async function EmailsPage({
   const error = firstSearchParam(sp.error);
   const dismissed = firstSearchParam(sp.dismissed);
   const restored = firstSearchParam(sp.restored);
+  const dispatchRequested = firstSearchParam(sp.dispatch) === "requested";
   const visibilityWhere = {
     dismissedAt: view === "dismissed" ? { not: null } : null,
   } as const;
@@ -137,7 +141,7 @@ export default async function EmailsPage({
     <main className="mx-auto max-w-5xl px-6 py-10">
       <EmailCenterHeader active="custom" />
 
-      {(sent || queued || cancelled || dismissed || restored || error) && (
+      {(sent || queued || cancelled || dismissed || restored || dispatchRequested || error) && (
         <div className={`mt-5 rounded-lg border px-4 py-3 text-sm ${
           error
             ? "border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
@@ -145,7 +149,17 @@ export default async function EmailsPage({
         }`}>
           {error
             ? `Email action failed: ${error}`
-            : queued
+            : dispatchRequested
+              ? (
+                <>
+                  Scheduled outreach workflow requested. GitHub Actions will
+                  process emails that are due, including queued custom emails.{" "}
+                  <a className="underline" href={workflowActionsUrl("send-scheduled.yml")}>
+                    View workflow
+                  </a>
+                </>
+              )
+              : queued
               ? queuedEmail?.scheduledFor
                 ? `Email queued for ${formatScheduledTime(
                     queuedEmail.scheduledFor,
@@ -188,6 +202,15 @@ export default async function EmailsPage({
           Dismissed {dismissedCount}
         </Link>
       </nav>
+
+      <form action={dispatchScheduledOutreachAction} className="mt-5 flex flex-wrap items-center gap-3">
+        <PendingSubmitButton pendingLabel="Requesting dispatch…" size="sm">
+          Dispatch due outreach
+        </PendingSubmitButton>
+        <span className="text-xs text-zinc-500">
+          Runs the GitHub workflow in manual mode; future scheduled emails stay queued.
+        </span>
+      </form>
 
       <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[

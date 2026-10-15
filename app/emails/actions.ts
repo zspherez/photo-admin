@@ -15,6 +15,7 @@ import {
   sendArbitraryEmail,
 } from "@/lib/sendArbitraryEmail";
 import { getNextNormalOutreachDispatch } from "@/lib/schedule";
+import { triggerScheduledOutreachWorkflow } from "@/lib/scheduledOutreachWorkflow";
 import { db } from "@/lib/db";
 import { readAndStoreEmailAttachments } from "@/lib/emailAttachments";
 
@@ -107,6 +108,15 @@ export async function cancelArbitraryEmailAction(formData: FormData) {
     );
   }
   redirect(`/emails?cancelled=${encodeURIComponent(id)}`);
+}
+
+export async function dispatchScheduledOutreachAction() {
+  await requireServerActionAuth("/emails");
+  const result = await triggerScheduledOutreachWorkflow();
+  if (!result.ok) {
+    redirect(`/emails?error=${encodeURIComponent(result.error)}`);
+  }
+  redirect("/emails?dispatch=requested");
 }
 
 function selectedEmailIds(formData: FormData): string[] {
