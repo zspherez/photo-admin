@@ -11,7 +11,7 @@ import { delimiter, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
-test("pins GPT-6.1 Sol for research and audit sessions", () => {
+test("uses supported flags for research, audit, and professional contact sessions", () => {
   const directory = mkdtempSync(join(tmpdir(), "contact-agent-model-"));
   try {
     const fakeCopilot = join(directory, "copilot");
@@ -28,6 +28,7 @@ console.log(JSON.stringify({ type: "result", exitCode: 0 }));
     for (const [agentName, agentTool] of [
       ["contact-research", "contact-research-agent-tool"],
       ["contact-audit", "contact-audit-agent-tool"],
+      ["professional-contact-research", "professional-contact-research-agent-tool"],
     ]) {
       const result = spawnSync(
         process.execPath,
@@ -59,6 +60,7 @@ console.log(JSON.stringify({ type: "result", exitCode: 0 }));
       ]);
       assert.equal(args.filter((arg) => arg === "--model").length, 1);
       assert.ok(args.includes(`--allow-tool=shell(${agentTool})`));
+      assert.ok(!args.includes("--no-remote"));
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
