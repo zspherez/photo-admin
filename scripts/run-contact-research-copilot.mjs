@@ -49,7 +49,6 @@ const child = spawn(
     "--secret-env-vars=GITHUB_TOKEN,ACTIONS_ID_TOKEN_REQUEST_URL,ACTIONS_ID_TOKEN_REQUEST_TOKEN,CONTACT_RESEARCH_AGENT_TOKEN,CONTACT_AUDIT_AGENT_TOKEN,PROFESSIONAL_CONTACT_RESEARCH_AGENT_TOKEN",
     "--no-ask-user",
     "--no-auto-update",
-    "--no-remote",
     "--output-format",
     "json",
     "--stream",
