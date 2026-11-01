@@ -10,9 +10,15 @@ import { TemplateEditor } from "@/components/template-editor";
 export function ComposeEmailForm({
   compositionId,
   scheduleLabel,
+  initialRecipients = "",
+  initialSubject = "",
+  initialHtml = "<p></p>",
 }: {
   compositionId: string;
   scheduleLabel: string;
+  initialRecipients?: string;
+  initialSubject?: string;
+  initialHtml?: string;
 }) {
   const [files, setFiles] = useState<File[]>([]);
   const [state, formAction] = useActionState(async (previous: { error: string | null }, data: FormData) => {
@@ -34,6 +40,7 @@ export function ComposeEmailForm({
         <textarea
           id="recipients"
           name="recipients"
+          defaultValue={initialRecipients}
           required
           rows={2}
           placeholder="person@example.com, another@example.com"
@@ -54,8 +61,8 @@ export function ComposeEmailForm({
       )}
 
       <TemplateEditor
-        initialSubject=""
-        initialHtml="<p></p>"
+        initialSubject={initialSubject}
+        initialHtml={initialHtml}
         variables={[]}
         previewNormalization="arbitrary-email"
       />
