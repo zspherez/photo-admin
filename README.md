@@ -19,8 +19,13 @@ or mutations; see [docs/mobile-pwa.md](docs/mobile-pwa.md).
 | **Emails** (`/emails`, `/outreach`) | Inspect outreach and delivery history. |
 | **Contacts** (`/contacts`) | Browse artist contacts. |
 | **Festivals** (`/festivals`) | Manage lineups and outreach. |
+| **New Year's runs** (`/new-years-runs`) | Find artists with shows in at least two US cities Dec 27–Jan 3; review the show list and compose a pitch with an editable, dedicated template. |
 | **All shows / Sync** (`/shows`) | Inspect synced shows and run a manual sync. |
 | **Settings** (`/settings`) | Configure identity, integrations, templates, agents, and queues. |
+
+The nationwide festival sync also retains regular US shows in the New Year's
+window. Those shows remain outside the NYC-only regular-show feed. New Year's
+pitches prefill the ordinary email composer; no email is sent automatically.
 
 ## Contact research and audit
 

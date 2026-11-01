@@ -46,6 +46,7 @@ import {
 import { appConfig } from "@/lib/appConfig";
 import { b2bArtistNames } from "@/lib/festivalLineup";
 import { normalizeArtistName } from "@/lib/normalize";
+import { isNewYearRunDate, newYearRunWindowsWithin } from "@/lib/newYearRuns";
 
 const EDMTRAIN_BASE = "https://edmtrain.com/api/events";
 const MARKET_LOCATION_IDS =
@@ -389,13 +390,17 @@ export async function runLeasedEdmtrainSnapshotSync<Snapshot, Result>(
   });
 }
 
-function scopedEvents(
+export function scopedEvents(
   scope: EdmtrainScope,
   events: readonly EdmtrainEvent[]
 ): EdmtrainEvent[] {
   return events.filter((event) =>
     scope === "festivals"
-      ? event.festivalInd && event.electronicGenreInd
+      ? event.electronicGenreInd &&
+        (event.festivalInd ||
+          (isNewYearRunDate(event.date) &&
+            edmtrainEventGeography(event).countryCode === "US" &&
+            !event.livestreamInd))
       : !event.festivalInd
   );
 }
@@ -790,10 +795,18 @@ async function reconcileEdmtrainSnapshots(
         }
 
         const scopeFestival = snapshot.scope === "festivals";
+        const newYearWindows = newYearRunWindowsWithin(snapshot.range);
         const missingWhere: Prisma.ShowWhereInput = {
           source: "edmtrain",
           isFestival: scopeFestival,
           date: { gte: snapshot.range.start, lte: snapshot.range.end },
+          ...(!scopeFestival && newYearWindows.length > 0
+            ? {
+                NOT: {
+                  OR: newYearWindows.map((date) => ({ date })),
+                },
+              }
+            : {}),
           ...(eventIds.length > 0
             ? { edmtrainId: { notIn: eventIds } }
             : { edmtrainId: { not: null } }),
@@ -805,6 +818,22 @@ async function reconcileEdmtrainSnapshots(
             sourceGeneration: generation,
           },
         });
+        if (scopeFestival) {
+          if (newYearWindows.length > 0) {
+            await tx.show.updateMany({
+              where: {
+                source: "edmtrain",
+                isFestival: false,
+                countryCode: "US",
+                OR: newYearWindows.map((date) => ({ date })),
+                ...(eventIds.length > 0
+                  ? { edmtrainId: { notIn: eventIds } }
+                  : { edmtrainId: { not: null } }),
+              },
+              data: { syncStatus: "missing", sourceGeneration: generation },
+            });
+          }
+        }
 
         const cancelledCount = rows.filter(
           (row) => row.status === "cancelled"

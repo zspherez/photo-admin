@@ -11,6 +11,7 @@ import {
   runLeasedEdmtrainSnapshotSync,
   runConcurrentEdmtrainSnapshotSyncs,
   runIndependentEdmtrainSyncs,
+  scopedEvents,
   syncEdmtrainFestivals,
   syncEdmtrainShows,
   type EdmtrainEvent,
@@ -103,6 +104,22 @@ test("EDMTrain geography persists provider countries without assuming US", () =>
     countryCode: null,
     countryName: "Atlantis",
   });
+});
+
+test("nationwide festival snapshot retains US New Year's regular shows without expanding NYC scope", () => {
+  const regular = { ...eventWithCountry("United States"), festivalInd: false, date: "2026-12-31" };
+  const festival = { ...regular, id: 2, festivalInd: true };
+  const outsideWindow = { ...regular, id: 3, date: "2026-12-26" };
+  const canada = { ...regular, id: 4, venue: { ...regular.venue, country: "Canada" } };
+  const livestream = { ...regular, id: 5, livestreamInd: true };
+  assert.deepEqual(
+    scopedEvents("festivals", [regular, festival, outsideWindow, canada, livestream]).map((event) => event.id),
+    [1, 2]
+  );
+  assert.deepEqual(
+    scopedEvents("nyc", [regular, festival]).map((event) => event.id),
+    [1]
+  );
 });
 
 test("festival reconciliation succeeds when the NYC snapshot fails", async () => {
