@@ -1350,7 +1350,7 @@ async function reconcileSpotifySnapshots(
   );
 }
 
-async function fetchAllSpotifySnapshots(
+export async function fetchAllSpotifySnapshots(
   token: string,
   now: Date,
   deadline: OperationDeadline
@@ -1361,7 +1361,7 @@ async function fetchAllSpotifySnapshots(
     "short_term",
   ];
   const topResults = await mapWithConcurrency(ranges, 2, (range) =>
-    fetchTopArtistsSnapshot(token, range, deadline)
+    fetchTopArtistsSnapshot(token, range, deadline, 100)
   );
   const top = Object.fromEntries(
     ranges.map((range, index) => [range, topResults[index]])
