@@ -372,6 +372,40 @@ jobs:
 
           NODE
 
+      - name: Verify deployment token can read Vercel project settings
+        shell: bash
+        timeout-minutes: 3
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          printf -v authorization_header '%s: %s %s' \
+            "Authorization" "Bearer" "${VERCEL_TOKEN}"
+          check_access() {
+            local label="$1" endpoint="$2" http_status
+            if http_status="$(
+              curl --silent --show-error --output /dev/null \
+                --connect-timeout 15 --max-time 60 \
+                --header "${authorization_header}" \
+                --write-out '%{http_code}' \
+                "${endpoint}"
+            )"; then
+              printf '%s\n' "${http_status}"
+            else
+              echo "::error::${label}: Vercel API request failed"
+              exit 1
+            fi
+            if [[ ! "${http_status}" =~ ^2[0-9]{2}$ ]]; then
+              echo "::error::${label}: deployment token cannot read this Vercel resource (HTTP ${http_status})"
+              exit 1
+            fi
+          }
+          check_access "User" "https://api.vercel.com/v2/user"
+          check_access "Team" "https://api.vercel.com/v2/teams/${VERCEL_ORG_ID}"
+          check_access "Project" "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?teamId=${VERCEL_ORG_ID}"
+
       - name: Pull exact production project settings
         shell: bash
         env:
