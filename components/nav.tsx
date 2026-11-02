@@ -31,6 +31,15 @@ const ITEMS: { href: string; label: string; match: (p: string) => boolean }[] = 
   { href: "/settings", label: "Settings", match: (p) => p === "/settings" || p.startsWith("/settings/") },
 ];
 
+const DESKTOP_MORE_HREFS = new Set([
+  "/new-years-runs",
+  "/contact-audit",
+  "/shows",
+  "/settings",
+]);
+const DESKTOP_ITEMS = ITEMS.filter((item) => !DESKTOP_MORE_HREFS.has(item.href));
+const DESKTOP_MORE_ITEMS = ITEMS.filter((item) => DESKTOP_MORE_HREFS.has(item.href));
+
 const MOBILE_ITEMS = [
   { href: "/dashboard", label: "Shows", icon: "shows" },
   { href: "/research", label: "Research", icon: "research" },
@@ -76,14 +85,39 @@ function NavIcon({
 export function Nav() {
   const pathname = usePathname() ?? "/";
   const mobileMenuRef = useRef<HTMLDetailsElement>(null);
+  const desktopMenuRef = useRef<HTMLDetailsElement>(null);
 
   const closeMobileMenu = () => {
     if (mobileMenuRef.current) mobileMenuRef.current.open = false;
   };
+  const closeDesktopMenu = () => {
+    if (desktopMenuRef.current) desktopMenuRef.current.open = false;
+  };
 
   useEffect(() => {
     closeMobileMenu();
+    closeDesktopMenu();
   }, [pathname]);
+
+  useEffect(() => {
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (desktopMenuRef.current && !desktopMenuRef.current.contains(event.target as Node)) {
+        closeDesktopMenu();
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && desktopMenuRef.current?.open) {
+        closeDesktopMenu();
+        desktopMenuRef.current.querySelector("summary")?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
 
   if (pathname === "/login" || pathname === "/test") return null;
   const activeItem = ITEMS.find((item) => item.match(pathname));
@@ -110,17 +144,17 @@ export function Nav() {
         <div className="mx-auto flex h-12 max-w-6xl items-center gap-3 px-6">
           <Link
             href="/"
-            className="flex min-w-0 items-center gap-2 text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+            className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.svg" alt="" className="h-6 w-auto dark:brightness-200" />
-            <span className="truncate">{appConfig.appName}</span>
+            <span>{appConfig.appName}</span>
           </Link>
           <nav
             aria-label="Primary navigation"
             className="flex min-w-0 flex-1 items-center justify-end gap-1"
           >
-            {ITEMS.map((item) => {
+            {DESKTOP_ITEMS.map((item) => {
               const active = item.match(pathname);
               return (
                 <Link
@@ -138,15 +172,51 @@ export function Nav() {
                 </Link>
               );
             })}
+            <details ref={desktopMenuRef} className="relative shrink-0">
+              <summary
+                className={cn(
+                  "flex cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded-md px-2.5 py-1 text-sm transition [&::-webkit-details-marker]:hidden",
+                  DESKTOP_MORE_ITEMS.some((item) => item.match(pathname))
+                    ? "bg-zinc-100 font-medium text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100"
+                    : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                )}
+              >
+                More
+                <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3 w-3 fill-none stroke-current" strokeWidth="1.5">
+                  <path d="m4 6 4 4 4-4" />
+                </svg>
+              </summary>
+              <div className="absolute right-0 top-[calc(100%+0.5rem)] w-52 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
+                {DESKTOP_MORE_ITEMS.map((item) => {
+                  const active = item.match(pathname);
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={closeDesktopMenu}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "block rounded-md px-3 py-2 text-sm",
+                        active
+                          ? "bg-zinc-100 font-medium text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100"
+                          : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                      )}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+                <form action="/api/auth/logout" method="post" className="mt-1 border-t border-zinc-200 pt-1 dark:border-zinc-800">
+                  <button
+                    type="submit"
+                    className="w-full rounded-md px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/40"
+                  >
+                    Log out
+                  </button>
+                </form>
+              </div>
+            </details>
           </nav>
-          <form action="/api/auth/logout" method="post" className="shrink-0">
-            <button
-              type="submit"
-              className="text-xs text-zinc-500 hover:text-zinc-900 dark:text-zinc-500 dark:hover:text-zinc-200"
-            >
-              Log out
-            </button>
-          </form>
         </div>
       </header>
 
