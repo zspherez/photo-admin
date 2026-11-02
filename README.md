@@ -19,13 +19,27 @@ or mutations; see [docs/mobile-pwa.md](docs/mobile-pwa.md).
 | **Emails** (`/emails`, `/outreach`) | Inspect outreach and delivery history. |
 | **Contacts** (`/contacts`) | Browse artist contacts. |
 | **Festivals** (`/festivals`) | Manage lineups and outreach. |
-| **New Year's runs** (`/new-years-runs`) | Find artists with shows in at least two US cities Dec 27–Jan 3; review the show list and compose a pitch with an editable, dedicated template. |
+| **New Year's runs** (`/new-years-runs`) | Find confirmed multi-city US runs Dec 27–Jan 3, or manually request a separate web search of active Spotify/Stats.fm top-100 artists. |
 | **All shows / Sync** (`/shows`) | Inspect synced shows and run a manual sync. |
 | **Settings** (`/settings`) | Configure identity, integrations, templates, agents, and queues. |
 
 The nationwide festival sync also retains regular US shows in the New Year's
 window. Those shows remain outside the NYC-only regular-show feed. New Year's
 pitches prefill the ordinary email composer; no email is sent automatically.
+The manual web search dispatches `.github/workflows/new-year-runs-search.yml`
+using the existing `PROFESSIONAL_CONTACT_RESEARCH_DISPATCH_TOKEN` and
+`APP_BASE_URL` configuration. Four OIDC-authenticated workers search public
+event pages in bounded batches. Each service contributes at most 100 unique
+artists, selected by best active rank across its three ranges; overlapping
+artists are searched once (at most 200 jobs). Only evidence with an artist,
+season date, US state and at least two cities across new evidence and active,
+non-dismissed confirmed US shows appears as a suggestion. Existing shows are
+not duplicated. The Spotify sync fetches both 50-item pages per top range to
+cover ranks 1–100. Suggestions retain source links and can be marked reviewed
+or dismissed; they never become shows or enter the pitch composer
+automatically. A failed dispatch can be retried
+from the page; a running batch can be restarted after four hours. The workflow
+must be present on the repository's main branch before dispatch is available.
 
 ## Contact research and audit
 

@@ -61,6 +61,7 @@ model Artist {
   contactAuditJobs   ContactAuditJob[]
   contactAuditDecisions ContactAuditArtistDecision[]
   trajectoryRuns     TrajectoryRunArtist[]
+  newYearSearchJobs  NewYearSearchJob[]
   externalIdentityAliases ArtistExternalIdentityAlias[]
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
@@ -886,6 +887,51 @@ model Show {
   @@index([source, syncStatus, date])
   @@index([dismissedAt])
   @@index([interestedAt])
+}
+
+model NewYearSearchBatch {
+  id        String             @id @default(cuid())
+  year      Int
+  status    String             @default("queued")
+  jobs      NewYearSearchJob[]
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  @@index([createdAt])
+}
+
+model NewYearSearchJob {
+  id          String                    @id @default(cuid())
+  batchId     String
+  batch       NewYearSearchBatch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  artistId    String
+  artist      Artist                    @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  status      String                    @default("pending")
+  claimedAt   DateTime?
+  claimToken  String?                   @unique
+  attemptCount Int                      @default(0)
+  error       String?
+  suggestions NewYearSearchSuggestion[]
+
+  @@unique([batchId, artistId])
+  @@index([batchId, status])
+}
+
+model NewYearSearchSuggestion {
+  id        String           @id @default(cuid())
+  jobId     String
+  job       NewYearSearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  date      DateTime
+  city      String
+  state     String
+  sourceUrl String
+  evidence  String
+  status    String           @default("pending")
+  createdAt DateTime         @default(now())
+  reviewedAt DateTime?
+
+  @@unique([jobId, date, city, state])
+  @@index([status, createdAt])
 }
 
 model DashboardShowSnapshot {

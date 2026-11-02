@@ -8,6 +8,7 @@ import {
   buildSpotifyPlaylistReconciliationPlan,
   classifySpotifyPlaylistItemsError,
   finalizeSpotifySyncResult,
+  fetchAllSpotifySnapshots,
   getCurrentSpotifyUserId,
   hydrateSpotifyArtistObservations,
   isUsableSpotifyArtist,
@@ -267,6 +268,53 @@ test("Spotify pagination shares one absolute fake-clock deadline", async () => {
       OperationDeadlineExceededError
     );
     assert.equal(fetches, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("synced Spotify top ranges fetch up to rank 100 using 50-item offset pages", async () => {
+  const originalFetch = globalThis.fetch;
+  const topRequests: string[] = [];
+  globalThis.fetch = (async (input) => {
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input : input.url
+    );
+    if (url.pathname === "/v1/me/top/artists") {
+      const range = url.searchParams.get("time_range");
+      const offset = Number(url.searchParams.get("offset"));
+      assert.equal(url.searchParams.get("limit"), "50");
+      topRequests.push(`${range}:${offset}`);
+      const count = range === "short_term" ? 27 : 50;
+      return Response.json({
+        items: Array.from({ length: count }, (_, i) => ({
+          id: `${range}-${offset + i + 1}`,
+          name: `${range} Artist ${offset + i + 1}`,
+        })),
+        next: count === 50 && offset === 0
+          ? `https://api.spotify.com/v1/me/top/artists?time_range=${range}&limit=50&offset=50`
+          : null,
+      });
+    }
+    if (url.pathname === "/v1/me/player/recently-played") return Response.json({ items: [] });
+    if (url.pathname === "/v1/me/following") return Response.json({ artists: { items: [], next: null } });
+    if (url.pathname === "/v1/me/playlists") return Response.json({ items: [], next: null });
+    throw new Error(`Unexpected Spotify request: ${url.pathname}`);
+  }) as typeof fetch;
+
+  try {
+    const snapshots = await fetchAllSpotifySnapshots(
+      "token", new Date("2026-11-01T00:00:00Z"),
+      createOperationDeadline(30_000)
+    );
+    assert.equal(snapshots.top.long_term.length, 100);
+    assert.equal(snapshots.top.long_term[50].id, "long_term-51");
+    assert.equal(snapshots.top.long_term[99].id, "long_term-100");
+    assert.equal(snapshots.top.medium_term.length, 100);
+    assert.equal(snapshots.top.short_term.length, 27);
+    assert.deepEqual(topRequests.sort(), [
+      "long_term:0", "long_term:50", "medium_term:0", "medium_term:50", "short_term:0",
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
