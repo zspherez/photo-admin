@@ -6,6 +6,7 @@ import { formatShowDate } from "@/lib/formatDate";
 import { loadNewYearRuns, newYearRunWindow } from "@/lib/newYearRuns";
 import { getSessionAccess, SESSION_COOKIE } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { validatedTrimmedSearchParam, type SearchParamValue } from "@/lib/searchParams";
 import {
   dismissNewYearSuggestionAction,
   reviewNewYearSuggestionAction,
@@ -18,7 +19,7 @@ export const metadata: Metadata = { title: "New Year's runs" };
 export default async function NewYearRunsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: SearchParamValue }>;
 }) {
   const now = new Date();
   const { year } = newYearRunWindow(now);
@@ -37,7 +38,7 @@ export default async function NewYearRunsPage({
     }),
   ]);
   const access = await getSessionAccess(cookieStore.get(SESSION_COOKIE)?.value);
-  const { error } = await searchParams;
+  const error = validatedTrimmedSearchParam((await searchParams).error, { maxLength: 180 });
   const suggestionsByArtist = Map.groupBy(suggestions, (suggestion) => suggestion.job.artistId);
 
   return (
