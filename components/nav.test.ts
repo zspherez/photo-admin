@@ -38,12 +38,26 @@ test("mobile navigation exposes core workflows and an accessible overflow menu",
   assert.match(source, /All sections/);
 });
 
-test("mobile More menu closes on selection and persistent pathname changes", () => {
+test("desktop navigation groups secondary routes under More", () => {
+  const secondary = source.match(/const DESKTOP_MORE_HREFS = new Set\(\[([\s\S]*?)\]\);/)?.[1];
+  assert.ok(secondary);
+  for (const href of ["/new-years-runs", "/contact-audit", "/shows", "/settings"]) {
+    assert.ok(secondary.includes(`"${href}"`));
+  }
+  assert.match(source, /const DESKTOP_ITEMS = ITEMS\.filter/);
+  assert.match(source, /const DESKTOP_MORE_ITEMS = ITEMS\.filter/);
+  assert.match(source, /ref=\{desktopMenuRef\}/);
+  assert.match(source, /DESKTOP_MORE_ITEMS\.map/);
+  assert.match(source, /onClick=\{closeDesktopMenu\}/);
+  assert.match(source, /DESKTOP_MORE_ITEMS\.some\(\(item\) => item\.match\(pathname\)\)/);
+});
+
+test("More menus close on selection and persistent pathname changes", () => {
   assert.match(source, /useRef<HTMLDetailsElement>/);
   assert.match(source, /ref=\{mobileMenuRef\}/);
   assert.match(source, /onClick=\{closeMobileMenu\}/);
   assert.match(
     source,
-    /useEffect\(\(\) => \{\s*closeMobileMenu\(\);\s*\}, \[pathname\]\)/,
+    /useEffect\(\(\) => \{\s*closeMobileMenu\(\);\s*closeDesktopMenu\(\);\s*\}, \[pathname\]\)/,
   );
 });
