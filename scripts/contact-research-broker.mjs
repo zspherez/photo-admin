@@ -4,6 +4,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import {
   fetchReadablePage,
@@ -203,6 +204,34 @@ async function authorizationToken() {
 }
 
 async function photoAdminRequest(path, body) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await sendPhotoAdminRequest(path, body);
+    } catch (error) {
+      // Only this response guarantees the claim transaction failed, not that
+      // a committed claim's response was lost in transit.
+      if (
+        path !== "/api/contact-research/claim" ||
+        !(error instanceof PhotoAdminRequestError) ||
+        error.status !== 500 ||
+        error.message !==
+          "photo-admin returned 500: unable to claim contact research jobs" ||
+        attempt >= 4
+      ) {
+        throw error;
+      }
+      const delayMs = 250 * 2 ** attempt + Math.floor(Math.random() * 250);
+      console.error(JSON.stringify({
+        event: "contact_research_claim_retry",
+        attempt: attempt + 1,
+        delayMs,
+      }));
+      await delay(delayMs);
+    }
+  }
+}
+
+async function sendPhotoAdminRequest(path, body) {
   const token = await authorizationToken();
   const response = await fetch(`${baseUrl}${path}`, {
     method: "POST",

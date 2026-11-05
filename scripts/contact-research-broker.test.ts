@@ -415,6 +415,90 @@ test("agent broker keeps app authentication behind narrow localhost tools", asyn
   });
 });
 
+test("claim retries are bounded and limited to explicit rolled-back claims", async (t) => {
+  for (const scenario of [
+    { name: "transient claim failure", status: 500, error: "unable to claim contact research jobs", failures: 2, calls: 3, expectedStatus: 200 },
+    { name: "persistent claim failure", status: 500, error: "unable to claim contact research jobs", failures: 10, calls: 5, expectedStatus: 502 },
+    { name: "unauthorized claim", status: 401, error: "unauthorized", failures: 1, calls: 1, expectedStatus: 502 },
+    { name: "unclassified server failure", status: 500, error: "unexpected failure", failures: 1, calls: 1, expectedStatus: 502 },
+    { name: "ambiguous gateway failure", status: 502, error: "unable to claim contact research jobs", failures: 1, calls: 1, expectedStatus: 502 },
+    { name: "submission is never retried", status: 500, error: "unable to claim contact research jobs", failures: 1, calls: 1, expectedStatus: 502, submit: true },
+  ]) {
+    await t.test(scenario.name, async (t) => {
+      const submit = "submit" in scenario && scenario.submit;
+      let calls = 0;
+      const api = createServer((request, response) => {
+        request.resume();
+        if (submit && request.url === "/api/contact-research/claim") {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({
+            jobs: [{
+              id: "job-1",
+              claimToken: "claim-1",
+              artist: { name: "Example Artist" },
+            }],
+          }));
+          return;
+        }
+        calls += 1;
+        const failed = calls <= scenario.failures;
+        response.writeHead(failed ? scenario.status : 200, {
+          "content-type": "application/json",
+        });
+        response.end(JSON.stringify(
+          failed ? { error: scenario.error } : { jobs: [] },
+        ));
+      });
+      api.listen(0, "127.0.0.1");
+      await once(api, "listening");
+      t.after(() => api.close());
+      const address = api.address();
+      assert.ok(address && typeof address === "object");
+
+      const directory = mkdtempSync(join(process.cwd(), ".br-"));
+      const socketPath = join(directory, "broker.sock");
+      t.after(() => rmSync(directory, { recursive: true, force: true }));
+      const broker = spawn(
+        process.execPath,
+        [new URL("./contact-research-broker.mjs", import.meta.url).pathname],
+        {
+          env: {
+            ...process.env,
+            APP_BASE_URL: `http://127.0.0.1:${address.port}`,
+            CONTACT_RESEARCH_AGENT_TOKEN: "app-secret",
+            ACTIONS_ID_TOKEN_REQUEST_URL: "",
+            ACTIONS_ID_TOKEN_REQUEST_TOKEN: "",
+            CONTACT_RESEARCH_BROKER_SOCKET: socketPath,
+            CONTACT_RESEARCH_BROKER_METRICS_FILE: join(directory, "metrics.json"),
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      t.after(() => broker.kill("SIGTERM"));
+      await waitForSocket(socketPath);
+
+      if (submit) {
+        const claimed = await brokerRequest(socketPath, "/claim", { limit: 1 });
+        assert.equal(claimed.status, 200);
+      }
+      const result = await brokerRequest(
+        socketPath,
+        submit ? "/submit-exhausted" : "/claim",
+        submit
+          ? { jobId: "job-1", claimToken: "claim-1", notes: "Checked the artist website and linked social profiles; no supported email found." }
+          : { limit: 1 },
+      );
+      assert.equal(result.status, scenario.expectedStatus);
+      assert.equal(calls, scenario.calls);
+      if (result.status === 200) {
+        assert.deepEqual(result.value, { jobs: [] });
+      } else {
+        assert.match((result.value as { error: string }).error, /photo-admin returned/);
+      }
+    });
+  }
+});
+
 test("agent skip submissions are schema and claim-token protected", () => {
   const source = readFileSync(
     new URL("./contact-research-broker.mjs", import.meta.url),
