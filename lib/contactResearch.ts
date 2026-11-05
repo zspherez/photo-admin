@@ -2069,7 +2069,7 @@ export async function claimContactResearchJobs(
   limit: number,
   now: Date = new Date(),
   runTransaction: ContactResearchTransactionRunner = (work) =>
-    withSerializableRetry(work)
+    withSerializableRetry(work, { maxAttempts: 8 })
 ) {
   const claimLimit = parseContactResearchClaimLimit(limit);
   const claimExpiresAt = new Date(now.getTime() + CONTACT_RESEARCH_CLAIM_TTL_MS);
@@ -2566,9 +2566,10 @@ export async function submitContactResearchResult(
 
 async function withSerializableRetry<T>(
   work: (tx: Prisma.TransactionClient) => Promise<T>,
-  options: { timeout?: number } = {}
+  options: { timeout?: number; maxAttempts?: number } = {}
 ): Promise<T> {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  const maxAttempts = options.maxAttempts ?? 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       return await db.$transaction(work, {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -2583,7 +2584,16 @@ async function withSerializableRetry<T>(
             error.meta !== null &&
             typeof error.meta === "object" &&
             Reflect.get(error.meta, "code") === "40001"));
-      if (retryable && attempt < 3) continue;
+      if (retryable && attempt < maxAttempts - 1) {
+        await new Promise((resolve) =>
+          setTimeout(
+            resolve,
+            Math.min(50 * 2 ** attempt, 1_000) +
+              Math.floor(Math.random() * 100),
+          ),
+        );
+        continue;
+      }
       throw error;
     }
   }

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import { db } from "./db";
 import { festivalLeadTimeWhere } from "./festivalEligibility";
 import { directOutreachInstructionsStorage } from "./agentRules";
 import {
@@ -1032,6 +1033,85 @@ test("claim observes a concurrent audit quarantine atomically", async () => {
   assert.equal(claims.length, 1);
   assert.equal(state.candidateStatus, "superseded");
   assert.equal(state.jobStatus, "claimed");
+});
+
+test("default claims back off and recover after concurrent transaction conflicts", async (t) => {
+  const target: {
+    $transaction<T>(
+      work: (tx: Prisma.TransactionClient) => Promise<T>,
+      options?: { isolationLevel?: Prisma.TransactionIsolationLevel },
+    ): Promise<T>;
+  } = db;
+  let attempts = 0;
+  const isolationLevels: Array<Prisma.TransactionIsolationLevel | undefined> = [];
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const descriptor = Object.getOwnPropertyDescriptor(db, "$transaction");
+  t.after(() => {
+    if (descriptor) Object.defineProperty(db, "$transaction", descriptor);
+    else Reflect.deleteProperty(db, "$transaction");
+  });
+  target.$transaction = async (work, options) => {
+    attempts += 1;
+    isolationLevels.push(options?.isolationLevel);
+    if (attempts <= 4) {
+      throw new Prisma.PrismaClientKnownRequestError("write conflict", {
+        code: "P2034",
+        clientVersion: "test",
+      });
+    }
+    return runWithTransaction({
+      agentRuleSet: { findUnique: async () => null },
+      $queryRaw: async () => [],
+    })(work);
+  };
+
+  const result = claimContactResearchJobs(1);
+  const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+  await flush();
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    assert.equal(attempts, attempt, "conflicts must not spin through immediate retries");
+    t.mock.timers.tick(2_000);
+    await flush();
+  }
+  assert.deepEqual(await result, []);
+  assert.equal(attempts, 5);
+  assert.ok(isolationLevels.every(
+    (level) => level === Prisma.TransactionIsolationLevel.Serializable,
+  ));
+});
+
+test("default claim retries are bounded and do not retry permanent database errors", async (t) => {
+  for (const code of ["P2034", "P2022"]) {
+    await t.test(code, async (t) => {
+      const target: {
+        $transaction<T>(
+          work: (tx: Prisma.TransactionClient) => Promise<T>,
+        ): Promise<T>;
+      } = db;
+      const error = new Prisma.PrismaClientKnownRequestError("database failure", {
+        code,
+        clientVersion: "test",
+      });
+      let attempts = 0;
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      const descriptor = Object.getOwnPropertyDescriptor(db, "$transaction");
+      t.after(() => {
+        if (descriptor) Object.defineProperty(db, "$transaction", descriptor);
+        else Reflect.deleteProperty(db, "$transaction");
+      });
+      target.$transaction = async () => {
+        attempts += 1;
+        throw error;
+      };
+      const rejected = assert.rejects(claimContactResearchJobs(1), (value) => value === error);
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        t.mock.timers.tick(2_000);
+      }
+      await rejected;
+      assert.equal(attempts, code === "P2034" ? 8 : 1);
+    });
+  }
 });
 
 test("active approved contacts suppress queue refresh", async () => {
