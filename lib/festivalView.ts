@@ -10,9 +10,14 @@ export interface FestivalListView {
 }
 
 export const DEFAULT_FESTIVAL_LIST_VIEW: FestivalListView = {
-  includeInternational: false,
+  includeInternational: true,
   dismissed: false,
 };
+
+// UN M49 Americas and Europe (ISO alpha-2).
+const FESTIVAL_REGION_CODES = new Set(
+  "AI AG AW BS BB BQ VG KY CU CW DM DO GD GP HT JM MQ MS PR BL KN LC MF VC SX TT TC VI BZ CR SV GT HN MX NI PA AR BO BV BR CL CO EC FK GF GY PY PE GS SR UY VE BM CA GL PM US BY BG CZ HU PL MD RO RU SK UA AX DK EE FO FI GG IS IE IM JE LV LT NO SJ SE GB AL AD BA HR GI GR VA IT MT ME MK PT SM RS SI ES AT BE FR DE LI LU MC NL CH".split(" ")
+);
 
 function enabledSearchParam(value: unknown): boolean {
   const normalized = firstSearchParam(value)?.toLowerCase();
@@ -24,7 +29,10 @@ export function parseFestivalListView(input: {
   dismissed?: unknown;
 }): FestivalListView {
   return {
-    includeInternational: enabledSearchParam(input.includeInternational),
+    includeInternational: input.includeInternational === undefined ||
+      input.includeInternational === null
+      ? true
+      : enabledSearchParam(input.includeInternational),
     dismissed: enabledSearchParam(input.dismissed),
   };
 }
@@ -33,7 +41,7 @@ export function festivalListPath(
   view: FestivalListView = DEFAULT_FESTIVAL_LIST_VIEW
 ): string {
   const params = new URLSearchParams();
-  if (view.includeInternational) params.set("includeInternational", "1");
+  params.set("includeInternational", view.includeInternational ? "1" : "0");
   if (view.dismissed) params.set("dismissed", "1");
   const query = params.toString();
   return query ? `/festivals?${query}` : "/festivals";
@@ -57,10 +65,14 @@ export function isFestivalVisible(
   view: FestivalListView
 ): boolean {
   if ((festival.dismissedAt !== null) !== view.dismissed) return false;
-  return (
-    festivalCountryCategory(festival) === "us" ||
-    view.includeInternational
-  );
+  const code = normalizeCountryCode(festival.countryCode);
+  return code === "US" ||
+    (view.includeInternational && !!code && FESTIVAL_REGION_CODES.has(code));
+}
+
+export function isFestivalInTargetRegion(festival: { countryCode: string | null }): boolean {
+  const code = normalizeCountryCode(festival.countryCode);
+  return !!code && FESTIVAL_REGION_CODES.has(code);
 }
 
 function normalizedGroupPart(value: string | null | undefined): string {

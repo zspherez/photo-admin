@@ -15,6 +15,7 @@ import { countryLabel } from "@/lib/country";
 import {
   festivalCountryCategory,
   festivalGroupKey,
+  isFestivalInTargetRegion,
   festivalListPath,
   isFestivalVisible,
   parseFestivalListView,
@@ -28,6 +29,7 @@ import {
   type SearchParamValue,
 } from "@/lib/searchParams";
 import { activeFestivalWhere } from "@/lib/festivalEligibility";
+import { festivalRunDaysAhead, festivalRunWindow } from "@/lib/festivalRuns";
 import {
   dismissShowAction,
   restoreShowAction,
@@ -43,15 +45,17 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 export const metadata: Metadata = {
   title: "Festivals",
-  description: "Upcoming festival outreach, filtered to the United States by default.",
+  description: "Upcoming festivals in the Americas and Europe over the next 12 months.",
 };
 
 type FestivalRow = Awaited<ReturnType<typeof loadFestivals>>[number];
 
 async function loadFestivals(now: Date) {
+  const { start, end } = festivalRunWindow(now);
   return db.show.findMany({
     where: {
       ...activeFestivalWhere(now),
+      date: { gte: start, lt: end },
     },
     orderBy: { date: "asc" },
     include: {
@@ -81,7 +85,6 @@ async function loadFestivals(now: Date) {
         },
       },
     },
-    take: 800,
   });
 }
 
@@ -160,7 +163,7 @@ async function refreshFestivals(formData: FormData) {
     const deadline = createOperationDeadline(maxDuration * 1_000, {
       safetyMarginMs: ROUTE_DEADLINE_SAFETY_MARGIN_MS,
     });
-    const result = await syncEdmtrainFestivals(365, deadline);
+    const result = await syncEdmtrainFestivals(festivalRunDaysAhead(), deadline);
     if (!result.ok) {
       const busy = "status" in result && result.status === "busy";
       const detail = busy
@@ -231,7 +234,8 @@ export default async function FestivalsPage({
   );
   const internationalCount = stateGroups.filter(
     (group) =>
-      festivalCountryCategory(group.primary) === "international"
+      festivalCountryCategory(group.primary) === "international" &&
+      isFestivalInTargetRegion(group.primary)
   ).length;
   const unknownCount = stateGroups.filter(
     (group) => festivalCountryCategory(group.primary) === "unknown"
@@ -249,7 +253,9 @@ export default async function FestivalsPage({
     ...view,
     dismissed: true,
   }).length;
-  const hiddenCountryCount = internationalCount + unknownCount;
+  const hiddenCountryCount = stateGroups.filter(
+    (group) => !isFestivalVisible(group.primary, view),
+  ).length;
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -257,11 +263,10 @@ export default async function FestivalsPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Festivals</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            {groups.length} {view.dismissed ? "dismissed" : "upcoming"}
+            {groups.length} {view.dismissed ? "dismissed" : "upcoming"} · next 12 months
             {hiddenEmpty > 0 && ` · ${hiddenEmpty} empty-lineup hidden`}
-            {!view.includeInternational &&
-              hiddenCountryCount > 0 &&
-              ` · ${hiddenCountryCount} international or unknown hidden`}
+            {hiddenCountryCount > 0 &&
+              ` · ${hiddenCountryCount} outside selected regions or unknown hidden`}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -345,21 +350,21 @@ export default async function FestivalsPage({
           aria-label={
             view.includeInternational
               ? "Show United States festivals only"
-              : `Include ${internationalCount} international and ${unknownCount} unknown-country festivals`
+              : `Include ${internationalCount} festivals in the Americas and Europe`
           }
           className="rounded-full border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-600 dark:border-zinc-800 dark:text-zinc-400"
         >
           {view.includeInternational
-            ? "✓ International + unknown included"
-            : `Include international + unknown (${hiddenCountryCount})`}
+            ? "✓ Americas + Europe"
+            : `Include Americas + Europe (${internationalCount})`}
         </Link>
       </nav>
 
       {unknownCount > 0 && (
         <p className="mt-2 text-xs text-zinc-500">
           {unknownCount} festival{unknownCount === 1 ? " has" : "s have"} no
-          verified country code and {unknownCount === 1 ? "is" : "are"} treated
-          as non-US until reviewed.
+          verified country code and {unknownCount === 1 ? "is" : "are"} hidden
+          until reviewed. Festivals outside the Americas and Europe are hidden.
         </p>
       )}
 
@@ -367,7 +372,7 @@ export default async function FestivalsPage({
         <div className="mt-10 rounded-xl border border-dashed border-zinc-300 p-12 text-center text-sm text-zinc-500 dark:border-zinc-700">
           {view.dismissed
             ? "No dismissed festivals match this country view."
-            : "No upcoming US festivals yet. Include international and unknown-country festivals, refresh EDMTrain, or add one manually."}
+            : "No upcoming festivals in this region yet. Refresh EDMTrain or add one manually."}
         </div>
       ) : (
         <ul className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">

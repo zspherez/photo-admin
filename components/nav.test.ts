@@ -41,7 +41,7 @@ test("mobile navigation exposes core workflows and an accessible overflow menu",
 test("desktop navigation groups secondary routes under More", () => {
   const secondary = source.match(/const DESKTOP_MORE_HREFS = new Set\(\[([\s\S]*?)\]\);/)?.[1];
   assert.ok(secondary);
-  for (const href of ["/new-years-runs", "/contact-audit", "/shows", "/settings"]) {
+  for (const href of ["/new-years-runs", "/festival-runs", "/contact-audit", "/shows", "/settings"]) {
     assert.ok(secondary.includes(`"${href}"`));
   }
   assert.match(source, /const DESKTOP_ITEMS = ITEMS\.filter/);

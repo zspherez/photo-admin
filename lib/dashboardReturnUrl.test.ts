@@ -56,7 +56,7 @@ test("workflow returns allow exact workflow routes and preserve their filters", 
     workflowReturnPath(
       "/festivals/show_123?filter=unsent&genre=house&page=9&sent=old"
     ),
-    "/festivals/show_123?filter=unsent&genre=house"
+    "/festivals/show_123?filter=unsent&genre=house&includeInternational=1"
   );
   assert.equal(
     workflowReturnPath(
@@ -66,20 +66,20 @@ test("workflow returns allow exact workflow routes and preserve their filters", 
   );
   assert.equal(
     festivalReturnPath("show_123", "matched_with_contact", "drum & bass"),
-    "/festivals/show_123?filter=matched_with_contact&genre=drum+%26+bass"
+    "/festivals/show_123?filter=matched_with_contact&genre=drum+%26+bass&includeInternational=1"
   );
   assert.equal(
     appendWorkflowResult("/festivals/show_123?filter=unsent", {
       scheduled: "1",
     }),
-    "/festivals/show_123?filter=unsent&scheduled=1"
+    "/festivals/show_123?filter=unsent&includeInternational=1&scheduled=1"
   );
   assert.equal(
     withWorkflowReturnTo(
       "/dashboard/add-contact/artist_123",
       "/festivals/show_123?filter=needs_contact"
     ),
-    "/dashboard/add-contact/artist_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dneeds_contact"
+    "/dashboard/add-contact/artist_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dneeds_contact%26includeInternational%3D1"
   );
   assert.equal(
     workflowReturnPath(
@@ -109,7 +109,7 @@ test("workflow returns allow exact workflow routes and preserve their filters", 
     workflowReturnPath(
       "/dashboard/contact/contact_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dunsent&historyPage=4&deleted=old",
     ),
-    "/dashboard/contact/contact_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dunsent&historyPage=4",
+    "/dashboard/contact/contact_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dunsent%26includeInternational%3D1&historyPage=4",
   );
   assert.equal(
     workflowReturnPath(
@@ -137,13 +137,13 @@ test("festival search parameters normalize repeated values safely", () => {
   );
   assert.equal(
     festivalReturnPath("show_123", "manager_needed", "all"),
-    "/festivals/show_123?filter=manager_needed",
+    "/festivals/show_123?filter=manager_needed&includeInternational=1",
   );
   assert.equal(
     workflowReturnPath(
       "/festivals/show_123?filter=shared_management&genre=House&dismissed=1",
     ),
-    "/festivals/show_123?filter=shared_management&genre=house&dismissed=1",
+    "/festivals/show_123?filter=shared_management&genre=house&includeInternational=1&dismissed=1",
   );
   assert.equal(
     workflowReturnPath(
@@ -182,7 +182,7 @@ test("artist workflow actions preserve safe festival returns and reject unsafe r
       "/festivals/show_123?filter=needs_contact",
       { research_saved: "1" }
     ),
-    "/artists/artist_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dneeds_contact&research_saved=1"
+    "/artists/artist_123?returnTo=%2Ffestivals%2Fshow_123%3Ffilter%3Dneeds_contact%26includeInternational%3D1&research_saved=1"
   );
   assert.equal(
     workflowFestivalShowId(

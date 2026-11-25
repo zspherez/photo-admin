@@ -25,7 +25,7 @@ function topArtistIds(
   ).slice(0, 100).map(([artistId]) => artistId);
 }
 
-export function selectNewYearSearchArtistIds(
+export function selectTopArtistSearchIds(
   signals: readonly RankedArtistSignal[],
   now: Date = new Date()
 ): string[] {
@@ -34,3 +34,5 @@ export function selectNewYearSearchArtistIds(
     ...topArtistIds(signals, STATSFM_SOURCES, now),
   ])];
 }
+
+export const selectNewYearSearchArtistIds = selectTopArtistSearchIds;

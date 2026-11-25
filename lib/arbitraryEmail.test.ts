@@ -569,6 +569,7 @@ test("arbitrary email migrations are ordered, transactional, and constrained", (
     "20261004190000_festival_recipient_partition",
     "20261015160000_festival_b2b",
     "20261101180000_new_year_search",
+    "20261125120000_festival_run_search",
   ]);
 
   const migration = readFileSync(

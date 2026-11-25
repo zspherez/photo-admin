@@ -62,6 +62,7 @@ model Artist {
   contactAuditDecisions ContactAuditArtistDecision[]
   trajectoryRuns     TrajectoryRunArtist[]
   newYearSearchJobs  NewYearSearchJob[]
+  festivalRunSearchJobs FestivalRunSearchJob[]
   externalIdentityAliases ArtistExternalIdentityAlias[]
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
@@ -931,6 +932,54 @@ model NewYearSearchSuggestion {
   reviewedAt DateTime?
 
   @@unique([jobId, date, city, state])
+  @@index([status, createdAt])
+}
+
+model FestivalRunSearchBatch {
+  id        String                 @id @default(cuid())
+  startDate DateTime
+  endDate   DateTime
+  status    String                 @default("queued")
+  jobs      FestivalRunSearchJob[]
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
+
+  @@index([createdAt])
+}
+
+model FestivalRunSearchJob {
+  id           String                        @id @default(cuid())
+  batchId      String
+  batch        FestivalRunSearchBatch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  artistId     String
+  artist       Artist                        @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  status       String                        @default("pending")
+  claimedAt    DateTime?
+  claimToken   String?                       @unique
+  attemptCount Int                           @default(0)
+  error        String?
+  suggestions  FestivalRunSearchSuggestion[]
+
+  @@unique([batchId, artistId])
+  @@index([batchId, status])
+}
+
+model FestivalRunSearchSuggestion {
+  id           String               @id @default(cuid())
+  jobId        String
+  job          FestivalRunSearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  date         DateTime
+  festivalName String
+  city         String
+  region       String
+  countryCode  String
+  sourceUrl    String
+  evidence     String
+  status       String               @default("pending")
+  createdAt    DateTime             @default(now())
+  reviewedAt   DateTime?
+
+  @@unique([jobId, date, festivalName])
   @@index([status, createdAt])
 }
 

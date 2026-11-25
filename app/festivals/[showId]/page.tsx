@@ -1596,13 +1596,7 @@ export default async function FestivalDetailPage({
             <input type="hidden" name="filter" value={filter} />
             <input type="hidden" name="genre" value={genreFilter} />
             <input type="hidden" name="returnTo" value={returnTo} />
-            {listView.includeInternational && (
-              <input
-                type="hidden"
-                name="includeInternational"
-                value="1"
-              />
-            )}
+            <input type="hidden" name="includeInternational" value={listView.includeInternational ? "1" : "0"} />
             {listView.dismissed && (
               <input type="hidden" name="dismissed" value="1" />
             )}
@@ -1654,9 +1648,7 @@ export default async function FestivalDetailPage({
           <input type="hidden" name="filter" value={filter} />
           <input type="hidden" name="genre" value={genreFilter} />
           <input type="hidden" name="returnTo" value={returnTo} />
-          {listView.includeInternational && (
-            <input type="hidden" name="includeInternational" value="1" />
-          )}
+          <input type="hidden" name="includeInternational" value={listView.includeInternational ? "1" : "0"} />
           {listView.dismissed && (
             <input type="hidden" name="dismissed" value="1" />
           )}
