@@ -3,14 +3,17 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   formatNextDispatchActionLabel,
+  formatCustomEmailScheduleInput,
   getNextMondaySlot,
   getNextNormalOutreachDispatch,
   getOutreachRecoveryCutoff,
   getScheduledDispatchDisposition,
   isOutreachMorningDispatchWindow,
+  isCustomEmailDispatchWindow,
   isOutreachRecoveryDispatchWindow,
   isStaleOutreachClaim,
   isWeekendET,
+  parseCustomEmailSchedule,
   OUTREACH_CLAIM_TIMEOUT_MS,
   OUTREACH_MORNING_DISPATCH_HOUR,
   OUTREACH_MORNING_DISPATCH_LABEL,
@@ -101,6 +104,40 @@ test("next dispatch label uses the shared cadence", () => {
     formatNextDispatchActionLabel(new Date("2026-07-20T13:07:00.000Z")),
     "Schedule for Mon 9:07 AM ET",
   );
+});
+
+test("custom email time is parsed as ET across daylight saving changes", () => {
+  const now = new Date("2026-03-01T00:00:00Z");
+  assert.deepEqual(parseCustomEmailSchedule("2026-03-06T09:00", now), {
+    ok: true, date: new Date("2026-03-06T14:00:00Z"),
+  });
+  assert.deepEqual(parseCustomEmailSchedule("2026-03-09T13:59", now), {
+    ok: true, date: new Date("2026-03-09T17:59:00Z"),
+  });
+  assert.deepEqual(parseCustomEmailSchedule("2026-11-02T09:00", now), {
+    ok: true, date: new Date("2026-11-02T14:00:00Z"),
+  });
+  assert.equal(formatCustomEmailScheduleInput(new Date("2026-11-02T14:00:00Z")), "2026-11-02T09:00");
+});
+
+test("custom email rejects non-existent, past, weekend, and off-hours ET times", () => {
+  const now = new Date("2026-03-06T14:00:00Z");
+  for (const input of [
+    "2026-02-30T09:00",
+    "2026-03-08T02:30",
+    "2026-03-09T09:00Z",
+    "2026-03-06T09:00",
+    "2026-03-07T10:00",
+    "2026-03-06T14:00",
+    "2026-03-06T08:59",
+    "2026-03-06T09:00:30",
+  ]) {
+    assert.equal(parseCustomEmailSchedule(input, now).ok, false, input);
+  }
+  assert.equal(isCustomEmailDispatchWindow(new Date("2026-03-09T13:00:00Z")), true);
+  assert.equal(isCustomEmailDispatchWindow(new Date("2026-03-09T17:59:59Z")), true);
+  assert.equal(isCustomEmailDispatchWindow(new Date("2026-03-09T18:00:00Z")), false);
+  assert.equal(isCustomEmailDispatchWindow(new Date("2026-03-07T15:00:00Z")), false);
 });
 
 test("morning dispatch window is explicit and DST-safe", () => {

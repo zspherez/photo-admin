@@ -184,6 +184,14 @@ test("trajectory ingest reaches its own fail-closed request authentication", asy
   assert.equal(response.headers.get("x-middleware-next"), "1");
 });
 
+test("private queue callback reaches its Vercel-only consumer without session auth", async () => {
+  const response = await proxy(
+    new NextRequest("https://admin.example/api/queues/custom-emails", { method: "POST" }),
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-middleware-next"), "1");
+});
+
 test("professional contact research reaches its own bearer authorization", async () => {
   for (const path of [
     "/api/professional-contact-research/prepare",

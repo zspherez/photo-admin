@@ -762,6 +762,73 @@ test("concurrent morning claims submit an overdue queued record once", async () 
   assert.equal(database.record?.text, submitted.text);
 });
 
+test("delayed custom-email alarm defers outside weekday ET window and respects cancellation", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  const now = { value: new Date("2026-07-20T17:58:00Z") };
+  let submissions = 0;
+  const deps = dependencies(database, REAL_SETTINGS, async () => {
+    submissions += 1;
+    return { providerMessageId: "sent", error: null, failureDisposition: null };
+  });
+  deps.now = () => now.value;
+  const id = "c3b9c9b2-45cf-4e16-979a-04cff0a82761";
+  assert.equal((await queueArbitraryEmailWithDependencies(
+    INPUT, new Date("2026-07-20T17:59:00Z"), id, deps,
+  )).ok, true);
+
+  now.value = new Date("2026-07-20T18:05:00Z");
+  assert.equal((await dispatchScheduledArbitraryEmailWithDependencies(id, deps, true)).skipped, true);
+  assert.equal(database.record?.status, "scheduled");
+  assert.equal(submissions, 0);
+
+  now.value = new Date("2026-07-21T13:05:00Z");
+  assert.equal((await dispatchScheduledArbitraryEmailWithDependencies(id, deps, true)).ok, true);
+  assert.equal(submissions, 1);
+  assert.equal((await dispatchScheduledArbitraryEmailWithDependencies(id, deps, true)).skipped, true);
+
+  const cancelledDb = new MemoryArbitraryEmailDatabase();
+  const cancelledDeps = dependencies(cancelledDb, REAL_SETTINGS, async () => {
+    throw new Error("Cancelled email must not be submitted");
+  });
+  cancelledDeps.now = () => new Date("2026-07-21T13:05:00Z");
+  assert.equal((await queueArbitraryEmailWithDependencies(
+    INPUT, new Date("2026-07-21T13:06:00Z"), id, cancelledDeps,
+  )).ok, true);
+  assert.equal(await cancelScheduledArbitraryEmailWithDatabase(id, cancelledDb as never), true);
+  assert.equal((await dispatchScheduledArbitraryEmailWithDependencies(id, cancelledDeps, true)).skipped, true);
+});
+
+test("custom email crossing the ET window during preparation never submits", async () => {
+  const database = new MemoryArbitraryEmailDatabase();
+  const now = { value: new Date("2026-07-20T17:58:00Z") };
+  let submissions = 0;
+  const deps = dependencies(database, REAL_SETTINGS, async () => {
+    submissions += 1;
+    return { providerMessageId: "sent", error: null, failureDisposition: null };
+  });
+  deps.now = () => now.value;
+  const id = "726f0212-0374-4c93-ae8a-b2ff451860a3";
+  assert.equal((await queueArbitraryEmailWithDependencies(
+    INPUT, new Date("2026-07-20T17:59:00Z"), id, deps,
+  )).ok, true);
+  now.value = new Date("2026-07-20T17:59:01Z");
+  const getSettings = deps.getDeliverySettings;
+  let settingsReads = 0;
+  deps.getDeliverySettings = async (tx) => {
+    const settings = await getSettings(tx);
+    if (++settingsReads === 2) now.value = new Date("2026-07-20T18:00:00Z");
+    return settings;
+  };
+  const delayed = await dispatchScheduledArbitraryEmailWithDependencies(id, deps, true);
+  assert.equal(delayed.retryScheduled, true);
+  assert.equal(database.record?.status, "retry_scheduled");
+  assert.equal(database.record?.attemptCount, 0);
+  assert.equal(submissions, 0);
+  now.value = new Date("2026-07-21T13:05:00Z");
+  assert.equal((await dispatchScheduledArbitraryEmailWithDependencies(id, deps, true)).ok, true);
+  assert.equal(submissions, 1);
+});
+
 test("scheduled retries retain their committed credential scope", async () => {
   const database = new MemoryArbitraryEmailDatabase();
   const now = { value: new Date("2026-07-20T12:00:00.000Z") };
