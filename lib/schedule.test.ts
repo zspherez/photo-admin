@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  CUSTOM_EMAIL_DISPATCH_END_HOUR,
   formatNextDispatchActionLabel,
   formatCustomEmailScheduleInput,
   getNextMondaySlot,
@@ -114,6 +115,12 @@ test("custom email time is parsed as ET across daylight saving changes", () => {
   assert.deepEqual(parseCustomEmailSchedule("2026-03-09T13:59", now), {
     ok: true, date: new Date("2026-03-09T17:59:00Z"),
   });
+  assert.deepEqual(parseCustomEmailSchedule("2026-03-09T15:59", now), {
+    ok: true, date: new Date("2026-03-09T19:59:00Z"),
+  });
+  assert.deepEqual(parseCustomEmailSchedule("2026-11-02T15:59", now), {
+    ok: true, date: new Date("2026-11-02T20:59:00Z"),
+  });
   assert.deepEqual(parseCustomEmailSchedule("2026-11-02T09:00", now), {
     ok: true, date: new Date("2026-11-02T14:00:00Z"),
   });
@@ -128,15 +135,18 @@ test("custom email rejects non-existent, past, weekend, and off-hours ET times",
     "2026-03-09T09:00Z",
     "2026-03-06T09:00",
     "2026-03-07T10:00",
-    "2026-03-06T14:00",
+    "2026-03-06T16:00",
     "2026-03-06T08:59",
     "2026-03-06T09:00:30",
   ]) {
     assert.equal(parseCustomEmailSchedule(input, now).ok, false, input);
   }
+  assert.equal(CUSTOM_EMAIL_DISPATCH_END_HOUR, 16);
   assert.equal(isCustomEmailDispatchWindow(new Date("2026-03-09T13:00:00Z")), true);
-  assert.equal(isCustomEmailDispatchWindow(new Date("2026-03-09T17:59:59Z")), true);
-  assert.equal(isCustomEmailDispatchWindow(new Date("2026-03-09T18:00:00Z")), false);
+  assert.equal(isCustomEmailDispatchWindow(new Date("2026-03-09T19:59:59Z")), true);
+  assert.equal(isCustomEmailDispatchWindow(new Date("2026-03-09T20:00:00Z")), false);
+  assert.equal(isCustomEmailDispatchWindow(new Date("2026-11-02T20:59:59Z")), true);
+  assert.equal(isCustomEmailDispatchWindow(new Date("2026-11-02T21:00:00Z")), false);
   assert.equal(isCustomEmailDispatchWindow(new Date("2026-03-07T15:00:00Z")), false);
 });
 

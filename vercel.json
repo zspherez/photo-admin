@@ -19,7 +19,7 @@
   },
   "schedules": {
     "custom-email-recovery": {
-      "schedule": "*/15 9-13 * * 1-5",
+      "schedule": "*/15 9-15 * * 1-5",
       "timezone": "America/New_York",
       "topic": "custom-email-dispatch"
     }

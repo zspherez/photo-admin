@@ -119,7 +119,7 @@ export function ComposeEmailForm({
           className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
         />
         <p className="mt-1 text-xs text-zinc-500">
-          Scheduled emails send on weekdays from 9:00 AM to 1:59 PM ET.
+          Scheduled emails send on weekdays from 9:00 AM to 3:59 PM ET.
           Vercel may start an alarm about 15 minutes late (or longer during
           recovery). An alarm arriving after the window waits until the next
           eligible window; emails never send before the chosen time.

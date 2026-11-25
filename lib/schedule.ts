@@ -13,6 +13,7 @@ export const OUTREACH_MORNING_DISPATCH_MINUTE =
 export const OUTREACH_MORNING_DISPATCH_LABEL = appConfig.outreachDispatch.label;
 export const OUTREACH_RECOVERY_DISPATCH_START_HOUR = 9;
 export const OUTREACH_RECOVERY_DISPATCH_END_HOUR = 14;
+export const CUSTOM_EMAIL_DISPATCH_END_HOUR = 16;
 export const OUTREACH_RECOVERY_OVERDUE_MS = 2 * 60 * 60 * 1000;
 export const OUTREACH_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
 export const OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS = 30 * 1000;
@@ -178,7 +179,7 @@ export function isCustomEmailDispatchWindow(now: Date = new Date()): boolean {
   return (
     isWeekday(weekday) &&
     hour >= OUTREACH_RECOVERY_DISPATCH_START_HOUR &&
-    hour < OUTREACH_RECOVERY_DISPATCH_END_HOUR
+    hour < CUSTOM_EMAIL_DISPATCH_END_HOUR
   );
 }
 
@@ -205,7 +206,7 @@ export function parseCustomEmailSchedule(
     return { ok: false, error: "That date or time does not exist in Eastern Time (ET)" };
   }
   if (!isCustomEmailDispatchWindow(date)) {
-    return { ok: false, error: "Choose a weekday between 9:00 AM and 1:59 PM ET" };
+    return { ok: false, error: "Choose a weekday between 9:00 AM and 3:59 PM ET" };
   }
   if (date <= now) {
     return { ok: false, error: "Choose a future date and time in Eastern Time (ET)" };
