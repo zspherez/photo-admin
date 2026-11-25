@@ -764,7 +764,7 @@ test("concurrent morning claims submit an overdue queued record once", async () 
 
 test("delayed custom-email alarm defers outside weekday ET window and respects cancellation", async () => {
   const database = new MemoryArbitraryEmailDatabase();
-  const now = { value: new Date("2026-07-20T17:58:00Z") };
+  const now = { value: new Date("2026-07-20T19:58:00Z") };
   let submissions = 0;
   const deps = dependencies(database, REAL_SETTINGS, async () => {
     submissions += 1;
@@ -773,10 +773,10 @@ test("delayed custom-email alarm defers outside weekday ET window and respects c
   deps.now = () => now.value;
   const id = "c3b9c9b2-45cf-4e16-979a-04cff0a82761";
   assert.equal((await queueArbitraryEmailWithDependencies(
-    INPUT, new Date("2026-07-20T17:59:00Z"), id, deps,
+    INPUT, new Date("2026-07-20T19:59:00Z"), id, deps,
   )).ok, true);
 
-  now.value = new Date("2026-07-20T18:05:00Z");
+  now.value = new Date("2026-07-20T20:05:00Z");
   assert.equal((await dispatchScheduledArbitraryEmailWithDependencies(id, deps, true)).skipped, true);
   assert.equal(database.record?.status, "scheduled");
   assert.equal(submissions, 0);
@@ -800,7 +800,7 @@ test("delayed custom-email alarm defers outside weekday ET window and respects c
 
 test("custom email crossing the ET window during preparation never submits", async () => {
   const database = new MemoryArbitraryEmailDatabase();
-  const now = { value: new Date("2026-07-20T17:58:00Z") };
+  const now = { value: new Date("2026-07-20T19:58:00Z") };
   let submissions = 0;
   const deps = dependencies(database, REAL_SETTINGS, async () => {
     submissions += 1;
@@ -809,14 +809,14 @@ test("custom email crossing the ET window during preparation never submits", asy
   deps.now = () => now.value;
   const id = "726f0212-0374-4c93-ae8a-b2ff451860a3";
   assert.equal((await queueArbitraryEmailWithDependencies(
-    INPUT, new Date("2026-07-20T17:59:00Z"), id, deps,
+    INPUT, new Date("2026-07-20T19:59:00Z"), id, deps,
   )).ok, true);
-  now.value = new Date("2026-07-20T17:59:01Z");
+  now.value = new Date("2026-07-20T19:59:01Z");
   const getSettings = deps.getDeliverySettings;
   let settingsReads = 0;
   deps.getDeliverySettings = async (tx) => {
     const settings = await getSettings(tx);
-    if (++settingsReads === 2) now.value = new Date("2026-07-20T18:00:00Z");
+    if (++settingsReads === 2) now.value = new Date("2026-07-20T20:00:00Z");
     return settings;
   };
   const delayed = await dispatchScheduledArbitraryEmailWithDependencies(id, deps, true);
