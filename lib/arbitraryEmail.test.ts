@@ -658,7 +658,8 @@ test("arbitrary email UI normalizes previews and explains deliverability limits"
   assert.match(compose, /DNS authentication/);
   assert.match(compose, /quoted-printable message source/);
   assert.match(compose, /value="queue"/);
-  assert.match(compose, /\{scheduleLabel\}/);
+  assert.match(compose, /name="scheduledForET"/);
+  assert.match(compose, /Schedule date and time \(Eastern Time \/ ET\)/);
   assert.match(compose, /pendingLabel="Scheduling…"/);
   assert.match(dashboard, /text: true/);
   assert.match(dashboard, /Canonical HTML source/);
