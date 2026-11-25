@@ -31,6 +31,7 @@ import {
   ensureSentMailCopyQueued,
 } from "@/lib/sentMailCopy";
 import {
+  isCustomEmailDispatchWindow,
   OUTREACH_CLAIM_TIMEOUT_MS,
   OUTREACH_PROVIDER_TRANSACTION_TIMEOUT_MS,
 } from "@/lib/schedule";
@@ -663,11 +664,15 @@ export async function sendArbitraryEmail(
 async function claimScheduledArbitraryEmail(
   id: string,
   dependencies: SendArbitraryEmailDependencies,
+  enforceWindow: boolean,
 ): Promise<
   | { kind: "claimed"; claimToken: string }
   | { kind: "complete"; result: DispatchArbitraryEmailResult }
 > {
   const now = dependencies.now();
+  if (enforceWindow && !isCustomEmailDispatchWindow(now)) {
+    return { kind: "complete", result: { ok: true, id, skipped: true } };
+  }
   const staleBefore = new Date(now.getTime() - OUTREACH_CLAIM_TIMEOUT_MS);
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
@@ -1097,6 +1102,7 @@ async function submitScheduledArbitraryEmail(
   id: string,
   claimToken: string,
   dependencies: SendArbitraryEmailDependencies,
+  enforceWindow: boolean,
 ): Promise<DispatchArbitraryEmailResult> {
   for (let transactionAttempt = 0; transactionAttempt < 4; transactionAttempt += 1) {
     let providerSubmissionStarted = false;
@@ -1262,6 +1268,12 @@ async function submitScheduledArbitraryEmail(
             return { ok: false, id, error };
           }
 
+          const previousAttempt = {
+            attemptCount: stored.attemptCount,
+            firstAttemptAt: stored.firstAttemptAt,
+            lastAttemptAt: stored.lastAttemptAt,
+            failureDisposition: stored.failureDisposition,
+          };
           const completedAttempts = stored.attemptCount + 1;
           const attemptStartedAt = dependencies.now();
           providerFirstAttemptAt = stored.firstAttemptAt;
@@ -1276,6 +1288,19 @@ async function submitScheduledArbitraryEmail(
             },
           });
           const attachmentBlobs = await loadEmailAttachmentBlobs(request.attachments, tx);
+          if (enforceWindow && !isCustomEmailDispatchWindow(dependencies.now())) {
+            await tx.arbitraryEmail.update({
+              where: { id },
+              data: {
+                status: "retry_scheduled",
+                nextAttemptAt: stored.nextAttemptAt ?? attemptStartedAt,
+                ...previousAttempt,
+                claimedAt: null,
+                claimToken: null,
+              },
+            });
+            return { ok: false, id, retryScheduled: true, nextAttemptAt: stored.nextAttemptAt ?? attemptStartedAt };
+          }
           providerSubmissionStarted = true;
           const submission = await dependencies.submit(
             request,
@@ -1393,8 +1418,9 @@ async function submitScheduledArbitraryEmail(
 export async function dispatchScheduledArbitraryEmailWithDependencies(
   id: string,
   dependencies: SendArbitraryEmailDependencies,
+  enforceWindow = false,
 ): Promise<DispatchArbitraryEmailResult> {
-  const claim = await claimScheduledArbitraryEmail(id, dependencies);
+  const claim = await claimScheduledArbitraryEmail(id, dependencies, enforceWindow);
   if (claim.kind === "complete") return claim.result;
   const prepared = await ensureScheduledArbitraryRequest(
     id,
@@ -1408,7 +1434,7 @@ export async function dispatchScheduledArbitraryEmailWithDependencies(
     dependencies,
   );
   if (!bound.ok) return bound.result;
-  return submitScheduledArbitraryEmail(id, claim.claimToken, dependencies);
+  return submitScheduledArbitraryEmail(id, claim.claimToken, dependencies, enforceWindow);
 }
 
 export async function dispatchScheduledArbitraryEmail(
@@ -1417,6 +1443,7 @@ export async function dispatchScheduledArbitraryEmail(
   return dispatchScheduledArbitraryEmailWithDependencies(
     id,
     DEFAULT_DEPENDENCIES,
+    true,
   );
 }
 

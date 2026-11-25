@@ -9,13 +9,13 @@ import { TemplateEditor } from "@/components/template-editor";
 
 export function ComposeEmailForm({
   compositionId,
-  scheduleLabel,
+  defaultScheduleTime,
   initialRecipients = "",
   initialSubject = "",
   initialHtml = "<p></p>",
 }: {
   compositionId: string;
-  scheduleLabel: string;
+  defaultScheduleTime: string;
   initialRecipients?: string;
   initialSubject?: string;
   initialHtml?: string;
@@ -106,6 +106,26 @@ export function ComposeEmailForm({
         </div>
       </fieldset>
 
+      <div>
+        <label htmlFor="scheduledForET" className="text-sm font-medium">
+          Schedule date and time (Eastern Time / ET)
+        </label>
+        <input
+          id="scheduledForET"
+          name="scheduledForET"
+          type="datetime-local"
+          defaultValue={defaultScheduleTime}
+          step={60}
+          className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+        />
+        <p className="mt-1 text-xs text-zinc-500">
+          Scheduled emails send on weekdays from 9:00 AM to 1:59 PM ET.
+          Vercel may start an alarm about 15 minutes late (or longer during
+          recovery). An alarm arriving after the window waits until the next
+          eligible window; emails never send before the chosen time.
+        </p>
+      </div>
+
       <div className="mobile-sticky-actions mobile-action-grid flex flex-wrap justify-end gap-2 sm:w-auto">
         <PendingSubmitButton
           name="intent"
@@ -113,7 +133,7 @@ export function ComposeEmailForm({
           variant="secondary"
           pendingLabel="Scheduling…"
         >
-          {scheduleLabel}
+          Schedule email
         </PendingSubmitButton>
         <PendingSubmitButton
           name="intent"

@@ -12,6 +12,7 @@ const PUBLIC_PATHS = new Set([
   "/api/integrations/trajectory-runs",
   "/api/release/runtime-verification",
   "/api/resend/webhook",
+  "/api/queues/custom-emails",
   "/api/spotify/callback",
   "/favicon.ico",
   "/apple-icon.png",

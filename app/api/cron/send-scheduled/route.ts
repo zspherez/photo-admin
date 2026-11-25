@@ -11,6 +11,7 @@ import {
   getOutreachRecoveryCutoff,
   isOutreachMorningDispatchWindow,
   isOutreachRecoveryDispatchWindow,
+  isCustomEmailDispatchWindow,
   OUTREACH_CLAIM_TIMEOUT_MS,
   SCHEDULED_DISPATCH_MAX_ROWS,
   SCHEDULED_DISPATCH_ROUTE_TIMEOUT_MS,
@@ -121,39 +122,41 @@ export async function GET(request: NextRequest) {
           ],
           take: Math.min(10, SCHEDULED_DISPATCH_MAX_ROWS - results.length),
         }),
-        db.arbitraryEmail.findMany({
-          where: {
-            OR: [
-              {
-                status: "scheduled",
-                nextAttemptAt: {
-                  lte: mode === "recovery" ? recoveryCutoff : now,
-                },
+        isCustomEmailDispatchWindow(now)
+          ? db.arbitraryEmail.findMany({
+              where: {
+                OR: [
+                  {
+                    status: "scheduled",
+                    nextAttemptAt: {
+                      lte: mode === "recovery" ? recoveryCutoff : now,
+                    },
+                  },
+                  {
+                    status: "retry_scheduled",
+                    nextAttemptAt: { lte: now },
+                  },
+                  {
+                    status: "queued",
+                    nextAttemptAt: { lte: now },
+                    claimedAt: { lte: staleBefore },
+                  },
+                  {
+                    status: "sending",
+                    nextAttemptAt: { lte: now },
+                    claimedAt: { lte: staleBefore },
+                  },
+                ],
               },
-              {
-                status: "retry_scheduled",
-                nextAttemptAt: { lte: now },
-              },
-              {
-                status: "queued",
-                nextAttemptAt: { lte: now },
-                claimedAt: { lte: staleBefore },
-              },
-              {
-                status: "sending",
-                nextAttemptAt: { lte: now },
-                claimedAt: { lte: staleBefore },
-              },
-            ],
-          },
-          select: { id: true, nextAttemptAt: true, createdAt: true },
-          orderBy: [
-            { nextAttemptAt: "asc" },
-            { createdAt: "asc" },
-            { id: "asc" },
-          ],
-          take: Math.min(10, SCHEDULED_DISPATCH_MAX_ROWS - results.length),
-        }),
+              select: { id: true, nextAttemptAt: true, createdAt: true },
+              orderBy: [
+                { nextAttemptAt: "asc" },
+                { createdAt: "asc" },
+                { id: "asc" },
+              ],
+              take: Math.min(10, SCHEDULED_DISPATCH_MAX_ROWS - results.length),
+            })
+          : [],
       ]);
       due = [
         ...outreachDue.map((row) => ({ ...row, kind: "outreach" as const })),

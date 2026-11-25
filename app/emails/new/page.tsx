@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Card, CardBody } from "@/components/ui/card";
 import {
-  formatNextDispatchActionLabel,
+  formatCustomEmailScheduleInput,
   getNextNormalOutreachDispatch,
 } from "@/lib/schedule";
 import { ComposeEmailForm } from "./compose-email-form";
@@ -30,7 +30,7 @@ export default function ComposeEmailPage() {
         <CardBody>
           <ComposeEmailForm
             compositionId={randomUUID()}
-            scheduleLabel={formatNextDispatchActionLabel(
+            defaultScheduleTime={formatCustomEmailScheduleInput(
               getNextNormalOutreachDispatch(),
             )}
           />

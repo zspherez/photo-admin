@@ -8,7 +8,7 @@ import { formatShowDate } from "@/lib/formatDate";
 import { loadNewYearRuns } from "@/lib/newYearRuns";
 import { readNewYearPitchTemplate, renderNewYearPitch } from "@/lib/newYearPitch";
 import {
-  formatNextDispatchActionLabel,
+  formatCustomEmailScheduleInput,
   getNextNormalOutreachDispatch,
 } from "@/lib/schedule";
 import { ComposeEmailForm } from "@/app/emails/new/compose-email-form";
@@ -62,7 +62,7 @@ export default async function NewYearComposePage({
         <CardBody>
           <ComposeEmailForm
             compositionId={randomUUID()}
-            scheduleLabel={formatNextDispatchActionLabel(getNextNormalOutreachDispatch())}
+            defaultScheduleTime={formatCustomEmailScheduleInput(getNextNormalOutreachDispatch())}
             initialRecipients={contact?.email ?? ""}
             initialSubject={subject}
             initialHtml={html}

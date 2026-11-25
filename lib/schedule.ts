@@ -173,6 +173,46 @@ export function isOutreachRecoveryDispatchWindow(
   );
 }
 
+export function isCustomEmailDispatchWindow(now: Date = new Date()): boolean {
+  const { hour, weekday } = partsInET(now);
+  return (
+    isWeekday(weekday) &&
+    hour >= OUTREACH_RECOVERY_DISPATCH_START_HOUR &&
+    hour < OUTREACH_RECOVERY_DISPATCH_END_HOUR
+  );
+}
+
+export function formatCustomEmailScheduleInput(date: Date): string {
+  const { year, month, day, hour, minute } = partsInET(date);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}`;
+}
+
+export function parseCustomEmailSchedule(
+  input: string,
+  now: Date = new Date(),
+): { ok: true; date: Date } | { ok: false; error: string } {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(input);
+  if (!match) {
+    return {
+      ok: false,
+      error: "Select a valid date and time in Eastern Time (ET)",
+    };
+  }
+  const [, year, month, day, hour, minute] = match.map(Number);
+  const date = localETToUtc(year, month, day, hour, minute);
+  if (formatCustomEmailScheduleInput(date) !== input) {
+    return { ok: false, error: "That date or time does not exist in Eastern Time (ET)" };
+  }
+  if (!isCustomEmailDispatchWindow(date)) {
+    return { ok: false, error: "Choose a weekday between 9:00 AM and 1:59 PM ET" };
+  }
+  if (date <= now) {
+    return { ok: false, error: "Choose a future date and time in Eastern Time (ET)" };
+  }
+  return { ok: true, date };
+}
+
 export function getOutreachRecoveryCutoff(now: Date = new Date()): Date {
   return new Date(now.getTime() - OUTREACH_RECOVERY_OVERDUE_MS);
 }

@@ -14,7 +14,8 @@ import {
   queueArbitraryEmail,
   sendArbitraryEmail,
 } from "@/lib/sendArbitraryEmail";
-import { getNextNormalOutreachDispatch } from "@/lib/schedule";
+import { parseCustomEmailSchedule } from "@/lib/schedule";
+import { createCustomEmailAlarm } from "@/lib/customEmailAlarm";
 import { triggerScheduledOutreachWorkflow } from "@/lib/scheduledOutreachWorkflow";
 import { db } from "@/lib/db";
 import { readAndStoreEmailAttachments } from "@/lib/emailAttachments";
@@ -72,23 +73,30 @@ export async function sendArbitraryEmailAction(
   ) {
     return { error: "This composition identity is invalid; reload and retry" };
   }
+  const schedule = intent === "queue"
+    ? parseCustomEmailSchedule(String(formData.get("scheduledForET") ?? ""))
+    : null;
+  if (schedule && !schedule.ok) return { error: schedule.error };
 
   const upload = await readAndStoreEmailAttachments(formData);
   if (!upload.ok) return { error: upload.error };
   const input = { ...parsed.input, attachments: upload.attachments };
-  const result =
-    intent === "queue"
-      ? await queueArbitraryEmail(
-          input,
-          getNextNormalOutreachDispatch(),
-          compositionId,
-        )
-      : await sendArbitraryEmail(input);
+  const result = schedule?.ok
+    ? await queueArbitraryEmail(input, schedule.date, compositionId)
+    : await sendArbitraryEmail(input);
   revalidatePath("/emails");
   if (!result.ok) {
     return { error: result.error };
   }
-  if (intent === "queue") {
+  if (schedule?.ok) {
+    try {
+      await createCustomEmailAlarm(result.id, schedule.date);
+    } catch (error) {
+      console.error("Custom email alarm creation failed", result.id, error);
+      return {
+        error: "Email was saved, but its alarm could not be created. If the time is still upcoming, retry this composition; otherwise weekday recovery will pick it up.",
+      };
+    }
     redirect(`/emails?queued=${encodeURIComponent(result.id)}`);
   }
   redirect(`/emails?sent=${encodeURIComponent(result.id)}`);

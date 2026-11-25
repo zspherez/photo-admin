@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  VERCEL_CLI_VERSION: "56.2.1"
+  VERCEL_CLI_VERSION: "66.6.0"
   # The exact `owner/name` trusted to run this hardened release/recovery
   # profile. Defaults to this deployment's own repository so production
   # behavior here is unchanged. A fork enables this hardened profile for
