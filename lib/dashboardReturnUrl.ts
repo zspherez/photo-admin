@@ -91,9 +91,7 @@ export function festivalReturnPath(
   if (normalizedGenre !== "all") {
     params.set("genre", normalizedGenre);
   }
-  if (listView.includeInternational) {
-    params.set("includeInternational", "1");
-  }
+  params.set("includeInternational", listView.includeInternational ? "1" : "0");
   if (listView.dismissed) params.set("dismissed", "1");
   const query = params.toString();
   const path = `/festivals/${encodeURIComponent(showId)}`;

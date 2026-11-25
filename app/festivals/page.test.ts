@@ -11,7 +11,7 @@ test("festivals page exposes an authenticated EDMTrain refresh action", () => {
     source,
     /requireServerActionAuth\(formData\.get\("returnTo"\) \?\? "\/festivals"\)/
   );
-  assert.match(source, /syncEdmtrainFestivals\(365, deadline\)/);
+  assert.match(source, /syncEdmtrainFestivals\(festivalRunDaysAhead\(\), deadline\)/);
   assert.match(source, /label="Refresh festivals"/);
   assert.match(source, /pendingLabel="Refreshing…"/);
   assert.match(source, /Festivals refreshed\./);

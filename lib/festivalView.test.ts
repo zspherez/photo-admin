@@ -31,19 +31,23 @@ function festival(
   };
 }
 
-test("festival list defaults to active US festivals only", () => {
+test("festival list includes the Americas and Europe by default but retains a US-only filter", () => {
+  const defaultView = parseFestivalListView({});
+  assert.deepEqual(defaultView, { includeInternational: true, dismissed: false });
+  assert.equal(isFestivalVisible(festival("US"), defaultView), true);
+  assert.equal(isFestivalVisible(festival("CA"), defaultView), true);
+  assert.equal(isFestivalVisible(festival("MX"), defaultView), true);
+  assert.equal(isFestivalVisible(festival("BR"), defaultView), true);
+  assert.equal(isFestivalVisible(festival("GB"), defaultView), true);
+  assert.equal(isFestivalVisible(festival("FR"), defaultView), true);
+  assert.equal(isFestivalVisible(festival("JP"), defaultView), false);
+  assert.equal(isFestivalVisible(festival("AU"), defaultView), false);
+  assert.equal(isFestivalVisible(festival(null), defaultView), false);
+
   assert.equal(isFestivalVisible(festival("US"), activeView), true);
   assert.equal(isFestivalVisible(festival("CA"), activeView), false);
   assert.equal(isFestivalVisible(festival("MX"), activeView), false);
   assert.equal(isFestivalVisible(festival(null), activeView), false);
-
-  const internationalView = {
-    ...activeView,
-    includeInternational: true,
-  };
-  assert.equal(isFestivalVisible(festival("CA"), internationalView), true);
-  assert.equal(isFestivalVisible(festival("MX"), internationalView), true);
-  assert.equal(isFestivalVisible(festival(null), internationalView), true);
   assert.equal(festivalCountryCategory({ countryCode: null }), "unknown");
 });
 
@@ -89,6 +93,10 @@ test("festival list query state is explicit and shareable", () => {
   assert.equal(
     festivalListPath({ includeInternational: true, dismissed: true }),
     "/festivals?includeInternational=1&dismissed=1"
+  );
+  assert.equal(
+    festivalListPath({ includeInternational: false, dismissed: false }),
+    "/festivals?includeInternational=0"
   );
 });
 

@@ -4,6 +4,7 @@ import {
   type EdmtrainSyncResult,
 } from "@/lib/edmtrain";
 import { isValidCronAuthorization } from "@/lib/cron-auth";
+import { festivalRunDaysAhead } from "@/lib/festivalRuns";
 import { runCronSource } from "@/lib/cronResult";
 import {
   createOperationDeadline,
@@ -34,7 +35,7 @@ export async function GET(request: NextRequest) {
   }
 
   const execution = await runCronSource("sync-shows", "edmtrain", () =>
-    syncAllEdmtrain(90, 365, deadline)
+    syncAllEdmtrain(90, festivalRunDaysAhead(), deadline)
   );
   if (!execution.ok) {
     return NextResponse.json(

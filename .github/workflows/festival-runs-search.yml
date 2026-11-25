@@ -1,0 +1,38 @@
+name: Search festival runs
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_id:
+        description: Existing manually requested festival search batch ID
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: festival-runs-${{ inputs.batch_id }}
+  cancel-in-progress: false
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Search bounded public festival sources
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          FESTIVAL_RUN_BATCH_ID: ${{ inputs.batch_id }}
+        run: npx tsx scripts/run-festival-run-search.ts
